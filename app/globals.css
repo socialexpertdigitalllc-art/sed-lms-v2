@@ -1,0 +1,118 @@
+@import "tailwindcss";
+
+/* ============================================================
+   SED LMS v2 — Light theme "Data Console / Teal"
+   Tokens are exposed to Tailwind v4 via @theme, so utilities
+   like bg-surface, text-text-muted, border-border, bg-ready-bg
+   are generated automatically.
+   ============================================================ */
+@theme {
+  /* surfaces & structure */
+  --color-bg: #eef1f5;
+  --color-surface: #ffffff;
+  --color-surface-2: #fbfcfd;
+  --color-border: #dde2ea;
+  --color-border-subtle: #eef1f5;
+
+  /* text */
+  --color-text: #141b2d;
+  --color-text-muted: #5a6377;
+  --color-text-faint: #8089a0;
+
+  /* accent (teal) */
+  --color-accent: #0d9488;
+  --color-accent-soft: #dff5f2;
+  --color-accent-ink: #0f766e;
+
+  /* semantic status colors (fixed) */
+  --color-ready-fg: #15803d;
+  --color-ready-bg: #dcfce7;
+  --color-notready-fg: #b45309;
+  --color-notready-bg: #fef3c7;
+  --color-closed-fg: #7e22ce;
+  --color-closed-bg: #f3e8ff;
+  --color-dropped-fg: #b91c1c;
+  --color-dropped-bg: #fee2e2;
+  --color-longterm-fg: #1d4ed8;
+  --color-longterm-bg: #e8f0fe;
+
+  /* typography */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "JetBrains Mono", monospace;
+  --font-display: var(--font-bricolage), var(--font-inter), ui-sans-serif, sans-serif;
+
+  /* radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+/* tabular numerals for data-dense numbers */
+.tabular,
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* subtle accent-tinted scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+/* ============================================================
+   Marketing / landing atmosphere + motion
+   ============================================================ */
+
+/* fine engineering grid */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgba(20, 27, 45, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(20, 27, 45, 0.045) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+/* soft teal glow blob */
+.glow-teal {
+  background: radial-gradient(closest-side, rgba(13, 148, 136, 0.18), transparent);
+}
+.glow-blue {
+  background: radial-gradient(closest-side, rgba(37, 99, 235, 0.12), transparent);
+}
+
+/* staggered load reveal */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.reveal {
+  opacity: 0;
+  animation: fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes float-soft {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.float-soft {
+  animation: float-soft 6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { animation: none; opacity: 1; }
+  .float-soft { animation: none; }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
