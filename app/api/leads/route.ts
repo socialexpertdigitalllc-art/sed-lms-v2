@@ -48,9 +48,16 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!perms.has(catSetKey(parsed.data.status))) {
+  // Submission controls. Without `leads.assign` the lead is auto-assigned to the
+  // submitter; without `leads.set_status` it is forced to "Not Ready". These are
+  // enforced here (not just hidden in the UI) so they can't be bypassed.
+  const payload = { ...parsed.data, created_by: user.id };
+  if (!perms.has("leads.assign")) payload.agent_id = user.id;
+  if (!perms.has("leads.set_status")) {
+    payload.status = "Not Ready";
+  } else if (!perms.has(catSetKey(payload.status))) {
     return NextResponse.json(
-      { error: `You are not allowed to create a lead with status "${parsed.data.status}"` },
+      { error: `You are not allowed to create a lead with status "${payload.status}"` },
       { status: 403 }
     );
   }
@@ -58,7 +65,7 @@ export async function POST(req: Request) {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("leads")
-    .insert({ ...parsed.data, created_by: user.id })
+    .insert(payload)
     .select("id")
     .single();
   if (error || !data) {
@@ -70,11 +77,11 @@ export async function POST(req: Request) {
     action: "lead.created",
     entity_type: "lead",
     entity_id: data.id,
-    new_value: { business_name: parsed.data.business_name, status: parsed.data.status },
+    new_value: { business_name: payload.business_name, status: payload.status },
   });
 
   // Fire-and-forget auto-generation (never blocks lead creation).
-  await enqueueLeadIfReady({ ...parsed.data, id: data.id }, user.id);
+  await enqueueLeadIfReady({ ...payload, id: data.id }, user.id);
 
   return NextResponse.json({ id: data.id }, { status: 201 });
 }

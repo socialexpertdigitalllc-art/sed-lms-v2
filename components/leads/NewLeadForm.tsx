@@ -3,8 +3,20 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  Building2,
+  MapPinned,
+  Globe,
+  DollarSign,
+  ClipboardCheck,
+  UserCog,
+  Star,
+  ArrowLeft,
+  Check,
+} from "lucide-react";
 import { SITE_TYPES } from "@/lib/leads/types";
 import { settableStatuses } from "@/lib/leads/categories";
+import { STATUS_PILL } from "@/lib/leads/types";
 import { usePermissions } from "@/hooks/usePermissions";
 import { formatPhone } from "@/lib/forms/phone";
 import {
@@ -19,7 +31,7 @@ import {
   buildLeadPayload,
   type NewLeadFormState,
 } from "@/lib/leads/newLeadForm";
-import { Field, FormSection, inputCls } from "@/components/forms/Field";
+import { Field, inputCls } from "@/components/forms/Field";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { ChipGroup } from "@/components/forms/ChipGroup";
 import { DynamicList } from "@/components/forms/DynamicList";
@@ -28,10 +40,7 @@ import { RatingGroup } from "@/components/forms/RatingGroup";
 
 type Agent = { id: string; display_name: string | null };
 
-/**
- * Field wrapper that flags itself for scroll-to-first-error.
- * Module-scope (stable component identity) so typing never remounts the input.
- */
+/** Field wrapper that flags itself for scroll-to-first-error (module scope = stable identity). */
 function F({ error, ...props }: { error?: string } & React.ComponentProps<typeof Field>) {
   return (
     <div data-error={error ? "true" : undefined}>
@@ -40,25 +49,91 @@ function F({ error, ...props }: { error?: string } & React.ComponentProps<typeof
   );
 }
 
-/** Inline error line for controls that live outside a direct Field child. */
 function FieldError({ error }: { error?: string }) {
   if (!error) return null;
   return <p className="text-[11px] text-dropped-fg mt-1">⚠ {error}</p>;
 }
 
-export function NewLeadForm({ agents }: { agents: Agent[] }) {
+/** A numbered, iconed section card. */
+function SectionCard({
+  n,
+  icon: Icon,
+  title,
+  subtitle,
+  done,
+  delay,
+  children,
+}: {
+  n: number;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  title: string;
+  subtitle: string;
+  done: boolean;
+  delay: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className="reveal group rounded-2xl border border-border bg-surface shadow-sm transition-shadow hover:shadow-md"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <header className="flex items-center gap-3.5 px-6 pt-5 pb-4">
+        <div
+          className={
+            "grid h-10 w-10 shrink-0 place-items-center rounded-xl border text-sm font-semibold transition-colors " +
+            (done
+              ? "border-accent bg-accent text-white"
+              : "border-border bg-accent-soft text-accent-ink")
+          }
+        >
+          {done ? <Check size={18} /> : <Icon size={18} />}
+        </div>
+        <div className="min-w-0">
+          <h2 className="font-display text-[15px] font-semibold leading-tight text-text">
+            <span className="mr-2 font-mono text-xs text-text-faint">
+              {String(n).padStart(2, "0")}
+            </span>
+            {title}
+          </h2>
+          <p className="text-xs text-text-muted">{subtitle}</p>
+        </div>
+      </header>
+      <div className="space-y-5 border-t border-border-subtle px-6 py-5">{children}</div>
+    </section>
+  );
+}
+
+function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-1.5">
+      <span className="text-[11px] uppercase tracking-wide text-text-faint">{label}</span>
+      <span className="min-w-0 truncate text-right text-sm text-text">{children}</span>
+    </div>
+  );
+}
+
+export function NewLeadForm({
+  agents,
+  canAssign,
+  canSetStatus,
+}: {
+  agents: Agent[];
+  canAssign: boolean;
+  canSetStatus: boolean;
+}) {
   const router = useRouter();
   const { all } = usePermissions();
   const settable = useMemo(() => settableStatuses(all), [all]);
 
   const [f, setF] = useState<NewLeadFormState>(() =>
-    emptyNewLead(settable.includes("Not Ready") ? "Not Ready" : (settable[0] ?? ""))
+    emptyNewLead(
+      !canSetStatus || settable.includes("Not Ready") ? "Not Ready" : (settable[0] ?? "")
+    )
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  /** Set one field and clear its error. */
   function set<K extends keyof NewLeadFormState>(k: K, v: NewLeadFormState[K]) {
     setF((p) => ({ ...p, [k]: v }));
     setErrors((p) => {
@@ -76,9 +151,9 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
     [f.specify_pages, serviceCount, areaCount]
   );
 
-  // Contact Us is forced whenever anything besides Home/Contact Us is selected.
   const contactForced = f.specify_pages.some((p) => p !== "Home" && p !== "Contact Us");
-  const isapDisabled = f.has_service_areas !== "Yes";
+  // ISAP is available only once Service Areas = Yes AND at least one area is filled.
+  const isapDisabled = f.has_service_areas !== "Yes" || areaCount === 0;
 
   function togglePage(p: string) {
     setErrors((prev) => {
@@ -90,11 +165,30 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
       let next = prev.specify_pages.includes(p)
         ? prev.specify_pages.filter((x) => x !== p)
         : [...prev.specify_pages, p];
-      // dynamics from the old form
       const forced = next.some((x) => x !== "Home" && x !== "Contact Us");
       if (forced && !next.includes("Contact Us")) next = [...next, "Contact Us"];
       if (!forced) next = next.filter((x) => x !== "Contact Us");
       return { ...prev, specify_pages: next, other_page: next.includes("Other") ? prev.other_page : "" };
+    });
+  }
+
+  /** Set the areas list; drop ISAP if no areas remain (it can't apply without areas). */
+  function setAreas(v: string[]) {
+    setF((prev) => {
+      const stripIsap = nonEmpty(v).length === 0;
+      return {
+        ...prev,
+        areas: v,
+        specify_pages: stripIsap
+          ? prev.specify_pages.filter((p) => p !== "Individual Service Area Pages")
+          : prev.specify_pages,
+      };
+    });
+    setErrors((p) => {
+      if (!("areas" in p)) return p;
+      const n = { ...p };
+      delete n.areas;
+      return n;
     });
   }
 
@@ -104,7 +198,6 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
       ...prev,
       has_service_areas: v as "Yes" | "No",
       areas: yes && nonEmpty(prev.areas).length === 0 ? [""] : yes ? prev.areas : [],
-      // deselect ISAP when service areas are turned off
       specify_pages: yes
         ? prev.specify_pages
         : prev.specify_pages.filter((p) => p !== "Individual Service Area Pages"),
@@ -117,12 +210,36 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
     });
   }
 
+  // Live validation (does not surface messages — drives the progress + "fields left" hint).
+  const liveErrors = useMemo(() => validateNewLead(f), [f]);
+  const sectionErrs: Record<string, string[]> = {
+    identity: [
+      "site_type",
+      "business_name",
+      "business_phone",
+      "business_email",
+      "platform",
+      "business_profile_link",
+      "other_platform",
+    ],
+    location: ["has_service_areas", "areas", "services"],
+    website: ["client_experience", "specify_pages", "color_scheme"],
+    pricing: ["follow_up_time", "price_quoted", "price_custom", "reference_link"],
+    assessment: ["comments", "rating", "fresh_or_followup"],
+  };
+  const sectionDone = (key: keyof typeof sectionErrs) =>
+    sectionErrs[key].every((k) => !(k in liveErrors));
+  const completed = Object.keys(sectionErrs).filter((k) =>
+    sectionDone(k as keyof typeof sectionErrs)
+  ).length;
+  const totalSections = Object.keys(sectionErrs).length;
+  const remaining = Object.keys(liveErrors).length;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const errs = validateNewLead(f);
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
-      // Defer past commit so the freshly-set data-error markers exist in the DOM.
       requestAnimationFrame(() =>
         document
           .querySelector("[data-error='true']")
@@ -147,186 +264,298 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
     router.refresh();
   }
 
+  const showAssignment = canAssign || canSetStatus;
+  const agentName = canAssign
+    ? agents.find((a) => a.id === f.agent_id)?.display_name ?? "Unassigned"
+    : "You";
+  const priceDisplay =
+    f.price_quoted === "Other"
+      ? f.price_custom
+        ? `$${f.price_custom}`
+        : "—"
+      : f.price_quoted
+        ? `$${f.price_quoted}`
+        : "—";
+
+  const submitBtn = (
+    <button
+      disabled={busy || (canSetStatus && settable.length === 0)}
+      className="w-full rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-accent-ink disabled:opacity-60"
+    >
+      {busy ? "Submitting…" : "Submit Lead"}
+    </button>
+  );
+
   return (
-    <div className="max-w-3xl">
-      <Link href="/leads" className="text-xs text-text-muted hover:text-text">← Leads</Link>
-      <h1 className="text-xl font-semibold text-text mt-2 mb-5">New lead</h1>
+    <div className="mx-auto max-w-6xl">
+      {/* Header band */}
+      <div className="reveal relative mb-6 overflow-hidden rounded-2xl border border-border bg-surface">
+        <div className="bg-grid absolute inset-0 opacity-60" />
+        <div className="glow-teal absolute -right-16 -top-24 h-64 w-64" />
+        <div className="relative flex flex-wrap items-end justify-between gap-4 p-6">
+          <div className="min-w-0">
+            <Link
+              href="/leads"
+              className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-text-muted hover:text-text"
+            >
+              <ArrowLeft size={13} /> Leads
+            </Link>
+            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-accent-ink">
+              New Lead
+            </p>
+            <h1 className="font-display text-2xl font-semibold leading-tight text-text">
+              {f.business_name.trim() || "Untitled lead"}
+            </h1>
+          </div>
+          <div className="text-right">
+            <div className="font-mono text-2xl font-semibold text-text">
+              {completed}
+              <span className="text-text-faint">/{totalSections}</span>
+            </div>
+            <p className="text-[11px] uppercase tracking-wide text-text-faint">sections ready</p>
+            <div className="mt-2 h-1.5 w-36 overflow-hidden rounded-full bg-border-subtle">
+              <div
+                className="h-full rounded-full bg-accent transition-all duration-500"
+                style={{ width: `${(completed / totalSections) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
 
       {apiError && (
-        <div className="mb-4 text-sm text-dropped-fg bg-dropped-bg rounded-md px-3 py-2">{apiError}</div>
+        <div className="mb-4 rounded-lg border border-dropped-fg/20 bg-dropped-bg px-4 py-2.5 text-sm text-dropped-fg">
+          {apiError}
+        </div>
       )}
 
-      <form onSubmit={submit} className="bg-surface border border-border rounded-lg p-5 divide-y divide-border">
-        {/* ⓪ Assignment (v2-specific) */}
-        <FormSection title="Assignment">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F error={errors.status} label="Status" required>
-              <select value={f.status} onChange={(e) => set("status", e.target.value)} className={inputCls}>
-                {settable.length === 0 && <option value="">No statuses available to you</option>}
-                {settable.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </F>
-            <F error={errors.agent_id} label="Agent">
-              <select value={f.agent_id} onChange={(e) => set("agent_id", e.target.value)} className={inputCls}>
-                <option value="">Unassigned</option>
-                {agents.map((a) => <option key={a.id} value={a.id}>{a.display_name ?? a.id}</option>)}
-              </select>
-            </F>
-          </div>
-        </FormSection>
+      <form onSubmit={submit} className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+        {/* Form column */}
+        <div className="min-w-0 space-y-5">
+          {showAssignment && (
+            <SectionCard n={0} icon={UserCog} title="Assignment" subtitle="Ownership & pipeline stage" done delay={0}>
+              <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
+                {canSetStatus && (
+                  <F error={errors.status} label="Status">
+                    <select value={f.status} onChange={(e) => set("status", e.target.value)} className={inputCls}>
+                      {settable.length === 0 && <option value="">No statuses available to you</option>}
+                      {settable.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </F>
+                )}
+                {canAssign && (
+                  <F error={errors.agent_id} label="Agent">
+                    <select value={f.agent_id} onChange={(e) => set("agent_id", e.target.value)} className={inputCls}>
+                      <option value="">Unassigned</option>
+                      {agents.map((a) => (
+                        <option key={a.id} value={a.id}>{a.display_name ?? a.id}</option>
+                      ))}
+                    </select>
+                  </F>
+                )}
+              </div>
+            </SectionCard>
+          )}
 
-        {/* ① Client Identity */}
-        <FormSection title="Client Identity">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F error={errors.site_type} label="Site Type" required>
-              <RadioPillGroup options={SITE_TYPES} value={f.site_type} onChange={(v) => set("site_type", v)} />
-            </F>
-            <F error={errors.business_name} label="Business Name" required>
-              <input value={f.business_name} onChange={(e) => set("business_name", e.target.value)} placeholder="Enter business name" className={inputCls} autoFocus />
-            </F>
-            <F error={errors.business_phone} label="Phone Number" required hint="Format: (252) 401-2775">
-              <input type="tel" value={f.business_phone} onChange={(e) => set("business_phone", formatPhone(e.target.value))} placeholder="(252) 401-2775" maxLength={14} className={inputCls} />
-            </F>
-            <F error={errors.business_email} label="Email Address" required>
-              <input type="email" value={f.business_email} onChange={(e) => set("business_email", e.target.value)} placeholder="example@email.com" className={inputCls} />
-            </F>
-          </div>
-          <F error={errors.platform} label="Platform" required>
-            <RadioPillGroup options={PLATFORM_OPTIONS} value={f.platform} onChange={(v) => set("platform", v)} />
-            <div className="mt-3" data-error={errors.business_profile_link ? "true" : undefined}>
-              <input value={f.business_profile_link} onChange={(e) => set("business_profile_link", e.target.value)} placeholder="Enter profile link" className={inputCls} />
-              <FieldError error={errors.business_profile_link} />
+          <SectionCard n={1} icon={Building2} title="Client Identity" subtitle="Who the business is" done={sectionDone("identity")} delay={showAssignment ? 60 : 0}>
+            <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
+              <F error={errors.site_type} label="Site Type" required>
+                <RadioPillGroup options={SITE_TYPES} value={f.site_type} onChange={(v) => set("site_type", v)} />
+              </F>
+              <F error={errors.business_name} label="Business Name" required>
+                <input value={f.business_name} onChange={(e) => set("business_name", e.target.value)} placeholder="Enter business name" className={inputCls} autoFocus />
+              </F>
+              <F error={errors.business_phone} label="Phone Number" required hint="Format: (252) 401-2775">
+                <input type="tel" value={f.business_phone} onChange={(e) => set("business_phone", formatPhone(e.target.value))} placeholder="(252) 401-2775" maxLength={14} className={inputCls} />
+              </F>
+              <F error={errors.business_email} label="Email Address" required>
+                <input type="email" value={f.business_email} onChange={(e) => set("business_email", e.target.value)} placeholder="example@email.com" className={inputCls} />
+              </F>
             </div>
-            <ConditionalBlock open={f.platform === "Other"} label="Other Platform">
-              <div data-error={errors.other_platform ? "true" : undefined}>
-                <input value={f.other_platform} onChange={(e) => set("other_platform", e.target.value)} placeholder="e.g., Facebook, Instagram, LinkedIn" className={inputCls} />
-                <FieldError error={errors.other_platform} />
+            <F error={errors.platform} label="Platform" required>
+              <RadioPillGroup options={PLATFORM_OPTIONS} value={f.platform} onChange={(v) => set("platform", v)} />
+              <div className="mt-3" data-error={errors.business_profile_link ? "true" : undefined}>
+                <input value={f.business_profile_link} onChange={(e) => set("business_profile_link", e.target.value)} placeholder="Enter profile link" className={inputCls} />
+                <FieldError error={errors.business_profile_link} />
               </div>
-            </ConditionalBlock>
-          </F>
-        </FormSection>
-
-        {/* ② Location & Services */}
-        <FormSection title="Location & Services">
-          <F error={errors.map_embed_link} label="Map Embed Link">
-            <textarea value={f.map_embed_link} onChange={(e) => set("map_embed_link", e.target.value)} placeholder="Paste your map embed link or iframe code here" rows={2} className={inputCls} />
-          </F>
-          <F error={errors.has_service_areas} label="Service Areas" required>
-            <RadioPillGroup options={["Yes", "No"]} value={f.has_service_areas} onChange={setServiceAreas} />
-            <ConditionalBlock open={f.has_service_areas === "Yes"} label="Areas">
-              <div data-error={errors.areas ? "true" : undefined}>
-                <DynamicList values={f.areas} onChange={(v) => set("areas", v)} placeholder="Enter service area" addLabel="Add Area" />
-                <FieldError error={errors.areas} />
-              </div>
-            </ConditionalBlock>
-          </F>
-          <F error={errors.services} label="Services" required>
-            <DynamicList values={f.services} onChange={(v) => set("services", v)} placeholder="Enter service" addLabel="Add Service" />
-          </F>
-        </FormSection>
-
-        {/* ③ Website Details */}
-        <FormSection title="Website Details">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F error={errors.client_experience} label="Client's Experience (Years)" required>
-              <input type="number" min={0} value={f.client_experience} onChange={(e) => set("client_experience", e.target.value)} placeholder="e.g., 5" className={inputCls} />
-            </F>
-            <Field label="No. of Webpages (auto)" hint="Derived from the selected pages below.">
-              <div className={inputCls + " bg-surface-2 font-mono"}>{total || "—"}</div>
-            </Field>
-          </div>
-          <F error={errors.specify_pages} label="Specify Webpages" required hint={total > 0 ? `Total webpages: ${total}.` : "Selections determine the total number of webpages."}>
-            <ChipGroup
-              options={PAGE_OPTIONS}
-              selected={f.specify_pages}
-              onToggle={togglePage}
-              locked={contactForced ? ["Home", "Contact Us"] : ["Home"]}
-              disabled={isapDisabled ? ["Individual Service Area Pages"] : []}
-              counter={total > 0 ? `${total} page(s) total` : "0 / — selected"}
-            />
-            <ConditionalBlock open={f.specify_pages.includes("Other")}>
-              <input value={f.other_page} onChange={(e) => set("other_page", e.target.value)} placeholder="Specify other page name" className={inputCls} />
-            </ConditionalBlock>
-          </F>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F error={errors.color_scheme} label="Color Scheme" required>
-              <input value={f.color_scheme} onChange={(e) => set("color_scheme", e.target.value)} placeholder="e.g., #1A73E8, #FFFFFF, #000000" className={inputCls} />
-            </F>
-            <F error={errors.logo_link} label="Logo Link">
-              <input type="url" value={f.logo_link} onChange={(e) => set("logo_link", e.target.value)} placeholder="https://example.com/logo.png" className={inputCls} />
-            </F>
-          </div>
-          <F error={errors.image_links} label="Image Links">
-            <DynamicList values={f.image_links} onChange={(v) => set("image_links", v)} placeholder="https://example.com/image.jpg" addLabel="Add Image Link" inputType="url" />
-          </F>
-        </FormSection>
-
-        {/* ④ Pricing & Follow Up */}
-        <FormSection title="Pricing & Follow Up">
-          <F error={errors.follow_up_time} label="Follow Up Time" required>
-            <input type="datetime-local" value={f.follow_up_time} onChange={(e) => set("follow_up_time", e.target.value)} className={inputCls} />
-          </F>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F error={errors.price_quoted} label="Price Quoted" required>
-              <RadioPillGroup
-                options={PRICE_OPTIONS}
-                value={f.price_quoted}
-                onChange={(v) => set("price_quoted", v)}
-              />
-              <ConditionalBlock open={f.price_quoted === "Other"}>
-                <div className="relative" data-error={errors.price_custom ? "true" : undefined}>
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-text-muted">$</span>
-                  <input type="number" min={0} value={f.price_custom} onChange={(e) => set("price_custom", e.target.value)} placeholder="Enter custom price" className={inputCls + " pl-7"} />
-                </div>
-                <FieldError error={errors.price_custom} />
-              </ConditionalBlock>
-            </F>
-            <F error={errors.yearly_price} label="Yearly Price">
-              <RadioPillGroup
-                options={YEARLY_OPTIONS}
-                value={f.yearly_price}
-                onChange={(v) => set("yearly_price", v)}
-              />
-              <ConditionalBlock open={f.yearly_price === "Other"}>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-text-muted">$</span>
-                  <input type="number" min={0} value={f.yearly_custom} onChange={(e) => set("yearly_custom", e.target.value)} placeholder="Enter yearly price" className={inputCls + " pl-7"} />
+              <ConditionalBlock open={f.platform === "Other"} label="Other Platform">
+                <div data-error={errors.other_platform ? "true" : undefined}>
+                  <input value={f.other_platform} onChange={(e) => set("other_platform", e.target.value)} placeholder="e.g., Facebook, Instagram, LinkedIn" className={inputCls} />
+                  <FieldError error={errors.other_platform} />
                 </div>
               </ConditionalBlock>
             </F>
-          </div>
-          <F error={errors.direct_line_saved} label="Direct Line saved?">
-            <RadioPillGroup options={["Yes", "No"]} value={f.direct_line_saved} onChange={(v) => set("direct_line_saved", v as "Yes" | "No")} />
-          </F>
-          <ConditionalBlock open={f.site_type === "Redesign"} label="Reference Site (Redesign only)">
-            <div data-error={errors.reference_link ? "true" : undefined}>
-              <input type="url" value={f.reference_link} onChange={(e) => set("reference_link", e.target.value)} placeholder="https://referencesite.com" className={inputCls} />
-              <FieldError error={errors.reference_link} />
+          </SectionCard>
+
+          <SectionCard n={2} icon={MapPinned} title="Location & Services" subtitle="Coverage & offering" done={sectionDone("location")} delay={showAssignment ? 120 : 60}>
+            <F error={errors.map_embed_link} label="Map Embed Link">
+              <textarea value={f.map_embed_link} onChange={(e) => set("map_embed_link", e.target.value)} placeholder="Paste your map embed link or iframe code here" rows={2} className={inputCls} />
+            </F>
+            <F error={errors.has_service_areas} label="Service Areas" required>
+              <RadioPillGroup options={["Yes", "No"]} value={f.has_service_areas} onChange={setServiceAreas} />
+              <ConditionalBlock open={f.has_service_areas === "Yes"} label="Areas">
+                <div data-error={errors.areas ? "true" : undefined}>
+                  <DynamicList values={f.areas} onChange={setAreas} placeholder="Enter service area" addLabel="Add Area" />
+                  <FieldError error={errors.areas} />
+                </div>
+              </ConditionalBlock>
+            </F>
+            <F error={errors.services} label="Services" required>
+              <DynamicList values={f.services} onChange={(v) => set("services", v)} placeholder="Enter service" addLabel="Add Service" />
+            </F>
+          </SectionCard>
+
+          <SectionCard n={3} icon={Globe} title="Website Details" subtitle="Scope of the build" done={sectionDone("website")} delay={showAssignment ? 180 : 120}>
+            <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
+              <F error={errors.client_experience} label="Client's Experience (Years)" required>
+                <input type="number" min={0} value={f.client_experience} onChange={(e) => set("client_experience", e.target.value)} placeholder="e.g., 5" className={inputCls} />
+              </F>
+              <Field label="No. of Webpages" hint="Auto-derived from the pages below.">
+                <div className={inputCls + " flex items-center bg-surface-2 font-mono text-text-muted"}>
+                  {total || "—"}
+                </div>
+              </Field>
             </div>
-          </ConditionalBlock>
-        </FormSection>
+            <F error={errors.specify_pages} label="Specify Webpages" required hint={total > 0 ? `Total webpages: ${total}.` : "Selections determine the total number of webpages."}>
+              <ChipGroup
+                options={PAGE_OPTIONS}
+                selected={f.specify_pages}
+                onToggle={togglePage}
+                locked={contactForced ? ["Home", "Contact Us"] : ["Home"]}
+                disabled={isapDisabled ? ["Individual Service Area Pages"] : []}
+                counter={total > 0 ? `${total} page(s) total` : "0 / — selected"}
+              />
+              <ConditionalBlock open={f.specify_pages.includes("Other")}>
+                <input value={f.other_page} onChange={(e) => set("other_page", e.target.value)} placeholder="Specify other page name" className={inputCls} />
+              </ConditionalBlock>
+            </F>
+            <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
+              <F error={errors.color_scheme} label="Color Scheme" required>
+                <input value={f.color_scheme} onChange={(e) => set("color_scheme", e.target.value)} placeholder="e.g., #1A73E8, #FFFFFF, #000000" className={inputCls} />
+              </F>
+              <F error={errors.logo_link} label="Logo Link">
+                <input type="url" value={f.logo_link} onChange={(e) => set("logo_link", e.target.value)} placeholder="https://example.com/logo.png" className={inputCls} />
+              </F>
+            </div>
+            <F error={errors.image_links} label="Image Links">
+              <DynamicList values={f.image_links} onChange={(v) => set("image_links", v)} placeholder="https://example.com/image.jpg" addLabel="Add Image Link" inputType="url" />
+            </F>
+          </SectionCard>
 
-        {/* ⑤ Final Assessment */}
-        <FormSection title="Final Assessment">
-          <F error={errors.comments} label="Specific Comments on Client" required>
-            <textarea value={f.comments} onChange={(e) => set("comments", e.target.value)} placeholder="Enter detailed comments about the client..." rows={4} className={inputCls} />
-          </F>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F error={errors.rating} label="Give Lead a Rating (1–10)" required>
-              <RatingGroup value={f.rating} onChange={(v) => set("rating", v)} />
+          <SectionCard n={4} icon={DollarSign} title="Pricing & Follow Up" subtitle="Commercials & next touch" done={sectionDone("pricing")} delay={showAssignment ? 240 : 180}>
+            <F error={errors.follow_up_time} label="Follow Up Time" required>
+              <input type="datetime-local" value={f.follow_up_time} onChange={(e) => set("follow_up_time", e.target.value)} className={inputCls} />
             </F>
-            <F error={errors.fresh_or_followup} label="Fresh or Follow Up?" required>
-              <RadioPillGroup options={["Fresh", "Follow Up"]} value={f.fresh_or_followup} onChange={(v) => set("fresh_or_followup", v)} />
+            <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
+              <F error={errors.price_quoted} label="Price Quoted" required>
+                <RadioPillGroup options={PRICE_OPTIONS} value={f.price_quoted} onChange={(v) => set("price_quoted", v)} />
+                <ConditionalBlock open={f.price_quoted === "Other"}>
+                  <div className="relative" data-error={errors.price_custom ? "true" : undefined}>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-text-muted">$</span>
+                    <input type="number" min={0} value={f.price_custom} onChange={(e) => set("price_custom", e.target.value)} placeholder="Enter custom price" className={inputCls + " pl-7"} />
+                  </div>
+                  <FieldError error={errors.price_custom} />
+                </ConditionalBlock>
+              </F>
+              <F error={errors.yearly_price} label="Yearly Price">
+                <RadioPillGroup options={YEARLY_OPTIONS} value={f.yearly_price} onChange={(v) => set("yearly_price", v)} />
+                <ConditionalBlock open={f.yearly_price === "Other"}>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-text-muted">$</span>
+                    <input type="number" min={0} value={f.yearly_custom} onChange={(e) => set("yearly_custom", e.target.value)} placeholder="Enter yearly price" className={inputCls + " pl-7"} />
+                  </div>
+                </ConditionalBlock>
+              </F>
+            </div>
+            <F error={errors.direct_line_saved} label="Direct Line saved?">
+              <RadioPillGroup options={["Yes", "No"]} value={f.direct_line_saved} onChange={(v) => set("direct_line_saved", v as "Yes" | "No")} />
             </F>
+            <ConditionalBlock open={f.site_type === "Redesign"} label="Reference Site (Redesign only)">
+              <div data-error={errors.reference_link ? "true" : undefined}>
+                <input type="url" value={f.reference_link} onChange={(e) => set("reference_link", e.target.value)} placeholder="https://referencesite.com" className={inputCls} />
+                <FieldError error={errors.reference_link} />
+              </div>
+            </ConditionalBlock>
+          </SectionCard>
+
+          <SectionCard n={5} icon={ClipboardCheck} title="Final Assessment" subtitle="Your read on the lead" done={sectionDone("assessment")} delay={showAssignment ? 300 : 240}>
+            <F error={errors.comments} label="Specific Comments on Client" required>
+              <textarea value={f.comments} onChange={(e) => set("comments", e.target.value)} placeholder="Enter detailed comments about the client..." rows={4} className={inputCls} />
+            </F>
+            <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
+              <F error={errors.rating} label="Give Lead a Rating (1–10)" required>
+                <RatingGroup value={f.rating} onChange={(v) => set("rating", v)} />
+              </F>
+              <F error={errors.fresh_or_followup} label="Fresh or Follow Up?" required>
+                <RadioPillGroup options={["Fresh", "Follow Up"]} value={f.fresh_or_followup} onChange={(v) => set("fresh_or_followup", v)} />
+              </F>
+            </div>
+          </SectionCard>
+
+          {/* Mobile action row (sticky summary handles this on desktop) */}
+          <div className="flex items-center gap-3 lg:hidden">
+            <Link href="/leads" className="rounded-lg border border-border px-4 py-2.5 text-sm text-text-muted hover:bg-surface-2">
+              Cancel
+            </Link>
+            <div className="flex-1">{submitBtn}</div>
           </div>
-        </FormSection>
-
-        <div className="flex justify-end gap-2 pt-5">
-          <Link href="/leads" className="px-4 py-2 text-sm rounded-md border border-border text-text-muted hover:bg-surface-2">Cancel</Link>
-          <button disabled={busy || settable.length === 0} className="px-5 py-2 text-sm rounded-md bg-accent text-white font-semibold hover:bg-accent-ink disabled:opacity-60">
-            {busy ? "Submitting…" : "Submit Lead"}
-          </button>
         </div>
+
+        {/* Sticky summary */}
+        <aside className="hidden lg:block">
+          <div className="reveal sticky top-6 rounded-2xl border border-border bg-surface shadow-sm" style={{ animationDelay: "120ms" }}>
+            <div className="border-b border-border-subtle px-5 py-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint">Summary</p>
+              <p className="font-display text-base font-semibold text-text">Lead dossier</p>
+            </div>
+            <div className="px-5 py-3">
+              <SummaryRow label="Business">{f.business_name.trim() || "—"}</SummaryRow>
+              <SummaryRow label="Status">
+                <span className={"rounded-md px-2 py-0.5 text-xs font-medium " + (STATUS_PILL[f.status] ?? "bg-surface-2 text-text-muted")}>
+                  {f.status || "—"}
+                </span>
+              </SummaryRow>
+              <SummaryRow label="Site type">{f.site_type || "—"}</SummaryRow>
+              <SummaryRow label="Agent">{agentName}</SummaryRow>
+              <SummaryRow label="Price">
+                <span className="font-mono">{priceDisplay}</span>
+              </SummaryRow>
+              <SummaryRow label="Rating">
+                {f.rating ? (
+                  <span className="inline-flex items-center gap-1 font-mono">
+                    <Star size={13} className="fill-accent text-accent" />
+                    {f.rating}/10
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </SummaryRow>
+            </div>
+            <div className="border-t border-border-subtle px-5 py-4">
+              <p className="mb-3 text-xs text-text-muted">
+                {remaining === 0 ? (
+                  <span className="inline-flex items-center gap-1.5 font-medium text-ready-fg">
+                    <Check size={14} /> All required fields complete
+                  </span>
+                ) : (
+                  <>
+                    <span className="font-mono font-semibold text-text">{remaining}</span> required{" "}
+                    {remaining === 1 ? "field" : "fields"} remaining
+                  </>
+                )}
+              </p>
+              {submitBtn}
+              <Link
+                href="/leads"
+                className="mt-2 block rounded-lg border border-border px-4 py-2 text-center text-sm text-text-muted transition-colors hover:bg-surface-2"
+              >
+                Cancel
+              </Link>
+            </div>
+          </div>
+        </aside>
       </form>
     </div>
   );

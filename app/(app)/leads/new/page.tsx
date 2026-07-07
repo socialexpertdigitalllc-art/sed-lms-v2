@@ -12,11 +12,17 @@ export default async function NewLeadPage() {
   const perms = await getUserPermissions(user.id);
   if (!perms.has("leads.create")) redirect("/leads");
 
-  const { data: agents } = await supabase
-    .from("profiles")
-    .select("id, display_name")
-    .eq("is_active", true)
-    .order("display_name");
+  const canAssign = perms.has("leads.assign");
+  const canSetStatus = perms.has("leads.set_status");
 
-  return <NewLeadForm agents={agents ?? []} />;
+  // Only load the agent list when the user may actually assign to others.
+  const { data: agents } = canAssign
+    ? await supabase
+        .from("profiles")
+        .select("id, display_name")
+        .eq("is_active", true)
+        .order("display_name")
+    : { data: [] };
+
+  return <NewLeadForm agents={agents ?? []} canAssign={canAssign} canSetStatus={canSetStatus} />;
 }
