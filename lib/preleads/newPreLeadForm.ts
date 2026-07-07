@@ -36,7 +36,7 @@ export function emptyPreLead(): PreLeadFormState {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function validatePreLead(f: PreLeadFormState): Record<string, string> {
+export function validatePreLead(f: PreLeadFormState, now: Date = new Date()): Record<string, string> {
   const e: Record<string, string> = {};
   if (!f.service_offered) e.service_offered = "Please select a service.";
   if (f.service_offered === "Website" && !f.service_type)
@@ -45,7 +45,10 @@ export function validatePreLead(f: PreLeadFormState): Record<string, string> {
   if (!PHONE_RE.test(f.phone_number.trim())) e.phone_number = "Use format: (252) 401-2775";
   if (f.email.trim() && !EMAIL_RE.test(f.email.trim())) e.email = "Enter a valid email address.";
   if (!f.google_yelp_link.trim()) e.google_yelp_link = "Profile link is required.";
+  const t = f.follow_up_time ? new Date(f.follow_up_time).getTime() : NaN;
   if (!f.follow_up_time) e.follow_up_time = "Follow-up date & time is required.";
+  else if (Number.isNaN(t) || t <= now.getTime())
+    e.follow_up_time = "Follow-up date & time must be in the future.";
   if (!f.lead_category) e.lead_category = "Please select a category.";
   return e;
 }
@@ -53,6 +56,7 @@ export function validatePreLead(f: PreLeadFormState): Record<string, string> {
 const csv = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
 export function buildPreLeadPayload(f: PreLeadFormState) {
+  const d = f.follow_up_time ? new Date(f.follow_up_time) : null;
   return {
     business_name: f.business_name.trim(),
     lead_category: f.lead_category,
@@ -66,7 +70,7 @@ export function buildPreLeadPayload(f: PreLeadFormState) {
     pricing: f.pricing.trim() === "" ? null : Number(f.pricing),
     areas: csv(f.areas),
     services: csv(f.services),
-    follow_up_time: f.follow_up_time ? new Date(f.follow_up_time).toISOString() : null,
+    follow_up_time: d && !Number.isNaN(d.getTime()) ? d.toISOString() : null,
     comments: f.comments.trim() || null,
   };
 }
