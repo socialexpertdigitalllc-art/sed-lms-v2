@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { catSetKey } from "@/lib/leads/categories";
-import { nextStreak } from "@/lib/leads/followups";
+import { nextStreak, isFollowUpEligible } from "@/lib/leads/followups";
 import { logFollowUpSchema } from "@/lib/leads/followupSchema";
 
 export async function GET(
@@ -75,6 +75,8 @@ export async function POST(
     .is("deleted_at", null)
     .single();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  if (!isFollowUpEligible(lead.status))
+    return NextResponse.json({ error: "Follow-ups apply only to Ready or Long Term leads." }, { status: 422 });
 
   const parsed = logFollowUpSchema.safeParse(await req.json());
   if (!parsed.success) {
@@ -88,17 +90,9 @@ export async function POST(
   const next = parsed.data.next_follow_up_time
     ? new Date(parsed.data.next_follow_up_time).toISOString()
     : null;
-  if (
-    parsed.data.fu_status === "No Pickup" &&
-    (!next || new Date(next).getTime() <= Date.now())
-  )
+  if (!next || new Date(next).getTime() <= Date.now())
     return NextResponse.json(
       { error: "A future next follow-up time is required." },
-      { status: 422 }
-    );
-  if (isPickup && next && new Date(next).getTime() <= Date.now())
-    return NextResponse.json(
-      { error: "Next follow-up must be in the future." },
       { status: 422 }
     );
   const statusChange = isPickup ? parsed.data.status_change : null;

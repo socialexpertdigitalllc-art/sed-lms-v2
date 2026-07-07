@@ -30,7 +30,6 @@ export function FollowUpModal({
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const settable = settableStatuses(all);
-  const terminal = status_change === "Closed" || status_change === "Dropped";
 
   if (!open) return null;
 
@@ -129,13 +128,7 @@ export function FollowUpModal({
                   clearError("next_follow_up_time");
                 }}
               />
-              <p className="text-[11px] text-text-faint mt-1">
-                {fu_status === "No Pickup"
-                  ? "Required"
-                  : terminal
-                    ? "No next follow-up needed for a closed lead."
-                    : "Optional — schedule the next touch."}
-              </p>
+              <p className="text-[11px] text-text-faint mt-1">Required</p>
               {errors.next_follow_up_time && (
                 <p className="text-[11px] text-dropped-fg mt-1">{errors.next_follow_up_time}</p>
               )}
