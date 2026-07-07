@@ -1,14 +1,17 @@
 import type { Kpis } from "@/lib/leads/analytics";
 
-export function StatusStrip({ kpis }: { kpis: Kpis }) {
-  const items = [
+export function StatusStrip({ kpis, statuses }: { kpis: Kpis; statuses?: string[] }) {
+  const allItems = [
     { label: "Ready", count: kpis.ready, bar: "bg-ready-fg", text: "text-ready-fg" },
     { label: "Not Ready", count: kpis.notReady, bar: "bg-notready-fg", text: "text-notready-fg" },
     { label: "Closed", count: kpis.closed, bar: "bg-closed-fg", text: "text-closed-fg" },
     { label: "Dropped", count: kpis.dropped, bar: "bg-dropped-fg", text: "text-dropped-fg" },
     { label: "Long Term", count: kpis.longTerm, bar: "bg-longterm-fg", text: "text-longterm-fg" },
   ];
+  const items = allItems.filter((i) => !statuses || statuses.includes(i.label));
   const total = kpis.total || 1;
+
+  if (items.length === 0) return null;
 
   return (
     <div className="bg-surface border border-border rounded-lg p-4 grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-5">

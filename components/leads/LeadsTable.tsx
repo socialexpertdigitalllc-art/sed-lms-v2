@@ -14,7 +14,8 @@ import {
   type ColumnFiltersState,
 } from "@tanstack/react-table";
 import type { Lead } from "@/lib/leads/types";
-import { LEAD_STATUSES, SITE_TYPES } from "@/lib/leads/types";
+import { SITE_TYPES } from "@/lib/leads/types";
+import { visibleStatuses } from "@/lib/leads/categories";
 import { formatCurrency, formatDate, formatDateTime, initials } from "@/lib/leads/format";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
@@ -29,7 +30,8 @@ export function LeadsTable({
   leads: Lead[];
   agentNameById: Record<string, string>;
 }) {
-  const { has } = usePermissions();
+  const { has, all } = usePermissions();
+  const visible = visibleStatuses(all);
   useRealtimeRefresh("leads");
   const canCreate = has("leads.create");
   const canChangeStatus = has("leads.status_change");
@@ -71,10 +73,10 @@ export function LeadsTable({
 
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = { All: leads.length };
-    for (const s of LEAD_STATUSES) c[s] = 0;
+    for (const s of visible) c[s] = 0;
     for (const l of leads) if (l.status in c) c[l.status]++;
     return c;
-  }, [leads]);
+  }, [leads, visible]);
 
   const agentOptions = useMemo(() => {
     const set = new Set<string>();
@@ -223,7 +225,7 @@ export function LeadsTable({
 
       {/* status tabs */}
       <div className="flex flex-wrap gap-1 mb-3">
-        {["All", ...LEAD_STATUSES].map((tab) => (
+        {["All", ...visible].map((tab) => (
           <button
             key={tab}
             onClick={() => selectStatus(tab)}

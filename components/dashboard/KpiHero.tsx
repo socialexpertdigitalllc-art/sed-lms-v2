@@ -1,7 +1,7 @@
 import { formatCompactCurrency } from "@/lib/leads/format";
 import type { Kpis } from "@/lib/leads/analytics";
 
-export function KpiHero({ kpis }: { kpis: Kpis }) {
+export function KpiHero({ kpis, showReady = true }: { kpis: Kpis; showReady?: boolean }) {
   const readyPct = kpis.total ? Math.round((kpis.ready / kpis.total) * 100) : 0;
   const cards = [
     {
@@ -29,10 +29,11 @@ export function KpiHero({ kpis }: { kpis: Kpis }) {
       accent: false,
     },
   ];
+  const shown = cards.filter((c) => c.label !== "Ready" || showReady);
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      {cards.map((c) => (
+      {shown.map((c) => (
         <div key={c.label} className="bg-surface border border-border rounded-lg p-4">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-text-faint">
             {c.label}

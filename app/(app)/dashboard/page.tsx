@@ -21,6 +21,8 @@ import {
   freshVsFollowup,
 } from "@/lib/leads/analytics";
 import type { Lead } from "@/lib/leads/types";
+import { getUserPermissions } from "@/lib/permissions/resolver";
+import { visibleStatuses } from "@/lib/leads/categories";
 
 function ChartCard({
   title,
@@ -51,6 +53,10 @@ export default async function DashboardPage() {
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 
+  const { data: { user } } = await supabase.auth.getUser();
+  const perms = user ? await getUserPermissions(user.id) : new Set<string>();
+  const visible: string[] = visibleStatuses(perms);
+
   const kpis = computeKpis(leads);
   const fvf = freshVsFollowup(leads);
   const siteData = bySiteType(leads);
@@ -65,8 +71,8 @@ export default async function DashboardPage() {
         </p>
       </div>
 
-      <KpiHero kpis={kpis} />
-      <StatusStrip kpis={kpis} />
+      <KpiHero kpis={kpis} showReady={visible.includes("Ready")} />
+      <StatusStrip kpis={kpis} statuses={visible} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <ChartCard title="Leads over time" className="lg:col-span-2">
@@ -74,7 +80,7 @@ export default async function DashboardPage() {
         </ChartCard>
         <ChartCard title="Pipeline by status">
           <StatusDonut data={byStatus(leads)} />
-          <Legend items={STATUS_LEGEND} />
+          <Legend items={STATUS_LEGEND.filter((i) => visible.includes(i.name))} />
         </ChartCard>
       </div>
 
