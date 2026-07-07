@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Lead } from "@/lib/leads/types";
+import type { LeadFollowUp } from "@/lib/leads/followups";
 import { SITE_TYPES, FRESH_OPTIONS } from "@/lib/leads/types";
 import { settableStatuses } from "@/lib/leads/categories";
 import { toDateTimeLocal } from "@/lib/leads/format";
@@ -11,6 +12,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
 import { DeleteLeadModal } from "./DeleteLeadModal";
+import { RecentFollowUps } from "./RecentFollowUps";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -52,7 +54,7 @@ function initialForm(lead: Lead) {
   };
 }
 
-export function LeadDetail({ lead, agents }: { lead: Lead; agents: Agent[] }) {
+export function LeadDetail({ lead, agents, followUps }: { lead: Lead; agents: Agent[]; followUps: LeadFollowUp[] }) {
   const { has, all } = usePermissions();
   const settable = settableStatuses(all);
   const canEdit = has("leads.edit");
@@ -129,7 +131,7 @@ export function LeadDetail({ lead, agents }: { lead: Lead; agents: Agent[] }) {
   const ro = !canEdit;
 
   return (
-    <div className="max-w-4xl">
+    <div className="max-w-6xl">
       <Link href="/leads" className="text-xs text-text-muted hover:text-text">← Leads</Link>
       <div className="flex items-start justify-between mt-2 mb-5 gap-4">
         <div className="min-w-0">
@@ -178,7 +180,8 @@ export function LeadDetail({ lead, agents }: { lead: Lead; agents: Agent[] }) {
       )}
       {queueMsg && <div className="mb-4 text-sm rounded-md px-3 py-2 bg-accent-soft text-accent-ink">{queueMsg}</div>}
 
-      <div className="space-y-5">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+      <div className="min-w-0 space-y-5">
         <Section title="Business info">
           <Field label="Business name"><input disabled={ro} value={f.business_name} onChange={set("business_name")} className={inputCls(ro)} /></Field>
           <Field label="Phone"><input disabled={ro} value={f.business_phone} onChange={set("business_phone")} className={inputCls(ro)} /></Field>
@@ -257,6 +260,11 @@ export function LeadDetail({ lead, agents }: { lead: Lead; agents: Agent[] }) {
             </button>
           </div>
         )}
+      </div>
+
+        <aside className="hidden lg:block">
+          <RecentFollowUps leadId={lead.id} businessName={lead.business_name} followUps={followUps} />
+        </aside>
       </div>
 
       <StatusChangeModal leadId={lead.id} current={lead.status} businessName={lead.business_name} open={statusOpen} onClose={() => setStatusOpen(false)} />
