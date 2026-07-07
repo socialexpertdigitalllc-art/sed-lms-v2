@@ -28,6 +28,24 @@ import { RatingGroup } from "@/components/forms/RatingGroup";
 
 type Agent = { id: string; display_name: string | null };
 
+/**
+ * Field wrapper that flags itself for scroll-to-first-error.
+ * Module-scope (stable component identity) so typing never remounts the input.
+ */
+function F({ error, ...props }: { error?: string } & React.ComponentProps<typeof Field>) {
+  return (
+    <div data-error={error ? "true" : undefined}>
+      <Field {...props} error={error} />
+    </div>
+  );
+}
+
+/** Inline error line for controls that live outside a direct Field child. */
+function FieldError({ error }: { error?: string }) {
+  if (!error) return null;
+  return <p className="text-[11px] text-dropped-fg mt-1">⚠ {error}</p>;
+}
+
 export function NewLeadForm({ agents }: { agents: Agent[] }) {
   const router = useRouter();
   const { all } = usePermissions();
@@ -104,7 +122,12 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
     const errs = validateNewLead(f);
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
-      document.querySelector("[data-error='true']")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      // Defer past commit so the freshly-set data-error markers exist in the DOM.
+      requestAnimationFrame(() =>
+        document
+          .querySelector("[data-error='true']")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" })
+      );
       return;
     }
     setBusy(true);
@@ -124,13 +147,6 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
     router.refresh();
   }
 
-  /** Wrapper that flags a field for scroll-to-first-error. */
-  const F = ({ k, ...props }: { k: string } & React.ComponentProps<typeof Field>) => (
-    <div data-error={errors[k] ? "true" : undefined}>
-      <Field {...props} error={errors[k]} />
-    </div>
-  );
-
   return (
     <div className="max-w-3xl">
       <Link href="/leads" className="text-xs text-text-muted hover:text-text">← Leads</Link>
@@ -144,13 +160,13 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
         {/* ⓪ Assignment (v2-specific) */}
         <FormSection title="Assignment">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F k="status" label="Status" required>
+            <F error={errors.status} label="Status" required>
               <select value={f.status} onChange={(e) => set("status", e.target.value)} className={inputCls}>
                 {settable.length === 0 && <option value="">No statuses available to you</option>}
                 {settable.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </F>
-            <F k="agent_id" label="Agent">
+            <F error={errors.agent_id} label="Agent">
               <select value={f.agent_id} onChange={(e) => set("agent_id", e.target.value)} className={inputCls}>
                 <option value="">Unassigned</option>
                 {agents.map((a) => <option key={a.id} value={a.id}>{a.display_name ?? a.id}</option>)}
@@ -162,33 +178,29 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
         {/* ① Client Identity */}
         <FormSection title="Client Identity">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F k="site_type" label="Site Type" required>
+            <F error={errors.site_type} label="Site Type" required>
               <RadioPillGroup options={SITE_TYPES} value={f.site_type} onChange={(v) => set("site_type", v)} />
             </F>
-            <F k="business_name" label="Business Name" required>
+            <F error={errors.business_name} label="Business Name" required>
               <input value={f.business_name} onChange={(e) => set("business_name", e.target.value)} placeholder="Enter business name" className={inputCls} autoFocus />
             </F>
-            <F k="business_phone" label="Phone Number" required hint="Format: (252) 401-2775">
+            <F error={errors.business_phone} label="Phone Number" required hint="Format: (252) 401-2775">
               <input type="tel" value={f.business_phone} onChange={(e) => set("business_phone", formatPhone(e.target.value))} placeholder="(252) 401-2775" maxLength={14} className={inputCls} />
             </F>
-            <F k="business_email" label="Email Address" required>
+            <F error={errors.business_email} label="Email Address" required>
               <input type="email" value={f.business_email} onChange={(e) => set("business_email", e.target.value)} placeholder="example@email.com" className={inputCls} />
             </F>
           </div>
-          <F k="platform" label="Platform" required>
+          <F error={errors.platform} label="Platform" required>
             <RadioPillGroup options={PLATFORM_OPTIONS} value={f.platform} onChange={(v) => set("platform", v)} />
             <div className="mt-3" data-error={errors.business_profile_link ? "true" : undefined}>
               <input value={f.business_profile_link} onChange={(e) => set("business_profile_link", e.target.value)} placeholder="Enter profile link" className={inputCls} />
-              {errors.business_profile_link && (
-                <p className="text-[11px] text-dropped-fg mt-1">⚠ {errors.business_profile_link}</p>
-              )}
+              <FieldError error={errors.business_profile_link} />
             </div>
             <ConditionalBlock open={f.platform === "Other"} label="Other Platform">
               <div data-error={errors.other_platform ? "true" : undefined}>
                 <input value={f.other_platform} onChange={(e) => set("other_platform", e.target.value)} placeholder="e.g., Facebook, Instagram, LinkedIn" className={inputCls} />
-                {errors.other_platform && (
-                  <p className="text-[11px] text-dropped-fg mt-1">⚠ {errors.other_platform}</p>
-                )}
+                <FieldError error={errors.other_platform} />
               </div>
             </ConditionalBlock>
           </F>
@@ -196,19 +208,19 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
 
         {/* ② Location & Services */}
         <FormSection title="Location & Services">
-          <F k="map_embed_link" label="Map Embed Link">
+          <F error={errors.map_embed_link} label="Map Embed Link">
             <textarea value={f.map_embed_link} onChange={(e) => set("map_embed_link", e.target.value)} placeholder="Paste your map embed link or iframe code here" rows={2} className={inputCls} />
           </F>
-          <F k="has_service_areas" label="Service Areas" required>
+          <F error={errors.has_service_areas} label="Service Areas" required>
             <RadioPillGroup options={["Yes", "No"]} value={f.has_service_areas} onChange={setServiceAreas} />
             <ConditionalBlock open={f.has_service_areas === "Yes"} label="Areas">
               <div data-error={errors.areas ? "true" : undefined}>
                 <DynamicList values={f.areas} onChange={(v) => set("areas", v)} placeholder="Enter service area" addLabel="Add Area" />
-                {errors.areas && <p className="text-[11px] text-dropped-fg mt-1">⚠ {errors.areas}</p>}
+                <FieldError error={errors.areas} />
               </div>
             </ConditionalBlock>
           </F>
-          <F k="services" label="Services" required>
+          <F error={errors.services} label="Services" required>
             <DynamicList values={f.services} onChange={(v) => set("services", v)} placeholder="Enter service" addLabel="Add Service" />
           </F>
         </FormSection>
@@ -216,14 +228,14 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
         {/* ③ Website Details */}
         <FormSection title="Website Details">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F k="client_experience" label="Client's Experience (Years)" required>
+            <F error={errors.client_experience} label="Client's Experience (Years)" required>
               <input type="number" min={0} value={f.client_experience} onChange={(e) => set("client_experience", e.target.value)} placeholder="e.g., 5" className={inputCls} />
             </F>
             <Field label="No. of Webpages (auto)" hint="Derived from the selected pages below.">
               <div className={inputCls + " bg-surface-2 font-mono"}>{total || "—"}</div>
             </Field>
           </div>
-          <F k="specify_pages" label="Specify Webpages" required hint={total > 0 ? `Total webpages: ${total}.` : "Selections determine the total number of webpages."}>
+          <F error={errors.specify_pages} label="Specify Webpages" required hint={total > 0 ? `Total webpages: ${total}.` : "Selections determine the total number of webpages."}>
             <ChipGroup
               options={PAGE_OPTIONS}
               selected={f.specify_pages}
@@ -237,25 +249,25 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
             </ConditionalBlock>
           </F>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F k="color_scheme" label="Color Scheme" required>
+            <F error={errors.color_scheme} label="Color Scheme" required>
               <input value={f.color_scheme} onChange={(e) => set("color_scheme", e.target.value)} placeholder="e.g., #1A73E8, #FFFFFF, #000000" className={inputCls} />
             </F>
-            <F k="logo_link" label="Logo Link">
+            <F error={errors.logo_link} label="Logo Link">
               <input type="url" value={f.logo_link} onChange={(e) => set("logo_link", e.target.value)} placeholder="https://example.com/logo.png" className={inputCls} />
             </F>
           </div>
-          <F k="image_links" label="Image Links">
+          <F error={errors.image_links} label="Image Links">
             <DynamicList values={f.image_links} onChange={(v) => set("image_links", v)} placeholder="https://example.com/image.jpg" addLabel="Add Image Link" inputType="url" />
           </F>
         </FormSection>
 
         {/* ④ Pricing & Follow Up */}
         <FormSection title="Pricing & Follow Up">
-          <F k="follow_up_time" label="Follow Up Time" required>
+          <F error={errors.follow_up_time} label="Follow Up Time" required>
             <input type="datetime-local" value={f.follow_up_time} onChange={(e) => set("follow_up_time", e.target.value)} className={inputCls} />
           </F>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F k="price_quoted" label="Price Quoted" required>
+            <F error={errors.price_quoted} label="Price Quoted" required>
               <RadioPillGroup
                 options={PRICE_OPTIONS}
                 value={f.price_quoted}
@@ -266,10 +278,10 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-text-muted">$</span>
                   <input type="number" min={0} value={f.price_custom} onChange={(e) => set("price_custom", e.target.value)} placeholder="Enter custom price" className={inputCls + " pl-7"} />
                 </div>
-                {errors.price_custom && <p className="text-[11px] text-dropped-fg mt-1">⚠ {errors.price_custom}</p>}
+                <FieldError error={errors.price_custom} />
               </ConditionalBlock>
             </F>
-            <F k="yearly_price" label="Yearly Price">
+            <F error={errors.yearly_price} label="Yearly Price">
               <RadioPillGroup
                 options={YEARLY_OPTIONS}
                 value={f.yearly_price}
@@ -283,27 +295,27 @@ export function NewLeadForm({ agents }: { agents: Agent[] }) {
               </ConditionalBlock>
             </F>
           </div>
-          <F k="direct_line_saved" label="Direct Line saved?">
+          <F error={errors.direct_line_saved} label="Direct Line saved?">
             <RadioPillGroup options={["Yes", "No"]} value={f.direct_line_saved} onChange={(v) => set("direct_line_saved", v as "Yes" | "No")} />
           </F>
           <ConditionalBlock open={f.site_type === "Redesign"} label="Reference Site (Redesign only)">
             <div data-error={errors.reference_link ? "true" : undefined}>
               <input type="url" value={f.reference_link} onChange={(e) => set("reference_link", e.target.value)} placeholder="https://referencesite.com" className={inputCls} />
-              {errors.reference_link && <p className="text-[11px] text-dropped-fg mt-1">⚠ {errors.reference_link}</p>}
+              <FieldError error={errors.reference_link} />
             </div>
           </ConditionalBlock>
         </FormSection>
 
         {/* ⑤ Final Assessment */}
         <FormSection title="Final Assessment">
-          <F k="comments" label="Specific Comments on Client" required>
+          <F error={errors.comments} label="Specific Comments on Client" required>
             <textarea value={f.comments} onChange={(e) => set("comments", e.target.value)} placeholder="Enter detailed comments about the client..." rows={4} className={inputCls} />
           </F>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-            <F k="rating" label="Give Lead a Rating (1–10)" required>
+            <F error={errors.rating} label="Give Lead a Rating (1–10)" required>
               <RatingGroup value={f.rating} onChange={(v) => set("rating", v)} />
             </F>
-            <F k="fresh_or_followup" label="Fresh or Follow Up?" required>
+            <F error={errors.fresh_or_followup} label="Fresh or Follow Up?" required>
               <RadioPillGroup options={["Fresh", "Follow Up"]} value={f.fresh_or_followup} onChange={(v) => set("fresh_or_followup", v)} />
             </F>
           </div>
