@@ -26,6 +26,13 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv } from "@/lib/leads/csv";
 
+const SORTS: Record<string, { id: string; desc: boolean }> = {
+  created_desc: { id: "created_at", desc: true },
+  followup_asc: { id: "follow_up_time", desc: false },
+  rating_desc: { id: "rating", desc: true },
+  name_asc: { id: "business_name", desc: false },
+};
+
 export function LeadsTable({
   leads,
   agentNameById,
@@ -71,6 +78,7 @@ export function LeadsTable({
 
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [sortKey, setSortKey] = useState<string>("created_desc");
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [statusTab, setStatusTab] = useState<string>("All");
   const [modalLead, setModalLead] = useState<Lead | null>(null);
@@ -298,6 +306,20 @@ export function LeadsTable({
         >
           <option value="">All types</option>
           {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select
+          value={sortKey}
+          onChange={(e) => {
+            const key = e.target.value;
+            setSortKey(key);
+            setSorting([SORTS[key]]);
+          }}
+          className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
+        >
+          <option value="created_desc">Submitted date</option>
+          <option value="followup_asc">Follow-up time</option>
+          <option value="rating_desc">Rating</option>
+          <option value="name_asc">Alphabetical</option>
         </select>
         {canExport && (
           <button onClick={exportCsv} className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted hover:bg-surface-2 whitespace-nowrap">
