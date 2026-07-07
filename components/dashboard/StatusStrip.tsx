@@ -6,11 +6,15 @@ export function StatusStrip({ kpis }: { kpis: Kpis }) {
     { label: "Not Ready", count: kpis.notReady, bar: "bg-notready-fg", text: "text-notready-fg" },
     { label: "Closed", count: kpis.closed, bar: "bg-closed-fg", text: "text-closed-fg" },
     { label: "Dropped", count: kpis.dropped, bar: "bg-dropped-fg", text: "text-dropped-fg" },
+    { label: "Long Term", count: kpis.longTerm, bar: "bg-longterm-fg", text: "text-longterm-fg" },
   ];
   const total = kpis.total || 1;
 
   return (
-    <div className="bg-surface border border-border rounded-lg p-4 grid grid-cols-2 sm:grid-cols-4 gap-5">
+    <div
+      className="bg-surface border border-border rounded-lg p-4 grid gap-5"
+      style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}
+    >
       {items.map((i) => {
         const pct = Math.round((i.count / total) * 100);
         return (

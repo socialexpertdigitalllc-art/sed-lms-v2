@@ -1,4 +1,4 @@
-export const LEAD_STATUSES = ["Ready", "Not Ready", "Closed", "Dropped"] as const;
+export const LEAD_STATUSES = ["Ready", "Not Ready", "Closed", "Dropped", "Long Term"] as const;
 export type LeadStatus = (typeof LEAD_STATUSES)[number];
 
 export const SITE_TYPES = [
@@ -17,6 +17,7 @@ export const STATUS_PILL: Record<string, string> = {
   "Not Ready": "bg-notready-bg text-notready-fg",
   Closed: "bg-closed-bg text-closed-fg",
   Dropped: "bg-dropped-bg text-dropped-fg",
+  "Long Term": "bg-longterm-bg text-longterm-fg",
 };
 
 export interface Lead {

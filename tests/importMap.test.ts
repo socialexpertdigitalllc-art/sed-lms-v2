@@ -33,6 +33,10 @@ describe("mapRow", () => {
     const r = mapRow(rowFrom({ F: "Biz", B: "Weird" }), DEFAULT_MAPPING)!;
     expect(r.lead.status).toBe("Not Ready");
   });
+  it("keeps Long Term as a valid status", () => {
+    const r = mapRow(rowFrom({ F: "Biz", B: "Long Term" }), DEFAULT_MAPPING)!;
+    expect(r.lead.status).toBe("Long Term");
+  });
   it("returns null when business_name is empty (invalid row)", () => {
     expect(mapRow(rowFrom({ B: "Ready" }), DEFAULT_MAPPING)).toBeNull();
   });

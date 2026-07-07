@@ -6,6 +6,7 @@ export interface Kpis {
   notReady: number;
   closed: number;
   dropped: number;
+  longTerm: number;
   freshCount: number;
   quotedRevenue: number;
   avgRating: number; // 0 when no rated leads
@@ -17,7 +18,13 @@ export function computeKpis(leads: Lead[], now: Date = new Date()): Kpis {
   let quotedRevenue = 0;
   let ratingSum = 0;
   let ratingCount = 0;
-  const counts: Record<string, number> = { Ready: 0, "Not Ready": 0, Closed: 0, Dropped: 0 };
+  const counts: Record<string, number> = {
+    Ready: 0,
+    "Not Ready": 0,
+    Closed: 0,
+    Dropped: 0,
+    "Long Term": 0,
+  };
   let freshCount = 0;
   let newThisWeek = 0;
 
@@ -38,6 +45,7 @@ export function computeKpis(leads: Lead[], now: Date = new Date()): Kpis {
     notReady: counts["Not Ready"],
     closed: counts.Closed,
     dropped: counts.Dropped,
+    longTerm: counts["Long Term"],
     freshCount,
     quotedRevenue,
     avgRating: ratingCount ? ratingSum / ratingCount : 0,
@@ -51,7 +59,7 @@ export interface NameValue {
 }
 
 export function byStatus(leads: Lead[]): NameValue[] {
-  const order = ["Ready", "Not Ready", "Closed", "Dropped"];
+  const order = ["Ready", "Not Ready", "Closed", "Dropped", "Long Term"];
   const map = new Map<string, number>();
   for (const l of leads) map.set(l.status, (map.get(l.status) ?? 0) + 1);
   return order.filter((s) => map.has(s)).map((s) => ({ name: s, value: map.get(s)! }));

@@ -25,6 +25,7 @@ const STATUS_COLORS: Record<string, string> = {
   "Not Ready": "#D97706",
   Closed: "#7E22CE",
   Dropped: "#DC2626",
+  "Long Term": "#1D4ED8",
 };
 const PALETTE = ["#0D9488", "#2563EB", "#7E22CE", "#D97706", "#0EA5E9"];
 
