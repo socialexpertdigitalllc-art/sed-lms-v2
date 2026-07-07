@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { bucketOf, groupByBucket, validateFollowUp, nextStreak } from "@/lib/leads/followups";
+import {
+  bucketOf,
+  groupByBucket,
+  validateFollowUp,
+  nextStreak,
+  isFollowUpEligible,
+  FOLLOWUP_STATUSES,
+} from "@/lib/leads/followups";
 
 const NOW = new Date("2026-07-07T12:00:00");
 
@@ -37,9 +44,21 @@ describe("validateFollowUp", () => {
     expect(validateFollowUp({ fu_status: "No Pickup", next_follow_up_time: "2026-07-06T10:00" }, NOW).next_follow_up_time).toBeTruthy();
     expect(validateFollowUp({ fu_status: "No Pickup", next_follow_up_time: "2026-07-08T10:00" }, NOW)).toEqual({});
   });
-  it("Pickup allows empty next time but rejects a past one", () => {
-    expect(validateFollowUp({ fu_status: "Pickup", next_follow_up_time: "" }, NOW)).toEqual({});
+  it("requires a future next time for BOTH statuses", () => {
+    expect(validateFollowUp({ fu_status: "Pickup", next_follow_up_time: "" }, NOW).next_follow_up_time).toBeTruthy();
     expect(validateFollowUp({ fu_status: "Pickup", next_follow_up_time: "2026-07-06T10:00" }, NOW).next_follow_up_time).toBeTruthy();
+    expect(validateFollowUp({ fu_status: "Pickup", next_follow_up_time: "2026-07-08T10:00" }, NOW)).toEqual({});
+    expect(validateFollowUp({ fu_status: "No Pickup", next_follow_up_time: "2026-07-08T10:00" }, NOW)).toEqual({});
+  });
+});
+
+describe("isFollowUpEligible", () => {
+  it("only Ready and Long Term", () => {
+    expect(FOLLOWUP_STATUSES).toEqual(["Ready", "Long Term"]);
+    expect(isFollowUpEligible("Ready")).toBe(true);
+    expect(isFollowUpEligible("Long Term")).toBe(true);
+    expect(isFollowUpEligible("Not Ready")).toBe(false);
+    expect(isFollowUpEligible("Closed")).toBe(false);
   });
 });
 

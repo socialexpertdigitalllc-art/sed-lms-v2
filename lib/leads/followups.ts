@@ -55,14 +55,13 @@ export function validateFollowUp(
   const e: Record<string, string> = {};
   if (!input.fu_status) e.fu_status = "Select Pickup or No Pickup.";
   const raw = input.next_follow_up_time ?? "";
-  const future = () => {
-    const t = new Date(raw).getTime();
-    return !Number.isNaN(t) && t > now.getTime();
-  };
-  if (input.fu_status === "No Pickup") {
-    if (!raw || !future()) e.next_follow_up_time = "Set a future next follow-up time.";
-  } else if (input.fu_status === "Pickup" && raw && !future()) {
-    e.next_follow_up_time = "Next follow-up must be in the future.";
-  }
+  const t = new Date(raw).getTime();
+  if (!raw || Number.isNaN(t) || t <= now.getTime())
+    e.next_follow_up_time = "Set a future next follow-up time.";
   return e;
+}
+
+export const FOLLOWUP_STATUSES = ["Ready", "Long Term"] as const;
+export function isFollowUpEligible(status: string): boolean {
+  return (FOLLOWUP_STATUSES as readonly string[]).includes(status);
 }
