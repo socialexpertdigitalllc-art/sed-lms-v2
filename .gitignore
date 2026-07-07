@@ -12,6 +12,9 @@ next-env.d.ts
 # production
 /dist
 
+# typescript incremental build info
+tsconfig.tsbuildinfo
+
 # env
 .env
 .env*.local
