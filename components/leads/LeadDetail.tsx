@@ -4,7 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Lead } from "@/lib/leads/types";
-import { LEAD_STATUSES, SITE_TYPES, FRESH_OPTIONS } from "@/lib/leads/types";
+import { SITE_TYPES, FRESH_OPTIONS } from "@/lib/leads/types";
+import { settableStatuses } from "@/lib/leads/categories";
 import { toDateTimeLocal } from "@/lib/leads/format";
 import { usePermissions } from "@/hooks/usePermissions";
 import { StatusPill } from "./StatusPill";
@@ -52,7 +53,8 @@ function initialForm(lead: Lead) {
 }
 
 export function LeadDetail({ lead, agents }: { lead: Lead; agents: Agent[] }) {
-  const { has } = usePermissions();
+  const { has, all } = usePermissions();
+  const settable = settableStatuses(all);
   const canEdit = has("leads.edit");
   const canDelete = has("leads.delete");
   const canChangeStatus = has("leads.status_change");
@@ -197,7 +199,9 @@ export function LeadDetail({ lead, agents }: { lead: Lead; agents: Agent[] }) {
           </Field>
           <Field label="Status">
             <select disabled={ro} value={f.status} onChange={set("status")} className={inputCls(ro)}>
-              {LEAD_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {((settable as string[]).includes(lead.status) ? settable : [lead.status, ...settable]).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
             </select>
           </Field>
           <Field label="Site type">

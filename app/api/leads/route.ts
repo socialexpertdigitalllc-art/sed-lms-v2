@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { createLeadSchema } from "@/lib/leads/schema";
+import { catSetKey } from "@/lib/leads/categories";
 import { enqueueLeadIfReady } from "@/lib/ai-tools/queue";
 
 export async function GET() {
@@ -44,6 +45,13 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { error: "Invalid input", issues: parsed.error.flatten() },
       { status: 422 }
+    );
+  }
+
+  if (!perms.has(catSetKey(parsed.data.status))) {
+    return NextResponse.json(
+      { error: `You are not allowed to create a lead with status "${parsed.data.status}"` },
+      { status: 403 }
     );
   }
 

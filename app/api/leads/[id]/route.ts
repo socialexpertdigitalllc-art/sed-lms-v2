@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { updateLeadSchema } from "@/lib/leads/schema";
+import { catSetKey } from "@/lib/leads/categories";
 
 export async function PATCH(
   req: Request,
@@ -33,6 +34,13 @@ export async function PATCH(
     return NextResponse.json(
       { error: "Invalid input", issues: parsed.error.flatten() },
       { status: 422 }
+    );
+  }
+
+  if (parsed.data.status !== undefined && !perms.has(catSetKey(parsed.data.status))) {
+    return NextResponse.json(
+      { error: `You are not allowed to set status "${parsed.data.status}"` },
+      { status: 403 }
     );
   }
 

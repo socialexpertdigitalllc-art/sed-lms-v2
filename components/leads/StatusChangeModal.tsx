@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { LEAD_STATUSES } from "@/lib/leads/types";
+import { settableStatuses } from "@/lib/leads/categories";
+import { usePermissions } from "@/hooks/usePermissions";
 
 export function StatusChangeModal({
   leadId,
@@ -18,9 +19,12 @@ export function StatusChangeModal({
   onClose: () => void;
 }) {
   const router = useRouter();
+  const { all } = usePermissions();
   const [status, setStatus] = useState(current);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const options = settableStatuses(all);
 
   if (!open) return null;
 
@@ -53,7 +57,7 @@ export function StatusChangeModal({
         {error && <div className="mb-3 text-sm text-dropped-fg bg-dropped-bg rounded-md px-3 py-2">{error}</div>}
 
         <div className="grid grid-cols-2 gap-2">
-          {LEAD_STATUSES.map((s) => (
+          {options.map((s) => (
             <button
               key={s}
               onClick={() => setStatus(s)}
@@ -68,6 +72,10 @@ export function StatusChangeModal({
             </button>
           ))}
         </div>
+
+        {options.length === 0 && (
+          <p className="text-sm text-text-muted">No categories available to you.</p>
+        )}
 
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="px-4 py-2 text-sm rounded-md border border-border text-text-muted hover:bg-surface-2">
