@@ -51,7 +51,7 @@ A shared helper `statusSlug(status: string): string` and constants (e.g. `CAT_VI
 1. Insert the 10 permission rows.
 2. Seed for zero disruption:
    - every department that has `leads.view` → all 5 `cat_view` keys;
-   - every department that has `leads.status_change` → all 5 `cat_set` keys.
+   - every department that has `leads.status_change` **or `leads.create`** → all 5 `cat_set` keys. (Creating a lead requires `cat_set` for its initial status; the `sales` dept has `leads.create` without `leads.status_change` and must not lose the ability to create.)
 3. Replace the leads RLS select policy:
 
 ```sql
@@ -105,7 +105,7 @@ Service-role paths (admin logs, WGE headless generation, importer) bypass RLS by
 
 ## D. Form parity with the old LMS
 
-Directive: replicate the old forms' **structure, fields, and dynamics** as-is; restyle to the v2 Data Console language (light theme, `#EEF1F5` canvas, white cards, teal `#0D9488` accent, Inter/JetBrains Mono). Both forms keep React-Hook-Form + Zod and POST to the existing APIs — this is a UI-layer rebuild, no schema/API changes except where noted.
+Directive: replicate the old forms' **structure, fields, and dynamics** as-is; restyle to the v2 Data Console language (light theme, `#EEF1F5` canvas, white cards, teal `#0D9488` accent, Inter/JetBrains Mono). Both forms keep the codebase's existing controlled-useState pattern with a pure, unit-tested validator (server keeps Zod) and POST to the existing APIs — this is a UI-layer rebuild, no schema/API changes except where noted.
 
 ### D1. New Lead form (`components/leads/NewLeadForm.tsx`)
 
@@ -125,7 +125,7 @@ Five sections with dividers, exactly as the old form:
 
 **③ Website Details**
 - Client's Experience (years, number, required) · No. of Webpages (number ≥1, required).
-- Specify Webpages — checkbox chips (Home always checked & locked; About Us, Services, Service Areas, Gallery, Contact Us, Individual Service Pages, Individual Service Area Pages, Pricing, Other) with a live counter `n / N selected` where **N = No. of Webpages; selection count must equal N**; **Other chip → conditional text input**.
+- Specify Webpages — checkbox chips (Home always checked & locked; About Us, Services, Service Areas, Gallery, Contact Us, Individual Service Pages(active for selection if services are added, otherwise disabled), Individual Service Area Pages(active for selection if service areas added otherwise disabled), Pricing, Other) with a live counter `n / N selected` where **N = No. of Webpages; selection count must equal N**; **Other chip → conditional text input**.
 - Color Scheme (text, required) · Logo Link (url, optional).
 - Image Links — dynamic list "+ Add Image Link" (optional).
 
