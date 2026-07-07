@@ -31,7 +31,7 @@ export function LeadsTable({
   agentNameById: Record<string, string>;
 }) {
   const { has, all } = usePermissions();
-  const visible = visibleStatuses(all);
+  const visible = useMemo(() => visibleStatuses(all), [all]);
   useRealtimeRefresh("leads");
   const canCreate = has("leads.create");
   const canChangeStatus = has("leads.status_change");

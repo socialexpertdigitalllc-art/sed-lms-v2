@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { resolvePermissions, type OverrideRow } from "./types";
 
@@ -5,8 +6,9 @@ import { resolvePermissions, type OverrideRow } from "./types";
  * Resolve the effective permission set for a user (server-side).
  * Fetches department permissions (via the user's department memberships)
  * and user overrides, then composes them with the pure resolver.
+ * Wrapped in React's request-level cache so layout and page share one lookup.
  */
-export async function getUserPermissions(userId: string): Promise<Set<string>> {
+export const getUserPermissions = cache(async (userId: string): Promise<Set<string>> => {
   const supabase = await createClient();
 
   // department permissions for every department the user belongs to
@@ -32,4 +34,4 @@ export async function getUserPermissions(userId: string): Promise<Set<string>> {
     .eq("user_id", userId);
 
   return resolvePermissions(deptPermKeys, (overrides ?? []) as OverrideRow[]);
-}
+});
