@@ -8,12 +8,15 @@ export function DynamicList({
   placeholder,
   addLabel,
   inputType = "text",
+  minRows = 0,
 }: {
   values: string[];
   onChange: (v: string[]) => void;
   placeholder: string;
   addLabel: string;
   inputType?: string;
+  /** Minimum number of rows; the Remove button is hidden at or below this count. */
+  minRows?: number;
 }) {
   const setAt = (i: number, v: string) => onChange(values.map((x, j) => (j === i ? v : x)));
   const removeAt = (i: number) => onChange(values.filter((_, j) => j !== i));
@@ -28,13 +31,15 @@ export function DynamicList({
             placeholder={placeholder}
             className={"flex-1 " + inputCls}
           />
-          <button
-            type="button"
-            onClick={() => removeAt(i)}
-            className="text-xs text-text-muted border border-border rounded-md px-2.5 py-2 hover:bg-dropped-bg hover:text-dropped-fg whitespace-nowrap"
-          >
-            ✕ Remove
-          </button>
+          {values.length > minRows && (
+            <button
+              type="button"
+              onClick={() => removeAt(i)}
+              className="text-xs text-text-muted border border-border rounded-md px-2.5 py-2 hover:bg-dropped-bg hover:text-dropped-fg whitespace-nowrap"
+            >
+              ✕ Remove
+            </button>
+          )}
         </div>
       ))}
       <button

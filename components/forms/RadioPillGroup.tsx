@@ -15,9 +15,10 @@ export function RadioPillGroup({
         <button
           key={o}
           type="button"
+          aria-pressed={value === o}
           onClick={() => onChange(o)}
           className={
-            "px-3.5 py-1.5 text-sm rounded-full border transition-colors " +
+            "px-3.5 py-1.5 text-sm rounded-full border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none " +
             (value === o
               ? "border-accent bg-accent-soft text-accent-ink font-medium"
               : "border-border text-text-muted hover:bg-surface-2")

@@ -1,6 +1,7 @@
-/** Progressive US phone mask: 2524012775 -> "(252) 401-2775". */
+/** Progressive US phone mask: 2524012775 -> "(252) 401-2775". Drops a leading US country code on 11-digit input. */
 export function formatPhone(raw: string): string {
-  const v = raw.replace(/\D/g, "").slice(0, 10);
+  const d = raw.replace(/\D/g, "");
+  const v = (d.length === 11 && d.startsWith("1") ? d.slice(1) : d).slice(0, 10);
   let f = "";
   if (v.length > 0) f = "(" + v.slice(0, 3);
   if (v.length >= 4) f += ") " + v.slice(3, 6);

@@ -11,6 +11,12 @@ describe("formatPhone", () => {
     expect(formatPhone("(252) 401-2775 ext 9")).toBe("(252) 401-2775");
     expect(formatPhone("abc")).toBe("");
   });
+  it("drops a leading US country code on 11-digit input", () => {
+    expect(formatPhone("+1 252 401 2775")).toBe("(252) 401-2775");
+  });
+  it("caps a non-1-prefixed 11th digit instead of dropping the first", () => {
+    expect(formatPhone("25240127759")).toBe("(252) 401-2775");
+  });
   it("PHONE_RE matches the exact format", () => {
     expect(PHONE_RE.test("(252) 401-2775")).toBe(true);
     expect(PHONE_RE.test("252-401-2775")).toBe(false);
