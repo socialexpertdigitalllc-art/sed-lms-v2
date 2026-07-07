@@ -22,46 +22,32 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { data, error } = await supabase
+  // RLS-scoped select on the user client → only follow-ups for visible leads.
+  const { data: rows, error } = await supabase
     .from("lead_follow_ups")
-    .select("*, profiles:user_id(display_name)")
+    .select("*")
     .eq("lead_id", id)
     .order("created_at", { ascending: false });
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  if (error) {
-    // Fall back to a plain select + a second query to resolve names, in case
-    // the PostgREST embed on profiles is ambiguous.
-    const { data: rows, error: err2 } = await supabase
-      .from("lead_follow_ups")
-      .select("*")
-      .eq("lead_id", id)
-      .order("created_at", { ascending: false });
-    if (err2) return NextResponse.json({ error: err2.message }, { status: 400 });
-
-    const userIds = Array.from(
-      new Set((rows ?? []).map((r) => r.user_id).filter(Boolean))
-    ) as string[];
-    const names = new Map<string, string | null>();
-    if (userIds.length) {
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("id, display_name")
-        .in("id", userIds);
-      for (const p of profiles ?? []) names.set(p.id, p.display_name ?? null);
-    }
-    const followUps = (rows ?? []).map((r) => ({
-      ...r,
-      logger_name: r.user_id ? names.get(r.user_id) ?? null : null,
-    }));
-    return NextResponse.json({ followUps });
+  // Resolve logger names via the admin client so display_name is not RLS-nulled
+  // for follow-ups logged by users other than the viewer.
+  const userIds = Array.from(
+    new Set((rows ?? []).map((r) => r.user_id).filter(Boolean))
+  ) as string[];
+  const names = new Map<string, string | null>();
+  if (userIds.length) {
+    const admin = createAdminClient();
+    const { data: profiles } = await admin
+      .from("profiles")
+      .select("id, display_name")
+      .in("id", userIds);
+    for (const p of profiles ?? []) names.set(p.id, p.display_name ?? null);
   }
-
-  const followUps = (data ?? []).map((r) => {
-    const { profiles, ...rest } = r as Record<string, unknown> & {
-      profiles?: { display_name?: string | null } | null;
-    };
-    return { ...rest, logger_name: profiles?.display_name ?? null };
-  });
+  const followUps = (rows ?? []).map((r) => ({
+    ...r,
+    logger_name: r.user_id ? names.get(r.user_id) ?? null : null,
+  }));
 
   return NextResponse.json({ followUps });
 }
@@ -108,6 +94,11 @@ export async function POST(
   )
     return NextResponse.json(
       { error: "A future next follow-up time is required." },
+      { status: 422 }
+    );
+  if (isPickup && next && new Date(next).getTime() <= Date.now())
+    return NextResponse.json(
+      { error: "Next follow-up must be in the future." },
       { status: 422 }
     );
   const statusChange = isPickup ? parsed.data.status_change : null;
