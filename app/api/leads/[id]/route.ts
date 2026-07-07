@@ -37,13 +37,6 @@ export async function PATCH(
     );
   }
 
-  if (parsed.data.status !== undefined && !perms.has(catSetKey(parsed.data.status))) {
-    return NextResponse.json(
-      { error: `You are not allowed to set status "${parsed.data.status}"` },
-      { status: 403 }
-    );
-  }
-
   const admin = createAdminClient();
   const { data: before } = await admin
     .from("leads")
@@ -52,6 +45,17 @@ export async function PATCH(
     .is("deleted_at", null)
     .single();
   if (!before) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  if (
+    parsed.data.status !== undefined &&
+    parsed.data.status !== before.status &&
+    !perms.has(catSetKey(parsed.data.status))
+  ) {
+    return NextResponse.json(
+      { error: `You are not allowed to set status "${parsed.data.status}"` },
+      { status: 403 }
+    );
+  }
 
   const { error } = await admin.from("leads").update(parsed.data).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

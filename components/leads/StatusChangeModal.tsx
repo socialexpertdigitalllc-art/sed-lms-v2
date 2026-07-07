@@ -56,25 +56,25 @@ export function StatusChangeModal({
 
         {error && <div className="mb-3 text-sm text-dropped-fg bg-dropped-bg rounded-md px-3 py-2">{error}</div>}
 
-        <div className="grid grid-cols-2 gap-2">
-          {options.map((s) => (
-            <button
-              key={s}
-              onClick={() => setStatus(s)}
-              className={
-                "text-sm rounded-md border px-3 py-2 transition-colors " +
-                (status === s
-                  ? "border-accent bg-accent-soft text-accent-ink font-medium"
-                  : "border-border text-text-muted hover:bg-surface-2")
-              }
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-
-        {options.length === 0 && (
-          <p className="text-sm text-text-muted">No categories available to you.</p>
+        {options.length === 0 ? (
+          <p className="text-sm text-text-muted">No statuses available to you.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {options.map((s) => (
+              <button
+                key={s}
+                onClick={() => setStatus(s)}
+                className={
+                  "text-sm rounded-md border px-3 py-2 transition-colors " +
+                  (status === s
+                    ? "border-accent bg-accent-soft text-accent-ink font-medium"
+                    : "border-border text-text-muted hover:bg-surface-2")
+                }
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         )}
 
         <div className="flex justify-end gap-2 mt-5">
@@ -83,7 +83,7 @@ export function StatusChangeModal({
           </button>
           <button
             onClick={save}
-            disabled={busy || status === current}
+            disabled={busy || status === current || !options.includes(status as (typeof options)[number])}
             className="px-4 py-2 text-sm rounded-md bg-accent text-white font-semibold hover:bg-accent-ink disabled:opacity-60"
           >
             {busy ? "Saving…" : "Update"}
