@@ -15,4 +15,8 @@ export async function register() {
   setInterval(() => {
     fetch(`${origin}/api/ai-tools/wge/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 120_000);
+
+  setInterval(() => {
+    fetch(`${origin}/api/notifications/generate`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 60_000);
 }

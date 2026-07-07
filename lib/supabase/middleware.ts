@@ -39,7 +39,8 @@ export async function updateSession(request: NextRequest) {
     path === "/" ||
     path === "/login" ||
     path.startsWith("/docs") ||
-    path === "/api/ai-tools/wge/process";
+    path === "/api/ai-tools/wge/process" ||
+    path === "/api/notifications/generate";
 
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));
