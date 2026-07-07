@@ -43,6 +43,8 @@ export interface Lead {
   price_quoted: number | null;
   yearly_price: string | null;
   follow_up_time: string | null;
+  last_followup_status: string | null;
+  no_pickup_streak: number;
   direct_line_saved: boolean | null;
   fresh_or_followup: string | null;
   reference_link: string | null;

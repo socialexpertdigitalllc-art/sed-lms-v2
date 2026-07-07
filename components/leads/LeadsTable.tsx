@@ -19,6 +19,9 @@ import { visibleStatuses } from "@/lib/leads/categories";
 import { formatCurrency, formatDate, formatDateTime, initials } from "@/lib/leads/format";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
+import { FollowUpModal } from "./FollowUpModal";
+import { FuStatusChip } from "./FuStatusChip";
+import { bucketOf } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv } from "@/lib/leads/csv";
@@ -35,6 +38,7 @@ export function LeadsTable({
   useRealtimeRefresh("leads");
   const canCreate = has("leads.create");
   const canChangeStatus = has("leads.status_change");
+  const canFollowUp = has("leads.followup");
   const canExport = has("leads.export");
 
   function exportCsv() {
@@ -70,6 +74,7 @@ export function LeadsTable({
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [statusTab, setStatusTab] = useState<string>("All");
   const [modalLead, setModalLead] = useState<Lead | null>(null);
+  const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
 
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = { All: leads.length };
@@ -140,7 +145,31 @@ export function LeadsTable({
       {
         accessorKey: "follow_up_time",
         header: "Follow-up",
-        cell: (c) => <span className="text-text-muted whitespace-nowrap">{formatDateTime(c.getValue<string | null>())}</span>,
+        cell: (c) => {
+          const value = c.getValue<string | null>();
+          const overdue = bucketOf(value) === "overdue";
+          const streak = c.row.original.no_pickup_streak;
+          const lastStatus = c.row.original.last_followup_status;
+          return (
+            <div className="flex flex-col gap-0.5">
+              <span
+                className={
+                  "whitespace-nowrap " + (overdue ? "text-dropped-fg font-medium" : "text-text-muted")
+                }
+              >
+                {formatDateTime(value)}
+              </span>
+              {(lastStatus || streak > 1) && (
+                <span className="inline-flex items-center gap-1">
+                  {lastStatus && <FuStatusChip status={lastStatus} />}
+                  {streak > 1 && (
+                    <span className="text-xs font-medium text-dropped-fg">×{streak}</span>
+                  )}
+                </span>
+              )}
+            </div>
+          );
+        },
       },
       {
         accessorKey: "rating",
@@ -172,11 +201,19 @@ export function LeadsTable({
                 Status
               </button>
             )}
+            {canFollowUp && (
+              <button
+                onClick={() => setFollowUpLead(c.row.original)}
+                className="text-xs font-medium text-text-muted px-2 py-1 rounded border border-border hover:bg-surface-2"
+              >
+                Follow Up
+              </button>
+            )}
           </div>
         ),
       },
     ],
-    [agentNameById, canChangeStatus]
+    [agentNameById, canChangeStatus, canFollowUp]
   );
 
   const table = useReactTable({
@@ -345,6 +382,14 @@ export function LeadsTable({
           onClose={() => setModalLead(null)}
         />
       )}
+
+      <FollowUpModal
+        key={followUpLead?.id}
+        leadId={followUpLead?.id ?? ""}
+        businessName={followUpLead?.business_name ?? ""}
+        open={!!followUpLead}
+        onClose={() => setFollowUpLead(null)}
+      />
     </div>
   );
 }

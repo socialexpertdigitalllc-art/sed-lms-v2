@@ -31,6 +31,8 @@ function mk(p: Partial<Lead>): Lead {
     price_quoted: null,
     yearly_price: null,
     follow_up_time: null,
+    last_followup_status: null,
+    no_pickup_streak: 0,
     direct_line_saved: null,
     fresh_or_followup: null,
     reference_link: null,
