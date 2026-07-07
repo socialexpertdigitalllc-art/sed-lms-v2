@@ -79,6 +79,19 @@ describe("validateNewLead", () => {
     expect(e.price_custom).toBeTruthy();
   });
 
+  it("rejects a non-numeric custom price", () => {
+    const e = validateNewLead(
+      { ...validState(), price_quoted: "Other", price_custom: "abc" },
+      now
+    );
+    expect(e.price_custom).toBeTruthy();
+  });
+
+  it("rejects an invalid follow-up date string", () => {
+    const e = validateNewLead({ ...validState(), follow_up_time: "garbage" }, now);
+    expect(e.follow_up_time).toBeTruthy();
+  });
+
   it("requires https reference link for Redesign", () => {
     const e = validateNewLead(
       { ...validState(), site_type: "Redesign", reference_link: "not-a-url" },
@@ -121,6 +134,15 @@ describe("buildLeadPayload", () => {
     });
     expect(p.price_quoted).toBe(1200);
     expect(p.yearly_price).toBe("None");
+  });
+
+  it("uses the custom yearly value when yearly is Other", () => {
+    const p = buildLeadPayload({
+      ...validState(),
+      yearly_price: "Other",
+      yearly_custom: "150",
+    });
+    expect(p.yearly_price).toBe("150");
   });
 
   it("replaces the Other page chip with its custom label and nulls reference when not Redesign", () => {

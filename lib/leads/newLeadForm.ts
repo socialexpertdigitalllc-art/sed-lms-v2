@@ -139,10 +139,15 @@ export function validateNewLead(
   if (total < 1) e.specify_pages = "Select at least one page.";
 
   if (!f.color_scheme.trim()) e.color_scheme = "Color scheme is required.";
-  if (!f.follow_up_time || new Date(f.follow_up_time) <= now)
+  const t = new Date(f.follow_up_time).getTime();
+  if (!f.follow_up_time || Number.isNaN(t) || t <= now.getTime())
     e.follow_up_time = "Follow up time must be in the future.";
   if (!f.price_quoted) e.price_quoted = "Please select a price.";
-  if (f.price_quoted === "Other" && (f.price_custom === "" || Number(f.price_custom) < 0))
+  const price = Number(f.price_custom);
+  if (
+    f.price_quoted === "Other" &&
+    (f.price_custom.trim() === "" || Number.isNaN(price) || price < 0)
+  )
     e.price_custom = "Enter a valid custom price.";
   if (f.site_type === "Redesign" && !/^https?:\/\/.+/.test(f.reference_link.trim()))
     e.reference_link = "A valid reference site URL is required for redesigns.";
