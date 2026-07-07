@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { PreLead } from "@/lib/preleads/types";
+import type { AppNotification } from "@/lib/notifications/types";
 import { followUpsDue, pastDueFollowUps } from "@/lib/preleads/analytics";
 import { formatDateTime } from "@/lib/leads/format";
 
@@ -12,6 +13,7 @@ export function NotificationBell() {
   const [due, setDue] = useState<PreLead[]>([]);
   const [overdue, setOverdue] = useState<PreLead[]>([]);
   const [wge, setWge] = useState<WgeNote[]>([]);
+  const [notes, setNotes] = useState<AppNotification[]>([]);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -52,6 +54,19 @@ export function NotificationBell() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/notifications?unread=1");
+        if (res.ok && active) setNotes(((await res.json()).notifications ?? []) as AppNotification[]);
+      } catch {
+        /* ignore — bell still works for pre-leads/WGE */
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (!open) return;
     function onMouseDown(e: MouseEvent) {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
@@ -62,9 +77,27 @@ export function NotificationBell() {
 
   // The pre-leads fetch failing (e.g. a user without pre_leads.view) hides the
   // bell — but still show it when there are WGE generation notifications.
-  if (hidden && wge.length === 0) return null;
+  if (hidden && wge.length === 0 && notes.length === 0) return null;
 
-  const count = due.length + overdue.length + wge.length;
+  const count = notes.length + due.length + overdue.length + wge.length;
+
+  async function markRead(id: string) {
+    setNotes((ns) => ns.filter((n) => n.id !== id));
+    try {
+      await fetch("/api/notifications/" + id + "/read", { method: "POST" });
+    } catch {
+      /* optimistic — ignore network errors */
+    }
+  }
+
+  async function markAllRead() {
+    setNotes([]);
+    try {
+      await fetch("/api/notifications/all/read", { method: "POST" });
+    } catch {
+      /* optimistic — ignore network errors */
+    }
+  }
 
   const item = (l: PreLead) => (
     <li key={l.id}>
@@ -109,8 +142,42 @@ export function NotificationBell() {
             <div className="px-4 py-6 text-sm text-text-muted text-center">You&apos;re all caught up. 🎉</div>
           ) : (
             <div className="max-h-96 overflow-y-auto">
-              {overdue.length > 0 && (
+              {notes.length > 0 && (
                 <div>
+                  <div className="px-3 pt-2.5 pb-1 flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-wide font-semibold text-accent-ink">Reminders ({notes.length})</span>
+                    <button
+                      type="button"
+                      onClick={markAllRead}
+                      className="text-[11px] font-medium text-text-faint hover:text-text transition-colors"
+                    >
+                      Mark all read
+                    </button>
+                  </div>
+                  <ul className="pb-1">
+                    {notes.slice(0, 8).map((n) => (
+                      <li key={n.id}>
+                        <Link
+                          href={n.lead_id ? `/leads/${n.lead_id}` : "#"}
+                          onClick={() => {
+                            void markRead(n.id);
+                            setOpen(false);
+                          }}
+                          className="block px-3 py-2 hover:bg-surface-2 transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm font-medium text-text truncate">{n.title}</span>
+                            <span className="text-[11px] text-text-faint whitespace-nowrap">{formatDateTime(n.created_at)}</span>
+                          </div>
+                          <div className="text-xs text-text-muted truncate">{n.body}</div>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {overdue.length > 0 && (
+                <div className={notes.length > 0 ? "border-t border-border-subtle" : ""}>
                   <div className="px-3 pt-2.5 pb-1 text-[10px] uppercase tracking-wide font-semibold text-dropped-fg flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-dropped-fg" /> Overdue ({overdue.length})
                   </div>
