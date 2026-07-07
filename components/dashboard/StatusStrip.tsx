@@ -11,10 +11,7 @@ export function StatusStrip({ kpis }: { kpis: Kpis }) {
   const total = kpis.total || 1;
 
   return (
-    <div
-      className="bg-surface border border-border rounded-lg p-4 grid gap-5"
-      style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}
-    >
+    <div className="bg-surface border border-border rounded-lg p-4 grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-5">
       {items.map((i) => {
         const pct = Math.round((i.count / total) * 100);
         return (

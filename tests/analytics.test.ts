@@ -106,20 +106,17 @@ describe("aggregations", () => {
 
 describe("Long Term status", () => {
   it("computeKpis counts Long Term leads", () => {
-    const leads = [
-      { status: "Long Term", created_at: "2026-01-01" },
-      { status: "Long Term", created_at: "2026-01-01" },
-      { status: "Ready", created_at: "2026-01-01" },
-    ] as never[];
+    const leads = [mk({ status: "Long Term" }), mk({ status: "Long Term" }), mk({ status: "Ready" })];
     const k = computeKpis(leads);
     expect(k.longTerm).toBe(2);
     expect(k.ready).toBe(1);
   });
 
   it("byStatus includes Long Term in order after Dropped", () => {
-    const leads = [{ status: "Long Term" }, { status: "Ready" }] as never[];
+    const leads = [mk({ status: "Long Term" }), mk({ status: "Dropped" }), mk({ status: "Ready" })];
     expect(byStatus(leads)).toEqual([
       { name: "Ready", value: 1 },
+      { name: "Dropped", value: 1 },
       { name: "Long Term", value: 1 },
     ]);
   });
