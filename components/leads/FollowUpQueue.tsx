@@ -7,7 +7,7 @@ import { formatDateTime, initials } from "@/lib/leads/format";
 import { StatusPill } from "./StatusPill";
 import { FuStatusChip } from "./FuStatusChip";
 import { FollowUpModal } from "./FollowUpModal";
-import { bucketOf, groupByBucket } from "@/lib/leads/followups";
+import { bucketOf, groupByBucket, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 
@@ -24,7 +24,10 @@ export function FollowUpQueue({
 
   const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
 
-  const groups = useMemo(() => groupByBucket(leads, new Date()), [leads]);
+  const groups = useMemo(() => {
+    const eligible = leads.filter((l) => isFollowUpEligible(l.status));
+    return groupByBucket(eligible, new Date());
+  }, [leads]);
 
   const isEmpty =
     groups.overdue.length === 0 &&

@@ -263,7 +263,7 @@ export function LeadDetail({ lead, agents, followUps }: { lead: Lead; agents: Ag
       </div>
 
         <aside className="hidden lg:block">
-          <RecentFollowUps leadId={lead.id} businessName={lead.business_name} followUps={followUps} />
+          <RecentFollowUps leadId={lead.id} businessName={lead.business_name} leadStatus={lead.status} followUps={followUps} />
         </aside>
       </div>
 

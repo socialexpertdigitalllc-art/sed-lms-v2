@@ -21,7 +21,7 @@ import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
 import { FollowUpModal } from "./FollowUpModal";
 import { FuStatusChip } from "./FuStatusChip";
-import { bucketOf } from "@/lib/leads/followups";
+import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv } from "@/lib/leads/csv";
@@ -209,7 +209,7 @@ export function LeadsTable({
                 Status
               </button>
             )}
-            {canFollowUp && (
+            {canFollowUp && isFollowUpEligible(c.row.original.status) && (
               <button
                 onClick={() => setFollowUpLead(c.row.original)}
                 className="text-xs font-medium text-text-muted px-2 py-1 rounded border border-border hover:bg-surface-2"

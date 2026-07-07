@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { LeadFollowUp } from "@/lib/leads/followups";
+import { isFollowUpEligible } from "@/lib/leads/followups";
 import { formatDateTime } from "@/lib/leads/format";
 import { usePermissions } from "@/hooks/usePermissions";
 import { FuStatusChip } from "./FuStatusChip";
@@ -12,10 +13,12 @@ import { FollowUpLogModal } from "./FollowUpLogModal";
 export function RecentFollowUps({
   leadId,
   businessName,
+  leadStatus,
   followUps,
 }: {
   leadId: string;
   businessName: string;
+  leadStatus: string;
   followUps: LeadFollowUp[];
 }) {
   const { has } = usePermissions();
@@ -27,7 +30,7 @@ export function RecentFollowUps({
     <div className="sticky top-6 rounded-2xl border border-border bg-surface shadow-sm p-5">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-text">Recent follow-ups</h2>
-        {has("leads.followup") && (
+        {has("leads.followup") && isFollowUpEligible(leadStatus) && (
           <button
             onClick={() => setEntryOpen(true)}
             className="bg-accent text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-accent-ink"
