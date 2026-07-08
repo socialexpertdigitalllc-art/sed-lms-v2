@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getUserPermissions } from "@/lib/permissions/resolver";
 import { findCollisions, type DupRow } from "@/lib/leads/duplicate";
 import { z } from "zod";
 
@@ -16,6 +17,11 @@ export async function POST(req: Request) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  const perms = await getUserPermissions(user.id);
+  if (!perms.has("leads.create")) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
 
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ collisions: [] });
