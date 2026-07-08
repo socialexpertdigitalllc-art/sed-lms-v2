@@ -3,6 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { createPreLeadSchema } from "@/lib/preleads/schema";
+import { findCollisions, type DupRow } from "@/lib/leads/duplicate";
+
+/** The schema's optional-string fields type-check as `unknown` (zod preprocess quirk); narrow defensively. */
+const asStr = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
 export async function GET() {
   const supabase = await createClient();
@@ -39,7 +43,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const parsed = createPreLeadSchema.safeParse(await req.json());
+  const body = await req.json();
+  const parsed = createPreLeadSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
       { error: "Invalid input", issues: parsed.error.flatten() },
@@ -48,6 +53,46 @@ export async function POST(req: Request) {
   }
 
   const admin = createAdminClient();
+
+  // Authoritative duplicate re-check — the client-side check is advisory only and
+  // can be bypassed, so collisions are re-verified here before the insert.
+  const override = body?.override === true && perms.has("leads.duplicate.override");
+  if (!override) {
+    const { data: existing } = await admin
+      .from("pre_leads")
+      .select("id, business_name, phone_number, email, agent_id")
+      .is("deleted_at", null);
+
+    const ownerIds = [...new Set((existing ?? []).map((l) => l.agent_id).filter(Boolean))];
+    const { data: profs } = await admin
+      .from("profiles")
+      .select("id, display_name")
+      .in("id", ownerIds.length ? ownerIds : ["00000000-0000-0000-0000-000000000000"]);
+    const nameById = new Map((profs ?? []).map((p) => [p.id, p.display_name]));
+
+    const rows: DupRow[] = (existing ?? []).map((l) => ({
+      id: l.id,
+      business_name: l.business_name,
+      phone: l.phone_number,
+      email: l.email,
+      owner: l.agent_id,
+      ownerName: l.agent_id ? nameById.get(l.agent_id) ?? null : null,
+    }));
+
+    const collisions = findCollisions(
+      {
+        business_name: parsed.data.business_name,
+        phone: asStr(parsed.data.phone_number),
+        email: asStr(parsed.data.email),
+      },
+      rows,
+      user.id
+    );
+    if (collisions.length) {
+      return NextResponse.json({ error: "duplicate", collisions }, { status: 409 });
+    }
+  }
+
   const { data, error } = await admin
     .from("pre_leads")
     .insert({ ...parsed.data, agent_id: user.id, last_updated_by: user.id })

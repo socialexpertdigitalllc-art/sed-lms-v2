@@ -12,5 +12,5 @@ export default async function NewPreLeadPage() {
   const perms = await getUserPermissions(user.id);
   if (!perms.has("pre_leads.create")) redirect("/pre-leads/all");
 
-  return <AddPreLeadForm />;
+  return <AddPreLeadForm canOverrideDuplicate={perms.has("leads.duplicate.override")} />;
 }

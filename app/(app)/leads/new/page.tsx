@@ -56,6 +56,7 @@ export default async function NewLeadPage() {
       salesUsers={salesUsers}
       addons={addons ?? []}
       currentUserId={user.id}
+      canOverrideDuplicate={perms.has("leads.duplicate.override")}
     />
   );
 }
