@@ -35,6 +35,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/permissions", label: "Permissions", perm: "admin.permissions.manage" },
   { href: "/admin/logs", label: "Activity Log", perm: "admin.logs.view" },
   { href: "/admin/import", label: "Import", perm: "admin.import" },
+  { href: "/admin/add-ons", label: "Add-ons", perm: "admin.settings.manage" },
 ];
 
 export function Sidebar() {
