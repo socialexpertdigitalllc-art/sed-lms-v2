@@ -9,6 +9,7 @@ insert into public.permissions (key, name, description, category, is_sensitive) 
   ('leads.status_change','Change Lead Status',null,'leads',false),
   ('leads.view_all','View All Agents'' Leads',null,'leads',false),
   ('leads.export','Export Leads',null,'leads',false),
+  ('leads.duplicate.override','Override Duplicate Lead Block',null,'leads',true),
   ('pre_leads.view','View Pre-Leads',null,'pre_leads',false),
   ('pre_leads.create','Create Pre-Lead',null,'pre_leads',false),
   ('pre_leads.edit','Edit Pre-Lead',null,'pre_leads',false),
@@ -48,14 +49,14 @@ where (d.slug, p.key) in (
   ('sales','pre_leads.view'),('sales','pre_leads.create'),('sales','pre_leads.edit'),('sales','pre_leads.followup'),
   ('sales','analytics.view'),('sales','ai_tools.webcraft'),('sales','ai_tools.deepseek'),
   ('management','leads.view'),('management','leads.create'),('management','leads.edit'),('management','leads.delete'),
-  ('management','leads.status_change'),('management','leads.view_all'),
+  ('management','leads.status_change'),('management','leads.view_all'),('management','leads.duplicate.override'),
   ('management','pre_leads.view'),('management','pre_leads.create'),('management','pre_leads.edit'),('management','pre_leads.delete'),('management','pre_leads.followup'),
   ('management','analytics.view'),('management','analytics.view_webcraft'),('management','analytics.view_deepseek'),('management','analytics.view_all_agents'),
   ('management','admin.settings.manage'),
   ('tech','analytics.view'),('tech','analytics.view_webcraft'),('tech','analytics.view_deepseek'),('tech','ai_tools.webcraft'),('tech','ai_tools.deepseek'),('tech','wge.manage'),
   ('tech','admin.import'),
   ('support','leads.view'),
-  ('admin','admin.import'),('admin','admin.settings.manage')
+  ('admin','admin.import'),('admin','admin.settings.manage'),('admin','leads.duplicate.override')
 )
 on conflict do nothing;
 
