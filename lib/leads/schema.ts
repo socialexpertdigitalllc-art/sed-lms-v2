@@ -40,6 +40,16 @@ export const leadFieldsSchema = z.object({
   image_links: z.array(z.string()).nullable().optional(),
   rating: optional(z.coerce.number().int().min(1).max(10).nullable()),
   comments: optStr,
+
+  design_reference_links: z.array(z.string().url()).max(3).nullable().optional(),
+  add_ons: z
+    .array(z.object({ id: z.string(), label: z.string(), price: z.number().nullable() }))
+    .nullable()
+    .optional(),
+  no_email: z.boolean().optional(),
+  logo_via_sms: z.boolean().optional(),
+  color_same_as_logo: z.boolean().optional(),
+  closed_by: z.string().uuid().nullable().optional(),
 });
 
 export const createLeadSchema = leadFieldsSchema;

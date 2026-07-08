@@ -54,3 +54,66 @@ describe("updateLeadSchema", () => {
     expect(r.success).toBe(true);
   });
 });
+
+describe("createLeadSchema polish-3 fields", () => {
+  const base = { business_name: "Acme", status: "Not Ready" };
+
+  it("accepts up to 3 design reference urls", () => {
+    const r = createLeadSchema.safeParse({
+      ...base,
+      design_reference_links: ["https://a.com", "https://b.com"],
+    });
+    expect(r.success).toBe(true);
+    if (r.success)
+      expect(r.data.design_reference_links).toEqual(["https://a.com", "https://b.com"]);
+  });
+
+  it("rejects more than 3 design reference urls", () => {
+    const r = createLeadSchema.safeParse({
+      ...base,
+      design_reference_links: [
+        "https://a.com",
+        "https://b.com",
+        "https://c.com",
+        "https://d.com",
+      ],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects a non-url design reference link", () => {
+    const r = createLeadSchema.safeParse({ ...base, design_reference_links: ["not-a-url"] });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts an add_ons snapshot array", () => {
+    const r = createLeadSchema.safeParse({
+      ...base,
+      add_ons: [{ id: "x", label: "Live Chat", price: 50 }],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.add_ons).toEqual([{ id: "x", label: "Live Chat", price: 50 }]);
+  });
+
+  it("accepts the boolean flags and closed_by", () => {
+    const r = createLeadSchema.safeParse({
+      ...base,
+      no_email: true,
+      logo_via_sms: true,
+      color_same_as_logo: true,
+      closed_by: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.no_email).toBe(true);
+      expect(r.data.logo_via_sms).toBe(true);
+      expect(r.data.color_same_as_logo).toBe(true);
+      expect(r.data.closed_by).toBe("11111111-1111-4111-8111-111111111111");
+    }
+  });
+
+  it("rejects a non-uuid closed_by", () => {
+    const r = createLeadSchema.safeParse({ ...base, closed_by: "not-a-uuid" });
+    expect(r.success).toBe(false);
+  });
+});
