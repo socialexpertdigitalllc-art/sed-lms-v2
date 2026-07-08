@@ -11,6 +11,25 @@ const inputCls =
 // our PUT validator both want plain "HH:MM".
 const hhmm = (t: string) => t.slice(0, 5);
 
+// Common IANA zones for the picker. The stored value is always ensured present
+// (prepended if custom), so an admin can still hold a zone outside this list.
+const COMMON_TIMEZONES = [
+  "Asia/Karachi",
+  "Asia/Kolkata",
+  "Asia/Dubai",
+  "Asia/Dhaka",
+  "Asia/Manila",
+  "Asia/Singapore",
+  "Europe/London",
+  "Europe/Berlin",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "Australia/Sydney",
+  "UTC",
+];
+
 export function AppSettingsCard({ initial }: { initial: AppSettings }) {
   const router = useRouter();
   const [workStartTime, setWorkStartTime] = useState(hhmm(initial.work_start_time));
@@ -69,13 +88,21 @@ export function AppSettingsCard({ initial }: { initial: AppSettings }) {
         </div>
         <div>
           <label className="block text-xs font-medium text-text-muted mb-1">Work timezone</label>
-          <input
+          <select
             value={workTimezone}
             onChange={(e) => setWorkTimezone(e.target.value)}
-            placeholder="Asia/Karachi"
             className={inputCls}
-          />
-          <p className="text-xs text-text-faint mt-1">IANA name, e.g. Asia/Karachi</p>
+          >
+            {(COMMON_TIMEZONES.includes(workTimezone)
+              ? COMMON_TIMEZONES
+              : [workTimezone, ...COMMON_TIMEZONES]
+            ).map((tz) => (
+              <option key={tz} value={tz}>
+                {tz}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-text-faint mt-1">Used for day boundaries & lateness</p>
         </div>
         <div>
           <label className="block text-xs font-medium text-text-muted mb-1">
