@@ -29,7 +29,8 @@ insert into public.permissions (key, name, description, category, is_sensitive) 
   ('admin.departments.manage','Manage Departments',null,'admin',true),
   ('admin.permissions.manage','Manage Permissions',null,'admin',true),
   ('admin.logs.view','View Activity Log',null,'admin',false),
-  ('admin.import','Import Leads','Bulk-import leads from Google Sheets','admin',true)
+  ('admin.import','Import Leads','Bulk-import leads from Google Sheets','admin',true),
+  ('admin.settings.manage','Manage App Settings & Add-ons',null,'admin',true)
 on conflict (key) do nothing;
 
 insert into public.departments (name, slug, description, color, icon) values
@@ -50,10 +51,11 @@ where (d.slug, p.key) in (
   ('management','leads.status_change'),('management','leads.view_all'),
   ('management','pre_leads.view'),('management','pre_leads.create'),('management','pre_leads.edit'),('management','pre_leads.delete'),('management','pre_leads.followup'),
   ('management','analytics.view'),('management','analytics.view_webcraft'),('management','analytics.view_deepseek'),('management','analytics.view_all_agents'),
+  ('management','admin.settings.manage'),
   ('tech','analytics.view'),('tech','analytics.view_webcraft'),('tech','analytics.view_deepseek'),('tech','ai_tools.webcraft'),('tech','ai_tools.deepseek'),('tech','wge.manage'),
   ('tech','admin.import'),
   ('support','leads.view'),
-  ('admin','admin.import')
+  ('admin','admin.import'),('admin','admin.settings.manage')
 )
 on conflict do nothing;
 
