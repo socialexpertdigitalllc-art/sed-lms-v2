@@ -20,6 +20,8 @@ export const STATUS_PILL: Record<string, string> = {
   "Long Term": "bg-longterm-bg text-longterm-fg",
 };
 
+export type AddOn = { id: string; label: string; price: number | null };
+
 export interface Lead {
   id: string;
   status: string;
@@ -27,9 +29,11 @@ export interface Lead {
   business_name: string;
   business_phone: string | null;
   business_email: string | null;
+  no_email: boolean | null;
   business_profile_link: string | null;
   website_link: string | null;
   logo_link: string | null;
+  logo_via_sms: boolean | null;
   map_embed_link: string | null;
   site_type: string | null;
   platform: string | null;
@@ -40,6 +44,8 @@ export interface Lead {
   num_webpages: number | null;
   specify_pages: string[] | null;
   color_scheme: string | null;
+  color_same_as_logo: boolean | null;
+  add_ons: AddOn[] | null;
   price_quoted: number | null;
   yearly_price: string | null;
   follow_up_time: string | null;
@@ -48,10 +54,12 @@ export interface Lead {
   direct_line_saved: boolean | null;
   fresh_or_followup: string | null;
   reference_link: string | null;
+  design_reference_links: string[] | null;
   image_links: string[] | null;
   rating: number | null;
   comments: string | null;
   created_by: string | null;
+  closed_by: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

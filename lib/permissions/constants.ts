@@ -6,6 +6,7 @@ export const PERMISSIONS = [
   { key: "leads.status_change", name: "Change Lead Status", category: "leads" },
   { key: "leads.view_all", name: "View All Agents' Leads", category: "leads" },
   { key: "leads.export", name: "Export Leads", category: "leads" },
+  { key: "leads.duplicate.override", name: "Override Duplicate Lead Block", category: "leads", is_sensitive: true },
   { key: "pre_leads.view", name: "View Pre-Leads", category: "pre_leads" },
   { key: "pre_leads.create", name: "Create Pre-Lead", category: "pre_leads" },
   { key: "pre_leads.edit", name: "Edit Pre-Lead", category: "pre_leads" },
@@ -27,6 +28,7 @@ export const PERMISSIONS = [
   { key: "admin.permissions.manage", name: "Manage Permissions", category: "admin", is_sensitive: true },
   { key: "admin.logs.view", name: "View Activity Log", category: "admin" },
   { key: "admin.import", name: "Import Leads", category: "admin", is_sensitive: true },
+  { key: "admin.settings.manage", name: "Manage App Settings & Add-ons", category: "admin", is_sensitive: true },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
