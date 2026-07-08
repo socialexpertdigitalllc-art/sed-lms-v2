@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Pencil, Copy, Check, X } from "lucide-react";
+import { Pencil, Copy, Check, X, ExternalLink } from "lucide-react";
 
 export type FieldType = "text" | "number" | "url" | "textarea" | "datetime" | "select";
 export type SelectOption = { value: string; label: string };
@@ -43,6 +43,7 @@ export function FieldRow({
 
   const copyText = copy ?? value;
   const hasValue = value.trim() !== "";
+  const openHref = type === "url" && hasValue ? value.trim() : undefined;
 
   function startEdit() {
     setDraft(value);
@@ -140,6 +141,18 @@ export function FieldRow({
             {display ?? (hasValue ? value : <span className="text-text-faint">—</span>)}
           </div>
           <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            {openHref && (
+              <a
+                href={openHref}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={"Open " + label + " in a new tab"}
+                title="Open in new tab"
+                className="grid h-6 w-6 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink"
+              >
+                <ExternalLink size={13} />
+              </a>
+            )}
             {hasValue && (
               <button
                 type="button"

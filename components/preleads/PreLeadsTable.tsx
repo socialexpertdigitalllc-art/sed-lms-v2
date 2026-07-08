@@ -18,13 +18,12 @@ import type { PreLead } from "@/lib/preleads/types";
 import { LEAD_CATEGORIES, PRELEAD_STATUSES } from "@/lib/preleads/types";
 import { formatCurrency, formatDateTime } from "@/lib/leads/format";
 import { CategoryPill, PreLeadStatusPill } from "./CategoryPill";
-import { QuickViewModal } from "./QuickViewModal";
 import { FollowUpModal } from "./FollowUpModal";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 
 type FollowFilter = "all" | "due" | "past";
-type Modal = { mode: "view" | "follow" | null; lead: PreLead | null };
+type Modal = { mode: "follow" | null; lead: PreLead | null };
 
 export function PreLeadsTable({
   preLeads,
@@ -120,12 +119,12 @@ export function PreLeadsTable({
           const lead = c.row.original;
           return (
             <div className="flex items-center justify-end gap-1 whitespace-nowrap">
-              <button
-                onClick={() => setModal({ mode: "view", lead })}
+              <Link
+                href={`/pre-leads/${lead.id}`}
                 className="text-xs font-medium text-accent-ink px-2 py-1 rounded hover:bg-accent-soft"
               >
                 View
-              </button>
+              </Link>
               {canFollowUp && (
                 <button
                   onClick={() => setModal({ mode: "follow", lead })}
@@ -322,9 +321,6 @@ export function PreLeadsTable({
         </div>
       )}
 
-      {modal.mode === "view" && modal.lead && (
-        <QuickViewModal preLead={modal.lead} open={true} onClose={() => setModal({ mode: null, lead: null })} />
-      )}
       {modal.mode === "follow" && modal.lead && (
         <FollowUpModal preLead={modal.lead} open={true} onClose={() => setModal({ mode: null, lead: null })} />
       )}
