@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,7 +14,7 @@ import {
   ArrowLeft,
   Check,
 } from "lucide-react";
-import { SITE_TYPES } from "@/lib/leads/types";
+import { SITE_TYPES, type AddOn } from "@/lib/leads/types";
 import { settableStatuses } from "@/lib/leads/categories";
 import { STATUS_PILL } from "@/lib/leads/types";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -45,10 +45,16 @@ export function NewLeadForm({
   agents,
   canAssign,
   canSetStatus,
+  salesUsers,
+  addons,
+  currentUserId,
 }: {
   agents: Agent[];
   canAssign: boolean;
   canSetStatus: boolean;
+  salesUsers: { id: string; display_name: string }[];
+  addons: AddOn[];
+  currentUserId: string;
 }) {
   const router = useRouter();
   const { all } = usePermissions();
@@ -83,6 +89,12 @@ export function NewLeadForm({
   const contactForced = f.specify_pages.some((p) => p !== "Home" && p !== "Contact Us");
   // ISAP is available only once Service Areas = Yes AND at least one area is filled.
   const isapDisabled = f.has_service_areas !== "Yes" || areaCount === 0;
+  // A logo is "provided" once a valid URL is entered or the client said they'd text it over.
+  const logoProvided = (!!f.logo_link && /^https?:\/\/.+/.test(f.logo_link.trim())) || f.logo_via_sms;
+  // If the logo goes away while "Same as Logo" is selected, fall back to manual color entry.
+  useEffect(() => {
+    if (f.color_same_as_logo && !logoProvided) set("color_same_as_logo", false);
+  }, [logoProvided]);
 
   function togglePage(p: string) {
     setErrors((prev) => {
@@ -152,9 +164,9 @@ export function NewLeadForm({
       "other_platform",
     ],
     location: ["has_service_areas", "areas", "services"],
-    website: ["client_experience", "specify_pages", "color_scheme"],
+    website: ["client_experience", "specify_pages", "color_scheme", "design_reference_links"],
     pricing: ["follow_up_time", "price_quoted", "price_custom", "reference_link"],
-    assessment: ["comments", "rating", "fresh_or_followup"],
+    assessment: ["comments", "rating", "fresh_or_followup", "closed_by"],
   };
   const sectionDone = (key: keyof typeof sectionErrs) =>
     sectionErrs[key].every((k) => !(k in liveErrors));
@@ -181,7 +193,7 @@ export function NewLeadForm({
     const res = await fetch("/api/leads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildLeadPayload(f)),
+      body: JSON.stringify(buildLeadPayload(f, { userId: currentUserId })),
     });
     setBusy(false);
     if (!res.ok) {
@@ -299,8 +311,28 @@ export function NewLeadForm({
               <F error={errors.business_phone} label="Phone Number" required hint="Format: (252) 401-2775">
                 <input type="tel" value={f.business_phone} onChange={(e) => set("business_phone", formatPhone(e.target.value))} placeholder="(252) 401-2775" maxLength={14} className={inputCls} />
               </F>
-              <F error={errors.business_email} label="Email Address" required>
-                <input type="email" value={f.business_email} onChange={(e) => set("business_email", e.target.value)} placeholder="example@email.com" className={inputCls} />
+              <F error={errors.business_email} label="Email Address" required={!f.no_email}>
+                <input
+                  type="email"
+                  value={f.business_email}
+                  onChange={(e) => set("business_email", e.target.value)}
+                  placeholder="example@email.com"
+                  disabled={f.no_email}
+                  className={inputCls + (f.no_email ? " opacity-50" : "")}
+                />
+                <label className="mt-1.5 flex items-center gap-1.5 text-xs text-text-muted">
+                  <input
+                    type="checkbox"
+                    checked={f.no_email}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      set("no_email", checked);
+                      if (checked) set("business_email", "");
+                    }}
+                    className="accent-accent"
+                  />
+                  No email (customer didn&apos;t provide one)
+                </label>
               </F>
             </div>
             <F error={errors.platform} label="Platform" required>
@@ -361,13 +393,79 @@ export function NewLeadForm({
               </ConditionalBlock>
             </F>
             <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
-              <F error={errors.color_scheme} label="Color Scheme" required>
-                <input value={f.color_scheme} onChange={(e) => set("color_scheme", e.target.value)} placeholder="e.g., #1A73E8, #FFFFFF, #000000" className={inputCls} />
+              <F error={errors.color_scheme} label="Color Scheme" required={!f.color_same_as_logo}>
+                <div className="mb-1.5 flex gap-2">
+                  <button
+                    type="button"
+                    aria-pressed={!f.color_same_as_logo}
+                    onClick={() => set("color_same_as_logo", false)}
+                    className={
+                      "px-3.5 py-1.5 text-sm rounded-full border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none " +
+                      (!f.color_same_as_logo
+                        ? "border-accent bg-accent-soft text-accent-ink font-medium"
+                        : "border-border text-text-muted hover:bg-surface-2")
+                    }
+                  >
+                    Enter manually
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={f.color_same_as_logo}
+                    disabled={!logoProvided}
+                    title={logoProvided ? undefined : "Add a logo first"}
+                    onClick={() => {
+                      set("color_same_as_logo", true);
+                      set("color_scheme", "");
+                    }}
+                    className={
+                      "px-3.5 py-1.5 text-sm rounded-full border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none " +
+                      (f.color_same_as_logo
+                        ? "border-accent bg-accent-soft text-accent-ink font-medium"
+                        : "border-border text-text-muted hover:bg-surface-2") +
+                      (!logoProvided ? " opacity-40 cursor-not-allowed" : "")
+                    }
+                  >
+                    Same as Logo
+                  </button>
+                </div>
+                {!f.color_same_as_logo && (
+                  <input value={f.color_scheme} onChange={(e) => set("color_scheme", e.target.value)} placeholder="e.g., #1A73E8, #FFFFFF, #000000" className={inputCls} />
+                )}
               </F>
               <F error={errors.logo_link} label="Logo Link">
-                <input type="url" value={f.logo_link} onChange={(e) => set("logo_link", e.target.value)} placeholder="https://example.com/logo.png" className={inputCls} />
+                <label className="mb-1.5 flex items-center gap-1.5 text-xs text-text-muted">
+                  <input
+                    type="checkbox"
+                    checked={f.logo_via_sms}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      set("logo_via_sms", checked);
+                      if (checked) set("logo_link", "");
+                    }}
+                    className="accent-accent"
+                  />
+                  Sent via SMS
+                </label>
+                <input
+                  type="url"
+                  value={f.logo_link}
+                  onChange={(e) => set("logo_link", e.target.value)}
+                  placeholder="https://example.com/logo.png"
+                  disabled={f.logo_via_sms}
+                  className={inputCls + (f.logo_via_sms ? " opacity-50" : "")}
+                />
               </F>
             </div>
+            <F error={errors.design_reference_links} label="Design Reference Sites (optional)" hint="Sites the client shared as design inspiration (max 3)">
+              <DynamicList
+                values={f.design_reference_links}
+                onChange={(v) => set("design_reference_links", v.slice(0, 3))}
+                placeholder="https://example.com"
+                addLabel="Add Site"
+                inputType="url"
+                max={3}
+              />
+            </F>
             <F error={errors.image_links} label="Image Links">
               <DynamicList values={f.image_links} onChange={(v) => set("image_links", v)} placeholder="https://example.com/image.jpg" addLabel="Add Image Link" inputType="url" />
             </F>
@@ -398,6 +496,40 @@ export function NewLeadForm({
                 </ConditionalBlock>
               </F>
             </div>
+            <F error={errors.add_ons} label="Add-ons Offered (optional)">
+              <div className="flex flex-wrap gap-2">
+                {addons.map((a) => {
+                  const on = f.add_ons.some((x) => x.id === a.id);
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() =>
+                        set(
+                          "add_ons",
+                          on
+                            ? f.add_ons.filter((x) => x.id !== a.id)
+                            : [...f.add_ons, { id: a.id, label: a.label, price: a.price }]
+                        )
+                      }
+                      className={
+                        "px-3 py-1.5 text-sm rounded-md border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none " +
+                        (on
+                          ? "border-accent bg-accent-soft text-accent-ink font-medium"
+                          : "border-border text-text-muted hover:bg-surface-2")
+                      }
+                    >
+                      {a.label}
+                      {a.price != null ? ` — $${a.price}` : ""}
+                    </button>
+                  );
+                })}
+                {addons.length === 0 && (
+                  <span className="text-xs text-text-muted">No add-ons configured.</span>
+                )}
+              </div>
+            </F>
             <F error={errors.direct_line_saved} label="Direct Line saved?">
               <RadioPillGroup options={["Yes", "No"]} value={f.direct_line_saved} onChange={(v) => set("direct_line_saved", v as "Yes" | "No")} />
             </F>
@@ -421,6 +553,14 @@ export function NewLeadForm({
                 <RadioPillGroup options={["Fresh", "Follow Up"]} value={f.fresh_or_followup} onChange={(v) => set("fresh_or_followup", v)} />
               </F>
             </div>
+            <F error={errors.closed_by} label="Lead Closed by" required>
+              <select value={f.closed_by} onChange={(e) => set("closed_by", e.target.value)} className={inputCls}>
+                <option value="self">Self</option>
+                {salesUsers.map((u) => (
+                  <option key={u.id} value={u.id}>{u.display_name}</option>
+                ))}
+              </select>
+            </F>
           </SectionCard>
 
           {/* Mobile action row (sticky summary handles this on desktop) */}

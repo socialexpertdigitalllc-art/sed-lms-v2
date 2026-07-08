@@ -24,5 +24,38 @@ export default async function NewLeadPage() {
         .order("display_name")
     : { data: [] };
 
-  return <NewLeadForm agents={agents ?? []} canAssign={canAssign} canSetStatus={canSetStatus} />;
+  // Sales-department members for the "Closed by" picker (two FKs to profiles → must pin the FK).
+  const { data: salesDept } = await supabase
+    .from("departments")
+    .select("id")
+    .eq("slug", "sales")
+    .single();
+  let salesUsers: { id: string; display_name: string }[] = [];
+  if (salesDept) {
+    const { data: members } = await supabase
+      .from("department_members")
+      .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
+      .eq("department_id", salesDept.id);
+    salesUsers = (members ?? [])
+      .map((m: any) => ({ id: m.profiles?.id, display_name: m.profiles?.display_name }))
+      .filter((u: any) => u.id);
+  }
+
+  // Active website add-ons for the offer picker.
+  const { data: addons } = await supabase
+    .from("website_addons")
+    .select("id,label,price")
+    .eq("is_active", true)
+    .order("sort");
+
+  return (
+    <NewLeadForm
+      agents={agents ?? []}
+      canAssign={canAssign}
+      canSetStatus={canSetStatus}
+      salesUsers={salesUsers}
+      addons={addons ?? []}
+      currentUserId={user.id}
+    />
+  );
 }

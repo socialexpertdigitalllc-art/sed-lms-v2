@@ -9,6 +9,7 @@ export function DynamicList({
   addLabel,
   inputType = "text",
   minRows = 0,
+  max,
 }: {
   values: string[];
   onChange: (v: string[]) => void;
@@ -17,6 +18,8 @@ export function DynamicList({
   inputType?: string;
   /** Minimum number of rows; the Remove button is hidden at or below this count. */
   minRows?: number;
+  /** Maximum number of rows; the Add button is hidden once this count is reached. */
+  max?: number;
 }) {
   const setAt = (i: number, v: string) => onChange(values.map((x, j) => (j === i ? v : x)));
   const removeAt = (i: number) => onChange(values.filter((_, j) => j !== i));
@@ -42,13 +45,15 @@ export function DynamicList({
           )}
         </div>
       ))}
-      <button
-        type="button"
-        onClick={() => onChange([...values, ""])}
-        className="text-sm text-accent-ink font-medium border border-dashed border-accent rounded-md px-3 py-1.5 hover:bg-accent-soft"
-      >
-        + {addLabel}
-      </button>
+      {(max === undefined || values.length < max) && (
+        <button
+          type="button"
+          onClick={() => onChange([...values, ""])}
+          className="text-sm text-accent-ink font-medium border border-dashed border-accent rounded-md px-3 py-1.5 hover:bg-accent-soft"
+        >
+          + {addLabel}
+        </button>
+      )}
     </div>
   );
 }
