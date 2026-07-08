@@ -27,6 +27,16 @@ export async function POST(req: Request) {
   }));
   await admin.from("user_activity").insert(rows);
 
+  try {
+    await admin
+      .from("user_sessions")
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq("user_id", user.id)
+      .is("signed_out_at", null);
+  } catch {
+    // best-effort heartbeat; never break activity tracking
+  }
+
   const now = Date.now();
   if (now - lastPrune > 3_600_000) {
     lastPrune = now;
