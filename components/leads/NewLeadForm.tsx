@@ -18,6 +18,7 @@ import { SITE_TYPES, type AddOn } from "@/lib/leads/types";
 import { settableStatuses } from "@/lib/leads/categories";
 import { STATUS_PILL } from "@/lib/leads/types";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useDuplicateCheck } from "@/hooks/useDuplicateCheck";
 import { formatPhone } from "@/lib/forms/phone";
 import {
   PAGE_OPTIONS,
@@ -48,6 +49,7 @@ export function NewLeadForm({
   salesUsers,
   addons,
   currentUserId,
+  canOverrideDuplicate,
 }: {
   agents: Agent[];
   canAssign: boolean;
@@ -55,6 +57,7 @@ export function NewLeadForm({
   salesUsers: { id: string; display_name: string }[];
   addons: AddOn[];
   currentUserId: string;
+  canOverrideDuplicate: boolean;
 }) {
   const router = useRouter();
   const { all } = usePermissions();
@@ -68,6 +71,15 @@ export function NewLeadForm({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+
+  const collisions = useDuplicateCheck("/api/leads/check-duplicate", {
+    business_name: f.business_name,
+    phone: f.business_phone,
+    email: f.no_email ? "" : f.business_email,
+  });
+  const dupBy = (field: string) => collisions.find((c) => c.field === field);
+  const hasDup = collisions.length > 0;
+  const [overrideDup, setOverrideDup] = useState(false);
 
   function set<K extends keyof NewLeadFormState>(k: K, v: NewLeadFormState[K]) {
     setF((p) => ({ ...p, [k]: v }));
@@ -188,15 +200,29 @@ export function NewLeadForm({
       );
       return;
     }
+    if (hasDup && !(canOverrideDuplicate && overrideDup)) {
+      setApiError("Resolve the highlighted duplicate before submitting.");
+      return;
+    }
     setBusy(true);
     setApiError(null);
     const res = await fetch("/api/leads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildLeadPayload(f, { userId: currentUserId })),
+      body: JSON.stringify({ ...buildLeadPayload(f, { userId: currentUserId }), override: overrideDup }),
     });
     setBusy(false);
     if (!res.ok) {
+      if (res.status === 409) {
+        const body = await res.json().catch(() => ({}));
+        const fields: string[] = (body.collisions ?? []).map((c: { field: string }) => c.field);
+        setApiError(
+          fields.length
+            ? `This business is already in the system (matching ${fields.join(", ")}).`
+            : "This business is already in the system."
+        );
+        return;
+      }
       setApiError((await res.json().catch(() => ({}))).error ?? "Failed to create lead");
       return;
     }
@@ -220,11 +246,35 @@ export function NewLeadForm({
 
   const submitBtn = (
     <button
-      disabled={busy || (canSetStatus && settable.length === 0)}
+      disabled={
+        busy ||
+        (canSetStatus && settable.length === 0) ||
+        (hasDup && !(canOverrideDuplicate && overrideDup))
+      }
       className="w-full rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-accent-ink disabled:opacity-60"
     >
       {busy ? "Submitting…" : "Submit Lead"}
     </button>
+  );
+
+  const dupBanner = hasDup && (
+    <div className="mb-3 rounded-lg border border-dropped-fg/20 bg-dropped-bg px-3 py-2.5 text-xs text-dropped-fg">
+      <p>
+        ⚠ Possible duplicate — matching{" "}
+        {collisions.map((c) => c.field.replace("_", " ")).join(", ")} found in the system.
+      </p>
+      {canOverrideDuplicate && (
+        <label className="mt-2 flex items-center gap-1.5 font-medium">
+          <input
+            type="checkbox"
+            checked={overrideDup}
+            onChange={(e) => setOverrideDup(e.target.checked)}
+            className="accent-accent"
+          />
+          Submit anyway
+        </label>
+      )}
+    </div>
   );
 
   return (
@@ -307,9 +357,25 @@ export function NewLeadForm({
               </F>
               <F error={errors.business_name} label="Business Name" required>
                 <input value={f.business_name} onChange={(e) => set("business_name", e.target.value)} placeholder="Enter business name" className={inputCls} autoFocus />
+                {dupBy("business_name") && (
+                  <p className="mt-1 text-[11px] text-dropped-fg">
+                    ⚠{" "}
+                    {dupBy("business_name")!.isOwn
+                      ? "You already have a lead with this business name."
+                      : `This business name belongs to a lead owned by ${dupBy("business_name")!.ownerDisplayName ?? "another agent"}.`}
+                  </p>
+                )}
               </F>
               <F error={errors.business_phone} label="Phone Number" required hint="Format: (252) 401-2775">
                 <input type="tel" value={f.business_phone} onChange={(e) => set("business_phone", formatPhone(e.target.value))} placeholder="(252) 401-2775" maxLength={14} className={inputCls} />
+                {dupBy("phone") && (
+                  <p className="mt-1 text-[11px] text-dropped-fg">
+                    ⚠{" "}
+                    {dupBy("phone")!.isOwn
+                      ? "You already have a lead with this phone number."
+                      : `This phone number belongs to a lead owned by ${dupBy("phone")!.ownerDisplayName ?? "another agent"}.`}
+                  </p>
+                )}
               </F>
               <F error={errors.business_email} label="Email Address" required={!f.no_email}>
                 <input
@@ -333,6 +399,14 @@ export function NewLeadForm({
                   />
                   No email (customer didn&apos;t provide one)
                 </label>
+                {dupBy("email") && (
+                  <p className="mt-1 text-[11px] text-dropped-fg">
+                    ⚠{" "}
+                    {dupBy("email")!.isOwn
+                      ? "You already have a lead with this email."
+                      : `This email belongs to a lead owned by ${dupBy("email")!.ownerDisplayName ?? "another agent"}.`}
+                  </p>
+                )}
               </F>
             </div>
             <F error={errors.platform} label="Platform" required>
@@ -564,11 +638,14 @@ export function NewLeadForm({
           </SectionCard>
 
           {/* Mobile action row (sticky summary handles this on desktop) */}
-          <div className="flex items-center gap-3 lg:hidden">
-            <Link href="/leads" className="rounded-lg border border-border px-4 py-2.5 text-sm text-text-muted hover:bg-surface-2">
-              Cancel
-            </Link>
-            <div className="flex-1">{submitBtn}</div>
+          <div className="lg:hidden">
+            {dupBanner}
+            <div className="flex items-center gap-3">
+              <Link href="/leads" className="rounded-lg border border-border px-4 py-2.5 text-sm text-text-muted hover:bg-surface-2">
+                Cancel
+              </Link>
+              <div className="flex-1">{submitBtn}</div>
+            </div>
           </div>
         </div>
 
@@ -615,6 +692,7 @@ export function NewLeadForm({
                   </>
                 )}
               </p>
+              {dupBanner}
               {submitBtn}
               <Link
                 href="/leads"
