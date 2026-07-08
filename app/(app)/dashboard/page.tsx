@@ -8,9 +8,8 @@ import {
   SiteTypeDonut,
   RatingBars,
   Legend,
-  STATUS_LEGEND,
-  SITE_PALETTE,
 } from "@/components/dashboard/Charts";
+import { STATUS_LEGEND, SITE_PALETTE } from "@/lib/dashboard/palette";
 import {
   computeKpis,
   byStatus,

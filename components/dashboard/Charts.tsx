@@ -15,19 +15,11 @@ import {
   Tooltip,
 } from "recharts";
 import type { NameValue } from "@/lib/leads/analytics";
+import { STATUS_COLORS, PALETTE } from "@/lib/dashboard/palette";
 
 const TEAL = "#0D9488";
 const GRID = "#E5E9F0";
 const AXIS = "#8089A0";
-
-const STATUS_COLORS: Record<string, string> = {
-  Ready: "#15803D",
-  "Not Ready": "#D97706",
-  Closed: "#7E22CE",
-  Dropped: "#DC2626",
-  "Long Term": "#1D4ED8",
-};
-const PALETTE = ["#0D9488", "#2563EB", "#7E22CE", "#D97706", "#0EA5E9"];
 
 const tooltipStyle = {
   borderRadius: 8,
@@ -152,5 +144,3 @@ export function Legend({ items }: { items: { name: string; color: string }[] }) 
   );
 }
 
-export const STATUS_LEGEND = Object.entries(STATUS_COLORS).map(([name, color]) => ({ name, color }));
-export const SITE_PALETTE = PALETTE;
