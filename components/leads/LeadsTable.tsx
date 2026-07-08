@@ -24,7 +24,7 @@ import { FuStatusChip } from "./FuStatusChip";
 import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
-import { toCsv } from "@/lib/leads/csv";
+import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
 
 const SORTS: Record<string, { id: string; desc: boolean }> = {
   created_desc: { id: "created_at", desc: true },
@@ -49,23 +49,8 @@ export function LeadsTable({
   const canExport = has("leads.export");
 
   function exportCsv() {
-    const cols = [
-      { key: "created_at", label: "Date" },
-      { key: "business_name", label: "Business" },
-      { key: "business_email", label: "Email" },
-      { key: "business_phone", label: "Phone" },
-      { key: "status", label: "Status" },
-      { key: "agent", label: "Agent" },
-      { key: "site_type", label: "Type" },
-      { key: "price_quoted", label: "Price" },
-      { key: "rating", label: "Rating" },
-      { key: "follow_up_time", label: "Follow-up" },
-    ];
-    const rows = table.getFilteredRowModel().rows.map((r) => ({
-      ...r.original,
-      agent: (r.original.agent_id && agentNameById[r.original.agent_id]) || "Unassigned",
-    }));
-    const blob = new Blob([toCsv(rows, cols)], { type: "text/csv;charset=utf-8" });
+    const rows = table.getFilteredRowModel().rows.map((r) => leadCsvRow(r.original, agentNameById));
+    const blob = new Blob([toCsv(rows, LEAD_CSV_COLUMNS)], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     const d = new Date();

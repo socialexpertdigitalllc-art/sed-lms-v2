@@ -28,10 +28,12 @@ export function LeadDetail({
   lead,
   agents,
   followUps,
+  closedByName,
 }: {
   lead: Lead;
   agents: Agent[];
   followUps: LeadFollowUp[];
+  closedByName: string | null;
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
@@ -76,12 +78,15 @@ export function LeadDetail({
   const commas = (v: string) => v.split(",").map((t) => t.trim()).filter(Boolean);
   const lines = (v: string) => v.split("\n").map((t) => t.trim()).filter(Boolean);
   const triBool = (v: string) => (v === "" ? null : v === "Yes");
+  const muted = (text: string) => <span className="text-text-faint">{text}</span>;
 
   const agentName = (lead.agent_id && agents.find((a) => a.id === lead.agent_id)?.display_name) || "Unassigned";
   const agentOptions: SelectOption[] = [
     { value: "", label: "Unassigned" },
     ...agents.map((a) => ({ value: a.id, label: a.display_name ?? a.id })),
   ];
+  const designRefs = lead.design_reference_links ?? [];
+  const addOns = lead.add_ons ?? [];
 
   const btn = "rounded-lg border border-border bg-surface/70 px-3 py-2 text-sm text-text hover:bg-surface-2";
   const grid = "grid grid-cols-1 gap-x-8 sm:grid-cols-2";
@@ -126,23 +131,58 @@ export function LeadDetail({
             <div className={grid}>
               <FieldRow label="Business name" value={lead.business_name ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_name: v.trim() })} />
               <FieldRow label="Phone" value={lead.business_phone ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_phone: nz(v) })} />
-              <FieldRow label="Email" value={lead.business_email ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_email: nz(v) })} />
+              {lead.no_email ? (
+                <FieldRow label="Email" value="" display={muted("No email")} />
+              ) : (
+                <FieldRow label="Email" value={lead.business_email ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_email: nz(v) })} />
+              )}
               <FieldRow label="Profile link" value={lead.business_profile_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ business_profile_link: nz(v) })} />
               <FieldRow label="Website link" value={lead.website_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ website_link: nz(v) })} />
-              <FieldRow label="Logo link" value={lead.logo_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ logo_link: nz(v) })} />
+              {lead.logo_via_sms ? (
+                <FieldRow label="Logo link" value="" display={muted("Sent via SMS")} />
+              ) : (
+                <FieldRow label="Logo link" value={lead.logo_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ logo_link: nz(v) })} />
+              )}
               <FieldRow label="Map embed link" value={lead.map_embed_link ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ map_embed_link: nz(v) })} />
               <FieldRow label="Reference link" value={lead.reference_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ reference_link: nz(v) })} />
+              {designRefs.length > 0 ? (
+                designRefs.map((link, i) => (
+                  <FieldRow key={i} label={`Design reference ${i + 1}`} value={link} type="url" />
+                ))
+              ) : (
+                <FieldRow label="Design reference sites" value="" />
+              )}
             </div>
           </SectionCard>
 
           <SectionCard n={2} icon={ClipboardList} title="Lead info" subtitle="Status, pricing & rating" done={false} delay={60}>
             <div className={grid}>
               <FieldRow label="Agent" value={lead.agent_id ?? ""} type="select" options={agentOptions} display={agentName} canEdit={canEdit} onSave={(v) => patch({ agent_id: v || null })} />
+              <FieldRow label="Closed by" value={lead.closed_by ?? ""} display={closedByName} />
               {/* Status is read-only here — edited via the "Change status" button (respects category permissions). */}
               <FieldRow label="Status" value={lead.status} display={<StatusPill status={lead.status} />} />
               <FieldRow label="Site type" value={lead.site_type ?? ""} type="select" options={[{ value: "", label: "—" }, ...SITE_TYPES.map((s) => ({ value: s, label: s }))]} canEdit={canEdit} onSave={(v) => patch({ site_type: v || null })} />
               <FieldRow label="Platform" value={lead.platform ?? ""} canEdit={canEdit} onSave={(v) => patch({ platform: nz(v) })} />
               <FieldRow label="Price quoted" value={lead.price_quoted?.toString() ?? ""} type="number" display={lead.price_quoted != null ? formatCurrency(lead.price_quoted) : undefined} canEdit={canEdit} onSave={(v) => patch({ price_quoted: num(v) })} />
+              {addOns.length > 0 ? (
+                <FieldRow
+                  className="sm:col-span-2"
+                  label="Add-ons"
+                  value=""
+                  display={
+                    <ul className="space-y-0.5">
+                      {addOns.map((a) => (
+                        <li key={a.id}>
+                          {a.label}
+                          {a.price != null ? ` — ${formatCurrency(a.price)}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  }
+                />
+              ) : (
+                <FieldRow className="sm:col-span-2" label="Add-ons" value="" />
+              )}
               <FieldRow label="Rating (1–10)" value={lead.rating?.toString() ?? ""} type="number" display={lead.rating != null ? `${lead.rating}/10` : undefined} canEdit={canEdit} onSave={(v) => patch({ rating: num(v) })} />
               <FieldRow label="Fresh or follow-up" value={lead.fresh_or_followup ?? ""} type="select" options={[{ value: "", label: "—" }, ...FRESH_OPTIONS.map((s) => ({ value: s, label: s }))]} canEdit={canEdit} onSave={(v) => patch({ fresh_or_followup: v || null })} />
             </div>
@@ -155,7 +195,11 @@ export function LeadDetail({
               <FieldRow label="Has service areas" value={lead.has_service_areas == null ? "" : lead.has_service_areas ? "Yes" : "No"} type="select" options={YES_NO} canEdit={canEdit} onSave={(v) => patch({ has_service_areas: triBool(v) })} />
               <FieldRow label="No. of webpages" value={lead.num_webpages?.toString() ?? ""} type="number" canEdit={canEdit} onSave={(v) => patch({ num_webpages: num(v) })} />
               <FieldRow label="Specify pages" value={(lead.specify_pages ?? []).join(", ")} canEdit={canEdit} onSave={(v) => patch({ specify_pages: commas(v) })} />
-              <FieldRow label="Color scheme" value={lead.color_scheme ?? ""} canEdit={canEdit} onSave={(v) => patch({ color_scheme: nz(v) })} />
+              {lead.color_same_as_logo ? (
+                <FieldRow label="Color scheme" value="" display={muted("Same as logo")} />
+              ) : (
+                <FieldRow label="Color scheme" value={lead.color_scheme ?? ""} canEdit={canEdit} onSave={(v) => patch({ color_scheme: nz(v) })} />
+              )}
               <FieldRow label="Client experience (years)" value={lead.client_experience?.toString() ?? ""} type="number" canEdit={canEdit} onSave={(v) => patch({ client_experience: num(v) })} />
             </div>
           </SectionCard>

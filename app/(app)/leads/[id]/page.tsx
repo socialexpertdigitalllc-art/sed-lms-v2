@@ -13,13 +13,14 @@ export default async function LeadDetailPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const { data: lead } = await supabase
+  const { data: leadRaw } = await supabase
     .from("leads")
     .select("*")
     .eq("id", id)
     .is("deleted_at", null)
     .single();
-  if (!lead) notFound();
+  if (!leadRaw) notFound();
+  const lead = leadRaw as Lead;
 
   const { data: agents } = await supabase
     .from("profiles")
@@ -33,10 +34,10 @@ export default async function LeadDetailPage({
     .eq("lead_id", id)
     .order("created_at", { ascending: false });
 
-  // Resolve logger names via the admin client so display_name is not RLS-nulled
-  // for follow-ups logged by users other than the viewer.
+  // Resolve logger + closer names via the admin client so display_name is not RLS-nulled
+  // for actors other than the viewer (covers no-longer-active profiles too).
   const userIds = Array.from(
-    new Set((followUpsRaw ?? []).map((r) => r.user_id).filter(Boolean))
+    new Set([...(followUpsRaw ?? []).map((r) => r.user_id), lead.closed_by].filter(Boolean))
   ) as string[];
   const names = new Map<string, string | null>();
   if (userIds.length) {
@@ -51,6 +52,7 @@ export default async function LeadDetailPage({
     ...r,
     logger_name: r.user_id ? names.get(r.user_id) ?? null : null,
   }));
+  const closedByName = lead.closed_by ? names.get(lead.closed_by) ?? null : null;
 
-  return <LeadDetail lead={lead as Lead} agents={agents ?? []} followUps={followUps} />;
+  return <LeadDetail lead={lead} agents={agents ?? []} followUps={followUps} closedByName={closedByName} />;
 }
