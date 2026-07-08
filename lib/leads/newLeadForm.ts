@@ -1,4 +1,5 @@
 import { PHONE_RE } from "@/lib/forms/phone";
+import type { AddOn } from "@/lib/leads/types";
 
 export const PAGE_OPTIONS = [
   "Home",
@@ -35,8 +36,12 @@ export interface NewLeadFormState {
   specify_pages: string[];
   other_page: string;
   color_scheme: string;
+  color_same_as_logo: boolean;
   logo_link: string;
+  logo_via_sms: boolean;
   image_links: string[];
+  design_reference_links: string[];
+  add_ons: AddOn[];
   follow_up_time: string;
   price_quoted: string;
   price_custom: string;
@@ -47,6 +52,9 @@ export interface NewLeadFormState {
   comments: string;
   rating: number;
   fresh_or_followup: string;
+  no_email: boolean;
+  /** Holds "self" (resolved to the current user at submit time) or a uuid. */
+  closed_by: string;
 }
 
 export function emptyNewLead(status: string): NewLeadFormState {
@@ -68,8 +76,12 @@ export function emptyNewLead(status: string): NewLeadFormState {
     specify_pages: ["Home"],
     other_page: "",
     color_scheme: "",
+    color_same_as_logo: false,
     logo_link: "",
+    logo_via_sms: false,
     image_links: [""],
+    design_reference_links: [],
+    add_ons: [],
     follow_up_time: "",
     price_quoted: "",
     price_custom: "",
@@ -80,6 +92,8 @@ export function emptyNewLead(status: string): NewLeadFormState {
     comments: "",
     rating: 0,
     fresh_or_followup: "",
+    no_email: false,
+    closed_by: "self",
   };
 }
 
@@ -117,7 +131,8 @@ export function validateNewLead(
   if (!f.business_name.trim()) e.business_name = "Business name is required.";
   if (!PHONE_RE.test(f.business_phone.trim()))
     e.business_phone = "Enter a valid phone: (252) 401-2775";
-  if (!EMAIL_RE.test(f.business_email.trim())) e.business_email = "Enter a valid email address.";
+  if (!f.no_email && !EMAIL_RE.test(f.business_email.trim()))
+    e.business_email = "Enter a valid email address.";
   if (!f.platform) e.platform = "Please select a platform.";
   if (!f.business_profile_link.trim()) e.business_profile_link = "Profile link is required.";
   if (f.platform === "Other" && !f.other_platform.trim())
@@ -138,7 +153,17 @@ export function validateNewLead(
   );
   if (total < 1) e.specify_pages = "Select at least one page.";
 
-  if (!f.color_scheme.trim()) e.color_scheme = "Color scheme is required.";
+  const logoProvided =
+    (!!f.logo_link && /^https?:\/\/.+/.test(f.logo_link.trim())) || f.logo_via_sms;
+  if (f.color_same_as_logo) {
+    if (!logoProvided) e.color_scheme = "Add a logo to use 'Same as Logo'.";
+  } else if (!f.color_scheme.trim()) {
+    e.color_scheme = "Color scheme is required.";
+  }
+
+  for (const u of f.design_reference_links)
+    if (u && !/^https?:\/\/.+/.test(u.trim())) e.design_reference_links = "Enter valid URLs.";
+
   const t = new Date(f.follow_up_time).getTime();
   if (!f.follow_up_time || Number.isNaN(t) || t <= now.getTime())
     e.follow_up_time = "Follow up time must be in the future.";
@@ -154,17 +179,19 @@ export function validateNewLead(
   if (!f.comments.trim()) e.comments = "Please enter comments about the client.";
   if (f.rating === 0) e.rating = "Please rate the lead.";
   if (!f.fresh_or_followup) e.fresh_or_followup = "Please select Fresh or Follow Up.";
+  if (!f.closed_by) e.closed_by = "Select who closed the lead.";
 
   return e;
 }
 
 /** Map the form state to the POST /api/leads body (createLeadSchema shape). */
-export function buildLeadPayload(f: NewLeadFormState) {
+export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }) {
   const services = nonEmpty(f.services);
   const areas = f.has_service_areas === "Yes" ? nonEmpty(f.areas) : [];
   const pages = f.specify_pages.map((p) => (p === "Other" ? f.other_page.trim() || "Other" : p));
   const total = pageTotal(f.specify_pages, services.length, areas.length);
   const images = nonEmpty(f.image_links);
+  const designRefs = nonEmpty(f.design_reference_links);
 
   return {
     business_name: f.business_name.trim(),
@@ -172,7 +199,8 @@ export function buildLeadPayload(f: NewLeadFormState) {
     agent_id: f.agent_id || null,
     site_type: f.site_type || null,
     business_phone: f.business_phone.trim() || null,
-    business_email: f.business_email.trim() || null,
+    no_email: f.no_email,
+    business_email: f.no_email ? null : f.business_email.trim() || null,
     business_profile_link: f.business_profile_link.trim() || null,
     platform: f.platform === "Other" ? f.other_platform.trim() || null : f.platform || null,
     map_embed_link: f.map_embed_link.trim() || null,
@@ -182,8 +210,12 @@ export function buildLeadPayload(f: NewLeadFormState) {
     client_experience: f.client_experience === "" ? null : parseInt(f.client_experience, 10),
     num_webpages: total || null,
     specify_pages: pages.length ? pages : null,
-    color_scheme: f.color_scheme.trim() || null,
-    logo_link: f.logo_link.trim() || null,
+    color_same_as_logo: f.color_same_as_logo,
+    color_scheme: f.color_same_as_logo ? null : f.color_scheme.trim() || null,
+    logo_via_sms: f.logo_via_sms,
+    logo_link: f.logo_via_sms ? null : f.logo_link.trim() || null,
+    design_reference_links: designRefs.length ? designRefs : null,
+    add_ons: f.add_ons.length ? f.add_ons : null,
     image_links: images.length ? images : null,
     follow_up_time: f.follow_up_time ? new Date(f.follow_up_time).toISOString() : null,
     price_quoted:
@@ -203,5 +235,6 @@ export function buildLeadPayload(f: NewLeadFormState) {
     rating: f.rating || null,
     fresh_or_followup: f.fresh_or_followup || null,
     comments: f.comments.trim() || null,
+    closed_by: f.closed_by === "self" ? (opts?.userId ?? null) : f.closed_by || null,
   };
 }

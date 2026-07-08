@@ -30,6 +30,8 @@ function validState(): NewLeadFormState {
   };
 }
 
+const NOW = new Date("2026-07-07T00:00:00");
+
 describe("pageTotal (weighted, as in the old form)", () => {
   it("counts plain pages as 1", () => {
     expect(pageTotal(["Home", "About Us"], 3, 2)).toBe(2);
@@ -154,5 +156,183 @@ describe("buildLeadPayload", () => {
     });
     expect(p.specify_pages).toContain("FAQ");
     expect(p.reference_link).toBeNull();
+  });
+});
+
+describe("polish-3: email / no_email", () => {
+  it("requires a valid email when no_email is false", () => {
+    const e = validateNewLead({ ...validState(), business_email: "", no_email: false }, NOW);
+    expect(e.business_email).toBeTruthy();
+  });
+
+  it("does not require email when no_email is true", () => {
+    const e = validateNewLead({ ...validState(), business_email: "", no_email: true }, NOW);
+    expect(e.business_email).toBeFalsy();
+  });
+});
+
+describe("polish-3: color scheme / logo dependency", () => {
+  it("requires color_scheme when not same-as-logo", () => {
+    const e = validateNewLead(
+      { ...validState(), color_scheme: "", color_same_as_logo: false },
+      NOW
+    );
+    expect(e.color_scheme).toBeTruthy();
+  });
+
+  it("does not require color_scheme when same-as-logo with a logo link", () => {
+    const e = validateNewLead(
+      {
+        ...validState(),
+        color_scheme: "",
+        color_same_as_logo: true,
+        logo_link: "https://x.com/l.png",
+      },
+      NOW
+    );
+    expect(e.color_scheme).toBeFalsy();
+  });
+
+  it("does not require color_scheme when same-as-logo with logo via sms", () => {
+    const e = validateNewLead(
+      {
+        ...validState(),
+        color_scheme: "",
+        color_same_as_logo: true,
+        logo_link: "",
+        logo_via_sms: true,
+      },
+      NOW
+    );
+    expect(e.color_scheme).toBeFalsy();
+  });
+
+  it("rejects same-as-logo when no logo was provided at all", () => {
+    const e = validateNewLead(
+      {
+        ...validState(),
+        color_scheme: "",
+        color_same_as_logo: true,
+        logo_link: "",
+        logo_via_sms: false,
+      },
+      NOW
+    );
+    expect(e.color_scheme).toBeTruthy();
+  });
+});
+
+describe("polish-3: design_reference_links validation", () => {
+  it("accepts an empty design reference list", () => {
+    const e = validateNewLead({ ...validState(), design_reference_links: [] }, NOW);
+    expect(e.design_reference_links).toBeFalsy();
+  });
+
+  it("accepts up to 3 valid urls", () => {
+    const e = validateNewLead(
+      {
+        ...validState(),
+        design_reference_links: ["https://a.com", "https://b.com", "https://c.com"],
+      },
+      NOW
+    );
+    expect(e.design_reference_links).toBeFalsy();
+  });
+
+  it("rejects a non-url design reference link", () => {
+    const e = validateNewLead(
+      { ...validState(), design_reference_links: ["not-a-url"] },
+      NOW
+    );
+    expect(e.design_reference_links).toBeTruthy();
+  });
+});
+
+describe("polish-3: closed_by validation", () => {
+  it("requires closed_by to be set", () => {
+    const e = validateNewLead({ ...validState(), closed_by: "" }, NOW);
+    expect(e.closed_by).toBeTruthy();
+  });
+
+  it("accepts the default 'self' value", () => {
+    const e = validateNewLead({ ...validState(), closed_by: "self" }, NOW);
+    expect(e.closed_by).toBeFalsy();
+  });
+});
+
+describe("polish-3: buildLeadPayload flags", () => {
+  it("nulls email and sets no_email true", () => {
+    const p = buildLeadPayload({ ...validState(), business_email: "x@y.com", no_email: true });
+    expect(p.business_email).toBeNull();
+    expect(p.no_email).toBe(true);
+  });
+
+  it("keeps the trimmed email when no_email is false", () => {
+    const p = buildLeadPayload({
+      ...validState(),
+      business_email: "  x@y.com  ",
+      no_email: false,
+    });
+    expect(p.business_email).toBe("x@y.com");
+    expect(p.no_email).toBe(false);
+  });
+
+  it("nulls logo_link when logo_via_sms is true", () => {
+    const p = buildLeadPayload({
+      ...validState(),
+      logo_link: "https://x.com/l.png",
+      logo_via_sms: true,
+    });
+    expect(p.logo_link).toBeNull();
+    expect(p.logo_via_sms).toBe(true);
+  });
+
+  it("keeps logo_link when logo_via_sms is false", () => {
+    const p = buildLeadPayload({
+      ...validState(),
+      logo_link: "https://x.com/l.png",
+      logo_via_sms: false,
+    });
+    expect(p.logo_link).toBe("https://x.com/l.png");
+  });
+
+  it("nulls color_scheme when color_same_as_logo is true", () => {
+    const p = buildLeadPayload({
+      ...validState(),
+      color_scheme: "#fff",
+      color_same_as_logo: true,
+      logo_link: "https://x.com/l.png",
+    });
+    expect(p.color_scheme).toBeNull();
+    expect(p.color_same_as_logo).toBe(true);
+  });
+
+  it("carries design_reference_links and add_ons through", () => {
+    const addOns = [{ id: "x", label: "Live Chat", price: 50 }];
+    const p = buildLeadPayload({
+      ...validState(),
+      design_reference_links: ["https://a.com", "https://b.com"],
+      add_ons: addOns,
+    });
+    expect(p.design_reference_links).toEqual(["https://a.com", "https://b.com"]);
+    expect(p.add_ons).toEqual(addOns);
+  });
+
+  it("resolves closed_by 'self' to the current user id", () => {
+    const p = buildLeadPayload({ ...validState(), closed_by: "self" }, { userId: "user-123" });
+    expect(p.closed_by).toBe("user-123");
+  });
+
+  it("resolves closed_by 'self' to null when no userId is supplied", () => {
+    const p = buildLeadPayload({ ...validState(), closed_by: "self" });
+    expect(p.closed_by).toBeNull();
+  });
+
+  it("keeps an explicit closed_by uuid as-is, ignoring opts.userId", () => {
+    const p = buildLeadPayload(
+      { ...validState(), closed_by: "11111111-1111-4111-8111-111111111111" },
+      { userId: "user-123" }
+    );
+    expect(p.closed_by).toBe("11111111-1111-4111-8111-111111111111");
   });
 });
