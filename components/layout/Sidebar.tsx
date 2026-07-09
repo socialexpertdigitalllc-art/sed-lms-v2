@@ -5,7 +5,9 @@ import { usePathname } from "next/navigation";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
 
-type NavItem = { href: string; label: string; perm: string };
+// `perm` is optional — an item with no perm is visible to every authenticated
+// user (see `mainVisible` below).
+type NavItem = { href: string; label: string; perm?: string };
 
 const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", perm: "analytics.view" },
@@ -14,6 +16,7 @@ const MAIN: NavItem[] = [
   { href: "/tickets", label: "Tickets", perm: "tickets.view" },
   { href: "/by-agent", label: "By Agent", perm: "analytics.view" },
   { href: "/feedback", label: "Feedback", perm: "feedback.submit" },
+  { href: "/notifications", label: "Notifications" },
 ];
 
 const PRELEADS: NavItem[] = [
@@ -44,13 +47,13 @@ export function Sidebar() {
   const { has, hasAny } = usePermissions();
   const path = usePathname();
 
-  const mainVisible = MAIN.filter((n) => has(n.perm));
-  const preVisible = PRELEADS.filter((n) => has(n.perm));
+  const mainVisible = MAIN.filter((n) => (n.perm ? has(n.perm) : true));
+  const preVisible = PRELEADS.filter((n) => (n.perm ? has(n.perm) : true));
   const hasAiTools = hasAny(["ai_tools.webcraft", "ai_tools.deepseek"]);
   const aiVisible = AI_TOOLS
     .filter((n) => hasAny(n.perms) && (n.href !== "/ai-tools/wge" || hasAiTools))
     .map((n) => ({ href: n.href, label: n.label, perm: n.perms[0] }));
-  const adminVisible = ADMIN.filter((n) => has(n.perm));
+  const adminVisible = ADMIN.filter((n) => (n.perm ? has(n.perm) : true));
 
   // longest-prefix match so only the most specific nav item is active
   const all = [...mainVisible, ...preVisible, ...aiVisible, ...adminVisible];

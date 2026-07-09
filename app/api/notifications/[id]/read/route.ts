@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const supabase = await createClient();
@@ -27,7 +27,15 @@ export async function POST(
     .is("read_at", null)
     .eq("user_id", user.id);
 
-  if (id !== "all") query = query.eq("id", id);
+  if (id !== "all") {
+    query = query.eq("id", id);
+  } else {
+    // Optional ?bell=website|general so a bell's own "mark all read" only
+    // clears its own rows, leaving the other bell's unread state untouched.
+    // The /notifications inbox omits this param to clear everything.
+    const bell = new URL(req.url).searchParams.get("bell");
+    if (bell === "website" || bell === "general") query = query.eq("bell", bell);
+  }
 
   const { error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

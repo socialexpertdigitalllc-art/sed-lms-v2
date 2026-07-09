@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { AppNotification, NotifyBell } from "@/lib/notifications/types";
 import { formatDateTime } from "@/lib/leads/format";
+import { createClient } from "@/lib/supabase/client";
 
 /** Shared notification-table-backed bell. Wrapped by WebsiteBell/GeneralBell with a fixed `bell`. */
 export function BellBase({
@@ -17,6 +18,7 @@ export function BellBase({
 }) {
   const [notes, setNotes] = useState<AppNotification[]>([]);
   const [open, setOpen] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,6 +33,35 @@ export function BellBase({
     })();
     return () => {
       active = false;
+    };
+  }, [bell, refreshTick]);
+
+  // Live badge updates. Not useRealtimeRefresh: that hook calls router.refresh()
+  // (a server-tree refetch), which wouldn't re-run this component's own
+  // client-side fetch effect above since it has no server-supplied props. So we
+  // subscribe directly and bump refreshTick to re-run that effect instead.
+  useEffect(() => {
+    const supabase = createClient();
+    let t: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+    const channel = supabase.channel(`rt-bell-${bell}`);
+
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (cancelled) return;
+      if (data.session) supabase.realtime.setAuth(data.session.access_token);
+      channel
+        .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => {
+          if (t) clearTimeout(t);
+          t = setTimeout(() => setRefreshTick((n) => n + 1), 400);
+        })
+        .subscribe();
+    })();
+
+    return () => {
+      cancelled = true;
+      if (t) clearTimeout(t);
+      supabase.removeChannel(channel);
     };
   }, [bell]);
 
@@ -57,10 +88,10 @@ export function BellBase({
   async function markAllRead() {
     setNotes([]);
     try {
-      // Marks ALL of the user's unread notifications read (both bells), not just this one —
-      // the other mounted bell will pick that up on its own next fetch. Refetch here to stay
-      // in sync with the server in case anything landed mid-flight.
-      await fetch("/api/notifications/all/read", { method: "POST" });
+      // Scoped to this bell via ?bell= so clearing one bell's unread state
+      // leaves the other bell untouched. Refetch here to stay in sync with
+      // the server in case anything landed mid-flight.
+      await fetch(`/api/notifications/all/read?bell=${bell}`, { method: "POST" });
       const res = await fetch(`/api/notifications?bell=${bell}&unread=1`);
       if (res.ok) setNotes(((await res.json()).notifications ?? []) as AppNotification[]);
     } catch {
