@@ -61,7 +61,9 @@ insert into public.permissions (key, name, description, category, is_sensitive) 
   ('dashboard.chart.rating_distribution','Chart: Rating Distribution',null,'dashboard',false),
   ('dashboard.chart.fresh_vs_followup','Chart: Fresh vs Follow-up',null,'dashboard',false),
   ('dashboard.chart.revenue_by_status','Chart: Revenue by Status',null,'dashboard',false),
-  ('dashboard.chart.ticket_status_split','Chart: Ticket Status Split',null,'dashboard',false)
+  ('dashboard.chart.ticket_status_split','Chart: Ticket Status Split',null,'dashboard',false),
+  ('payments.view','View Payment Links',null,'payments',false),
+  ('payments.manage','Manage Payment Links',null,'payments',true)
 on conflict (key) do nothing;
 
 insert into public.departments (name, slug, description, color, icon) values
@@ -69,7 +71,8 @@ insert into public.departments (name, slug, description, color, icon) values
   ('Management','management','Oversees all leads & analytics','#7E22CE','briefcase'),
   ('Tech','tech','AI tools & website generation','#2563EB','code'),
   ('Support','support','Read-only assistance','#B45309','headphones'),
-  ('Admin','admin','Full system administration','#141B2D','shield')
+  ('Admin','admin','Full system administration','#141B2D','shield'),
+  ('Accounts','accounts','Payments & billing','#CA8A04','wallet')
 on conflict (slug) do nothing;
 
 insert into public.department_permissions (department_id, permission_key)
@@ -93,10 +96,12 @@ where (d.slug, p.key) in (
   ('tech','feedback.submit'),('tech','feedback.manage'),
   ('support','leads.view'),
   ('support','feedback.submit'),
+  ('accounts','payments.view'),('accounts','payments.manage'),
   ('admin','admin.import'),('admin','admin.settings.manage'),('admin','leads.duplicate.override'),
   ('admin','tickets.view'),('admin','tickets.create'),('admin','tickets.assign'),('admin','tickets.resolve'),
   ('admin','feedback.submit'),('admin','feedback.manage'),
-  ('admin','admin.notifications.manage')
+  ('admin','admin.notifications.manage'),
+  ('admin','payments.view'),('admin','payments.manage')
 )
 on conflict do nothing;
 
