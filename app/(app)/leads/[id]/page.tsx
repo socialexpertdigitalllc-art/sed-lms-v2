@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadDetail } from "@/components/leads/LeadDetail";
 import type { Lead } from "@/lib/leads/types";
 import type { LeadFollowUp } from "@/lib/leads/followups";
+import type { Ticket, TicketItem } from "@/lib/tickets/types";
 import { notFound } from "next/navigation";
 
 export default async function LeadDetailPage({
@@ -34,6 +35,32 @@ export default async function LeadDetailPage({
     .eq("lead_id", id)
     .order("created_at", { ascending: false });
 
+  const admin = createAdminClient();
+
+  // Fetch this lead's tickets + their items via the admin client (mirrors
+  // GET /api/leads/[id]/tickets) so the detail-page card is never RLS-scoped.
+  const { data: ticketsRaw } = await admin
+    .from("lead_tickets")
+    .select("*")
+    .eq("lead_id", id)
+    .order("created_at", { ascending: false });
+  const ticketRows = (ticketsRaw ?? []) as Ticket[];
+  const ticketIds = ticketRows.map((t) => t.id);
+  const itemsByTicket = new Map<string, TicketItem[]>();
+  if (ticketIds.length) {
+    const { data: items } = await admin
+      .from("ticket_items")
+      .select("*")
+      .in("ticket_id", ticketIds)
+      .order("sort");
+    for (const item of (items ?? []) as TicketItem[]) {
+      const list = itemsByTicket.get(item.ticket_id) ?? [];
+      list.push(item);
+      itemsByTicket.set(item.ticket_id, list);
+    }
+  }
+  const tickets: Ticket[] = ticketRows.map((t) => ({ ...t, items: itemsByTicket.get(t.id) ?? [] }));
+
   // Resolve logger + closer names via the admin client so display_name is not RLS-nulled
   // for actors other than the viewer (covers no-longer-active profiles too).
   const userIds = Array.from(
@@ -41,7 +68,6 @@ export default async function LeadDetailPage({
   ) as string[];
   const names = new Map<string, string | null>();
   if (userIds.length) {
-    const admin = createAdminClient();
     const { data: profiles } = await admin
       .from("profiles")
       .select("id, display_name")
@@ -54,5 +80,14 @@ export default async function LeadDetailPage({
   }));
   const closedByName = lead.closed_by ? names.get(lead.closed_by) ?? null : null;
 
-  return <LeadDetail lead={lead} agents={agents ?? []} followUps={followUps} closedByName={closedByName} />;
+  return (
+    <LeadDetail
+      lead={lead}
+      agents={agents ?? []}
+      followUps={followUps}
+      closedByName={closedByName}
+      tickets={tickets}
+      hasCloser={!!lead.closed_by}
+    />
+  );
 }
