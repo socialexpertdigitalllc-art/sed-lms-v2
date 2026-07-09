@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { createLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
+import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { enqueueLeadIfReady } from "@/lib/ai-tools/queue";
 import { findCollisions, type DupRow } from "@/lib/leads/duplicate";
 
@@ -115,6 +116,9 @@ export async function POST(req: Request) {
     .select("id, business_name, agent_id")
     .single();
   if (error || !data) {
+    if (isReadyGuardError(error)) {
+      return NextResponse.json({ error: READY_GUARD_MESSAGE }, { status: 422 });
+    }
     return NextResponse.json({ error: error?.message ?? "Create failed" }, { status: 400 });
   }
 

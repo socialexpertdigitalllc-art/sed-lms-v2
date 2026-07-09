@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { updateLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
+import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 
 export async function PATCH(
   req: Request,
@@ -59,7 +60,12 @@ export async function PATCH(
   }
 
   const { error } = await admin.from("leads").update(parsed.data).eq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) {
+    if (isReadyGuardError(error)) {
+      return NextResponse.json({ error: READY_GUARD_MESSAGE }, { status: 422 });
+    }
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
 
   const changedKeys = Object.keys(parsed.data);
   const oldValue: Record<string, unknown> = {};

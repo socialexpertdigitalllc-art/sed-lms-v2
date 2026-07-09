@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { readSheet } from "@/lib/import/sheets";
 import { mapRow } from "@/lib/import/map";
+import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -66,8 +67,11 @@ export async function POST(req: Request) {
     const chunk = inserts.slice(i, i + 200);
     const { error } = await admin.from("leads").insert(chunk);
     if (error) {
+      // Don't abort the batch on a Ready-guard violation (or any other row
+      // error) — count the chunk as failed and keep importing the rest.
       failed += chunk.length;
-      if (!firstError) firstError = error.message;
+      const message = isReadyGuardError(error) ? READY_GUARD_MESSAGE : error.message;
+      if (!firstError) firstError = message;
     } else {
       imported += chunk.length;
     }

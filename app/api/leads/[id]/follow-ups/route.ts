@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { catSetKey } from "@/lib/leads/categories";
+import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { nextStreak, isFollowUpEligible } from "@/lib/leads/followups";
 import { logFollowUpSchema } from "@/lib/leads/followupSchema";
 
@@ -127,6 +128,10 @@ export async function POST(
       ...(statusChange ? { status: statusChange } : {}),
     })
     .eq("id", id);
+
+  if (leadUpdateError && isReadyGuardError(leadUpdateError)) {
+    return NextResponse.json({ error: READY_GUARD_MESSAGE }, { status: 422 });
+  }
 
   if (!leadUpdateError && statusChange && statusChange !== lead.status) {
     const nonce = new Date().toISOString();
