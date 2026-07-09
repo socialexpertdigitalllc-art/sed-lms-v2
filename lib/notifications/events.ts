@@ -34,6 +34,27 @@ export const NOTIFICATION_EVENTS = [
     defaultLeadTimeMinutes: 0,
     hasTiming: false,
   },
+  {
+    key: "ticket_overdue",
+    label: "Ticket overdue",
+    description: "A ticket passed its due date and was escalated.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+  },
+  {
+    key: "feedback_submitted",
+    label: "Feedback submitted",
+    description: "A user submitted dashboard feedback.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+  },
+  {
+    key: "feedback_resolved",
+    label: "Feedback resolved",
+    description: "Your feedback was resolved.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+  },
 ] as const;
 
 export type NotificationEventKey = (typeof NOTIFICATION_EVENTS)[number]["key"];

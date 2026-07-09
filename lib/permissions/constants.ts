@@ -33,8 +33,10 @@ export const PERMISSIONS = [
   { key: "tickets.create", name: "Open Tickets", category: "tickets" },
   { key: "tickets.assign", name: "Assign Tickets", category: "tickets", is_sensitive: true },
   { key: "tickets.resolve", name: "Resolve Tickets", category: "tickets" },
+  { key: "feedback.submit", name: "Submit Feedback", category: "feedback" },
+  { key: "feedback.manage", name: "Manage Feedback", category: "feedback", is_sensitive: true },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 
-export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets"] as const;
+export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback"] as const;
