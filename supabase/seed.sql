@@ -35,7 +35,9 @@ insert into public.permissions (key, name, description, category, is_sensitive) 
   ('tickets.view','View Tickets',null,'tickets',false),
   ('tickets.create','Open Tickets',null,'tickets',false),
   ('tickets.assign','Assign Tickets',null,'tickets',true),
-  ('tickets.resolve','Resolve Tickets',null,'tickets',false)
+  ('tickets.resolve','Resolve Tickets',null,'tickets',false),
+  ('feedback.submit','Submit Feedback',null,'feedback',false),
+  ('feedback.manage','Manage Feedback',null,'feedback',true)
 on conflict (key) do nothing;
 
 insert into public.departments (name, slug, description, color, icon) values
@@ -53,18 +55,23 @@ where (d.slug, p.key) in (
   ('sales','pre_leads.view'),('sales','pre_leads.create'),('sales','pre_leads.edit'),('sales','pre_leads.followup'),
   ('sales','analytics.view'),('sales','ai_tools.webcraft'),('sales','ai_tools.deepseek'),
   ('sales','tickets.view'),('sales','tickets.create'),
+  ('sales','feedback.submit'),
   ('management','leads.view'),('management','leads.create'),('management','leads.edit'),('management','leads.delete'),
   ('management','leads.status_change'),('management','leads.view_all'),('management','leads.duplicate.override'),
   ('management','pre_leads.view'),('management','pre_leads.create'),('management','pre_leads.edit'),('management','pre_leads.delete'),('management','pre_leads.followup'),
   ('management','analytics.view'),('management','analytics.view_webcraft'),('management','analytics.view_deepseek'),('management','analytics.view_all_agents'),
   ('management','admin.settings.manage'),
   ('management','tickets.view'),('management','tickets.assign'),
+  ('management','feedback.submit'),
   ('tech','analytics.view'),('tech','analytics.view_webcraft'),('tech','analytics.view_deepseek'),('tech','ai_tools.webcraft'),('tech','ai_tools.deepseek'),('tech','wge.manage'),
   ('tech','admin.import'),
   ('tech','tickets.view'),('tech','tickets.resolve'),
+  ('tech','feedback.submit'),('tech','feedback.manage'),
   ('support','leads.view'),
+  ('support','feedback.submit'),
   ('admin','admin.import'),('admin','admin.settings.manage'),('admin','leads.duplicate.override'),
-  ('admin','tickets.view'),('admin','tickets.create'),('admin','tickets.assign'),('admin','tickets.resolve')
+  ('admin','tickets.view'),('admin','tickets.create'),('admin','tickets.assign'),('admin','tickets.resolve'),
+  ('admin','feedback.submit'),('admin','feedback.manage')
 )
 on conflict do nothing;
 
