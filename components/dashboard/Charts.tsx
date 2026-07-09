@@ -15,7 +15,8 @@ import {
   Tooltip,
 } from "recharts";
 import type { NameValue } from "@/lib/leads/analytics";
-import { STATUS_COLORS, PALETTE } from "@/lib/dashboard/palette";
+import { STATUS_COLORS, PALETTE, TICKET_COLORS } from "@/lib/dashboard/palette";
+import { formatCurrency } from "@/lib/leads/format";
 
 const TEAL = "#0D9488";
 const GRID = "#E5E9F0";
@@ -82,6 +83,29 @@ export function LeadsByAgent({ data }: { data: NameValue[] }) {
   );
 }
 
+export function RevenueByStatus({ data }: { data: { name: string; value: number }[] }) {
+  if (!data.length) return <EmptyChart label="No revenue yet" />;
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(160, data.length * 38)}>
+      <BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 8, bottom: 0 }}>
+        <CartesianGrid stroke={GRID} horizontal={false} />
+        <XAxis type="number" {...axisProps} allowDecimals={false} />
+        <YAxis type="category" dataKey="name" {...axisProps} width={70} />
+        <Tooltip
+          contentStyle={tooltipStyle}
+          cursor={{ fill: "rgba(13,148,136,0.06)" }}
+          formatter={(value) => [formatCurrency(Number(value)), "Revenue"]}
+        />
+        <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={16} name="Revenue">
+          {data.map((d) => (
+            <Cell key={d.name} fill={STATUS_COLORS[d.name] ?? TEAL} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 export function StatusDonut({ data }: { data: NameValue[] }) {
   if (!data.length) return <EmptyChart label="No leads yet" />;
   return (
@@ -90,6 +114,22 @@ export function StatusDonut({ data }: { data: NameValue[] }) {
         <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={72} paddingAngle={2} stroke="none" isAnimationActive={false}>
           {data.map((d) => (
             <Cell key={d.name} fill={STATUS_COLORS[d.name] ?? TEAL} />
+          ))}
+        </Pie>
+        <Tooltip contentStyle={tooltipStyle} />
+      </PieChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function TicketStatusDonut({ data }: { data: { name: string; value: number }[] }) {
+  if (!data.length) return <EmptyChart label="No tickets yet" />;
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <PieChart>
+        <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={72} paddingAngle={2} stroke="none" isAnimationActive={false}>
+          {data.map((d) => (
+            <Cell key={d.name} fill={TICKET_COLORS[d.name] ?? TEAL} />
           ))}
         </Pie>
         <Tooltip contentStyle={tooltipStyle} />

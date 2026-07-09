@@ -18,3 +18,15 @@ export const STATUS_LEGEND = Object.entries(STATUS_COLORS).map(([name, color]) =
 
 export const PALETTE = ["#0D9488", "#2563EB", "#7E22CE", "#D97706", "#0EA5E9"];
 export const SITE_PALETTE = PALETTE;
+
+export const TICKET_COLORS: Record<string, string> = {
+  Open: "#6B7280",
+  Assigned: "#2563EB",
+  "In Progress": "#D97706",
+  Resolved: "#15803D",
+};
+
+export const TICKET_LEGEND = Object.entries(TICKET_COLORS).map(([name, color]) => ({
+  name,
+  color,
+}));
