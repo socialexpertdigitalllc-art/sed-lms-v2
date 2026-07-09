@@ -184,24 +184,39 @@ export function TicketDetail({
               <p className="text-sm text-text-muted">No items.</p>
             ) : (
               items.map((item) => (
-                <label
-                  key={item.id}
-                  className={
-                    "flex items-start gap-2.5 rounded-lg px-2 py-2 text-sm " +
-                    (canResolve ? "cursor-pointer hover:bg-surface-2" : "")
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    className="accent-accent mt-0.5 w-4 h-4 shrink-0"
-                    checked={item.is_done}
-                    disabled={!canResolve || itemBusy === item.id}
-                    onChange={() => toggleItem(item)}
-                  />
-                  <span className={item.is_done ? "text-text-faint line-through" : "text-text"}>
-                    {item.body}
-                  </span>
-                </label>
+                <div key={item.id}>
+                  <label
+                    className={
+                      "flex items-start gap-2.5 rounded-lg px-2 py-2 text-sm " +
+                      (canResolve ? "cursor-pointer hover:bg-surface-2" : "")
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      className="accent-accent mt-0.5 w-4 h-4 shrink-0"
+                      checked={item.is_done}
+                      disabled={!canResolve || itemBusy === item.id}
+                      onChange={() => toggleItem(item)}
+                    />
+                    <span className={item.is_done ? "text-text-faint line-through" : "text-text"}>
+                      {item.body}
+                    </span>
+                  </label>
+                  {item.attachments && item.attachments.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pl-9 pb-2">
+                      {item.attachments.map((att) => (
+                        <a key={att.id} href={att.url} target="_blank" rel="noreferrer">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={att.url}
+                            alt=""
+                            className="h-16 w-16 object-cover rounded border border-border"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
               ))
             )}
           </div>

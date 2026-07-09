@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { techMembers } from "@/lib/tickets/notify";
 import { TicketDetail } from "@/components/tickets/TicketDetail";
-import type { Ticket, TicketItem } from "@/lib/tickets/types";
+import type { Ticket, TicketItem, TicketAttachment } from "@/lib/tickets/types";
 
 export default async function TicketDetailPage({
   params,
@@ -39,6 +39,35 @@ export default async function TicketDetailPage({
     .eq("ticket_id", id)
     .order("sort");
   const items = (itemsRaw ?? []) as TicketItem[];
+
+  // Per-item image attachments, served as short-lived signed URLs — the
+  // `ticket-attachments` bucket is private, so only the service-role admin
+  // client can read it, and only this generated URL is shareable.
+  const itemIds = items.map((i) => i.id);
+  if (itemIds.length) {
+    const { data: attachmentsRaw } = await admin
+      .from("ticket_item_attachments")
+      .select("*")
+      .in("item_id", itemIds);
+    const attachments = (attachmentsRaw ?? []) as TicketAttachment[];
+    await Promise.all(
+      attachments.map(async (att) => {
+        const { data: signed } = await admin.storage
+          .from("ticket-attachments")
+          .createSignedUrl(att.path, 3600);
+        att.url = signed?.signedUrl ?? undefined;
+      })
+    );
+    const attachmentsByItem = new Map<string, TicketAttachment[]>();
+    for (const att of attachments) {
+      const list = attachmentsByItem.get(att.item_id) ?? [];
+      list.push(att);
+      attachmentsByItem.set(att.item_id, list);
+    }
+    for (const item of items) {
+      item.attachments = attachmentsByItem.get(item.id) ?? [];
+    }
+  }
 
   const { data: leadRow } = await admin
     .from("leads")
