@@ -13,6 +13,7 @@ const MAIN: NavItem[] = [
   { href: "/leads/follow-ups", label: "Follow-ups", perm: "leads.view" },
   { href: "/tickets", label: "Tickets", perm: "tickets.view" },
   { href: "/by-agent", label: "By Agent", perm: "analytics.view" },
+  { href: "/feedback", label: "Feedback", perm: "feedback.submit" },
 ];
 
 const PRELEADS: NavItem[] = [
