@@ -35,6 +35,7 @@ export const PERMISSIONS = [
   { key: "tickets.resolve", name: "Resolve Tickets", category: "tickets" },
   { key: "feedback.submit", name: "Submit Feedback", category: "feedback" },
   { key: "feedback.manage", name: "Manage Feedback", category: "feedback", is_sensitive: true },
+  { key: "admin.notifications.manage", name: "Manage Notification Rules", category: "admin", is_sensitive: true },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
