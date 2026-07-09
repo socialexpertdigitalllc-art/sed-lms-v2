@@ -59,8 +59,10 @@ export const PERMISSIONS = [
   { key: "dashboard.chart.fresh_vs_followup", name: "Chart: Fresh vs Follow-up", category: "dashboard" },
   { key: "dashboard.chart.revenue_by_status", name: "Chart: Revenue by Status", category: "dashboard" },
   { key: "dashboard.chart.ticket_status_split", name: "Chart: Ticket Status Split", category: "dashboard" },
+  { key: "payments.view", name: "View Payment Links", category: "payments" },
+  { key: "payments.manage", name: "Manage Payment Links", category: "payments", is_sensitive: true },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 
-export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard"] as const;
+export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard", "payments"] as const;
