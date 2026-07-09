@@ -11,6 +11,7 @@ const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", perm: "analytics.view" },
   { href: "/leads", label: "Leads", perm: "leads.view" },
   { href: "/leads/follow-ups", label: "Follow-ups", perm: "leads.view" },
+  { href: "/tickets", label: "Tickets", perm: "tickets.view" },
   { href: "/by-agent", label: "By Agent", perm: "analytics.view" },
 ];
 
