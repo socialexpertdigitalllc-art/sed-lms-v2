@@ -17,6 +17,7 @@ export function LogsViewer({
   nameById,
   sessions,
   settings,
+  logoUrl,
   canManageSettings,
 }: {
   audit: Audit[];
@@ -24,6 +25,7 @@ export function LogsViewer({
   nameById: Record<string, string>;
   sessions: Session[];
   settings: AppSettings;
+  logoUrl: string | null;
   canManageSettings: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("movement");
@@ -87,7 +89,7 @@ export function LogsViewer({
         <div>
           {canManageSettings && (
             <div className="mb-4">
-              <AppSettingsCard initial={settings} />
+              <AppSettingsCard initial={settings} initialLogoUrl={logoUrl} />
             </div>
           )}
 

@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { getAppSettings } from "@/lib/settings/appSettings";
+import { getAppSettings, logoPublicUrl } from "@/lib/settings/appSettings";
 import { LogsViewer } from "@/components/admin/LogsViewer";
 
 export default async function LogsPage() {
@@ -47,6 +47,7 @@ export default async function LogsPage() {
       nameById={nameById}
       sessions={sessions ?? []}
       settings={settings}
+      logoUrl={logoPublicUrl(settings.logo_path)}
       canManageSettings={canManageSettings}
     />
   );
