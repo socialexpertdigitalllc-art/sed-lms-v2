@@ -11,8 +11,12 @@ import {
   type TicketPriority,
 } from "@/lib/tickets/types";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
-import { DynamicList } from "@/components/forms/DynamicList";
 import { inputCls } from "@/components/forms/Field";
+
+type ItemDraft = { body: string; files: File[] };
+
+const MAX_FILES_PER_ITEM = 5;
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 export function TicketModal({
   leadId,
@@ -28,10 +32,12 @@ export function TicketModal({
   const [signature, setSignature] = useState<TicketSignature>("Agent");
   const [priority, setPriority] = useState<TicketPriority>("Normal");
   const [title, setTitle] = useState("");
-  const [items, setItems] = useState<string[]>([""]);
+  const [dueDate, setDueDate] = useState("");
+  const [items, setItems] = useState<ItemDraft[]>([{ body: "", files: [] }]);
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [itemsError, setItemsError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   // "Closer" only makes sense once the lead has a closer — hide the pill and fall
   // back to "Agent" otherwise (defensive: covers a stale "Closer" selection too).
@@ -40,25 +46,75 @@ export function TicketModal({
 
   const labelCls = "block text-[10px] uppercase tracking-wide text-text-faint mb-1";
 
+  function updateItemBody(i: number, body: string) {
+    setItems((prev) => prev.map((it, j) => (j === i ? { ...it, body } : it)));
+    if (itemsError) setItemsError(null);
+  }
+
+  function addItem() {
+    setItems((prev) => [...prev, { body: "", files: [] }]);
+  }
+
+  function removeItem(i: number) {
+    setItems((prev) => prev.filter((_, j) => j !== i));
+  }
+
+  function addFiles(i: number, fileList: FileList | null) {
+    const incoming = Array.from(fileList ?? []);
+    if (!incoming.length) return;
+    const room = MAX_FILES_PER_ITEM - items[i].files.length;
+    const accepted: File[] = [];
+    let message: string | null = null;
+    for (const f of incoming) {
+      if (accepted.length >= room) {
+        message = `Up to ${MAX_FILES_PER_ITEM} images per item.`;
+        break;
+      }
+      if (f.size > MAX_FILE_BYTES) {
+        message = `"${f.name}" is over 5 MB and was skipped.`;
+        continue;
+      }
+      accepted.push(f);
+    }
+    setFileError(message);
+    if (accepted.length) {
+      setItems((prev) => prev.map((it, j) => (j === i ? { ...it, files: [...it.files, ...accepted] } : it)));
+    }
+  }
+
+  function removeFile(i: number, fileIdx: number) {
+    setItems((prev) =>
+      prev.map((it, j) => (j === i ? { ...it, files: it.files.filter((_, k) => k !== fileIdx) } : it))
+    );
+  }
+
   async function save() {
-    const nonEmptyItems = items.map((s) => s.trim()).filter(Boolean);
-    if (nonEmptyItems.length === 0) {
+    const nonEmpty = items.filter((it) => it.body.trim());
+    if (!nonEmpty.length) {
       setItemsError("Add at least one change item.");
       return;
     }
     setItemsError(null);
     setBusy(true);
     setApiError(null);
-    const res = await fetch(`/api/leads/${leadId}/tickets`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const fd = new FormData();
+    fd.append(
+      "payload",
+      JSON.stringify({
         category,
         signature: signatureValue,
         priority,
         title: title.trim() || null,
-        items: nonEmptyItems,
-      }),
+        due_date: dueDate ? new Date(dueDate).toISOString() : null,
+        items: nonEmpty.map((it) => it.body.trim()),
+      })
+    );
+    // The FormData key index MUST be the post-filter index (sortIdx) — it has
+    // to match the item `sort` the server assigns to the parallel items array.
+    nonEmpty.forEach((it, sortIdx) => it.files.forEach((f) => fd.append(`item_${sortIdx}`, f)));
+    const res = await fetch(`/api/leads/${leadId}/tickets`, {
+      method: "POST",
+      body: fd, // no Content-Type header — the browser sets the multipart boundary
     });
     setBusy(false);
     if (!res.ok) {
@@ -124,17 +180,82 @@ export function TicketModal({
           </div>
 
           <div>
-            <label className={labelCls}>Change items</label>
-            <DynamicList
-              values={items}
-              onChange={(v) => {
-                setItems(v);
-                if (itemsError) setItemsError(null);
-              }}
-              placeholder="Describe one change…"
-              addLabel="Add item"
+            <label className={labelCls}>Due date (optional)</label>
+            <input
+              type="datetime-local"
+              className={inputCls}
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
             />
+          </div>
+
+          <div>
+            <label className={labelCls}>Change items</label>
+            <div className="space-y-2.5">
+              {items.map((it, i) => (
+                <div key={i} className="rounded-md border border-border p-2.5 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={it.body}
+                      onChange={(e) => updateItemBody(i, e.target.value)}
+                      placeholder="Describe one change…"
+                      className={"flex-1 " + inputCls}
+                    />
+                    {items.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeItem(i)}
+                        className="text-xs text-text-muted border border-border rounded-md px-2.5 py-2 hover:bg-dropped-bg hover:text-dropped-fg whitespace-nowrap"
+                      >
+                        ✕ Remove
+                      </button>
+                    )}
+                  </div>
+
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => {
+                      addFiles(i, e.target.files);
+                      e.target.value = ""; // allow re-selecting the same file later
+                    }}
+                    className="block w-full text-xs text-text-muted file:mr-2 file:rounded-md file:border file:border-border file:bg-surface-2 file:px-2 file:py-1 file:text-xs file:text-text file:cursor-pointer"
+                  />
+
+                  {it.files.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {it.files.map((f, fi) => (
+                        <span
+                          key={fi}
+                          className="inline-flex items-center gap-1 text-[11px] bg-surface-2 border border-border rounded-full pl-2 pr-1 py-0.5 text-text-muted"
+                        >
+                          {f.name}
+                          <button
+                            type="button"
+                            onClick={() => removeFile(i, fi)}
+                            aria-label={`Remove ${f.name}`}
+                            className="text-text-faint hover:text-dropped-fg leading-none px-0.5"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addItem}
+              className="mt-2 text-sm text-accent-ink font-medium border border-dashed border-accent rounded-md px-3 py-1.5 hover:bg-accent-soft"
+            >
+              + Add item
+            </button>
             {itemsError && <p className="text-[11px] text-dropped-fg mt-1">{itemsError}</p>}
+            {fileError && <p className="text-[11px] text-dropped-fg mt-1">{fileError}</p>}
           </div>
         </div>
 
