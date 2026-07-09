@@ -7,6 +7,7 @@ export const createTicketSchema = z.object({
   priority: z.enum(TICKET_PRIORITIES).default("Normal"),
   title: z.string().trim().max(200).nullable().optional(),
   items: z.array(z.string().trim().min(1)).min(1, "Add at least one change item"),
+  due_date: z.string().datetime().nullable().optional(),
 });
 export const ticketActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("assign"), assigned_to: z.string().uuid() }),
