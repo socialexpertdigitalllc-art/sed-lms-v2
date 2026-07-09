@@ -33,6 +33,12 @@ const settingsSchema = z.object({
   work_start_time: z.string().regex(/^\d{2}:\d{2}$/, "must be in HH:MM format"),
   work_timezone: z.string().trim().min(1, "timezone is required"),
   idle_timeout_minutes: z.number().int().min(1, "must be at least 1 minute"),
+  ticket_sla: z.object({
+    Low: z.number().int().min(1),
+    Normal: z.number().int().min(1),
+    High: z.number().int().min(1),
+  }),
+  ticket_retention_days: z.number().int().min(0),
 });
 
 export async function PUT(req: Request) {
@@ -47,7 +53,8 @@ export async function PUT(req: Request) {
     );
   }
 
-  const { work_start_time, work_timezone, idle_timeout_minutes } = parsed.data;
+  const { work_start_time, work_timezone, idle_timeout_minutes, ticket_sla, ticket_retention_days } =
+    parsed.data;
   const admin = createAdminClient();
   const { error } = await admin.from("app_settings").upsert(
     {
@@ -55,6 +62,8 @@ export async function PUT(req: Request) {
       work_start_time,
       work_timezone,
       idle_timeout_minutes,
+      ticket_sla,
+      ticket_retention_days,
       updated_at: new Date().toISOString(),
       updated_by: auth.userId,
     },
@@ -68,5 +77,11 @@ export async function PUT(req: Request) {
     entity_type: "app_settings",
   });
 
-  return NextResponse.json({ work_start_time, work_timezone, idle_timeout_minutes });
+  return NextResponse.json({
+    work_start_time,
+    work_timezone,
+    idle_timeout_minutes,
+    ticket_sla,
+    ticket_retention_days,
+  });
 }

@@ -35,6 +35,10 @@ export function AppSettingsCard({ initial }: { initial: AppSettings }) {
   const [workStartTime, setWorkStartTime] = useState(hhmm(initial.work_start_time));
   const [workTimezone, setWorkTimezone] = useState(initial.work_timezone);
   const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState(initial.idle_timeout_minutes);
+  const [slaLow, setSlaLow] = useState(initial.ticket_sla.Low);
+  const [slaNormal, setSlaNormal] = useState(initial.ticket_sla.Normal);
+  const [slaHigh, setSlaHigh] = useState(initial.ticket_sla.High);
+  const [ticketRetentionDays, setTicketRetentionDays] = useState(initial.ticket_retention_days);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -48,6 +52,12 @@ export function AppSettingsCard({ initial }: { initial: AppSettings }) {
         work_start_time: hhmm(workStartTime),
         work_timezone: workTimezone.trim(),
         idle_timeout_minutes: Math.max(1, Math.round(Number(idleTimeoutMinutes)) || 1),
+        ticket_sla: {
+          Low: Math.max(1, Math.round(Number(slaLow)) || 1),
+          Normal: Math.max(1, Math.round(Number(slaNormal)) || 1),
+          High: Math.max(1, Math.round(Number(slaHigh)) || 1),
+        },
+        ticket_retention_days: Math.max(0, Math.round(Number(ticketRetentionDays)) || 0),
       }),
     });
     setSaving(false);
@@ -117,6 +127,58 @@ export function AppSettingsCard({ initial }: { initial: AppSettings }) {
           />
         </div>
       </div>
+
+      <div className="mt-6 pt-5 border-t border-border">
+        <div className="text-sm font-semibold text-text mb-1">Tickets</div>
+        <p className="text-xs text-text-muted mb-4">
+          SLA hours before a ticket by priority is considered overdue, and how long resolved
+          tickets are kept before they&apos;re automatically deleted.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1">SLA — Low (hrs)</label>
+            <input
+              type="number"
+              min={1}
+              value={slaLow}
+              onChange={(e) => setSlaLow(Number(e.target.value))}
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1">SLA — Normal (hrs)</label>
+            <input
+              type="number"
+              min={1}
+              value={slaNormal}
+              onChange={(e) => setSlaNormal(Number(e.target.value))}
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1">SLA — High (hrs)</label>
+            <input
+              type="number"
+              min={1}
+              value={slaHigh}
+              onChange={(e) => setSlaHigh(Number(e.target.value))}
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1">Retention (days)</label>
+            <input
+              type="number"
+              min={0}
+              value={ticketRetentionDays}
+              onChange={(e) => setTicketRetentionDays(Number(e.target.value))}
+              className={inputCls}
+            />
+            <p className="text-xs text-text-faint mt-1">0 = never auto-delete</p>
+          </div>
+        </div>
+      </div>
+
       <div className="mt-4">
         <button
           onClick={save}
