@@ -37,7 +37,8 @@ insert into public.permissions (key, name, description, category, is_sensitive) 
   ('tickets.assign','Assign Tickets',null,'tickets',true),
   ('tickets.resolve','Resolve Tickets',null,'tickets',false),
   ('feedback.submit','Submit Feedback',null,'feedback',false),
-  ('feedback.manage','Manage Feedback',null,'feedback',true)
+  ('feedback.manage','Manage Feedback',null,'feedback',true),
+  ('admin.notifications.manage','Manage Notification Rules',null,'admin',true)
 on conflict (key) do nothing;
 
 insert into public.departments (name, slug, description, color, icon) values
@@ -71,7 +72,8 @@ where (d.slug, p.key) in (
   ('support','feedback.submit'),
   ('admin','admin.import'),('admin','admin.settings.manage'),('admin','leads.duplicate.override'),
   ('admin','tickets.view'),('admin','tickets.create'),('admin','tickets.assign'),('admin','tickets.resolve'),
-  ('admin','feedback.submit'),('admin','feedback.manage')
+  ('admin','feedback.submit'),('admin','feedback.manage'),
+  ('admin','admin.notifications.manage')
 )
 on conflict do nothing;
 
