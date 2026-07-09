@@ -39,6 +39,7 @@ const settingsSchema = z.object({
     High: z.number().int().min(1),
   }),
   ticket_retention_days: z.number().int().min(0),
+  company_name: z.string().trim().min(1).max(80),
 });
 
 export async function PUT(req: Request) {
@@ -53,8 +54,14 @@ export async function PUT(req: Request) {
     );
   }
 
-  const { work_start_time, work_timezone, idle_timeout_minutes, ticket_sla, ticket_retention_days } =
-    parsed.data;
+  const {
+    work_start_time,
+    work_timezone,
+    idle_timeout_minutes,
+    ticket_sla,
+    ticket_retention_days,
+    company_name,
+  } = parsed.data;
   const admin = createAdminClient();
   const { error } = await admin.from("app_settings").upsert(
     {
@@ -64,6 +71,7 @@ export async function PUT(req: Request) {
       idle_timeout_minutes,
       ticket_sla,
       ticket_retention_days,
+      company_name,
       updated_at: new Date().toISOString(),
       updated_by: auth.userId,
     },
@@ -83,5 +91,6 @@ export async function PUT(req: Request) {
     idle_timeout_minutes,
     ticket_sla,
     ticket_retention_days,
+    company_name,
   });
 }
