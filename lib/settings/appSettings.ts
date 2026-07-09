@@ -6,6 +6,8 @@ export type AppSettings = {
   idle_timeout_minutes: number;
   ticket_sla: { Low: number; Normal: number; High: number };
   ticket_retention_days: number;
+  company_name: string;
+  logo_path: string | null;
 };
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -14,6 +16,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   idle_timeout_minutes: 15,
   ticket_sla: { Low: 168, Normal: 72, High: 24 },
   ticket_retention_days: 0,
+  company_name: "SED LMS",
+  logo_path: null,
 };
 
 // Read the singleton company settings row; lazily materialise the default
@@ -23,7 +27,7 @@ export async function getAppSettings(): Promise<AppSettings> {
   const admin = createAdminClient();
   const { data } = await admin
     .from("app_settings")
-    .select("work_start_time, work_timezone, idle_timeout_minutes, ticket_sla, ticket_retention_days")
+    .select("work_start_time, work_timezone, idle_timeout_minutes, ticket_sla, ticket_retention_days, company_name, logo_path")
     .eq("singleton", true)
     .maybeSingle();
 
@@ -34,4 +38,21 @@ export async function getAppSettings(): Promise<AppSettings> {
     .from("app_settings")
     .upsert({ singleton: true, ...DEFAULT_APP_SETTINGS }, { onConflict: "singleton" });
   return DEFAULT_APP_SETTINGS;
+}
+
+export function logoPublicUrl(logoPath: string | null): string | null {
+  if (!logoPath) return null;
+  return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/branding/${logoPath}`;
+}
+
+export type Branding = { companyName: string; logoUrl: string | null };
+
+/** Fallback-safe: never throws (metadata generation must not crash a render/build). */
+export async function getBranding(): Promise<Branding> {
+  try {
+    const s = await getAppSettings();
+    return { companyName: s.company_name || "SED LMS", logoUrl: logoPublicUrl(s.logo_path) };
+  } catch {
+    return { companyName: "SED LMS", logoUrl: null };
+  }
 }

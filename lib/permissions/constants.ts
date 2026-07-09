@@ -36,8 +36,31 @@ export const PERMISSIONS = [
   { key: "feedback.submit", name: "Submit Feedback", category: "feedback" },
   { key: "feedback.manage", name: "Manage Feedback", category: "feedback", is_sensitive: true },
   { key: "admin.notifications.manage", name: "Manage Notification Rules", category: "admin", is_sensitive: true },
+  { key: "dashboard.kpi.total_leads", name: "KPI: Total Leads", category: "dashboard" },
+  { key: "dashboard.kpi.quoted_revenue", name: "KPI: Quoted Revenue", category: "dashboard" },
+  { key: "dashboard.kpi.ready", name: "KPI: Ready Count", category: "dashboard" },
+  { key: "dashboard.kpi.avg_rating", name: "KPI: Avg Rating", category: "dashboard" },
+  { key: "dashboard.kpi.closed_revenue", name: "KPI: Closed Revenue", category: "dashboard" },
+  { key: "dashboard.kpi.recurring_revenue", name: "KPI: Recurring (Yearly) Revenue", category: "dashboard" },
+  { key: "dashboard.kpi.avg_deal_size", name: "KPI: Avg Deal Size", category: "dashboard" },
+  { key: "dashboard.kpi.conversion_rate", name: "KPI: Conversion Rate", category: "dashboard" },
+  { key: "dashboard.kpi.new_this_week", name: "KPI: New Leads This Week", category: "dashboard" },
+  { key: "dashboard.kpi.overdue_followups", name: "KPI: Overdue Follow-ups", category: "dashboard" },
+  { key: "dashboard.kpi.pickup_rate", name: "KPI: Pickup Rate", category: "dashboard" },
+  { key: "dashboard.kpi.open_tickets", name: "KPI: Open Tickets", category: "dashboard" },
+  { key: "dashboard.kpi.overdue_tickets", name: "KPI: Overdue Tickets", category: "dashboard" },
+  { key: "dashboard.kpi.avg_resolution_time", name: "KPI: Avg Ticket Resolution Time", category: "dashboard" },
+  { key: "dashboard.strip.status", name: "Status Percentage Strip", category: "dashboard" },
+  { key: "dashboard.chart.leads_over_time", name: "Chart: Leads Over Time", category: "dashboard" },
+  { key: "dashboard.chart.pipeline_by_status", name: "Chart: Pipeline by Status", category: "dashboard" },
+  { key: "dashboard.chart.leads_by_agent", name: "Chart: Leads by Agent", category: "dashboard" },
+  { key: "dashboard.chart.site_type_split", name: "Chart: Site Type Split", category: "dashboard" },
+  { key: "dashboard.chart.rating_distribution", name: "Chart: Rating Distribution", category: "dashboard" },
+  { key: "dashboard.chart.fresh_vs_followup", name: "Chart: Fresh vs Follow-up", category: "dashboard" },
+  { key: "dashboard.chart.revenue_by_status", name: "Chart: Revenue by Status", category: "dashboard" },
+  { key: "dashboard.chart.ticket_status_split", name: "Chart: Ticket Status Split", category: "dashboard" },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 
-export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback"] as const;
+export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard"] as const;
