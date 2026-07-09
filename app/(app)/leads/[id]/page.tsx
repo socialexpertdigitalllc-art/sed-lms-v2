@@ -89,7 +89,6 @@ export default async function LeadDetailPage({
       followUps={followUps}
       closedByName={closedByName}
       tickets={tickets}
-      hasCloser={!!lead.closed_by}
       sla={settings.ticket_sla}
     />
   );

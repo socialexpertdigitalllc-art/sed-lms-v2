@@ -28,12 +28,10 @@ function toLocalInput(iso: string) {
 
 export function TicketModal({
   leadId,
-  hasCloser,
   sla,
   onClose,
 }: {
   leadId: string;
-  hasCloser: boolean;
   sla: Record<TicketPriority, number>;
   onClose: () => void;
 }) {
@@ -59,10 +57,8 @@ export function TicketModal({
     setDueDate(toLocalInput(slaDueDate(priority, sla, new Date().toISOString())));
   }, [priority, sla, dueTouched]);
 
-  // "Closer" only makes sense once the lead has a closer — hide the pill and fall
-  // back to "Agent" otherwise (defensive: covers a stale "Closer" selection too).
-  const signatureOptions = hasCloser ? TICKET_SIGNATURES : (["Agent"] as const);
-  const signatureValue = hasCloser ? signature : "Agent";
+  const signatureOptions = TICKET_SIGNATURES;
+  const signatureValue = signature;
 
   const labelCls = "block text-[10px] uppercase tracking-wide text-text-faint mb-1";
 

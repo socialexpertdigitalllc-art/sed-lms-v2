@@ -32,7 +32,6 @@ export function LeadDetail({
   followUps,
   closedByName,
   tickets,
-  hasCloser,
   sla,
 }: {
   lead: Lead;
@@ -40,7 +39,6 @@ export function LeadDetail({
   followUps: LeadFollowUp[];
   closedByName: string | null;
   tickets: Ticket[];
-  hasCloser: boolean;
   sla: Record<TicketPriority, number>;
 }) {
   const { has } = usePermissions();
@@ -234,9 +232,11 @@ export function LeadDetail({
           )}
         </div>
 
-        <aside className="hidden lg:block space-y-6">
-          <RecentFollowUps leadId={lead.id} businessName={lead.business_name} leadStatus={lead.status} followUps={followUps} />
-          <TicketsCard leadId={lead.id} leadStatus={lead.status} hasCloser={hasCloser} tickets={tickets} sla={sla} />
+        <aside className="hidden lg:block">
+          <div className="sticky top-6 space-y-6">
+            <RecentFollowUps leadId={lead.id} businessName={lead.business_name} leadStatus={lead.status} followUps={followUps} />
+            <TicketsCard leadId={lead.id} leadStatus={lead.status} tickets={tickets} sla={sla} />
+          </div>
         </aside>
       </div>
 

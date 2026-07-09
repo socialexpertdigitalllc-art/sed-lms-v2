@@ -11,13 +11,11 @@ import { TicketModal } from "./TicketModal";
 export function TicketsCard({
   leadId,
   leadStatus,
-  hasCloser,
   tickets,
   sla,
 }: {
   leadId: string;
   leadStatus: string;
-  hasCloser: boolean;
   tickets: Ticket[];
   sla: Record<TicketPriority, number>;
 }) {
@@ -25,7 +23,7 @@ export function TicketsCard({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="sticky top-6 rounded-2xl border border-border bg-surface shadow-sm p-5">
+    <div className="rounded-2xl border border-border bg-surface shadow-sm p-5">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-text">Tickets</h2>
         {has("tickets.create") && isTicketEligible(leadStatus) && (
@@ -52,14 +50,14 @@ export function TicketsCard({
 
       {tickets.length > 0 && (
         <Link
-          href={`/tickets?lead=${leadId}`}
+          href={`/leads/${leadId}/tickets`}
           className="mt-4 block w-full text-center text-xs text-text-muted hover:text-text rounded-md border border-border px-3 py-2 hover:bg-surface-2 transition-colors"
         >
           View all tickets ({tickets.length})
         </Link>
       )}
 
-      {open && <TicketModal leadId={leadId} hasCloser={hasCloser} sla={sla} onClose={() => setOpen(false)} />}
+      {open && <TicketModal leadId={leadId} sla={sla} onClose={() => setOpen(false)} />}
     </div>
   );
 }
