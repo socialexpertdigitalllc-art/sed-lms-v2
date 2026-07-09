@@ -101,6 +101,7 @@ export async function POST(
     .from("leads")
     .select("id, business_name, status")
     .eq("id", id)
+    .is("deleted_at", null)
     .single();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
   if (!isTicketEligible(lead.status))
