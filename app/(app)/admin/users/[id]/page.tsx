@@ -1,7 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { UserManager } from "@/components/admin/UserManager";
-import { NotificationSettings } from "@/components/admin/NotificationSettings";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -49,11 +48,6 @@ export default async function UserDetail({
     deptGranted = [...new Set((dp ?? []).map((r) => r.permission_key))];
   }
 
-  const { data: notifRows } = await supabase
-    .from("user_notification_settings")
-    .select("event_key, enabled, lead_time_minutes")
-    .eq("user_id", id);
-
   const effective = [...(await getUserPermissions(id))];
 
   return (
@@ -82,10 +76,6 @@ export default async function UserDetail({
         }))}
         effective={effective}
       />
-
-      <div className="mt-6">
-        <NotificationSettings userId={id} rows={notifRows ?? []} />
-      </div>
     </div>
   );
 }
