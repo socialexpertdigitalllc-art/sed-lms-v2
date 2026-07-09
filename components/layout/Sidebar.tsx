@@ -18,6 +18,7 @@ const MAIN: NavItem[] = [
   { href: "/tickets", label: "Tickets", perm: "tickets.view" },
   { href: "/by-agent", label: "By Agent", perm: "analytics.view" },
   { href: "/feedback", label: "Feedback", perm: "feedback.submit" },
+  { href: "/payments", label: "Payments", perm: "payments.view" },
   { href: "/notifications", label: "Notifications" },
 ];
 
