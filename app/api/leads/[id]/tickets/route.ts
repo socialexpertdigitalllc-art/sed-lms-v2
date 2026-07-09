@@ -5,7 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { isTicketEligible } from "@/lib/tickets/logic";
 import { createTicketSchema } from "@/lib/tickets/schema";
 import { notifyTicket, adminUserIds } from "@/lib/tickets/notify";
-import type { Ticket, TicketItem } from "@/lib/tickets/types";
+import type { Ticket, TicketItem, TicketAttachment } from "@/lib/tickets/types";
 
 export async function GET(
   _req: Request,
@@ -46,7 +46,27 @@ export async function GET(
       .select("*")
       .in("ticket_id", ticketIds)
       .order("sort");
-    for (const item of (items ?? []) as TicketItem[]) {
+    const allItems = (items ?? []) as TicketItem[];
+
+    // Per-item image attachments, resolved via the admin client and grouped
+    // by item id (raw storage paths only — signed URLs are generated where
+    // they're actually rendered, i.e. the ticket detail page).
+    const itemIds = allItems.map((i) => i.id);
+    const attachmentsByItem = new Map<string, TicketAttachment[]>();
+    if (itemIds.length) {
+      const { data: attachments } = await admin
+        .from("ticket_item_attachments")
+        .select("*")
+        .in("item_id", itemIds);
+      for (const att of (attachments ?? []) as TicketAttachment[]) {
+        const list = attachmentsByItem.get(att.item_id) ?? [];
+        list.push(att);
+        attachmentsByItem.set(att.item_id, list);
+      }
+    }
+
+    for (const item of allItems) {
+      item.attachments = attachmentsByItem.get(item.id) ?? [];
       const list = itemsByTicket.get(item.ticket_id) ?? [];
       list.push(item);
       itemsByTicket.set(item.ticket_id, list);
@@ -110,7 +130,10 @@ export async function POST(
       { status: 422 }
     );
 
-  const parsed = createTicketSchema.safeParse(await req.json());
+  const form = await req.formData();
+  const payloadRaw = form.get("payload");
+  if (typeof payloadRaw !== "string") return NextResponse.json({ error: "invalid" }, { status: 422 });
+  const parsed = createTicketSchema.safeParse(JSON.parse(payloadRaw));
   if (!parsed.success) {
     return NextResponse.json(
       { error: "Invalid input", issues: parsed.error.flatten() },
@@ -127,6 +150,7 @@ export async function POST(
       signature: parsed.data.signature,
       priority: parsed.data.priority,
       title: parsed.data.title ?? null,
+      due_date: parsed.data.due_date ?? null,
       status: "Open",
     })
     .select("*")
@@ -138,8 +162,37 @@ export async function POST(
     body,
     sort: index,
   }));
-  const { error: itemsError } = await admin.from("ticket_items").insert(itemRows);
+  const { data: insertedItems, error: itemsError } = await admin
+    .from("ticket_items")
+    .insert(itemRows)
+    .select("id, sort");
   if (itemsError) return NextResponse.json({ error: itemsError.message }, { status: 400 });
+
+  // Per-item image attachments, matched to their item by the `item_${sort}`
+  // FormData key (sort is the post-filter index the client submitted with).
+  // Best-effort: a failed upload must never fail the ticket create, since the
+  // ticket + items already exist by this point.
+  for (const item of insertedItems ?? []) {
+    const files = form.getAll(`item_${item.sort}`).filter((f): f is File => f instanceof File);
+    for (const file of files) {
+      if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) continue; // skip invalid
+      const path = `${ticket.id}/${item.id}/${file.name.replace(/[^\w.\-]/g, "_")}`;
+      try {
+        await admin.storage.from("ticket-attachments").upload(path, file, {
+          contentType: file.type,
+          upsert: true,
+        });
+        await admin.from("ticket_item_attachments").insert({
+          item_id: item.id,
+          path,
+          mime: file.type,
+          size: file.size,
+        });
+      } catch {
+        // Best-effort; don't fail the whole create on one bad upload.
+      }
+    }
+  }
 
   await admin.from("activity_log").insert({
     user_id: user.id,
