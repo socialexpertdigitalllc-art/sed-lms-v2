@@ -158,7 +158,7 @@ export function NotificationBell() {
                     {notes.slice(0, 8).map((n) => (
                       <li key={n.id}>
                         <Link
-                          href={n.lead_id ? `/leads/${n.lead_id}` : "#"}
+                          href={n.target_url ?? (n.lead_id ? `/leads/${n.lead_id}` : "#")}
                           onClick={() => {
                             void markRead(n.id);
                             setOpen(false);

@@ -12,7 +12,7 @@ export async function GET(req: Request) {
 
   let query = supabase
     .from("notifications")
-    .select("id, event_key, lead_id, title, body, created_at, read_at")
+    .select("id, event_key, lead_id, target_url, title, body, created_at, read_at")
     .order("created_at", { ascending: false })
     .limit(50);
 
