@@ -30,4 +30,8 @@ export async function register() {
   setInterval(() => {
     fetch(`${origin}/api/notifications/generate`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 60_000);
+
+  setInterval(() => {
+    fetch(`${origin}/api/tickets/maintenance`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 300_000);
 }
