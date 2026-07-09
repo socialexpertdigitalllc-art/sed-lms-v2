@@ -29,8 +29,12 @@ export const PERMISSIONS = [
   { key: "admin.logs.view", name: "View Activity Log", category: "admin" },
   { key: "admin.import", name: "Import Leads", category: "admin", is_sensitive: true },
   { key: "admin.settings.manage", name: "Manage App Settings & Add-ons", category: "admin", is_sensitive: true },
+  { key: "tickets.view", name: "View Tickets", category: "tickets" },
+  { key: "tickets.create", name: "Open Tickets", category: "tickets" },
+  { key: "tickets.assign", name: "Assign Tickets", category: "tickets", is_sensitive: true },
+  { key: "tickets.resolve", name: "Resolve Tickets", category: "tickets" },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 
-export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin"] as const;
+export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets"] as const;
