@@ -71,8 +71,9 @@ describe("computeKpis", () => {
     expect(k.notReady).toBe(1);
   });
 
-  it("sums quoted revenue", () => {
-    expect(computeKpis(leads).quotedRevenue).toBe(2450);
+  it("sums quoted revenue for Ready leads only", () => {
+    // Ready: 750 + 500 = 1250. The Closed lead's 1200 must NOT be counted.
+    expect(computeKpis(leads).quotedRevenue).toBe(1250);
   });
 
   it("averages rating only over rated leads", () => {

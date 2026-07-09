@@ -30,7 +30,7 @@ export function computeKpis(leads: Lead[], now: Date = new Date()): Kpis {
 
   for (const l of leads) {
     if (l.status in counts) counts[l.status]++;
-    if (typeof l.price_quoted === "number") quotedRevenue += l.price_quoted;
+    if (l.status === "Ready" && typeof l.price_quoted === "number") quotedRevenue += l.price_quoted;
     if (typeof l.rating === "number") {
       ratingSum += l.rating;
       ratingCount++;
