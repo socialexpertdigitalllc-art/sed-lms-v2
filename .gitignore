@@ -15,10 +15,12 @@ next-env.d.ts
 # typescript incremental build info
 tsconfig.tsbuildinfo
 
-# env
+# env — never commit secrets in any env variant
 .env
 .env*.local
 .env.local
+.env.production
+.env.development
 
 # supabase
 /supabase/.branches
