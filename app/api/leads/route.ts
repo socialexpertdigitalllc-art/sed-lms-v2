@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { notify } from "@/lib/notifications/notify";
 import { createLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
 import { enqueueLeadIfReady } from "@/lib/ai-tools/queue";
@@ -111,7 +112,7 @@ export async function POST(req: Request) {
   const { data, error } = await admin
     .from("leads")
     .insert(payload)
-    .select("id")
+    .select("id, business_name, agent_id")
     .single();
   if (error || !data) {
     return NextResponse.json({ error: error?.message ?? "Create failed" }, { status: 400 });
@@ -124,6 +125,19 @@ export async function POST(req: Request) {
     entity_id: data.id,
     new_value: { business_name: payload.business_name, status: payload.status },
   });
+
+  try {
+    await notify(
+      "lead_submitted",
+      { leadId: data.id, lead: { agent_id: data.agent_id ?? null, closed_by: null }, actorId: user.id },
+      {
+        title: "New lead submitted",
+        body: data.business_name,
+        dedupKey: `lead_submitted:${data.id}`,
+        targetUrl: `/leads/${data.id}`,
+      }
+    );
+  } catch {}
 
   // Fire-and-forget auto-generation (never blocks lead creation).
   await enqueueLeadIfReady({ ...payload, id: data.id }, user.id);

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { notify } from "@/lib/notifications/notify";
 import { catSetKey } from "@/lib/leads/categories";
 import { nextStreak, isFollowUpEligible } from "@/lib/leads/followups";
 import { logFollowUpSchema } from "@/lib/leads/followupSchema";
@@ -117,7 +118,7 @@ export async function POST(
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  await admin
+  const { error: leadUpdateError } = await admin
     .from("leads")
     .update({
       follow_up_time: next,
@@ -126,6 +127,36 @@ export async function POST(
       ...(statusChange ? { status: statusChange } : {}),
     })
     .eq("id", id);
+
+  if (!leadUpdateError && statusChange && statusChange !== lead.status) {
+    const nonce = new Date().toISOString();
+    try {
+      await notify(
+        "lead_status_changed",
+        { leadId: id, lead: { agent_id: lead.agent_id, closed_by: lead.closed_by }, actorId: user.id },
+        {
+          title: "Lead status changed",
+          body: `${lead.business_name} → ${statusChange}`,
+          dedupKey: `lead_status_changed:${id}:${statusChange}:${nonce}`,
+          targetUrl: `/leads/${id}`,
+        }
+      );
+    } catch {}
+    if (statusChange === "Ready") {
+      try {
+        await notify(
+          "website_ready",
+          { leadId: id, lead: { agent_id: lead.agent_id, closed_by: lead.closed_by }, actorId: user.id },
+          {
+            title: "Website ready",
+            body: `${lead.business_name}'s website is ready`,
+            dedupKey: `website_ready:${id}:${nonce}`,
+            targetUrl: `/leads/${id}`,
+          }
+        );
+      } catch {}
+    }
+  }
 
   await admin.from("activity_log").insert({
     user_id: user.id,

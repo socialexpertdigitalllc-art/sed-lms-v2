@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { notify } from "@/lib/notifications/notify";
 import { createPreLeadSchema } from "@/lib/preleads/schema";
 import { findCollisions, type DupRow } from "@/lib/leads/duplicate";
 
@@ -96,7 +97,7 @@ export async function POST(req: Request) {
   const { data, error } = await admin
     .from("pre_leads")
     .insert({ ...parsed.data, agent_id: user.id, last_updated_by: user.id })
-    .select("id")
+    .select("id, business_name")
     .single();
   if (error || !data) {
     return NextResponse.json({ error: error?.message ?? "Create failed" }, { status: 400 });
@@ -109,6 +110,19 @@ export async function POST(req: Request) {
     entity_id: data.id,
     new_value: { business_name: parsed.data.business_name, lead_category: parsed.data.lead_category },
   });
+
+  try {
+    await notify(
+      "prelead_submitted",
+      { leadId: null, actorId: user.id },
+      {
+        title: "New pre-lead submitted",
+        body: data.business_name,
+        dedupKey: `prelead_submitted:${data.id}`,
+        targetUrl: `/pre-leads/${data.id}`,
+      }
+    );
+  } catch {}
 
   return NextResponse.json({ id: data.id }, { status: 201 });
 }
