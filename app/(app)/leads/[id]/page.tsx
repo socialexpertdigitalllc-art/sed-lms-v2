@@ -4,6 +4,7 @@ import { LeadDetail } from "@/components/leads/LeadDetail";
 import type { Lead } from "@/lib/leads/types";
 import type { LeadFollowUp } from "@/lib/leads/followups";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
+import { getAppSettings } from "@/lib/settings/appSettings";
 import { notFound } from "next/navigation";
 
 export default async function LeadDetailPage({
@@ -36,6 +37,7 @@ export default async function LeadDetailPage({
     .order("created_at", { ascending: false });
 
   const admin = createAdminClient();
+  const settings = await getAppSettings();
 
   // Fetch this lead's tickets + their items via the admin client (mirrors
   // GET /api/leads/[id]/tickets) so the detail-page card is never RLS-scoped.
@@ -88,6 +90,7 @@ export default async function LeadDetailPage({
       closedByName={closedByName}
       tickets={tickets}
       hasCloser={!!lead.closed_by}
+      sla={settings.ticket_sla}
     />
   );
 }

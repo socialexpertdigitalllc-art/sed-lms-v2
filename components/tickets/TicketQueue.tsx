@@ -4,11 +4,11 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { Ticket, TicketItem, TicketStatus } from "@/lib/tickets/types";
 import { TICKET_STATUSES } from "@/lib/tickets/types";
-import { itemProgress } from "@/lib/tickets/logic";
+import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime, initials } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
-import { TicketStatusChip, TicketPriorityBadge } from "./TicketStatusChip";
+import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
 
 export type QueueTicket = Ticket & {
   business_name: string | null;
@@ -88,6 +88,7 @@ export function TicketQueue({
 
         <div className="flex items-center gap-2 whitespace-nowrap">
           <TicketStatusChip status={t.status} />
+          {isOverdue(t.due_date, t.status, new Date()) && <OverdueBadge />}
           <span className="inline-flex items-center gap-1.5 text-text-muted text-xs">
             <span className="w-5 h-5 rounded-full bg-accent-soft text-accent-ink grid place-items-center text-[9px] font-semibold">
               {initials(t.assigned_to ? assigneeLabel : "Unassigned")}

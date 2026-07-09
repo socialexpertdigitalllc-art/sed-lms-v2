@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon } from "lucide-react";
 import type { Lead } from "@/lib/leads/types";
 import type { LeadFollowUp } from "@/lib/leads/followups";
-import type { Ticket } from "@/lib/tickets/types";
+import type { Ticket, TicketPriority } from "@/lib/tickets/types";
 import { SITE_TYPES, FRESH_OPTIONS } from "@/lib/leads/types";
 import { toDateTimeLocal, formatDateTime, formatCurrency } from "@/lib/leads/format";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -33,6 +33,7 @@ export function LeadDetail({
   closedByName,
   tickets,
   hasCloser,
+  sla,
 }: {
   lead: Lead;
   agents: Agent[];
@@ -40,6 +41,7 @@ export function LeadDetail({
   closedByName: string | null;
   tickets: Ticket[];
   hasCloser: boolean;
+  sla: Record<TicketPriority, number>;
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
@@ -234,7 +236,7 @@ export function LeadDetail({
 
         <aside className="hidden lg:block space-y-6">
           <RecentFollowUps leadId={lead.id} businessName={lead.business_name} leadStatus={lead.status} followUps={followUps} />
-          <TicketsCard leadId={lead.id} leadStatus={lead.status} hasCloser={hasCloser} tickets={tickets} />
+          <TicketsCard leadId={lead.id} leadStatus={lead.status} hasCloser={hasCloser} tickets={tickets} sla={sla} />
         </aside>
       </div>
 

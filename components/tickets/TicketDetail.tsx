@@ -5,10 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
-import { itemProgress } from "@/lib/tickets/logic";
+import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
-import { TicketStatusChip, TicketPriorityBadge } from "./TicketStatusChip";
+import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
 
 type LeadInfo = {
   id: string;
@@ -152,6 +152,7 @@ export function TicketDetail({
             </h1>
             <TicketStatusChip status={ticket.status} />
             <TicketPriorityBadge priority={ticket.priority} />
+            {isOverdue(ticket.due_date, ticket.status, new Date()) && <OverdueBadge />}
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
             {ticket.title && <span>{ticket.category}</span>}

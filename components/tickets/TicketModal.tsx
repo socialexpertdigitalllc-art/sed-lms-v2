@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   TICKET_CATEGORIES,
@@ -10,6 +10,7 @@ import {
   type TicketSignature,
   type TicketPriority,
 } from "@/lib/tickets/types";
+import { slaDueDate } from "@/lib/tickets/logic";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { inputCls } from "@/components/forms/Field";
 
@@ -18,13 +19,22 @@ type ItemDraft = { body: string; files: File[] };
 const MAX_FILES_PER_ITEM = 5;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
+/** ISO datetime string -> `datetime-local` input value, in local time. */
+function toLocalInput(iso: string) {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export function TicketModal({
   leadId,
   hasCloser,
+  sla,
   onClose,
 }: {
   leadId: string;
   hasCloser: boolean;
+  sla: Record<TicketPriority, number>;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -32,12 +42,22 @@ export function TicketModal({
   const [signature, setSignature] = useState<TicketSignature>("Agent");
   const [priority, setPriority] = useState<TicketPriority>("Normal");
   const [title, setTitle] = useState("");
-  const [dueDate, setDueDate] = useState("");
+  // Pre-filled from the SLA on mount (using the initial `priority`); re-derived
+  // below whenever priority changes, unless the user has edited it by hand.
+  const [dueDate, setDueDate] = useState(() => toLocalInput(slaDueDate(priority, sla, new Date().toISOString())));
+  const [dueTouched, setDueTouched] = useState(false);
   const [items, setItems] = useState<ItemDraft[]>([{ body: "", files: [] }]);
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [itemsError, setItemsError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+
+  // Keep the due date in sync with the SLA for the selected priority — but only
+  // until the user manually edits the field, at which point their edit sticks.
+  useEffect(() => {
+    if (dueTouched) return;
+    setDueDate(toLocalInput(slaDueDate(priority, sla, new Date().toISOString())));
+  }, [priority, sla, dueTouched]);
 
   // "Closer" only makes sense once the lead has a closer — hide the pill and fall
   // back to "Agent" otherwise (defensive: covers a stale "Closer" selection too).
@@ -185,7 +205,10 @@ export function TicketModal({
               type="datetime-local"
               className={inputCls}
               value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
+              onChange={(e) => {
+                setDueTouched(true);
+                setDueDate(e.target.value);
+              }}
             />
           </div>
 

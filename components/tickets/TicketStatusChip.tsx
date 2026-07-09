@@ -30,3 +30,11 @@ export function TicketPriorityBadge({ priority }: { priority: TicketPriority }) 
     </span>
   );
 }
+
+export function OverdueBadge() {
+  return (
+    <span className="inline-flex items-center rounded-full bg-dropped-bg text-dropped-fg px-2 py-0.5 text-[11px] font-medium">
+      Overdue
+    </span>
+  );
+}

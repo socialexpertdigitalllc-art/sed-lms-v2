@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import type { Ticket } from "@/lib/tickets/types";
-import { itemProgress, isTicketEligible } from "@/lib/tickets/logic";
+import type { Ticket, TicketPriority } from "@/lib/tickets/types";
+import { itemProgress, isTicketEligible, isOverdue } from "@/lib/tickets/logic";
 import { usePermissions } from "@/hooks/usePermissions";
-import { TicketStatusChip, TicketPriorityBadge } from "./TicketStatusChip";
+import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
 import { TicketModal } from "./TicketModal";
 
 export function TicketsCard({
@@ -13,11 +13,13 @@ export function TicketsCard({
   leadStatus,
   hasCloser,
   tickets,
+  sla,
 }: {
   leadId: string;
   leadStatus: string;
   hasCloser: boolean;
   tickets: Ticket[];
+  sla: Record<TicketPriority, number>;
 }) {
   const { has } = usePermissions();
   const [open, setOpen] = useState(false);
@@ -57,7 +59,7 @@ export function TicketsCard({
         </Link>
       )}
 
-      {open && <TicketModal leadId={leadId} hasCloser={hasCloser} onClose={() => setOpen(false)} />}
+      {open && <TicketModal leadId={leadId} hasCloser={hasCloser} sla={sla} onClose={() => setOpen(false)} />}
     </div>
   );
 }
@@ -74,6 +76,7 @@ function TicketRow({ ticket }: { ticket: Ticket }) {
         <TicketStatusChip status={ticket.status} />
         <span className="text-xs text-text-muted">{ticket.category}</span>
         <TicketPriorityBadge priority={ticket.priority} />
+        {isOverdue(ticket.due_date, ticket.status, new Date()) && <OverdueBadge />}
         <span className="text-[11px] text-text-faint ml-auto">
           {done}/{total} done
         </span>
