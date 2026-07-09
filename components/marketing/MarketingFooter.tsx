@@ -1,15 +1,14 @@
 import Link from "next/link";
+import { BrandMark } from "@/components/branding/BrandMark";
+import type { Branding } from "@/lib/settings/appSettings";
 
-export function MarketingFooter() {
+export function MarketingFooter({ branding }: { branding: Branding }) {
   return (
     <footer className="border-t border-border bg-surface-2">
       <div className="mx-auto max-w-6xl px-5 py-12">
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-8">
           <div className="max-w-xs">
-            <div className="flex items-center gap-2.5">
-              <span className="w-8 h-8 rounded-lg bg-accent grid place-items-center text-white font-bold">S</span>
-              <span className="font-semibold text-text tracking-tight">SED&nbsp;LMS</span>
-            </div>
+            <BrandMark companyName={branding.companyName} logoUrl={branding.logoUrl} size={32} />
             <p className="text-sm text-text-muted mt-3 leading-relaxed">
               The lead-management console for Social Expert Digital — every lead, agent, and
               department in one permission-aware system.

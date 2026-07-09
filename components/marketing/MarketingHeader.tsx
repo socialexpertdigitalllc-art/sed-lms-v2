@@ -1,15 +1,14 @@
 import Link from "next/link";
 import { IconArrowRight } from "./icons";
+import { BrandMark } from "@/components/branding/BrandMark";
+import type { Branding } from "@/lib/settings/appSettings";
 
-export function MarketingHeader({ isAuthed }: { isAuthed: boolean }) {
+export function MarketingHeader({ isAuthed, branding }: { isAuthed: boolean; branding: Branding }) {
   return (
     <header className="sticky top-0 z-50 border-b border-border/70 bg-bg/75 backdrop-blur-md">
       <div className="mx-auto max-w-6xl px-5 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5">
-          <span className="w-8 h-8 rounded-lg bg-accent grid place-items-center text-white font-bold">
-            S
-          </span>
-          <span className="font-semibold text-text tracking-tight">SED&nbsp;LMS</span>
+          <BrandMark companyName={branding.companyName} logoUrl={branding.logoUrl} size={32} />
         </Link>
 
         <nav className="hidden md:flex items-center gap-8 text-sm text-text-muted">

@@ -1,6 +1,14 @@
+import { BrandMark } from "@/components/branding/BrandMark";
+
 // A static, on-brand miniature of the real Data Console dashboard.
 // Used as the landing hero visual — same tokens as the live app.
-export function DashboardPreview() {
+export function DashboardPreview({
+  companyName,
+  logoUrl,
+}: {
+  companyName: string;
+  logoUrl: string | null;
+}) {
   const bars = [62, 88, 45, 70, 35, 54];
   const rows = [
     { biz: "Brava Roofing", agent: "Alex", status: "Ready", cls: "bg-ready-bg text-ready-fg", price: "$750" },
@@ -23,8 +31,12 @@ export function DashboardPreview() {
         {/* sidebar */}
         <div className="w-40 shrink-0 border-r border-border bg-surface-2 p-3 hidden sm:block">
           <div className="flex items-center gap-2 px-1 pb-4">
-            <span className="w-6 h-6 rounded-md bg-accent grid place-items-center text-white text-[11px] font-bold">S</span>
-            <span className="text-[13px] font-semibold text-text">SED LMS</span>
+            <BrandMark
+              companyName={companyName}
+              logoUrl={logoUrl}
+              size={24}
+              textClassName="text-[13px] font-semibold text-text"
+            />
           </div>
           {["Dashboard", "Leads", "By Agent"].map((n, i) => (
             <div

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
+import { BrandMark } from "@/components/branding/BrandMark";
+import type { Branding } from "@/lib/settings/appSettings";
 
 // `perm` is optional — an item with no perm is visible to every authenticated
 // user (see `mainVisible` below).
@@ -44,7 +46,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/notifications", label: "Notifications", perm: "admin.notifications.manage" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ branding }: { branding: Branding }) {
   const { has, hasAny } = usePermissions();
   const path = usePathname();
 
@@ -91,8 +93,7 @@ export function Sidebar() {
   return (
     <aside className="w-56 shrink-0 bg-surface-2 border-r border-border p-3 flex flex-col gap-0.5">
       <div className="flex items-center gap-2.5 px-2 py-3 mb-2">
-        <div className="w-8 h-8 rounded-lg bg-accent grid place-items-center text-white font-bold text-sm">S</div>
-        <div className="font-semibold text-text">SED LMS</div>
+        <BrandMark companyName={branding.companyName} logoUrl={branding.logoUrl} size={32} />
       </div>
 
       {mainVisible.map(renderItem)}

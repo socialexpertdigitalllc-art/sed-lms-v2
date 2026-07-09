@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { getBranding } from "@/lib/settings/appSettings";
 import { PermissionProvider } from "@/providers/PermissionProvider";
 import { AppShell } from "@/components/layout/AppShell";
 import { ActivityTracker } from "@/providers/ActivityTracker";
@@ -17,6 +18,7 @@ export default async function AppLayout({
   if (!user) redirect("/login");
 
   const perms = await getUserPermissions(user.id);
+  const branding = await getBranding();
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -27,7 +29,7 @@ export default async function AppLayout({
   return (
     <PermissionProvider value={[...perms]}>
       <ActivityTracker />
-      <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""}>
+      <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding}>
         {children}
       </AppShell>
     </PermissionProvider>

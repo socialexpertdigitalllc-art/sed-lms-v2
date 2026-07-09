@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { getBranding } from "@/lib/settings/appSettings";
 import { DashboardPreview } from "@/components/marketing/DashboardPreview";
 import {
   IconLeads,
@@ -21,6 +22,7 @@ export default async function LandingPage() {
   } = await supabase.auth.getUser();
   const primaryHref = user ? "/dashboard" : "/login";
   const primaryLabel = user ? "Open dashboard" : "Log in";
+  const branding = await getBranding();
 
   return (
     <>
@@ -84,7 +86,7 @@ export default async function LandingPage() {
             className="reveal mt-14 md:mt-20 max-w-5xl mx-auto float-soft"
             style={{ animationDelay: "340ms" }}
           >
-            <DashboardPreview />
+            <DashboardPreview companyName={branding.companyName} logoUrl={branding.logoUrl} />
           </div>
         </div>
       </section>
