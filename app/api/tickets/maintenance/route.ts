@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAppSettings } from "@/lib/settings/appSettings";
 import { bumpPriority } from "@/lib/tickets/logic";
-import { notifyTicket, adminUserIds } from "@/lib/tickets/notify";
+import { notifyTicket } from "@/lib/tickets/notify";
 import type { TicketPriority, TicketStatus } from "@/lib/tickets/types";
 
 export const runtime = "nodejs";
@@ -66,9 +66,8 @@ export async function POST(req: Request) {
         eventKey: "ticket_overdue",
         ticketId: t.id,
         leadId: t.lead_id,
-        recipients: [...(await adminUserIds()), t.assigned_to].filter(
-          (v): v is string => Boolean(v)
-        ),
+        ticket: { assigned_to: t.assigned_to, created_by: null },
+        actorId: null,
         title: "Ticket overdue",
         body: `${lead?.business_name ?? "Lead"} — escalated to ${bumped}`,
         nonce: now.toISOString(),

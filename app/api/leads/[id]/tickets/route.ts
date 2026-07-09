@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { isTicketEligible } from "@/lib/tickets/logic";
 import { createTicketSchema } from "@/lib/tickets/schema";
-import { notifyTicket, adminUserIds } from "@/lib/tickets/notify";
+import { notifyTicket } from "@/lib/tickets/notify";
 import type { Ticket, TicketItem, TicketAttachment } from "@/lib/tickets/types";
 
 export async function GET(
@@ -207,7 +207,7 @@ export async function POST(
       eventKey: "ticket_opened",
       ticketId: ticket.id,
       leadId: id,
-      recipients: await adminUserIds(),
+      actorId: user.id,
       title: "Ticket needs assignment",
       body: `${parsed.data.category} — ${lead.business_name}`,
       nonce: ticket.created_at,

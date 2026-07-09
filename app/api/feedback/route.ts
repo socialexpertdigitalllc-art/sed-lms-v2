@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { createFeedbackSchema } from "@/lib/feedback/schema";
-import { notifyFeedback, feedbackManagerIds } from "@/lib/feedback/notify";
+import { notifyFeedback } from "@/lib/feedback/notify";
 import type { Feedback } from "@/lib/feedback/types";
 
 export async function POST(req: Request) {
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
     await notifyFeedback({
       eventKey: "feedback_submitted",
       feedbackId: row.id,
-      recipients: await feedbackManagerIds(),
+      actorId: user.id,
       title: "New feedback",
       body: `${parsed.data.type}: ${parsed.data.title}`,
       nonce: row.created_at,

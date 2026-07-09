@@ -64,7 +64,8 @@ export async function PATCH(
     await notifyFeedback({
       eventKey: "feedback_resolved",
       feedbackId: id,
-      recipients: [fb.user_id].filter((v): v is string => Boolean(v)),
+      feedback: { user_id: fb.user_id },
+      actorId: user.id,
       title: "Feedback resolved",
       body: fb.title,
       nonce: now,
