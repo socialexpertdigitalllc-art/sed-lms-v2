@@ -11,7 +11,7 @@ async function settingsFor(admin: ReturnType<typeof createAdminClient>, userIds:
 }
 
 export async function notifyTicket(opts: {
-  eventKey: "ticket_opened" | "ticket_assigned" | "ticket_resolved" | "ticket_reopened";
+  eventKey: "ticket_opened" | "ticket_assigned" | "ticket_resolved" | "ticket_reopened" | "ticket_overdue";
   ticketId: string; leadId: string; recipients: Recipient[]; title: string; body: string; nonce: string;
 }) {
   const admin = createAdminClient();

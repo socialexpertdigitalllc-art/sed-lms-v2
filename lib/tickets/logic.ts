@@ -1,5 +1,5 @@
 import { isFollowUpEligible } from "@/lib/leads/followups";
-import type { TicketStatus, TicketItem } from "@/lib/tickets/types";
+import type { TicketStatus, TicketItem, TicketPriority } from "@/lib/tickets/types";
 
 const ALLOWED: Record<TicketStatus, TicketStatus[]> = {
   "Open": ["Assigned"],
@@ -18,4 +18,17 @@ export function isTicketEligible(leadStatus: string): boolean {
 }
 export function dedupKey(event: string, ticketId: string, userId: string, nonce: string): string {
   return `${event}:${ticketId}:${userId}:${nonce}`;
+}
+export function slaDueDate(priority: TicketPriority, sla: Record<TicketPriority, number>, createdAtISO: string): string {
+  return new Date(new Date(createdAtISO).getTime() + (sla[priority] ?? 0) * 3_600_000).toISOString();
+}
+export function bumpPriority(p: TicketPriority): TicketPriority {
+  return p === "Low" ? "Normal" : p === "Normal" ? "High" : "High";
+}
+export function isOverdue(dueDate: string | null, status: TicketStatus, now: Date): boolean {
+  return !!dueDate && status !== "Resolved" && new Date(dueDate).getTime() < now.getTime();
+}
+export function retentionEligible(status: TicketStatus, resolvedAt: string | null, retentionDays: number, now: Date): boolean {
+  if (status !== "Resolved" || retentionDays <= 0 || !resolvedAt) return false;
+  return new Date(resolvedAt).getTime() < now.getTime() - retentionDays * 86_400_000;
 }
