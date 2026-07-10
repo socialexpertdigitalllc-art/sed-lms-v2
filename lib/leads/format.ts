@@ -32,6 +32,23 @@ export function formatDateTime(iso: string | null | undefined): string {
   });
 }
 
+/** Short relative time: "just now", "5m ago", "3h ago", "2d ago", else the date. Absolute value belongs in a title tooltip. */
+export function formatRelative(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (Number.isNaN(t)) return "—";
+  const diff = Date.now() - t;
+  const abs = Math.abs(diff);
+  const min = 60_000, hr = 3_600_000, day = 86_400_000;
+  if (abs < min) return "just now";
+  const suffix = diff >= 0 ? "ago" : "from now";
+  if (abs < hr) return `${Math.round(abs / min)}m ${suffix}`;
+  if (abs < day) return `${Math.round(abs / hr)}h ${suffix}`;
+  if (abs < 7 * day) return `${Math.round(abs / day)}d ${suffix}`;
+  return formatDate(iso);
+}
+
 /** ISO → value for an <input type="datetime-local"> (local time, no seconds). */
 export function toDateTimeLocal(iso: string | null | undefined): string {
   if (!iso) return "";

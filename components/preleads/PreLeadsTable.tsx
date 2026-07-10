@@ -155,7 +155,10 @@ export function PreLeadsTable({
         cell: (c) => {
           const lead = c.row.original;
           return (
-            <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex items-center justify-end gap-1 whitespace-nowrap opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+            >
               <Link
                 href={`/pre-leads/${lead.id}`}
                 className="text-xs font-medium text-accent-ink px-2 py-1 rounded hover:bg-accent-soft"
@@ -294,7 +297,7 @@ export function PreLeadsTable({
       <div className="bg-surface border border-border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-surface-2">
+            <thead className="bg-surface-2 sticky top-0 z-10">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id} className="border-b border-border">
                   {hg.headers.map((h) => (
@@ -322,7 +325,11 @@ export function PreLeadsTable({
                 </tr>
               ) : (
                 rows.map((row) => (
-                  <tr key={row.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
+                  <tr
+                    key={row.id}
+                    onClick={() => router.push(`/pre-leads/${row.original.id}`)}
+                    className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group cursor-pointer"
+                  >
                     {row.getVisibleCells().map((cell) => (
                       <td key={cell.id} className="px-4 py-2.5 align-middle max-w-[260px]">
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}

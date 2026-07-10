@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Download, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
 import {
   useReactTable,
@@ -18,7 +19,7 @@ import {
 import type { Lead } from "@/lib/leads/types";
 import { SITE_TYPES } from "@/lib/leads/types";
 import { visibleStatuses } from "@/lib/leads/categories";
-import { formatCurrency, formatDate, formatDateTime, initials } from "@/lib/leads/format";
+import { formatCurrency, formatDateTime, initials } from "@/lib/leads/format";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
 import { FollowUpModal } from "./FollowUpModal";
@@ -35,6 +36,7 @@ import { MonthFilter } from "@/components/common/MonthFilter";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { Select } from "@/components/common/Select";
 
 const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0" };
@@ -47,6 +49,7 @@ export function LeadsTable({
   leads: Lead[];
   agentNameById: Record<string, string>;
 }) {
+  const router = useRouter();
   const { has, all } = usePermissions();
   const visible = useMemo(() => visibleStatuses(all), [all]);
   useRealtimeRefresh("leads");
@@ -134,7 +137,7 @@ export function LeadsTable({
       {
         accessorKey: "created_at",
         header: "Date",
-        cell: (c) => <span className="text-text-muted whitespace-nowrap">{formatDate(c.getValue<string>())}</span>,
+        cell: (c) => <RelativeTime iso={c.getValue<string>()} className="text-text-muted whitespace-nowrap" />,
       },
       {
         accessorKey: "status",
@@ -254,7 +257,10 @@ export function LeadsTable({
         header: "",
         enableSorting: false,
         cell: (c) => (
-          <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex items-center justify-end gap-1 whitespace-nowrap opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+          >
             <Link
               href={`/leads/${c.row.original.id}`}
               className="text-xs font-medium text-accent-ink px-2 py-1 rounded hover:bg-accent-soft"
@@ -407,7 +413,7 @@ export function LeadsTable({
       <div className="bg-surface border border-border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-surface-2">
+            <thead className="bg-surface-2 sticky top-0 z-10">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id} className="border-b border-border">
                   {hg.headers.map((h) => (
@@ -431,7 +437,11 @@ export function LeadsTable({
                 <tr><td colSpan={columns.length} className="px-4 py-12 text-center text-text-faint">No leads match your filters.</td></tr>
               ) : (
                 rows.map((row) => (
-                  <tr key={row.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
+                  <tr
+                    key={row.id}
+                    onClick={() => router.push(`/leads/${row.original.id}`)}
+                    className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group cursor-pointer"
+                  >
                     {row.getVisibleCells().map((cell) => (
                       <td key={cell.id} className="px-4 py-2.5 align-middle max-w-[260px]">
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
