@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import "@/lib/tables/columnMeta";
 import { Download, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
 import {
@@ -42,6 +43,8 @@ import { Select } from "@/components/common/Select";
 import { useUiPrefs } from "@/providers/UiPrefsProvider";
 import { DensityToggle } from "@/components/common/DensityToggle";
 import { ColumnsMenu } from "@/components/common/ColumnsMenu";
+import { SavedViews } from "@/components/common/SavedViews";
+import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
 
 const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
@@ -83,6 +86,8 @@ export function LeadsTable({
   const [modalLead, setModalLead] = useState<Lead | null>(null);
   const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const router = useRouter();
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [urlState, setUrlState] = useUrlState(LEADS_DEFAULTS);
   const { q, status, agent, type, sort, page, size } = urlState;
@@ -353,6 +358,15 @@ export function LeadsTable({
   });
 
   const rows = table.getRowModel().rows;
+  const { highlightedIndex } = useTableKeyboardNav({
+    count: rows.length,
+    searchInputRef,
+    onOpen: (i) => {
+      const id = rows[i]?.original.id;
+      if (id) router.push(`/leads/${id}`);
+    },
+    onEscape: () => setUrlState({ q: "", page: "0" }),
+  });
   const filteredCount = table.getFilteredRowModel().rows.length;
   const selectedRows = table.getSelectedRowModel().rows;
   const selectedLeads = selectedRows.map((r) => r.original);
@@ -393,6 +407,7 @@ export function LeadsTable({
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input
+          ref={searchInputRef}
           value={q}
           onChange={(e) => setUrlState({ q: e.target.value, page: "0" })}
           placeholder="Search business, email, agent…"
@@ -434,6 +449,7 @@ export function LeadsTable({
         )}
         <DensityToggle />
         <ColumnsMenu table={table} />
+        <SavedViews path="/leads" onApply={(params) => setUrlState({ ...LEADS_DEFAULTS, ...params })} />
       </div>
 
       {/* table */}
@@ -464,10 +480,13 @@ export function LeadsTable({
               {rows.length === 0 ? (
                 <tr><td colSpan={columns.length} className="px-4 py-12 text-center text-text-faint">No leads match your filters.</td></tr>
               ) : (
-                rows.map((row) => (
+                rows.map((row, i) => (
                   <tr
                     key={row.id}
-                    className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group"
+                    className={
+                      "border-b border-border-subtle last:border-0 hover:bg-surface-2 group" +
+                      (i === highlightedIndex ? " ring-2 ring-inset ring-accent bg-accent-soft/40" : "")
+                    }
                   >
                     {row.getVisibleCells().map((cell) => (
                       <td key={cell.id} className={"px-4 align-middle max-w-[260px] " + (density === "compact" ? "py-1.5 " : "py-2.5 ") + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
@@ -484,19 +503,22 @@ export function LeadsTable({
 
       {/* pagination */}
       <div className="flex flex-wrap items-center justify-between gap-3 mt-3 text-sm text-text-muted">
-        <label className="inline-flex items-center gap-1.5 text-xs text-text-muted">
-          Rows per page
-          <Select
-            value={size}
-            onChange={(e) => setUrlState({ size: e.target.value, page: "0" })}
-            className="px-2 py-1 rounded-md border border-border bg-surface text-sm text-text-muted"
-          >
-            <option value="15">15</option>
-            <option value="25">25</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-          </Select>
-        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+            Rows per page
+            <Select
+              value={size}
+              onChange={(e) => setUrlState({ size: e.target.value, page: "0" })}
+              className="px-2 py-1 rounded-md border border-border bg-surface text-sm text-text-muted"
+            >
+              <option value="15">15</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </Select>
+          </label>
+          <span className="hidden sm:inline text-[11px] text-text-faint">Press / to search · j/k to move · Enter to open</span>
+        </div>
         {table.getPageCount() > 1 && (
           <div className="flex items-center gap-3">
             <span className="font-mono text-xs">
