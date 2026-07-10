@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon } from "lucide-react";
+import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon, LayoutTemplate } from "lucide-react";
 import type { Lead } from "@/lib/leads/types";
 import type { LeadFollowUp } from "@/lib/leads/followups";
 import type { Ticket, TicketPriority } from "@/lib/tickets/types";
@@ -49,6 +49,7 @@ export function LeadDetail({
   const canWebcraft = has("ai_tools.webcraft");
   const canDeepseek = has("ai_tools.deepseek");
   const canQueue = canWebcraft || canDeepseek;
+  const canTemplateGen = has("templates.generate");
   const router = useRouter();
   const { toast } = useToast();
 
@@ -130,6 +131,11 @@ export function LeadDetail({
               <button onClick={queueForGeneration} disabled={queuing} className={btn + " disabled:opacity-60"}>
                 {queuing ? "Queuing…" : "Queue for generation"}
               </button>
+            )}
+            {canTemplateGen && (
+              <Link href={`/ai-tools/template-engine?lead=${lead.id}`} className={btn + " inline-flex items-center gap-1.5"}>
+                <LayoutTemplate size={14} /> Generate from template
+              </Link>
             )}
           </div>
         </div>

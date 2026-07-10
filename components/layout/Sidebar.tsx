@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Building2, PhoneCall, Ticket, BarChart3, MessageSquare,
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
-  Settings,
+  Settings, LayoutTemplate, Library,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -41,6 +41,8 @@ const AI_TOOLS: NavItemAny[] = [
   { href: "/ai-tools/deepseek", label: "DeepSeek", icon: Bot, perms: ["ai_tools.deepseek"] },
   { href: "/ai-tools/analytics", label: "Analytics", icon: LineChart, perms: ["analytics.view_webcraft", "analytics.view_deepseek", "analytics.view_all_agents"] },
   { href: "/ai-tools/wge", label: "Engine (WGE)", icon: Cog, perms: ["wge.manage"] },
+  { href: "/ai-tools/template-engine", label: "Template Engine", icon: LayoutTemplate, perms: ["templates.generate"] },
+  { href: "/ai-tools/templates", label: "Templates", icon: Library, perms: ["templates.manage"] },
 ];
 
 const ADMIN: NavItem[] = [
