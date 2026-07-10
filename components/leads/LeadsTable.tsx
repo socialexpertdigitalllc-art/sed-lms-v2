@@ -13,6 +13,7 @@ import {
   type ColumnDef,
   type SortingState,
   type ColumnFiltersState,
+  type RowSelectionState,
 } from "@tanstack/react-table";
 import type { Lead } from "@/lib/leads/types";
 import { SITE_TYPES } from "@/lib/leads/types";
@@ -22,6 +23,7 @@ import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
 import { FollowUpModal } from "./FollowUpModal";
 import { FuStatusChip } from "./FuStatusChip";
+import { BulkActionBar } from "./BulkActionBar";
 import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
@@ -49,6 +51,9 @@ export function LeadsTable({
   const canChangeStatus = has("leads.status_change");
   const canFollowUp = has("leads.followup");
   const canExport = has("leads.export");
+  const canAssign = has("leads.assign");
+  const canDelete = has("leads.delete");
+  const canBulk = canChangeStatus || canAssign || canDelete || canExport;
 
   function exportCsv() {
     const rows = table.getFilteredRowModel().rows.map((r) => leadCsvRow(r.original, agentNameById));
@@ -65,6 +70,7 @@ export function LeadsTable({
 
   const [modalLead, setModalLead] = useState<Lead | null>(null);
   const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
   const [urlState, setUrlState] = useUrlState(LEADS_DEFAULTS);
   const { q, status, agent, type, sort, page } = urlState;
@@ -104,6 +110,23 @@ export function LeadsTable({
 
   const columns = useMemo<ColumnDef<Lead>[]>(
     () => [
+      ...(canBulk
+        ? [{
+            id: "select",
+            header: ({ table }) => (
+              <input type="checkbox" className="accent-accent"
+                checked={table.getIsAllPageRowsSelected()}
+                ref={(el) => { if (el) el.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected(); }}
+                onChange={table.getToggleAllPageRowsSelectedHandler()} />
+            ),
+            cell: ({ row }) => (
+              <input type="checkbox" className="accent-accent"
+                checked={row.getIsSelected()} onChange={row.getToggleSelectedHandler()}
+                onClick={(e) => e.stopPropagation()} />
+            ),
+            enableSorting: false,
+          } as ColumnDef<Lead>]
+        : []),
       {
         accessorKey: "created_at",
         header: "Date",
@@ -232,13 +255,16 @@ export function LeadsTable({
         ),
       },
     ],
-    [agentNameById, canChangeStatus, canFollowUp]
+    [agentNameById, canChangeStatus, canFollowUp, canBulk]
   );
 
   const table = useReactTable({
     data: scopedLeads,
     columns,
-    state: { globalFilter: q, sorting, columnFilters, pagination },
+    enableRowSelection: canBulk,
+    getRowId: (l) => l.id,
+    state: { globalFilter: q, sorting, columnFilters, pagination, rowSelection },
+    onRowSelectionChange: setRowSelection,
     onGlobalFilterChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: string) => string)(q) : (updater as string);
       setUrlState({ q: next ?? "", page: "0" });
@@ -269,6 +295,9 @@ export function LeadsTable({
 
   const rows = table.getRowModel().rows;
   const filteredCount = table.getFilteredRowModel().rows.length;
+  const selectedRows = table.getSelectedRowModel().rows;
+  const selectedLeads = selectedRows.map((r) => r.original);
+  const selectedIds = selectedLeads.map((l) => l.id);
 
   return (
     <div>
@@ -430,6 +459,17 @@ export function LeadsTable({
         open={!!followUpLead}
         onClose={() => setFollowUpLead(null)}
       />
+
+      {canBulk && selectedIds.length > 0 && (
+        <BulkActionBar
+          selectedIds={selectedIds}
+          selectedLeads={selectedLeads}
+          statuses={visible}
+          agentNameById={agentNameById}
+          can={{ status: canChangeStatus, assign: canAssign, archive: canDelete, export: canExport }}
+          onClear={() => setRowSelection({})}
+        />
+      )}
     </div>
   );
 }

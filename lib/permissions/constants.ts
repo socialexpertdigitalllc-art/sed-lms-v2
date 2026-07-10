@@ -4,6 +4,7 @@ export const PERMISSIONS = [
   { key: "leads.edit", name: "Edit Lead", category: "leads" },
   { key: "leads.delete", name: "Delete Lead", category: "leads", is_sensitive: true },
   { key: "leads.status_change", name: "Change Lead Status", category: "leads" },
+  { key: "leads.assign", name: "Assign / Reassign Lead", category: "leads", is_sensitive: true },
   { key: "leads.view_all", name: "View All Agents' Leads", category: "leads" },
   { key: "leads.export", name: "Export Leads", category: "leads" },
   { key: "leads.duplicate.override", name: "Override Duplicate Lead Block", category: "leads", is_sensitive: true },

@@ -7,6 +7,7 @@ insert into public.permissions (key, name, description, category, is_sensitive) 
   ('leads.edit','Edit Lead',null,'leads',false),
   ('leads.delete','Delete Lead',null,'leads',true),
   ('leads.status_change','Change Lead Status',null,'leads',false),
+  ('leads.assign','Assign / Reassign Lead',null,'leads',true),
   ('leads.view_all','View All Agents'' Leads',null,'leads',false),
   ('leads.export','Export Leads',null,'leads',false),
   ('leads.duplicate.override','Override Duplicate Lead Block',null,'leads',true),
