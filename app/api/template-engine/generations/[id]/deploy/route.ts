@@ -1,0 +1,176 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getUserPermissions } from "@/lib/permissions/resolver";
+import { daConfigured, createSubdomain, subdomainExists, uploadZipAndExtract } from "@/lib/template-engine/directadmin";
+import { businessSlug, websiteId } from "@/lib/template-engine/slug";
+import type { GenStep } from "@/lib/template-engine/types";
+
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
+export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const perms = await getUserPermissions(user.id);
+  if (!perms.has("templates.deploy")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  if (!daConfigured()) {
+    return NextResponse.json(
+      { error: "Deployment is not configured. Set DA_HOST, DA_USERNAME, DA_LOGIN_KEY, DA_DOMAIN." },
+      { status: 422 }
+    );
+  }
+
+  const admin = createAdminClient();
+  const { data: gen } = await admin
+    .from("template_generations")
+    .select("id, lead_id, status, steps, site_slug, zip_path")
+    .eq("id", id)
+    .maybeSingle();
+  if (!gen) return NextResponse.json({ error: "Generation not found" }, { status: 404 });
+  if (gen.status !== "ready_for_review" && gen.status !== "deployed") {
+    return NextResponse.json({ error: "Generation is not ready to deploy" }, { status: 409 });
+  }
+  if (!gen.zip_path) {
+    return NextResponse.json({ error: "This generation has no packaged zip" }, { status: 409 });
+  }
+  const { data: lead } = await admin
+    .from("leads")
+    .select("id, business_name")
+    .eq("id", gen.lead_id)
+    .maybeSingle();
+  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  // step machinery — appends to the generation's timeline with the same
+  // write-through the runner uses (previous deploy attempts are pruned)
+  const steps: GenStep[] = (Array.isArray(gen.steps) ? (gen.steps as GenStep[]) : []).filter(
+    (s) => !String(s.key).startsWith("deploy:")
+  );
+  const state = { currentKey: null as string | null, stepStart: 0 };
+  const write = async (extra?: Record<string, unknown>) => {
+    await admin
+      .from("template_generations")
+      .update({ steps, current_step: state.currentKey, updated_at: new Date().toISOString(), ...(extra ?? {}) })
+      .eq("id", id);
+  };
+  const begin = async (key: string, label: string) => {
+    steps.push({ key, label, status: "running", started_at: new Date().toISOString() });
+    state.currentKey = key;
+    state.stepStart = Date.now();
+    await write();
+  };
+  const end = async (status: "done" | "partial", detail?: string, extra?: Record<string, unknown>) => {
+    const step = steps[steps.length - 1];
+    step.status = status;
+    step.ms = Date.now() - state.stepStart;
+    if (detail) step.detail = detail;
+    await write(extra);
+  };
+  const failStep = async (detail: string) => {
+    const step = steps[steps.length - 1];
+    step.status = "failed";
+    step.ms = Date.now() - state.stepStart;
+    step.detail = detail.slice(0, 300);
+    await write();
+  };
+
+  const domain = process.env.DA_DOMAIN ?? "";
+  const base = businessSlug(String(lead.business_name ?? ""));
+  const siteSlug: string = typeof gen.site_slug === "string" ? gen.site_slug : "";
+  const idPart = siteSlug.includes("-") ? siteSlug.slice(siteSlug.lastIndexOf("-") + 1) : websiteId();
+
+  // deploy:subdomain -----------------------------------------------------------
+  await begin("deploy:subdomain", "Creating subdomain");
+  let sub = base;
+  if (await subdomainExists(sub)) sub = `${base}-${idPart}`;
+  const created = await createSubdomain(sub);
+  if (created.error) {
+    const text = `${created.text} ${created.details}`.toLowerCase();
+    if (!text.includes("exist")) {
+      if (sub === base) {
+        // one suffix fallback attempt before giving up
+        const fallback = `${base}-${idPart}`;
+        const retry = await createSubdomain(fallback);
+        const retryText = `${retry.text} ${retry.details}`.toLowerCase();
+        if (retry.error && !retryText.includes("exist")) {
+          const message = retry.text || retry.details || "subdomain creation failed";
+          await failStep(message);
+          return NextResponse.json({ error: `Could not create subdomain: ${message}` }, { status: 502 });
+        }
+        sub = fallback;
+      } else {
+        const message = created.text || created.details || "subdomain creation failed";
+        await failStep(message);
+        return NextResponse.json({ error: `Could not create subdomain: ${message}` }, { status: 502 });
+      }
+    }
+    // "already exists" → continue and overwrite its files
+  }
+  await end("done", `${sub}.${domain}`);
+
+  // deploy:upload --------------------------------------------------------------
+  await begin("deploy:upload", "Uploading site");
+  const { data: zipBlob, error: zipErr } = await admin.storage.from("template-sites").download(gen.zip_path);
+  if (zipErr || !zipBlob) {
+    await failStep("site zip missing from storage");
+    return NextResponse.json({ error: "Site zip not found in storage" }, { status: 500 });
+  }
+  const zipBytes = new Uint8Array(await zipBlob.arrayBuffer());
+  const uploaded = await uploadZipAndExtract(sub, zipBytes, "site.zip");
+  if (!uploaded.ok && uploaded.failedStep !== "delete") {
+    const message = `${uploaded.failedStep}: ${uploaded.message ?? "failed"}`;
+    await failStep(message);
+    return NextResponse.json({ error: `Deployment failed at ${message}` }, { status: 502 });
+  }
+  // failedStep "delete" = the site IS live, only the zip cleanup failed — non-fatal
+  await end(
+    uploaded.ok ? "done" : "partial",
+    uploaded.ok ? undefined : `zip cleanup failed (site is live): ${uploaded.message ?? ""}`
+  );
+
+  // deploy:verify ----------------------------------------------------------------
+  await begin("deploy:verify", "Verifying site");
+  const host = `${sub}.${domain}`;
+  let url = "";
+  let verified = false;
+  for (const scheme of ["https", "http"] as const) {
+    try {
+      const res = await fetch(`${scheme}://${host}/`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        url = `${scheme}://${host}`;
+        verified = true;
+        break;
+      }
+    } catch {
+      // try the next scheme
+    }
+  }
+  if (!verified) url = `http://${host}`;
+  await end(verified ? "done" : "partial", verified ? url : `site did not respond yet — defaulting to ${url}`);
+
+  // deploy:link --------------------------------------------------------------------
+  await begin("deploy:link", "Saving website link");
+  const { error: linkErr } = await admin.from("leads").update({ website_link: url }).eq("id", gen.lead_id);
+  if (linkErr) {
+    await failStep(linkErr.message);
+    return NextResponse.json({ error: `Deployed, but saving the lead link failed: ${linkErr.message}` }, { status: 500 });
+  }
+  await admin.from("activity_log").insert({
+    user_id: user.id,
+    action: "lead.website_link_set",
+    entity_type: "lead",
+    entity_id: gen.lead_id,
+    new_value: { website_link: url, generation_id: id },
+  });
+  state.currentKey = null;
+  await end("done", url, { status: "deployed", deployed_url: url });
+
+  return NextResponse.json({ url });
+}
