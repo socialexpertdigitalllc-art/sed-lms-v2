@@ -1,8 +1,16 @@
 import { createClient } from "@/lib/supabase/server";
+import { getUserPermissions } from "@/lib/permissions/resolver";
 import Link from "next/link";
+import { NewDepartmentForm } from "@/components/admin/NewDepartmentForm";
 
 export default async function DepartmentsPage() {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const perms = user ? await getUserPermissions(user.id) : new Set<string>();
+  const canManage = perms.has("admin.departments.manage");
+
   const { data: depts } = await supabase
     .from("departments")
     .select("id, name, slug, color, description, department_members(count), department_permissions(count)")
@@ -10,7 +18,10 @@ export default async function DepartmentsPage() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold text-text mb-5">Departments</h1>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold text-text">Departments</h1>
+        {canManage && <NewDepartmentForm />}
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {(depts ?? []).map((d: any) => (
           <Link

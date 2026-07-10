@@ -24,19 +24,19 @@ export default async function NewLeadPage() {
         .order("display_name")
     : { data: [] };
 
-  // Sales-department members for the "Closed by" picker (two FKs to profiles → must pin the FK).
-  const { data: salesDept } = await supabase
+  // Closing-department members for the "Closed by" picker (two FKs to profiles → must pin the FK).
+  const { data: closingDept } = await supabase
     .from("departments")
     .select("id")
-    .eq("slug", "sales")
+    .eq("slug", "closing")
     .single();
-  let salesUsers: { id: string; display_name: string }[] = [];
-  if (salesDept) {
+  let closingUsers: { id: string; display_name: string }[] = [];
+  if (closingDept) {
     const { data: members } = await supabase
       .from("department_members")
       .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
-      .eq("department_id", salesDept.id);
-    salesUsers = (members ?? [])
+      .eq("department_id", closingDept.id);
+    closingUsers = (members ?? [])
       .map((m: any) => ({ id: m.profiles?.id, display_name: m.profiles?.display_name }))
       .filter((u: any) => u.id);
   }
@@ -53,7 +53,7 @@ export default async function NewLeadPage() {
       agents={agents ?? []}
       canAssign={canAssign}
       canSetStatus={canSetStatus}
-      salesUsers={salesUsers}
+      salesUsers={closingUsers}
       addons={addons ?? []}
       currentUserId={user.id}
       canOverrideDuplicate={perms.has("leads.duplicate.override")}
