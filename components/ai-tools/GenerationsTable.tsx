@@ -18,8 +18,10 @@ import { TOOLS } from "@/lib/ai-tools/config";
 import type { AiGeneration } from "@/lib/ai-tools/types";
 import { useUrlState } from "@/hooks/useUrlState";
 import { serialColumn } from "@/components/common/tableSerial";
+import { Select } from "@/components/common/Select";
+import "@/lib/tables/columnMeta";
 
-const GEN_DEFAULTS = { q: "", sort: "created_at:desc" };
+const GEN_DEFAULTS = { q: "", sort: "created_at:desc", page: "0", size: "15" };
 
 type Row = AiGeneration & { agentName: string };
 
@@ -36,6 +38,11 @@ export function GenerationsTable({
     return id ? [{ id, desc: dir !== "asc" }] : [];
   }, [gs.sort]);
 
+  const pagination = useMemo(
+    () => ({ pageIndex: Math.max(0, Number(gs.page) || 0), pageSize: Math.max(1, Number(gs.size) || 15) }),
+    [gs.page, gs.size]
+  );
+
   const data = useMemo<Row[]>(
     () => rows.map((r) => ({ ...r, agentName: (r.agent_id && agentNameById[r.agent_id]) || "Unknown" })),
     [rows, agentNameById]
@@ -47,6 +54,7 @@ export function GenerationsTable({
       {
         accessorKey: "created_at",
         header: "Date",
+        meta: { responsiveClass: "hidden lg:table-cell" },
         cell: (c) => <span className="text-text-muted whitespace-nowrap">{formatDateTime(c.getValue<string>())}</span>,
       },
       {
@@ -65,12 +73,20 @@ export function GenerationsTable({
       {
         accessorKey: "business_name",
         header: "Business",
-        cell: (c) => <span className="font-medium text-text truncate">{c.getValue<string>() ?? "—"}</span>,
+        cell: (c) => (
+          <Link
+            href={`/ai-tools/generations/${c.row.original.id}`}
+            className="font-medium text-text truncate hover:underline"
+          >
+            {c.getValue<string>() ?? "—"}
+          </Link>
+        ),
       },
       {
         id: "agent",
         accessorFn: (r) => r.agentName,
         header: "Agent",
+        meta: { responsiveClass: "hidden xl:table-cell" },
         cell: (c) => (
           <span className="inline-flex items-center gap-2 whitespace-nowrap">
             <span className="w-5 h-5 rounded-full bg-accent-soft text-accent-ink grid place-items-center text-[9px] font-semibold">
@@ -83,16 +99,19 @@ export function GenerationsTable({
       {
         accessorKey: "model",
         header: "Model",
+        meta: { responsiveClass: "hidden xl:table-cell" },
         cell: (c) => <span className="text-text-muted font-mono text-xs">{c.getValue<string>() ?? "—"}</span>,
       },
       {
         accessorKey: "num_files",
         header: "Files",
+        meta: { responsiveClass: "hidden 2xl:table-cell" },
         cell: (c) => <span className="text-text font-mono">{c.getValue<number | null>() ?? "—"}</span>,
       },
       {
         accessorKey: "tokens_used",
         header: "Tokens",
+        meta: { responsiveClass: "hidden 2xl:table-cell" },
         cell: (c) => <span className="text-text-muted font-mono">{(c.getValue<number | null>() ?? 0).toLocaleString()}</span>,
       },
       {
@@ -130,15 +149,19 @@ export function GenerationsTable({
   const table = useReactTable({
     data,
     columns,
-    state: { globalFilter: gs.q, sorting },
+    state: { globalFilter: gs.q, sorting, pagination },
     onGlobalFilterChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: string) => string)(gs.q) : (updater as string);
-      setGs({ q: next ?? "" });
+      setGs({ q: next ?? "", page: "0" });
     },
     onSortingChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: SortingState) => SortingState)(sorting) : updater;
       const t = next[0];
-      setGs({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "" });
+      setGs({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "", page: "0" });
+    },
+    onPaginationChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: typeof pagination) => typeof pagination)(pagination) : updater;
+      setGs({ page: String(next.pageIndex) });
     },
     globalFilterFn: (row, _col, value) => {
       const q = String(value).toLowerCase();
@@ -149,7 +172,6 @@ export function GenerationsTable({
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 12 } },
   });
 
   const tableRows = table.getRowModel().rows;
@@ -158,7 +180,7 @@ export function GenerationsTable({
     <div>
       <input
         value={gs.q}
-        onChange={(e) => setGs({ q: e.target.value })}
+        onChange={(e) => setGs({ q: e.target.value, page: "0" })}
         placeholder="Search business, agent, model…"
         className="w-full mb-3 px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
       />
@@ -174,7 +196,8 @@ export function GenerationsTable({
                       onClick={h.column.getCanSort() ? h.column.getToggleSortingHandler() : undefined}
                       className={
                         "text-left text-[10px] uppercase tracking-wide text-text-faint font-semibold px-4 py-3 whitespace-nowrap " +
-                        (h.column.getCanSort() ? "cursor-pointer select-none hover:text-text-muted" : "")
+                        (h.column.getCanSort() ? "cursor-pointer select-none hover:text-text-muted" : "") +
+                        " " + (h.column.columnDef.meta?.responsiveClass ?? "")
                       }
                     >
                       {flexRender(h.column.columnDef.header, h.getContext())}
@@ -191,7 +214,7 @@ export function GenerationsTable({
                 tableRows.map((row) => (
                   <tr key={row.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="px-4 py-2.5 align-middle max-w-[220px]">
+                      <td key={cell.id} className={"px-4 py-2.5 align-middle max-w-[220px] " + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
@@ -202,15 +225,30 @@ export function GenerationsTable({
           </table>
         </div>
       </div>
-      {table.getPageCount() > 1 && (
-        <div className="flex items-center justify-between mt-3 text-sm text-text-muted">
-          <span className="font-mono text-xs">Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}</span>
-          <div className="flex gap-2">
-            <button onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()} className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40">Previous</button>
-            <button onClick={() => table.nextPage()} disabled={!table.getCanNextPage()} className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40">Next</button>
+      <div className="flex flex-wrap items-center justify-between gap-3 mt-3 text-sm text-text-muted">
+        <label className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+          Rows per page
+          <Select
+            value={gs.size}
+            onChange={(e) => setGs({ size: e.target.value, page: "0" })}
+            className="px-2 py-1 rounded-md border border-border bg-surface text-sm text-text-muted"
+          >
+            <option value="15">15</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </Select>
+        </label>
+        {table.getPageCount() > 1 && (
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-xs">Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}</span>
+            <div className="flex gap-2">
+              <button onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()} className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40">Previous</button>
+              <button onClick={() => table.nextPage()} disabled={!table.getCanNextPage()} className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40">Next</button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

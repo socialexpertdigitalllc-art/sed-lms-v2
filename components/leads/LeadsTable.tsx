@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import "@/lib/tables/columnMeta";
 import { Download, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
 import {
   useReactTable,
@@ -39,7 +39,7 @@ import { CopyButton } from "@/components/common/CopyButton";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { Select } from "@/components/common/Select";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0" };
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
 
 export function LeadsTable({
@@ -51,7 +51,6 @@ export function LeadsTable({
   agentNameById: Record<string, string>;
   salesAgents: { id: string; name: string }[];
 }) {
-  const router = useRouter();
   const { has, all } = usePermissions();
   const visible = useMemo(() => visibleStatuses(all), [all]);
   useRealtimeRefresh("leads");
@@ -81,7 +80,7 @@ export function LeadsTable({
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
   const [urlState, setUrlState] = useUrlState(LEADS_DEFAULTS);
-  const { q, status, agent, type, sort, page } = urlState;
+  const { q, status, agent, type, sort, page, size } = urlState;
   const canScopeMonth = has("analytics.view_all_agents");
   const month = canScopeMonth ? urlState.month : "";
   const regionSel = useMemo(() => (urlState.region ? urlState.region.split(",") : []), [urlState.region]);
@@ -89,7 +88,7 @@ export function LeadsTable({
     const [id, dir] = sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
   }, [sort]);
-  const pagination = useMemo(() => ({ pageIndex: Math.max(0, Number(page) || 0), pageSize: 15 }), [page]);
+  const pagination = useMemo(() => ({ pageIndex: Math.max(0, Number(page) || 0), pageSize: Math.max(1, Number(size) || 15) }), [page, size]);
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const f: ColumnFiltersState = [];
     if (status !== "All") f.push({ id: "status", value: status });
@@ -139,6 +138,7 @@ export function LeadsTable({
       {
         accessorKey: "created_at",
         header: "Date",
+        meta: { responsiveClass: "hidden md:table-cell" },
         cell: (c) => <RelativeTime iso={c.getValue<string>()} className="text-text-muted whitespace-nowrap" />,
       },
       {
@@ -179,6 +179,7 @@ export function LeadsTable({
         accessorKey: "site_type",
         header: "Type",
         filterFn: "equalsString",
+        meta: { responsiveClass: "hidden lg:table-cell" },
         cell: (c) => <span className="text-text-muted">{c.getValue<string>() ?? "—"}</span>,
       },
       {
@@ -192,7 +193,15 @@ export function LeadsTable({
         header: "Business",
         cell: (c) => (
           <div className="min-w-0">
-            <div className="font-medium text-text truncate">{c.row.original.business_name}</div>
+            <div className="font-medium text-text truncate">
+              <Link
+                href={`/leads/${c.row.original.id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="hover:underline"
+              >
+                {c.row.original.business_name}
+              </Link>
+            </div>
             <div className="text-xs text-text-faint truncate">{c.row.original.business_email ?? ""}</div>
           </div>
         ),
@@ -200,6 +209,7 @@ export function LeadsTable({
       {
         accessorKey: "business_phone",
         header: "Phone",
+        meta: { responsiveClass: "hidden lg:table-cell" },
         cell: (c) => {
           const phone = c.getValue<string>();
           return phone ? (
@@ -220,6 +230,7 @@ export function LeadsTable({
       {
         accessorKey: "follow_up_time",
         header: "Follow-up",
+        meta: { responsiveClass: "hidden xl:table-cell" },
         cell: (c) => {
           const value = c.getValue<string | null>();
           const overdue = bucketOf(value) === "overdue";
@@ -249,6 +260,7 @@ export function LeadsTable({
       {
         accessorKey: "rating",
         header: "Rating",
+        meta: { responsiveClass: "hidden 2xl:table-cell" },
         cell: (c) => {
           const r = c.getValue<number | null>();
           return <span className="text-text-muted font-mono">{r ? `${r}/10` : "—"}</span>;
@@ -424,7 +436,8 @@ export function LeadsTable({
                       onClick={h.column.getCanSort() ? h.column.getToggleSortingHandler() : undefined}
                       className={
                         "text-left text-[10px] uppercase tracking-wide text-text-faint font-semibold px-4 py-3 whitespace-nowrap " +
-                        (h.column.getCanSort() ? "cursor-pointer select-none hover:text-text-muted" : "")
+                        (h.column.getCanSort() ? "cursor-pointer select-none hover:text-text-muted" : "") +
+                        " " + (h.column.columnDef.meta?.responsiveClass ?? "")
                       }
                     >
                       {flexRender(h.column.columnDef.header, h.getContext())}
@@ -441,11 +454,10 @@ export function LeadsTable({
                 rows.map((row) => (
                   <tr
                     key={row.id}
-                    onClick={() => router.push(`/leads/${row.original.id}`)}
-                    className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group cursor-pointer"
+                    className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group"
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="px-4 py-2.5 align-middle max-w-[260px]">
+                      <td key={cell.id} className={"px-4 py-2.5 align-middle max-w-[260px] " + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
@@ -458,29 +470,44 @@ export function LeadsTable({
       </div>
 
       {/* pagination */}
-      {table.getPageCount() > 1 && (
-        <div className="flex items-center justify-between mt-3 text-sm text-text-muted">
-          <span className="font-mono text-xs">
-            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => table.previousPage()}
-              disabled={!table.getCanPreviousPage()}
-              className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => table.nextPage()}
-              disabled={!table.getCanNextPage()}
-              className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40"
-            >
-              Next
-            </button>
+      <div className="flex flex-wrap items-center justify-between gap-3 mt-3 text-sm text-text-muted">
+        <label className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+          Rows per page
+          <Select
+            value={size}
+            onChange={(e) => setUrlState({ size: e.target.value, page: "0" })}
+            className="px-2 py-1 rounded-md border border-border bg-surface text-sm text-text-muted"
+          >
+            <option value="15">15</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </Select>
+        </label>
+        {table.getPageCount() > 1 && (
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-xs">
+              Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => table.previousPage()}
+                disabled={!table.getCanPreviousPage()}
+                className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => table.nextPage()}
+                disabled={!table.getCanNextPage()}
+                className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {modalLead && (
         <StatusChangeModal

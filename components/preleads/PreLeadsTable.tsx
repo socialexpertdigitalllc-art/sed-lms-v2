@@ -26,6 +26,7 @@ import { useUrlState } from "@/hooks/useUrlState";
 import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Select } from "@/components/common/Select";
+import "@/lib/tables/columnMeta";
 
 type FollowFilter = "all" | "due" | "past";
 type Modal = { mode: "follow" | null; lead: PreLead | null };
@@ -36,7 +37,7 @@ type Modal = { mode: "follow" | null; lead: PreLead | null };
 // state var, wired straight to `table.getColumn("status").setFilterValue`).
 // Deriving columnFilters from category alone would silently stop that select
 // from doing anything, so `status` is URL-persisted too.
-const PRELEADS_DEFAULTS = { q: "", category: "All", follow: "all", sort: "created_at:desc", status: "" };
+const PRELEADS_DEFAULTS = { q: "", category: "All", follow: "all", sort: "created_at:desc", status: "", page: "0", size: "15" };
 
 export function PreLeadsTable({
   preLeads,
@@ -65,6 +66,10 @@ export function PreLeadsTable({
     if (ps.status) f.push({ id: "status", value: ps.status });
     return f;
   }, [ps.category, ps.status]);
+  const pagination = useMemo(
+    () => ({ pageIndex: Math.max(0, Number(ps.page) || 0), pageSize: Math.max(1, Number(ps.size) || 15) }),
+    [ps.page, ps.size]
+  );
   const [modal, setModal] = useState<Modal>({ mode: null, lead: null });
 
   // Follow-up quick filter applied BEFORE building the table.
@@ -97,7 +102,15 @@ export function PreLeadsTable({
         header: "Business",
         cell: (c) => (
           <div className="min-w-0">
-            <div className="font-semibold text-text truncate">{c.row.original.business_name}</div>
+            <div className="font-semibold text-text truncate">
+              <Link
+                href={`/pre-leads/${c.row.original.id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="hover:underline"
+              >
+                {c.row.original.business_name}
+              </Link>
+            </div>
             <div className="text-xs text-text-faint truncate">{c.row.original.owner_name ?? ""}</div>
           </div>
         ),
@@ -132,11 +145,13 @@ export function PreLeadsTable({
       {
         accessorKey: "service_type",
         header: "Service type",
+        meta: { responsiveClass: "hidden lg:table-cell" },
         cell: (c) => <span className="text-text-muted">{c.getValue<string | null>() ?? "—"}</span>,
       },
       {
         accessorKey: "pricing",
         header: "Pricing",
+        meta: { responsiveClass: "hidden xl:table-cell" },
         cell: (c) => (
           <span className="text-text font-mono whitespace-nowrap">{formatCurrency(c.getValue<number | null>())}</span>
         ),
@@ -144,6 +159,7 @@ export function PreLeadsTable({
       {
         accessorKey: "follow_up_time",
         header: "Follow-up",
+        meta: { responsiveClass: "hidden md:table-cell" },
         cell: (c) => (
           <span className="text-text-muted whitespace-nowrap">{formatDateTime(c.getValue<string | null>())}</span>
         ),
@@ -193,17 +209,21 @@ export function PreLeadsTable({
   const table = useReactTable({
     data,
     columns,
-    state: { globalFilter: ps.q, sorting, columnFilters },
+    state: { globalFilter: ps.q, sorting, columnFilters, pagination },
     onGlobalFilterChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: string) => string)(ps.q) : (updater as string);
-      setPs({ q: next ?? "" });
+      setPs({ q: next ?? "", page: "0" });
     },
     onSortingChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: SortingState) => SortingState)(sorting) : updater;
       const t = next[0];
-      setPs({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "" });
+      setPs({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "", page: "0" });
     },
     onColumnFiltersChange: () => {},
+    onPaginationChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: typeof pagination) => typeof pagination)(pagination) : updater;
+      setPs({ page: String(next.pageIndex) });
+    },
     globalFilterFn: (row, _col, value) => {
       const q = String(value).toLowerCase();
       const l = row.original;
@@ -215,7 +235,6 @@ export function PreLeadsTable({
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 15 } },
   });
 
   async function remove(lead: PreLead) {
@@ -250,7 +269,7 @@ export function PreLeadsTable({
         {["All", ...LEAD_CATEGORIES].map((tab) => (
           <button
             key={tab}
-            onClick={() => setPs({ category: tab })}
+            onClick={() => setPs({ category: tab, page: "0" })}
             className={
               "text-sm rounded-md px-3 py-1.5 font-medium transition-colors " +
               (categoryTab === tab ? "bg-accent-soft text-accent-ink" : "text-text-muted hover:bg-surface-2")
@@ -266,13 +285,13 @@ export function PreLeadsTable({
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input
           value={ps.q}
-          onChange={(e) => setPs({ q: e.target.value })}
+          onChange={(e) => setPs({ q: e.target.value, page: "0" })}
           placeholder="Search business, owner, email, phone…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
         <Select
           value={followFilter}
-          onChange={(e) => setPs({ follow: e.target.value })}
+          onChange={(e) => setPs({ follow: e.target.value, page: "0" })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="all">All follow-ups</option>
@@ -281,7 +300,7 @@ export function PreLeadsTable({
         </Select>
         <Select
           value={ps.status}
-          onChange={(e) => setPs({ status: e.target.value })}
+          onChange={(e) => setPs({ status: e.target.value, page: "0" })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="">All statuses</option>
@@ -306,7 +325,8 @@ export function PreLeadsTable({
                       onClick={h.column.getCanSort() ? h.column.getToggleSortingHandler() : undefined}
                       className={
                         "text-left text-[10px] uppercase tracking-wide text-text-faint font-semibold px-4 py-3 whitespace-nowrap " +
-                        (h.column.getCanSort() ? "cursor-pointer select-none hover:text-text-muted" : "")
+                        (h.column.getCanSort() ? "cursor-pointer select-none hover:text-text-muted" : "") +
+                        " " + (h.column.columnDef.meta?.responsiveClass ?? "")
                       }
                     >
                       {flexRender(h.column.columnDef.header, h.getContext())}
@@ -327,11 +347,10 @@ export function PreLeadsTable({
                 rows.map((row) => (
                   <tr
                     key={row.id}
-                    onClick={() => router.push(`/pre-leads/${row.original.id}`)}
-                    className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group cursor-pointer"
+                    className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group"
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="px-4 py-2.5 align-middle max-w-[260px]">
+                      <td key={cell.id} className={"px-4 py-2.5 align-middle max-w-[260px] " + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
@@ -344,29 +363,44 @@ export function PreLeadsTable({
       </div>
 
       {/* pagination */}
-      {table.getPageCount() > 1 && (
-        <div className="flex items-center justify-between mt-3 text-sm text-text-muted">
-          <span className="font-mono text-xs">
-            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => table.previousPage()}
-              disabled={!table.getCanPreviousPage()}
-              className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => table.nextPage()}
-              disabled={!table.getCanNextPage()}
-              className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40"
-            >
-              Next
-            </button>
+      <div className="flex flex-wrap items-center justify-between gap-3 mt-3 text-sm text-text-muted">
+        <label className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+          Rows per page
+          <Select
+            value={ps.size}
+            onChange={(e) => setPs({ size: e.target.value, page: "0" })}
+            className="px-2 py-1 rounded-md border border-border bg-surface text-sm text-text-muted"
+          >
+            <option value="15">15</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </Select>
+        </label>
+        {table.getPageCount() > 1 && (
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-xs">
+              Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => table.previousPage()}
+                disabled={!table.getCanPreviousPage()}
+                className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => table.nextPage()}
+                disabled={!table.getCanNextPage()}
+                className="px-3 py-1.5 rounded-md border border-border hover:bg-surface-2 disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {modal.mode === "follow" && modal.lead && (
         <FollowUpModal preLead={modal.lead} open={true} onClose={() => setModal({ mode: null, lead: null })} />

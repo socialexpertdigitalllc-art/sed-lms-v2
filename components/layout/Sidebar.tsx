@@ -83,7 +83,7 @@ export function Sidebar({
   function onLeave() {
     if (pinned) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setHovering(false), 5000);
+    timer.current = setTimeout(() => setHovering(false), 1000);
   }
 
   const mainVisible = MAIN.filter((n) => (n.perm ? has(n.perm) : true));
