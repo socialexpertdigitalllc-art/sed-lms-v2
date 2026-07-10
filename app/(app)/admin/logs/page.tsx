@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { getAppSettings, logoPublicUrl } from "@/lib/settings/appSettings";
+import { getAppSettings } from "@/lib/settings/appSettings";
 import { LogsViewer } from "@/components/admin/LogsViewer";
 
 export default async function LogsPage() {
@@ -38,8 +38,6 @@ export default async function LogsPage() {
   const nameById: Record<string, string> = {};
   for (const p of profiles ?? []) nameById[p.id] = p.display_name ?? p.id;
 
-  const canManageSettings = perms.has("admin.settings.manage");
-
   return (
     <LogsViewer
       audit={audit ?? []}
@@ -47,8 +45,6 @@ export default async function LogsPage() {
       nameById={nameById}
       sessions={sessions ?? []}
       settings={settings}
-      logoUrl={logoPublicUrl(settings.logo_path)}
-      canManageSettings={canManageSettings}
     />
   );
 }

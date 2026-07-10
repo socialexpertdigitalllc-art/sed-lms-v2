@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import { formatDateTime } from "@/lib/leads/format";
 import { summarize } from "@/lib/signin/analytics";
-import { AppSettingsCard } from "@/components/admin/AppSettingsCard";
 import type { AppSettings } from "@/lib/settings/appSettings";
 
 type Audit = { id: string; user_id: string | null; action: string; entity_type: string | null; entity_id: string | null; old_value: unknown; new_value: unknown; created_at: string };
@@ -17,16 +16,12 @@ export function LogsViewer({
   nameById,
   sessions,
   settings,
-  logoUrl,
-  canManageSettings,
 }: {
   audit: Audit[];
   activity: Activity[];
   nameById: Record<string, string>;
   sessions: Session[];
   settings: AppSettings;
-  logoUrl: string | null;
-  canManageSettings: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("movement");
   const [q, setQ] = useState("");
@@ -87,12 +82,6 @@ export function LogsViewer({
 
       {tab === "signin" ? (
         <div>
-          {canManageSettings && (
-            <div className="mb-4">
-              <AppSettingsCard initial={settings} initialLogoUrl={logoUrl} />
-            </div>
-          )}
-
           <div className="bg-surface border border-border rounded-lg p-4 mb-4">
             <div className="text-[10px] uppercase tracking-wide text-text-faint mb-2">Online now</div>
             {online.length === 0 ? (

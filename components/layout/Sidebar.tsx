@@ -7,6 +7,7 @@ import {
   LayoutDashboard, Building2, PhoneCall, Ticket, BarChart3, MessageSquare,
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
+  Settings,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -43,6 +44,7 @@ const AI_TOOLS: NavItemAny[] = [
 ];
 
 const ADMIN: NavItem[] = [
+  { href: "/admin/settings", label: "Settings", icon: Settings, perm: "admin.settings.manage" },
   { href: "/admin/users", label: "Users", icon: Users, perm: "admin.users.view" },
   { href: "/admin/departments", label: "Departments", icon: Building, perm: "admin.departments.manage" },
   { href: "/admin/permissions", label: "Permissions", icon: ShieldCheck, perm: "admin.permissions.manage" },
