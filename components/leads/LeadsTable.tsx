@@ -29,8 +29,10 @@ import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
 import { RegionFilter } from "./RegionFilter";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { useUrlState } from "@/hooks/useUrlState";
+import { MonthFilter } from "@/components/common/MonthFilter";
+import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", sort: "created_at:desc", page: "0" };
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
 
 export function LeadsTable({
@@ -66,6 +68,8 @@ export function LeadsTable({
 
   const [urlState, setUrlState] = useUrlState(LEADS_DEFAULTS);
   const { q, status, agent, type, sort, page } = urlState;
+  const canScopeMonth = has("analytics.view_all_agents");
+  const month = canScopeMonth ? urlState.month : "";
   const regionSel = useMemo(() => (urlState.region ? urlState.region.split(",") : []), [urlState.region]);
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
@@ -81,20 +85,22 @@ export function LeadsTable({
     return f;
   }, [status, agent, type, regionSel]);
 
+  const scopedLeads = useMemo(() => leads.filter((l) => inMonth(l.created_at, month)), [leads, month]);
+
   const statusCounts = useMemo(() => {
-    const c: Record<string, number> = { All: leads.length };
+    const c: Record<string, number> = { All: scopedLeads.length };
     for (const s of visible) c[s] = 0;
-    for (const l of leads) if (l.status in c) c[l.status]++;
+    for (const l of scopedLeads) if (l.status in c) c[l.status]++;
     return c;
-  }, [leads, visible]);
+  }, [scopedLeads, visible]);
 
   const agentOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const l of leads) set.add((l.agent_id && agentNameById[l.agent_id]) || "Unassigned");
+    for (const l of scopedLeads) set.add((l.agent_id && agentNameById[l.agent_id]) || "Unassigned");
     return [...set].sort();
-  }, [leads, agentNameById]);
+  }, [scopedLeads, agentNameById]);
 
-  const regionFacets = useMemo(() => buildRegionFacets(leads), [leads]);
+  const regionFacets = useMemo(() => buildRegionFacets(scopedLeads), [scopedLeads]);
 
   const columns = useMemo<ColumnDef<Lead>[]>(
     () => [
@@ -230,7 +236,7 @@ export function LeadsTable({
   );
 
   const table = useReactTable({
-    data: leads,
+    data: scopedLeads,
     columns,
     state: { globalFilter: q, sorting, columnFilters, pagination },
     onGlobalFilterChange: (updater) => {
@@ -270,7 +276,7 @@ export function LeadsTable({
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-semibold text-text">Leads</h1>
-          <p className="text-sm text-text-muted mt-0.5">{filteredCount} of {leads.length} shown</p>
+          <p className="text-sm text-text-muted mt-0.5">{filteredCount} of {scopedLeads.length} shown</p>
         </div>
         {canCreate && (
           <Link href="/leads/new" className="bg-accent text-white rounded-md px-4 py-2 text-sm font-semibold hover:bg-accent-ink transition-colors">
@@ -321,6 +327,7 @@ export function LeadsTable({
           {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(","), page: "0" })} />
+        {canScopeMonth && <MonthFilter options={monthOptions(leads)} value={month} onChange={(v) => setUrlState({ month: v, page: "0" })} />}
         <select
           value={sort}
           onChange={(e) => setUrlState({ sort: e.target.value, page: "0" })}

@@ -53,6 +53,7 @@ export default async function DashboardPage() {
       visible={visible}
       facets={facets}
       now={new Date().toISOString()}
+      canScopeMonth={perms.has("analytics.view_all_agents")}
     />
   );
 }

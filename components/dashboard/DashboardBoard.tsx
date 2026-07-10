@@ -27,8 +27,11 @@ import {
 import { computeExtendedKpis, revenueByStatus, ticketStatusSplit } from "@/lib/dashboard/metrics";
 import type { dashboardVisibility } from "@/lib/dashboard/visibility";
 import type { Lead } from "@/lib/leads/types";
-import { leadRegion, filterLeadsByRegions, type RegionFacet } from "@/lib/geo/regions";
+import { filterLeadsByRegions, type RegionFacet } from "@/lib/geo/regions";
 import { RegionScopeBar } from "@/components/dashboard/RegionScopeBar";
+import { useUrlState } from "@/hooks/useUrlState";
+import { MonthFilter } from "@/components/common/MonthFilter";
+import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 
 type FollowUpRow = { fu_status: string; lead_id: string | null };
 type TicketRow = {
@@ -48,6 +51,8 @@ function ChartCard({ title, children, className = "" }: { title: string; childre
   );
 }
 
+const DASH_DEFAULTS = { month: "" };
+
 export function DashboardBoard({
   leads,
   followUps,
@@ -57,6 +62,7 @@ export function DashboardBoard({
   visible,
   facets,
   now,
+  canScopeMonth,
 }: {
   leads: Lead[];
   followUps: FollowUpRow[];
@@ -66,30 +72,28 @@ export function DashboardBoard({
   visible: string[];
   facets: RegionFacet[];
   now: string;
+  canScopeMonth: boolean;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const selSet = useMemo(() => new Set(selected), [selected]);
 
-  const regionByLead = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const l of leads) m.set(l.id, leadRegion(l));
-    return m;
-  }, [leads]);
+  const [dashUrl, setDashUrl] = useUrlState(DASH_DEFAULTS);
+  const month = canScopeMonth ? dashUrl.month : "";
+  const monthOpts = useMemo(() => monthOptions(leads), [leads]);
+  const scoping = selSet.size > 0 || month !== "";
 
-  const fLeads = useMemo(() => filterLeadsByRegions(leads, selSet), [leads, selSet]);
+  const fLeads = useMemo(
+    () => filterLeadsByRegions(leads, selSet).filter((l) => inMonth(l.created_at, month)),
+    [leads, selSet, month]
+  );
+  const scopedIds = useMemo(() => new Set(fLeads.map((l) => l.id)), [fLeads]);
   const fFollowUps = useMemo(
-    () =>
-      selSet.size === 0
-        ? followUps
-        : followUps.filter((f) => selSet.has(regionByLead.get(f.lead_id ?? "") ?? "Unknown")),
-    [followUps, selSet, regionByLead]
+    () => (!scoping ? followUps : followUps.filter((f) => scopedIds.has(f.lead_id ?? ""))),
+    [followUps, scoping, scopedIds]
   );
   const fTickets = useMemo(
-    () =>
-      selSet.size === 0
-        ? tickets
-        : tickets.filter((t) => selSet.has(regionByLead.get(t.lead_id ?? "") ?? "Unknown")),
-    [tickets, selSet, regionByLead]
+    () => (!scoping ? tickets : tickets.filter((t) => scopedIds.has(t.lead_id ?? ""))),
+    [tickets, scoping, scopedIds]
   );
 
   const kpis = computeKpis(fLeads);
@@ -106,7 +110,10 @@ export function DashboardBoard({
 
   return (
     <div className="space-y-5">
-      <RegionScopeBar facets={facets} selected={selected} onChange={setSelected} />
+      <div className="flex flex-wrap items-center gap-2">
+        {canScopeMonth && <MonthFilter options={monthOpts} value={month} onChange={(v) => setDashUrl({ month: v })} />}
+        <RegionScopeBar facets={facets} selected={selected} onChange={setSelected} />
+      </div>
 
       <div>
         <h1 className="text-xl font-semibold text-text">Dashboard</h1>
