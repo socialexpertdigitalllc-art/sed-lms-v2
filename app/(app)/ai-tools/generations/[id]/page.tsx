@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { TOOLS } from "@/lib/ai-tools/config";
@@ -48,7 +49,9 @@ export default async function GenerationDetail({ params }: { params: Promise<{ i
 
   return (
     <div>
-      <Link href="/ai-tools/analytics" className="text-xs text-text-muted hover:text-text">← AI Tools analytics</Link>
+      <Link href="/ai-tools/analytics" className="text-xs text-text-muted hover:text-text inline-flex items-center gap-1">
+        <ArrowLeft className="w-4 h-4" /> AI Tools analytics
+      </Link>
       <div className="flex items-center gap-2 mt-2 mb-4">
         <span className="w-2.5 h-2.5 rounded-full" style={{ background: cfg?.accent ?? "#888" }} />
         <h1 className="text-xl font-semibold text-text truncate">{gen.business_name ?? "Untitled generation"}</h1>

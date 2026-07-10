@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Zap, RotateCw, ArrowLeft, ArrowRight, Download, CheckCircle2 } from "lucide-react";
 import { TOOLS, type ToolId } from "@/lib/ai-tools/config";
 import { buildPrompt, EMPTY_INPUT, type GenInput } from "@/lib/ai-tools/prompt";
 import type { WgeConfig, WgeVariable } from "@/lib/ai-tools/wge-types";
@@ -212,9 +213,9 @@ export function Generator({
                 rebuildPrompt();
                 setStep(2);
               }}
-              className="text-sm px-4 py-2 rounded-md bg-accent text-white font-semibold hover:bg-accent-ink"
+              className="text-sm px-4 py-2 rounded-md bg-accent text-white font-semibold hover:bg-accent-ink inline-flex items-center gap-1.5"
             >
-              Build prompt →
+              Build prompt <ArrowRight className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -267,8 +268,8 @@ export function Generator({
                 {promptStats.chars.toLocaleString()} chars · {promptStats.words.toLocaleString()} words · ~
                 {promptStats.tokens.toLocaleString()} tokens
               </div>
-              <button onClick={rebuildPrompt} className="text-xs text-accent-ink hover:underline">
-                ↻ Rebuild from details
+              <button onClick={rebuildPrompt} className="text-xs text-accent-ink hover:underline inline-flex items-center gap-1.5">
+                <RotateCw className="w-4 h-4" /> Rebuild from details
               </button>
             </div>
             <textarea
@@ -283,15 +284,15 @@ export function Generator({
           </Card>
 
           <div className="flex justify-between gap-2">
-            <button onClick={() => setStep(1)} className="text-sm px-4 py-2 rounded-md border border-border text-text-muted hover:bg-surface-2">
-              ← Back
+            <button onClick={() => setStep(1)} className="text-sm px-4 py-2 rounded-md border border-border text-text-muted hover:bg-surface-2 inline-flex items-center gap-1.5">
+              <ArrowLeft className="w-4 h-4" /> Back
             </button>
             <button
               onClick={generate}
               disabled={prompt.trim().length < 20}
-              className="text-sm px-5 py-2 rounded-md bg-accent text-white font-semibold hover:bg-accent-ink disabled:opacity-60"
+              className="text-sm px-5 py-2 rounded-md bg-accent text-white font-semibold hover:bg-accent-ink disabled:opacity-60 inline-flex items-center gap-1.5"
             >
-              ⚡ Generate website
+              <Zap className="w-4 h-4" /> Generate website
             </button>
           </div>
         </div>
@@ -308,7 +309,9 @@ export function Generator({
                   Streaming from {model}…
                 </span>
               ) : files.length ? (
-                <span className="text-ready-fg font-medium">✓ {files.length} page(s) generated</span>
+                <span className="text-ready-fg font-medium inline-flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> {files.length} page(s) generated
+                </span>
               ) : (
                 <span className="text-text-muted">Ready</span>
               )}
@@ -323,8 +326,8 @@ export function Generator({
               )}
               {!generating && files.length > 0 && (
                 <>
-                  <button onClick={() => downloadZip()} className="text-sm px-3 py-2 rounded-md border border-border text-text hover:bg-surface-2">
-                    ↓ Download ZIP
+                  <button onClick={() => downloadZip()} className="text-sm px-3 py-2 rounded-md border border-border text-text hover:bg-surface-2 inline-flex items-center gap-1.5">
+                    <Download className="w-4 h-4" /> Download ZIP
                   </button>
                   <button onClick={() => setStep(2)} className="text-sm px-3 py-2 rounded-md border border-border text-text-muted hover:bg-surface-2">
                     Edit & regenerate

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { Download, ArrowUp, ArrowDown } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -323,8 +324,8 @@ export function LeadsTable({
           <option value="name_asc">Alphabetical</option>
         </select>
         {canExport && (
-          <button onClick={exportCsv} className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted hover:bg-surface-2 whitespace-nowrap">
-            ↓ Export CSV
+          <button onClick={exportCsv} className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted hover:bg-surface-2 whitespace-nowrap inline-flex items-center gap-1.5">
+            <Download className="w-4 h-4" /> Export CSV
           </button>
         )}
       </div>
@@ -346,7 +347,7 @@ export function LeadsTable({
                       }
                     >
                       {flexRender(h.column.columnDef.header, h.getContext())}
-                      {{ asc: " ↑", desc: " ↓" }[h.column.getIsSorted() as string] ?? ""}
+                      {h.column.getIsSorted() === "asc" ? <ArrowUp className="inline w-3 h-3 ml-0.5" /> : h.column.getIsSorted() === "desc" ? <ArrowDown className="inline w-3 h-3 ml-0.5" /> : null}
                     </th>
                   ))}
                 </tr>

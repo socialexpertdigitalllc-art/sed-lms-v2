@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Check } from "lucide-react";
 import { PAYMENT_CATEGORIES, type PaymentCategory, type PaymentLink } from "@/lib/payments/types";
 import { groupLinks } from "@/lib/payments/board";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
@@ -112,7 +112,13 @@ export function PaymentLinksBoard({
           onClick={() => doCopy(l)}
           className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-ink whitespace-nowrap min-w-[84px] text-center"
         >
-          {copiedId === l.id ? "Copied ✓" : "Copy"}
+          {copiedId === l.id ? (
+            <span className="inline-flex items-center gap-1">
+              <Check className="w-3.5 h-3.5" /> Copied
+            </span>
+          ) : (
+            "Copy"
+          )}
         </button>
         <a
           href={l.url}

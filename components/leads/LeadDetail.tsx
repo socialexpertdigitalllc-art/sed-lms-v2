@@ -65,7 +65,7 @@ export function LeadDetail({
     });
     setQueuing(false);
     const j = await res.json().catch(() => ({}));
-    setQueueMsg(res.ok ? "Queued for generation ✓" : (j.error ?? "Could not queue"));
+    setQueueMsg(res.ok ? "Queued for generation" : (j.error ?? "Could not queue"));
   }
 
   /** PATCH a single field; throws so FieldRow surfaces the error and stays in edit. */

@@ -13,6 +13,7 @@ import {
   Star,
   ArrowLeft,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 import { SITE_TYPES, type AddOn } from "@/lib/leads/types";
 import { settableStatuses } from "@/lib/leads/categories";
@@ -260,7 +261,7 @@ export function NewLeadForm({
   const dupBanner = hasDup && (
     <div className="mb-3 rounded-lg border border-dropped-fg/20 bg-dropped-bg px-3 py-2.5 text-xs text-dropped-fg">
       <p>
-        ⚠ Possible duplicate — matching{" "}
+        <AlertTriangle className="w-3.5 h-3.5 shrink-0 inline" /> Possible duplicate — matching{" "}
         {collisions.map((c) => c.field.replace("_", " ")).join(", ")} found in the system.
       </p>
       {canOverrideDuplicate && (
@@ -359,7 +360,7 @@ export function NewLeadForm({
                 <input value={f.business_name} onChange={(e) => set("business_name", e.target.value)} placeholder="Enter business name" className={inputCls} autoFocus />
                 {dupBy("business_name") && (
                   <p className="mt-1 text-[11px] text-dropped-fg">
-                    ⚠{" "}
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 inline" />{" "}
                     {dupBy("business_name")!.isOwn
                       ? "You already have a lead with this business name."
                       : `This business name belongs to a lead owned by ${dupBy("business_name")!.ownerDisplayName ?? "another agent"}.`}
@@ -370,7 +371,7 @@ export function NewLeadForm({
                 <input type="tel" value={f.business_phone} onChange={(e) => set("business_phone", formatPhone(e.target.value))} placeholder="(252) 401-2775" maxLength={14} className={inputCls} />
                 {dupBy("phone") && (
                   <p className="mt-1 text-[11px] text-dropped-fg">
-                    ⚠{" "}
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 inline" />{" "}
                     {dupBy("phone")!.isOwn
                       ? "You already have a lead with this phone number."
                       : `This phone number belongs to a lead owned by ${dupBy("phone")!.ownerDisplayName ?? "another agent"}.`}
@@ -401,7 +402,7 @@ export function NewLeadForm({
                 </label>
                 {dupBy("email") && (
                   <p className="mt-1 text-[11px] text-dropped-fg">
-                    ⚠{" "}
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 inline" />{" "}
                     {dupBy("email")!.isOwn
                       ? "You already have a lead with this email."
                       : `This email belongs to a lead owned by ${dupBy("email")!.ownerDisplayName ?? "another agent"}.`}

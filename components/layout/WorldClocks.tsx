@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 
 const COMMON_ZONES = [
   "America/Los_Angeles",
@@ -144,7 +145,7 @@ export function WorldClocks() {
                   aria-label={`Remove ${zoneLabel(zone)}`}
                   className="text-text-faint hover:text-dropped-fg text-sm leading-none px-1"
                 >
-                  ✕
+                  <X className="w-4 h-4" />
                 </button>
               </div>
             </li>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { Inbox } from "lucide-react";
 import type { AppNotification, NotifyBell } from "@/lib/notifications/types";
 import { formatDateTime } from "@/lib/leads/format";
 import { createClient } from "@/lib/supabase/client";
@@ -134,7 +135,10 @@ export function BellBase({
           </div>
 
           {count === 0 ? (
-            <div className="px-4 py-6 text-sm text-text-muted text-center">You&apos;re all caught up. 🎉</div>
+            <div className="px-4 py-6 text-sm text-text-muted text-center flex flex-col items-center gap-2">
+              <Inbox className="w-6 h-6 text-text-faint" />
+              <span>You&apos;re all caught up.</span>
+            </div>
           ) : (
             <div className="max-h-96 overflow-y-auto">
               <ul className="pb-1">

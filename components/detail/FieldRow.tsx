@@ -1,15 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Pencil, Copy, Check, X, ExternalLink } from "lucide-react";
+import { Pencil, Copy, Check, X, ExternalLink, AlertTriangle } from "lucide-react";
 
 export type FieldType = "text" | "number" | "url" | "textarea" | "datetime" | "select";
 export type SelectOption = { value: string; label: string };
 
 /**
  * A single labelled datum shown as plain text, with per-field Copy and (optional)
- * inline Edit. Edit swaps the text for the right control with ✓ save / ✕ cancel;
- * saving calls `onSave(nextRawString)` — the caller maps it to the API payload.
+ * inline Edit. Edit swaps the text for the right control with a Check-to-save /
+ * X-to-cancel button pair; saving calls `onSave(nextRawString)` — the caller
+ * maps it to the API payload.
  */
 export function FieldRow({
   label,
@@ -114,7 +115,11 @@ export function FieldRow({
                 className={inputCls}
               />
             )}
-            {error && <p className="mt-1 text-[11px] text-dropped-fg">⚠ {error}</p>}
+            {error && (
+              <p className="mt-1 text-[11px] text-dropped-fg flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {error}
+              </p>
+            )}
           </div>
           <button
             type="button"

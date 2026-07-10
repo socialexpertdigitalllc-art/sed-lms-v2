@@ -1,3 +1,5 @@
+import { AlertTriangle } from "lucide-react";
+
 export function Field({
   label,
   required,
@@ -21,7 +23,11 @@ export function Field({
       </label>
       {children}
       {hint && !error && <p className="text-[11px] text-text-faint mt-1">{hint}</p>}
-      {error && <p className="text-[11px] text-dropped-fg mt-1">⚠ {error}</p>}
+      {error && (
+        <p className="text-[11px] text-dropped-fg mt-1 flex items-center gap-1">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {error}
+        </p>
+      )}
     </div>
   );
 }

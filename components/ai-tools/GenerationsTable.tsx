@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { ArrowUp, ArrowDown } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -162,7 +163,7 @@ export function GenerationsTable({
                       }
                     >
                       {flexRender(h.column.columnDef.header, h.getContext())}
-                      {{ asc: " ↑", desc: " ↓" }[h.column.getIsSorted() as string] ?? ""}
+                      {h.column.getIsSorted() === "asc" ? <ArrowUp className="inline w-3 h-3 ml-0.5" /> : h.column.getIsSorted() === "desc" ? <ArrowDown className="inline w-3 h-3 ml-0.5" /> : null}
                     </th>
                   ))}
                 </tr>

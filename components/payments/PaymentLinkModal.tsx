@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { AlertTriangle } from "lucide-react";
 import { PAYMENT_CATEGORIES, type PaymentCategory, type PaymentLink } from "@/lib/payments/types";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { inputCls } from "@/components/forms/Field";
@@ -112,7 +113,11 @@ export function PaymentLinkModal({
               onChange={(e) => setLabel(e.target.value)}
               placeholder="Website $250"
             />
-            {fieldErrors.label && <p className="text-[11px] text-dropped-fg mt-1">⚠ {fieldErrors.label}</p>}
+            {fieldErrors.label && (
+              <p className="text-[11px] text-dropped-fg mt-1 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {fieldErrors.label}
+              </p>
+            )}
           </div>
 
           <div>
@@ -126,7 +131,11 @@ export function PaymentLinkModal({
               onChange={(e) => setAmount(e.target.value)}
               placeholder="250"
             />
-            {fieldErrors.amount && <p className="text-[11px] text-dropped-fg mt-1">⚠ {fieldErrors.amount}</p>}
+            {fieldErrors.amount && (
+              <p className="text-[11px] text-dropped-fg mt-1 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {fieldErrors.amount}
+              </p>
+            )}
           </div>
 
           <div>
@@ -147,7 +156,11 @@ export function PaymentLinkModal({
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://buy.stripe.com/…"
             />
-            {fieldErrors.url && <p className="text-[11px] text-dropped-fg mt-1">⚠ {fieldErrors.url}</p>}
+            {fieldErrors.url && (
+              <p className="text-[11px] text-dropped-fg mt-1 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {fieldErrors.url}
+              </p>
+            )}
           </div>
 
           <div>

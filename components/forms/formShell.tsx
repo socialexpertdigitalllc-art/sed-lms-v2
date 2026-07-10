@@ -1,4 +1,4 @@
-import { Check } from "lucide-react";
+import { Check, AlertTriangle } from "lucide-react";
 import { Field } from "./Field";
 
 /** Field wrapper that flags itself for scroll-to-first-error (stable identity). */
@@ -16,7 +16,11 @@ export function FieldBlock({
 /** Inline error line for controls that live outside a direct Field child. */
 export function FieldError({ error }: { error?: string }) {
   if (!error) return null;
-  return <p className="text-[11px] text-dropped-fg mt-1">⚠ {error}</p>;
+  return (
+    <p className="text-[11px] text-dropped-fg mt-1 flex items-center gap-1">
+      <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {error}
+    </p>
+  );
 }
 
 /** A numbered, iconed section card with a completion state and staggered reveal. */

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Briefcase, Building2, CalendarClock, ArrowLeft, Check } from "lucide-react";
+import { Briefcase, Building2, CalendarClock, ArrowLeft, Check, AlertTriangle } from "lucide-react";
 import {
   LEAD_CATEGORIES,
   SERVICE_OFFERED,
@@ -120,7 +120,7 @@ export function AddPreLeadForm({ canOverrideDuplicate }: { canOverrideDuplicate:
   const dupBanner = hasDup && (
     <div className="mb-3 rounded-lg border border-dropped-fg/20 bg-dropped-bg px-3 py-2.5 text-xs text-dropped-fg">
       <p>
-        ⚠ Possible duplicate — matching{" "}
+        <AlertTriangle className="w-3.5 h-3.5 shrink-0 inline" /> Possible duplicate — matching{" "}
         {collisions.map((c) => c.field.replace("_", " ")).join(", ")} found in the system.
       </p>
       {canOverrideDuplicate && (
@@ -220,7 +220,7 @@ export function AddPreLeadForm({ canOverrideDuplicate }: { canOverrideDuplicate:
                 <input value={f.business_name} onChange={(e) => set("business_name", e.target.value)} placeholder="Legal business name" className={inputCls} autoFocus />
                 {dupBy("business_name") && (
                   <p className="mt-1 text-[11px] text-dropped-fg">
-                    ⚠{" "}
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 inline" />{" "}
                     {dupBy("business_name")!.isOwn
                       ? "You already have a pre-lead with this business name."
                       : `This business name belongs to a pre-lead owned by ${dupBy("business_name")!.ownerDisplayName ?? "another agent"}.`}
@@ -231,7 +231,7 @@ export function AddPreLeadForm({ canOverrideDuplicate }: { canOverrideDuplicate:
                 <input type="tel" value={f.phone_number} onChange={(e) => set("phone_number", formatPhone(e.target.value))} placeholder="(252) 401-2775" maxLength={14} className={inputCls} />
                 {dupBy("phone") && (
                   <p className="mt-1 text-[11px] text-dropped-fg">
-                    ⚠{" "}
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 inline" />{" "}
                     {dupBy("phone")!.isOwn
                       ? "You already have a pre-lead with this phone number."
                       : `This phone number belongs to a pre-lead owned by ${dupBy("phone")!.ownerDisplayName ?? "another agent"}.`}
@@ -242,7 +242,7 @@ export function AddPreLeadForm({ canOverrideDuplicate }: { canOverrideDuplicate:
                 <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="contact@business.com" className={inputCls} />
                 {dupBy("email") && (
                   <p className="mt-1 text-[11px] text-dropped-fg">
-                    ⚠{" "}
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 inline" />{" "}
                     {dupBy("email")!.isOwn
                       ? "You already have a pre-lead with this email."
                       : `This email belongs to a pre-lead owned by ${dupBy("email")!.ownerDisplayName ?? "another agent"}.`}

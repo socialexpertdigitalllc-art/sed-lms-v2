@@ -1,5 +1,6 @@
 "use client";
 
+import { X } from "lucide-react";
 import { inputCls } from "./Field";
 
 export function DynamicList({
@@ -38,9 +39,9 @@ export function DynamicList({
             <button
               type="button"
               onClick={() => removeAt(i)}
-              className="text-xs text-text-muted border border-border rounded-md px-2.5 py-2 hover:bg-dropped-bg hover:text-dropped-fg whitespace-nowrap"
+              className="text-xs text-text-muted border border-border rounded-md px-2.5 py-2 hover:bg-dropped-bg hover:text-dropped-fg whitespace-nowrap inline-flex items-center gap-1"
             >
-              ✕ Remove
+              <X className="w-4 h-4" /> Remove
             </button>
           )}
         </div>
