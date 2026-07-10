@@ -22,14 +22,16 @@ export default async function AppLayout({
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("display_name")
+    .select("display_name, ui_preferences")
     .eq("id", user.id)
     .single();
+
+  const sidebarPinned = (profile?.ui_preferences as { sidebarPinned?: boolean } | null)?.sidebarPinned ?? false;
 
   return (
     <PermissionProvider value={[...perms]}>
       <ActivityTracker />
-      <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding}>
+      <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
         {children}
       </AppShell>
     </PermissionProvider>
