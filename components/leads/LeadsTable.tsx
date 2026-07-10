@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   useReactTable,
@@ -25,6 +25,8 @@ import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
+import { RegionFilter } from "./RegionFilter";
+import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 
 const SORTS: Record<string, { id: string; desc: boolean }> = {
   created_desc: { id: "created_at", desc: true },
@@ -68,6 +70,7 @@ export function LeadsTable({
   const [statusTab, setStatusTab] = useState<string>("All");
   const [modalLead, setModalLead] = useState<Lead | null>(null);
   const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
+  const [regionSel, setRegionSel] = useState<string[]>([]);
 
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = { All: leads.length };
@@ -81,6 +84,8 @@ export function LeadsTable({
     for (const l of leads) set.add((l.agent_id && agentNameById[l.agent_id]) || "Unassigned");
     return [...set].sort();
   }, [leads, agentNameById]);
+
+  const regionFacets = useMemo(() => buildRegionFacets(leads), [leads]);
 
   const columns = useMemo<ColumnDef<Lead>[]>(
     () => [
@@ -114,6 +119,12 @@ export function LeadsTable({
         header: "Type",
         filterFn: "equalsString",
         cell: (c) => <span className="text-text-muted">{c.getValue<string>() ?? "—"}</span>,
+      },
+      {
+        id: "region",
+        accessorFn: (row) => leadRegion(row),
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
+        enableSorting: false,
       },
       {
         accessorKey: "business_name",
@@ -227,8 +238,12 @@ export function LeadsTable({
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 15 } },
+    initialState: { pagination: { pageSize: 15 }, columnVisibility: { region: false } },
   });
+
+  useEffect(() => {
+    table.getColumn("region")?.setFilterValue(regionSel.length ? regionSel : undefined);
+  }, [regionSel, table]);
 
   function selectStatus(tab: string) {
     setStatusTab(tab);
@@ -292,6 +307,7 @@ export function LeadsTable({
           <option value="">All types</option>
           {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
+        <RegionFilter facets={regionFacets} selected={regionSel} onChange={setRegionSel} />
         <select
           value={sortKey}
           onChange={(e) => {
