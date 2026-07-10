@@ -12,6 +12,7 @@ import {
   flexRender,
   type ColumnDef,
   type SortingState,
+  type VisibilityState,
 } from "@tanstack/react-table";
 import { formatDateTime, initials } from "@/lib/leads/format";
 import { TOOLS } from "@/lib/ai-tools/config";
@@ -19,6 +20,9 @@ import type { AiGeneration } from "@/lib/ai-tools/types";
 import { useUrlState } from "@/hooks/useUrlState";
 import { serialColumn } from "@/components/common/tableSerial";
 import { Select } from "@/components/common/Select";
+import { useUiPrefs } from "@/providers/UiPrefsProvider";
+import { DensityToggle } from "@/components/common/DensityToggle";
+import { ColumnsMenu } from "@/components/common/ColumnsMenu";
 import "@/lib/tables/columnMeta";
 
 const GEN_DEFAULTS = { q: "", sort: "created_at:desc", page: "0", size: "15" };
@@ -33,6 +37,7 @@ export function GenerationsTable({
   agentNameById: Record<string, string>;
 }) {
   const [gs, setGs] = useUrlState(GEN_DEFAULTS);
+  const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = gs.sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
@@ -42,6 +47,7 @@ export function GenerationsTable({
     () => ({ pageIndex: Math.max(0, Number(gs.page) || 0), pageSize: Math.max(1, Number(gs.size) || 15) }),
     [gs.page, gs.size]
   );
+  const columnVisibility = useMemo<VisibilityState>(() => columnPrefs.generations ?? {}, [columnPrefs]);
 
   const data = useMemo<Row[]>(
     () => rows.map((r) => ({ ...r, agentName: (r.agent_id && agentNameById[r.agent_id]) || "Unknown" })),
@@ -50,7 +56,7 @@ export function GenerationsTable({
 
   const columns = useMemo<ColumnDef<Row>[]>(
     () => [
-      serialColumn<Row>(),
+      { ...serialColumn<Row>(), enableHiding: false },
       {
         accessorKey: "created_at",
         header: "Date",
@@ -136,6 +142,7 @@ export function GenerationsTable({
         id: "actions",
         header: "",
         enableSorting: false,
+        enableHiding: false,
         cell: (c) => (
           <Link href={`/ai-tools/generations/${c.row.original.id}`} className="text-xs font-medium text-accent-ink px-2 py-1 rounded hover:bg-accent-soft whitespace-nowrap">
             View
@@ -149,7 +156,7 @@ export function GenerationsTable({
   const table = useReactTable({
     data,
     columns,
-    state: { globalFilter: gs.q, sorting, pagination },
+    state: { globalFilter: gs.q, sorting, pagination, columnVisibility },
     onGlobalFilterChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: string) => string)(gs.q) : (updater as string);
       setGs({ q: next ?? "", page: "0" });
@@ -158,6 +165,10 @@ export function GenerationsTable({
       const next = typeof updater === "function" ? (updater as (o: SortingState) => SortingState)(sorting) : updater;
       const t = next[0];
       setGs({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "", page: "0" });
+    },
+    onColumnVisibilityChange: (updater) => {
+      const next = typeof updater === "function" ? updater(columnVisibility) : updater;
+      setTableColumns("generations", next);
     },
     onPaginationChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: typeof pagination) => typeof pagination)(pagination) : updater;
@@ -178,12 +189,16 @@ export function GenerationsTable({
 
   return (
     <div>
-      <input
-        value={gs.q}
-        onChange={(e) => setGs({ q: e.target.value, page: "0" })}
-        placeholder="Search business, agent, model…"
-        className="w-full mb-3 px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
-      />
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <input
+          value={gs.q}
+          onChange={(e) => setGs({ q: e.target.value, page: "0" })}
+          placeholder="Search business, agent, model…"
+          className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
+        />
+        <DensityToggle />
+        <ColumnsMenu table={table} />
+      </div>
       <div className="bg-surface border border-border rounded-lg overflow-hidden">
         <div className="overflow-auto max-h-[70vh]">
           <table className="w-full text-sm">
@@ -214,7 +229,7 @@ export function GenerationsTable({
                 tableRows.map((row) => (
                   <tr key={row.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className={"px-4 py-2.5 align-middle max-w-[220px] " + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
+                      <td key={cell.id} className={"px-4 align-middle max-w-[220px] " + (density === "compact" ? "py-1.5 " : "py-2.5 ") + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}

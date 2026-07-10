@@ -15,6 +15,7 @@ import {
   type SortingState,
   type ColumnFiltersState,
   type RowSelectionState,
+  type VisibilityState,
 } from "@tanstack/react-table";
 import type { Lead } from "@/lib/leads/types";
 import { SITE_TYPES } from "@/lib/leads/types";
@@ -38,6 +39,9 @@ import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { Select } from "@/components/common/Select";
+import { useUiPrefs } from "@/providers/UiPrefsProvider";
+import { DensityToggle } from "@/components/common/DensityToggle";
+import { ColumnsMenu } from "@/components/common/ColumnsMenu";
 
 const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
@@ -52,6 +56,7 @@ export function LeadsTable({
   salesAgents: { id: string; name: string }[];
 }) {
   const { has, all } = usePermissions();
+  const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   const visible = useMemo(() => visibleStatuses(all), [all]);
   useRealtimeRefresh("leads");
   const canCreate = has("leads.create");
@@ -89,6 +94,7 @@ export function LeadsTable({
     return id ? [{ id, desc: dir !== "asc" }] : [];
   }, [sort]);
   const pagination = useMemo(() => ({ pageIndex: Math.max(0, Number(page) || 0), pageSize: Math.max(1, Number(size) || 15) }), [page, size]);
+  const columnVisibility = useMemo<VisibilityState>(() => ({ ...(columnPrefs.leads ?? {}), region: false }), [columnPrefs]);
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const f: ColumnFiltersState = [];
     if (status !== "All") f.push({ id: "status", value: status });
@@ -117,7 +123,7 @@ export function LeadsTable({
 
   const columns = useMemo<ColumnDef<Lead>[]>(
     () => [
-      serialColumn<Lead>(),
+      { ...serialColumn<Lead>(), enableHiding: false },
       ...(canBulk
         ? [{
             id: "select",
@@ -133,6 +139,7 @@ export function LeadsTable({
                 onClick={(e) => e.stopPropagation()} />
             ),
             enableSorting: false,
+            enableHiding: false,
           } as ColumnDef<Lead>]
         : []),
       {
@@ -270,6 +277,7 @@ export function LeadsTable({
         id: "actions",
         header: "",
         enableSorting: false,
+        enableHiding: false,
         cell: (c) => (
           <div
             onClick={(e) => e.stopPropagation()}
@@ -311,8 +319,12 @@ export function LeadsTable({
     columns,
     enableRowSelection: canBulk,
     getRowId: (l) => l.id,
-    state: { globalFilter: q, sorting, columnFilters, pagination, rowSelection },
+    state: { globalFilter: q, sorting, columnFilters, pagination, rowSelection, columnVisibility },
     onRowSelectionChange: setRowSelection,
+    onColumnVisibilityChange: (updater) => {
+      const next = typeof updater === "function" ? updater(columnVisibility) : updater;
+      setTableColumns("leads", next);
+    },
     onGlobalFilterChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: string) => string)(q) : (updater as string);
       setUrlState({ q: next ?? "", page: "0" });
@@ -338,7 +350,6 @@ export function LeadsTable({
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { columnVisibility: { region: false } },
   });
 
   const rows = table.getRowModel().rows;
@@ -421,6 +432,8 @@ export function LeadsTable({
             <Download className="w-4 h-4" /> Export CSV
           </button>
         )}
+        <DensityToggle />
+        <ColumnsMenu table={table} />
       </div>
 
       {/* table */}
@@ -457,7 +470,7 @@ export function LeadsTable({
                     className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group"
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className={"px-4 py-2.5 align-middle max-w-[260px] " + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
+                      <td key={cell.id} className={"px-4 align-middle max-w-[260px] " + (density === "compact" ? "py-1.5 " : "py-2.5 ") + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}

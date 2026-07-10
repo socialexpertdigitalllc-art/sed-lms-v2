@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { getBranding } from "@/lib/settings/appSettings";
 import { PermissionProvider } from "@/providers/PermissionProvider";
+import { UiPrefsProvider, type Density } from "@/providers/UiPrefsProvider";
 import { AppShell } from "@/components/layout/AppShell";
 import { ActivityTracker } from "@/providers/ActivityTracker";
 import { ToastProvider } from "@/components/common/Toast";
@@ -28,15 +29,22 @@ export default async function AppLayout({
     .eq("id", user.id)
     .single();
 
-  const sidebarPinned = (profile?.ui_preferences as { sidebarPinned?: boolean } | null)?.sidebarPinned ?? false;
+  const uiPrefs = (profile?.ui_preferences as Record<string, unknown>) ?? {};
+  const sidebarPinned = (uiPrefs.sidebarPinned as boolean | undefined) ?? false;
+  const uiInitial = {
+    density: (uiPrefs.density === "compact" ? "compact" : "comfortable") as Density,
+    columns: (uiPrefs.columns as Record<string, Record<string, boolean>>) ?? {},
+  };
 
   return (
     <PermissionProvider value={[...perms]}>
       <ToastProvider>
         <ActivityTracker />
-        <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
-          {children}
-        </AppShell>
+        <UiPrefsProvider initial={uiInitial}>
+          <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
+            {children}
+          </AppShell>
+        </UiPrefsProvider>
         <NotificationToaster />
       </ToastProvider>
     </PermissionProvider>

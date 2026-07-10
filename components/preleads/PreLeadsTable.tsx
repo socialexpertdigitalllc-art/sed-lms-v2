@@ -14,6 +14,7 @@ import {
   type ColumnDef,
   type SortingState,
   type ColumnFiltersState,
+  type VisibilityState,
 } from "@tanstack/react-table";
 import type { PreLead } from "@/lib/preleads/types";
 import { LEAD_CATEGORIES, PRELEAD_STATUSES } from "@/lib/preleads/types";
@@ -26,6 +27,9 @@ import { useUrlState } from "@/hooks/useUrlState";
 import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Select } from "@/components/common/Select";
+import { useUiPrefs } from "@/providers/UiPrefsProvider";
+import { DensityToggle } from "@/components/common/DensityToggle";
+import { ColumnsMenu } from "@/components/common/ColumnsMenu";
 import "@/lib/tables/columnMeta";
 
 type FollowFilter = "all" | "due" | "past";
@@ -48,6 +52,7 @@ export function PreLeadsTable({
 }) {
   const router = useRouter();
   const { has } = usePermissions();
+  const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   useRealtimeRefresh("pre_leads");
   const canCreate = has("pre_leads.create");
   const canFollowUp = has("pre_leads.followup");
@@ -70,6 +75,7 @@ export function PreLeadsTable({
     () => ({ pageIndex: Math.max(0, Number(ps.page) || 0), pageSize: Math.max(1, Number(ps.size) || 15) }),
     [ps.page, ps.size]
   );
+  const columnVisibility = useMemo<VisibilityState>(() => columnPrefs.preleads ?? {}, [columnPrefs]);
   const [modal, setModal] = useState<Modal>({ mode: null, lead: null });
 
   // Follow-up quick filter applied BEFORE building the table.
@@ -96,7 +102,7 @@ export function PreLeadsTable({
 
   const columns = useMemo<ColumnDef<PreLead>[]>(
     () => [
-      serialColumn<PreLead>(),
+      { ...serialColumn<PreLead>(), enableHiding: false },
       {
         accessorKey: "business_name",
         header: "Business",
@@ -168,6 +174,7 @@ export function PreLeadsTable({
         id: "actions",
         header: "",
         enableSorting: false,
+        enableHiding: false,
         cell: (c) => {
           const lead = c.row.original;
           return (
@@ -209,7 +216,7 @@ export function PreLeadsTable({
   const table = useReactTable({
     data,
     columns,
-    state: { globalFilter: ps.q, sorting, columnFilters, pagination },
+    state: { globalFilter: ps.q, sorting, columnFilters, pagination, columnVisibility },
     onGlobalFilterChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: string) => string)(ps.q) : (updater as string);
       setPs({ q: next ?? "", page: "0" });
@@ -220,6 +227,10 @@ export function PreLeadsTable({
       setPs({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "", page: "0" });
     },
     onColumnFiltersChange: () => {},
+    onColumnVisibilityChange: (updater) => {
+      const next = typeof updater === "function" ? updater(columnVisibility) : updater;
+      setTableColumns("preleads", next);
+    },
     onPaginationChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: typeof pagination) => typeof pagination)(pagination) : updater;
       setPs({ page: String(next.pageIndex) });
@@ -310,6 +321,8 @@ export function PreLeadsTable({
             </option>
           ))}
         </Select>
+        <DensityToggle />
+        <ColumnsMenu table={table} />
       </div>
 
       {/* table */}
@@ -350,7 +363,7 @@ export function PreLeadsTable({
                     className="border-b border-border-subtle last:border-0 hover:bg-surface-2 group"
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className={"px-4 py-2.5 align-middle max-w-[260px] " + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
+                      <td key={cell.id} className={"px-4 align-middle max-w-[260px] " + (density === "compact" ? "py-1.5 " : "py-2.5 ") + (cell.column.columnDef.meta?.responsiveClass ?? "")}>
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-const ALLOWED = new Set(["sidebarPinned"]); // extend as prefs grow
+const ALLOWED = new Set(["sidebarPinned", "density", "columns"]); // extend as prefs grow
 
 export async function PATCH(req: Request) {
   const supabase = await createClient();
