@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import type { Ticket, TicketItem, TicketStatus } from "@/lib/tickets/types";
 import { TICKET_STATUSES } from "@/lib/tickets/types";
@@ -8,6 +8,7 @@ import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime, initials } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
+import { useUrlState } from "@/hooks/useUrlState";
 import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
 
 export type QueueTicket = Ticket & {
@@ -15,6 +16,8 @@ export type QueueTicket = Ticket & {
   items: TicketItem[];
   assigned_to_name: string | null;
 };
+
+const TICKETS_DEFAULTS = { status: "", mine: "", lead: "" };
 
 export function TicketQueue({
   tickets,
@@ -37,9 +40,22 @@ export function TicketQueue({
   // assignees, so the "assigned to me" filter is only meaningful for them.
   const canFilterMine = canAssign || canResolve;
 
-  const [statusFilter, setStatusFilter] = useState<TicketStatus | "">("");
-  const [mineOnly, setMineOnly] = useState(!!initialMine && canFilterMine);
-  const [leadFilter, setLeadFilter] = useState<string | null>(initialLeadId ?? null);
+  const [ts, setTs] = useUrlState(TICKETS_DEFAULTS);
+  const statusFilter = ts.status as TicketStatus | "";
+  const mineOnly = ts.mine === "1";
+  const leadFilter = ts.lead || null;
+
+  // `initialMine`/`initialLeadId` come from the page's own searchParams read
+  // (?mine=1&lead=<id>), which useUrlState's parse already picks up directly
+  // since the keys match — this is a defensive seed for callers/cases where
+  // the URL doesn't carry them yet but the prop does.
+  useEffect(() => {
+    const patch: Partial<typeof TICKETS_DEFAULTS> = {};
+    if (initialMine && canFilterMine && !ts.mine) patch.mine = "1";
+    if (initialLeadId && !ts.lead) patch.lead = initialLeadId;
+    if (Object.keys(patch).length) setTs(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     return tickets.filter((t) => {
@@ -143,7 +159,7 @@ export function TicketQueue({
             <span className="inline-flex items-center gap-1.5 text-xs text-text-muted bg-surface-2 rounded-md px-2.5 py-1.5">
               Filtered to {leadFilterName ?? "lead"}
               <button
-                onClick={() => setLeadFilter(null)}
+                onClick={() => setTs({ lead: "" })}
                 className="font-medium text-accent-ink hover:underline"
               >
                 Clear
@@ -156,7 +172,7 @@ export function TicketQueue({
                 type="checkbox"
                 className="accent-accent w-4 h-4"
                 checked={mineOnly}
-                onChange={(e) => setMineOnly(e.target.checked)}
+                onChange={(e) => setTs({ mine: e.target.checked ? "1" : "" })}
               />
               Assigned to me
             </label>
@@ -164,7 +180,7 @@ export function TicketQueue({
           <select
             className={inputCls + " w-auto"}
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as TicketStatus | "")}
+            onChange={(e) => setTs({ status: e.target.value })}
           >
             <option value="">All statuses</option>
             {TICKET_STATUSES.map((s) => (

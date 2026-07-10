@@ -22,9 +22,18 @@ import { CategoryPill, PreLeadStatusPill } from "./CategoryPill";
 import { FollowUpModal } from "./FollowUpModal";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
+import { useUrlState } from "@/hooks/useUrlState";
 
 type FollowFilter = "all" | "due" | "past";
 type Modal = { mode: "follow" | null; lead: PreLead | null };
+
+// NOTE: the plan's PRELEADS_DEFAULTS only listed q/category/follow/sort, but
+// this table also has a `status` filter driven through the same react-table
+// columnFilters state as `lead_category` (a plain <select> with no local
+// state var, wired straight to `table.getColumn("status").setFilterValue`).
+// Deriving columnFilters from category alone would silently stop that select
+// from doing anything, so `status` is URL-persisted too.
+const PRELEADS_DEFAULTS = { q: "", category: "All", follow: "all", sort: "created_at:desc", status: "" };
 
 export function PreLeadsTable({
   preLeads,
@@ -40,11 +49,19 @@ export function PreLeadsTable({
   const canFollowUp = has("pre_leads.followup");
   const canDelete = has("pre_leads.delete");
 
-  const [globalFilter, setGlobalFilter] = useState("");
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-  const [categoryTab, setCategoryTab] = useState<string>("All");
-  const [followFilter, setFollowFilter] = useState<FollowFilter>("all");
+  const [ps, setPs] = useUrlState(PRELEADS_DEFAULTS);
+  const categoryTab = ps.category;
+  const followFilter = ps.follow as FollowFilter;
+  const sorting = useMemo<SortingState>(() => {
+    const [id, dir] = ps.sort.split(":");
+    return id ? [{ id, desc: dir !== "asc" }] : [];
+  }, [ps.sort]);
+  const columnFilters = useMemo<ColumnFiltersState>(() => {
+    const f: ColumnFiltersState = [];
+    if (ps.category !== "All") f.push({ id: "lead_category", value: ps.category });
+    if (ps.status) f.push({ id: "status", value: ps.status });
+    return f;
+  }, [ps.category, ps.status]);
   const [modal, setModal] = useState<Modal>({ mode: null, lead: null });
 
   // Follow-up quick filter applied BEFORE building the table.
@@ -154,10 +171,17 @@ export function PreLeadsTable({
   const table = useReactTable({
     data,
     columns,
-    state: { globalFilter, sorting, columnFilters },
-    onGlobalFilterChange: setGlobalFilter,
-    onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
+    state: { globalFilter: ps.q, sorting, columnFilters },
+    onGlobalFilterChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: string) => string)(ps.q) : (updater as string);
+      setPs({ q: next ?? "" });
+    },
+    onSortingChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: SortingState) => SortingState)(sorting) : updater;
+      const t = next[0];
+      setPs({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "" });
+    },
+    onColumnFiltersChange: () => {},
     globalFilterFn: (row, _col, value) => {
       const q = String(value).toLowerCase();
       const l = row.original;
@@ -171,11 +195,6 @@ export function PreLeadsTable({
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize: 15 } },
   });
-
-  function selectCategory(tab: string) {
-    setCategoryTab(tab);
-    table.getColumn("lead_category")?.setFilterValue(tab === "All" ? undefined : tab);
-  }
 
   async function remove(lead: PreLead) {
     if (!window.confirm(`Delete pre-lead “${lead.business_name}”? This cannot be undone.`)) return;
@@ -209,7 +228,7 @@ export function PreLeadsTable({
         {["All", ...LEAD_CATEGORIES].map((tab) => (
           <button
             key={tab}
-            onClick={() => selectCategory(tab)}
+            onClick={() => setPs({ category: tab })}
             className={
               "text-sm rounded-md px-3 py-1.5 font-medium transition-colors " +
               (categoryTab === tab ? "bg-accent-soft text-accent-ink" : "text-text-muted hover:bg-surface-2")
@@ -224,14 +243,14 @@ export function PreLeadsTable({
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input
-          value={globalFilter}
-          onChange={(e) => setGlobalFilter(e.target.value)}
+          value={ps.q}
+          onChange={(e) => setPs({ q: e.target.value })}
           placeholder="Search business, owner, email, phone…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
         <select
           value={followFilter}
-          onChange={(e) => setFollowFilter(e.target.value as FollowFilter)}
+          onChange={(e) => setPs({ follow: e.target.value })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="all">All follow-ups</option>
@@ -239,7 +258,8 @@ export function PreLeadsTable({
           <option value="past">Past due</option>
         </select>
         <select
-          onChange={(e) => table.getColumn("status")?.setFilterValue(e.target.value || undefined)}
+          value={ps.status}
+          onChange={(e) => setPs({ status: e.target.value })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="">All statuses</option>

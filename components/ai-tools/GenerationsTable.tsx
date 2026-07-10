@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { ArrowUp, ArrowDown } from "lucide-react";
 import {
@@ -16,6 +16,9 @@ import {
 import { formatDateTime, initials } from "@/lib/leads/format";
 import { TOOLS } from "@/lib/ai-tools/config";
 import type { AiGeneration } from "@/lib/ai-tools/types";
+import { useUrlState } from "@/hooks/useUrlState";
+
+const GEN_DEFAULTS = { q: "", sort: "created_at:desc" };
 
 type Row = AiGeneration & { agentName: string };
 
@@ -26,8 +29,11 @@ export function GenerationsTable({
   rows: AiGeneration[];
   agentNameById: Record<string, string>;
 }) {
-  const [globalFilter, setGlobalFilter] = useState("");
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [gs, setGs] = useUrlState(GEN_DEFAULTS);
+  const sorting = useMemo<SortingState>(() => {
+    const [id, dir] = gs.sort.split(":");
+    return id ? [{ id, desc: dir !== "asc" }] : [];
+  }, [gs.sort]);
 
   const data = useMemo<Row[]>(
     () => rows.map((r) => ({ ...r, agentName: (r.agent_id && agentNameById[r.agent_id]) || "Unknown" })),
@@ -122,9 +128,16 @@ export function GenerationsTable({
   const table = useReactTable({
     data,
     columns,
-    state: { globalFilter, sorting },
-    onGlobalFilterChange: setGlobalFilter,
-    onSortingChange: setSorting,
+    state: { globalFilter: gs.q, sorting },
+    onGlobalFilterChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: string) => string)(gs.q) : (updater as string);
+      setGs({ q: next ?? "" });
+    },
+    onSortingChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: SortingState) => SortingState)(sorting) : updater;
+      const t = next[0];
+      setGs({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "" });
+    },
     globalFilterFn: (row, _col, value) => {
       const q = String(value).toLowerCase();
       const r = row.original;
@@ -142,8 +155,8 @@ export function GenerationsTable({
   return (
     <div>
       <input
-        value={globalFilter}
-        onChange={(e) => setGlobalFilter(e.target.value)}
+        value={gs.q}
+        onChange={(e) => setGs({ q: e.target.value })}
         placeholder="Search business, agent, model…"
         className="w-full mb-3 px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
       />
