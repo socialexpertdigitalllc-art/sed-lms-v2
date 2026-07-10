@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { TOOLS, TOOL_IDS } from "@/lib/ai-tools/config";
 import { formatDateTime } from "@/lib/leads/format";
 import type { AiGeneration } from "@/lib/ai-tools/types";
+import { ArrowRight } from "lucide-react";
 
 export default async function AiToolsOverview() {
   const supabase = await createClient();
@@ -43,8 +44,8 @@ export default async function AiToolsOverview() {
               <p className="text-sm text-text-muted flex-1">{cfg.blurb}</p>
               <div className="mt-4">
                 {allowed ? (
-                  <Link href={`/ai-tools/${id}`} className="inline-block text-sm px-4 py-2 rounded-md bg-accent text-white font-semibold hover:bg-accent-ink">
-                    Open generator →
+                  <Link href={`/ai-tools/${id}`} className="inline-flex items-center gap-1.5 text-sm px-4 py-2 rounded-md bg-accent text-white font-semibold hover:bg-accent-ink">
+                    Open generator <ArrowRight className="w-4 h-4" />
                   </Link>
                 ) : (
                   <span className="inline-block text-sm px-4 py-2 rounded-md border border-border text-text-faint cursor-not-allowed">
@@ -60,8 +61,8 @@ export default async function AiToolsOverview() {
       <div className="flex items-center justify-between mb-3">
         <div className="text-[10px] uppercase tracking-wider text-text-faint font-semibold">Recent generations</div>
         {canAnalytics && (
-          <Link href="/ai-tools/analytics" className="text-xs text-accent-ink hover:underline">
-            View analytics →
+          <Link href="/ai-tools/analytics" className="inline-flex items-center gap-1 text-xs text-accent-ink hover:underline">
+            View analytics <ArrowRight className="w-3.5 h-3.5" />
           </Link>
         )}
       </div>
