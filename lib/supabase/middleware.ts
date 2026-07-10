@@ -40,6 +40,7 @@ export async function updateSession(request: NextRequest) {
     path === "/login" ||
     path.startsWith("/docs") ||
     path === "/api/ai-tools/wge/process" ||
+    path === "/api/template-engine/process" ||
     path === "/api/notifications/generate" ||
     path === "/api/tickets/maintenance";
 
