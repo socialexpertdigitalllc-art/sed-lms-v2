@@ -45,9 +45,11 @@ const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "b
 export function LeadsTable({
   leads,
   agentNameById,
+  salesAgents,
 }: {
   leads: Lead[];
   agentNameById: Record<string, string>;
+  salesAgents: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const { has, all } = usePermissions();
@@ -485,6 +487,7 @@ export function LeadsTable({
           leadId={modalLead.id}
           current={modalLead.status}
           businessName={modalLead.business_name}
+          websiteLink={modalLead.website_link}
           open={true}
           onClose={() => setModalLead(null)}
         />
@@ -504,6 +507,7 @@ export function LeadsTable({
           selectedLeads={selectedLeads}
           statuses={visible}
           agentNameById={agentNameById}
+          salesAgents={salesAgents}
           can={{ status: canChangeStatus, assign: canAssign, archive: canDelete, export: canExport }}
           onClear={() => setRowSelection({})}
         />

@@ -25,7 +25,9 @@ export async function PATCH(
   if (keys.length === 0) {
     return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
   }
-  const statusOnly = keys.length === 1 && keys[0] === "status";
+  const statusOnly =
+    keys.includes("status") &&
+    keys.every((k) => k === "status" || k === "website_link");
   const needed = statusOnly ? "leads.status_change" : "leads.edit";
   if (!perms.has(needed)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });

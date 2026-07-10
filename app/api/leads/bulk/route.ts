@@ -28,17 +28,39 @@ export async function POST(req: Request) {
   const perms = await getUserPermissions(user.id);
   if (!perms.has(PERM[action])) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
+  const admin = createAdminClient();
+
   let update: Record<string, unknown>;
   if (action === "status") {
     if (!value) return NextResponse.json({ error: "A status is required" }, { status: 422 });
     update = { status: value };
   } else if (action === "assign") {
+    if (value) {
+      const { data: salesDept } = await admin
+        .from("departments")
+        .select("id")
+        .eq("slug", "sales")
+        .single();
+      const { data: membership } = salesDept
+        ? await admin
+            .from("department_members")
+            .select("user_id")
+            .eq("department_id", salesDept.id)
+            .eq("user_id", value)
+            .maybeSingle()
+        : { data: null };
+      if (!membership) {
+        return NextResponse.json(
+          { error: "Leads can only be bulk-assigned to Sales department members." },
+          { status: 422 }
+        );
+      }
+    }
     update = { agent_id: value ? value : null };
   } else {
     update = { deleted_at: new Date().toISOString() };
   }
 
-  const admin = createAdminClient();
   const { error, count } = await admin
     .from("leads")
     .update(update, { count: "exact" })

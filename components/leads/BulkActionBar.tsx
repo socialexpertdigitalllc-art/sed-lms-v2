@@ -15,6 +15,7 @@ export function BulkActionBar({
   selectedLeads,
   statuses,
   agentNameById,
+  salesAgents,
   can,
   onClear,
 }: {
@@ -22,6 +23,7 @@ export function BulkActionBar({
   selectedLeads: Lead[];
   statuses: string[];
   agentNameById: Record<string, string>;
+  salesAgents: { id: string; name: string }[];
   can: { status: boolean; assign: boolean; archive: boolean; export: boolean };
   onClear: () => void;
 }) {
@@ -92,7 +94,9 @@ export function BulkActionBar({
           onChange={(e) => { const v = e.target.value; e.currentTarget.value = ""; if (v) void run("assign", v === "__unassign__" ? "" : v); }}>
           <option value="" disabled>Assign to…</option>
           <option value="__unassign__">Unassigned</option>
-          {Object.entries(agentNameById).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          {salesAgents.length === 0
+            ? <option value="" disabled>No Sales members</option>
+            : salesAgents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       )}
 
@@ -102,8 +106,8 @@ export function BulkActionBar({
 
       {can.archive && (
         <button type="button" className={btnCls} disabled={busy}
-          onClick={() => { if (confirm(`Archive ${count} lead(s)? This can be undone by an admin.`)) void run("archive"); }}>
-          Archive
+          onClick={() => { if (confirm(`Delete ${count} lead(s)? This removes them from the pipeline (recoverable by an admin).`)) void run("archive"); }}>
+          Delete
         </button>
       )}
 

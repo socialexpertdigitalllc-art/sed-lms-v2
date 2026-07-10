@@ -252,7 +252,7 @@ export function LeadDetail({
         </aside>
       </div>
 
-      <StatusChangeModal leadId={lead.id} current={lead.status} businessName={lead.business_name} open={statusOpen} onClose={() => setStatusOpen(false)} />
+      <StatusChangeModal leadId={lead.id} current={lead.status} businessName={lead.business_name} websiteLink={lead.website_link} open={statusOpen} onClose={() => setStatusOpen(false)} />
       <DeleteLeadModal leadId={lead.id} businessName={lead.business_name} open={deleteOpen} onClose={() => setDeleteOpen(false)} />
     </div>
   );

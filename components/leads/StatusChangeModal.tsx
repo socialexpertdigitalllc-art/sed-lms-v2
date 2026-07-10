@@ -9,22 +9,26 @@ export function StatusChangeModal({
   leadId,
   current,
   businessName,
+  websiteLink,
   open,
   onClose,
 }: {
   leadId: string;
   current: string;
   businessName: string;
+  websiteLink: string | null;
   open: boolean;
   onClose: () => void;
 }) {
   const router = useRouter();
   const { all } = usePermissions();
   const [status, setStatus] = useState(current);
+  const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const options = settableStatuses(all);
+  const needsLink = status === "Ready" && !(websiteLink && websiteLink.trim());
 
   if (!open) return null;
 
@@ -34,7 +38,7 @@ export function StatusChangeModal({
     const res = await fetch(`/api/leads/${leadId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(needsLink ? { status, website_link: link.trim() } : { status }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -77,13 +81,29 @@ export function StatusChangeModal({
           </div>
         )}
 
+        {needsLink && (
+          <div className="mt-4">
+            <label htmlFor="ready-website-link" className="block text-sm text-text-muted mb-1">
+              Website link (required for Ready)
+            </label>
+            <input
+              id="ready-website-link"
+              type="url"
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              placeholder="https://…"
+              className="w-full px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
+            />
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="px-4 py-2 text-sm rounded-md border border-border text-text-muted hover:bg-surface-2">
             Cancel
           </button>
           <button
             onClick={save}
-            disabled={busy || status === current || !options.includes(status as (typeof options)[number])}
+            disabled={busy || status === current || !options.includes(status as (typeof options)[number]) || (needsLink && !link.trim())}
             className="px-4 py-2 text-sm rounded-md bg-accent text-white font-semibold hover:bg-accent-ink disabled:opacity-60"
           >
             {busy ? "Saving…" : "Update"}
