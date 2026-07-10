@@ -17,6 +17,7 @@ import { formatDateTime, initials } from "@/lib/leads/format";
 import { TOOLS } from "@/lib/ai-tools/config";
 import type { AiGeneration } from "@/lib/ai-tools/types";
 import { useUrlState } from "@/hooks/useUrlState";
+import { serialColumn } from "@/components/common/tableSerial";
 
 const GEN_DEFAULTS = { q: "", sort: "created_at:desc" };
 
@@ -42,6 +43,7 @@ export function GenerationsTable({
 
   const columns = useMemo<ColumnDef<Row>[]>(
     () => [
+      serialColumn<Row>(),
       {
         accessorKey: "created_at",
         header: "Date",

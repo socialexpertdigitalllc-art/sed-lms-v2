@@ -26,6 +26,7 @@ export function UserTable({ users }: { users: UserRow[] }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-[10px] uppercase tracking-wide text-text-faint border-b border-border">
+            <th className="px-4 py-3 font-semibold">#</th>
             <th className="px-4 py-3 font-semibold">User</th>
             <th className="px-4 py-3 font-semibold">Departments</th>
             <th className="px-4 py-3 font-semibold">Status</th>
@@ -34,8 +35,11 @@ export function UserTable({ users }: { users: UserRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {users.map((u) => (
+          {users.map((u, i) => (
             <tr key={u.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
+              <td className="px-4 py-3">
+                <span className="text-text-faint text-xs tabular-nums">{i + 1}</span>
+              </td>
               <td className="px-4 py-3">
                 <div className="font-medium text-text">
                   {u.display_name ?? "—"}

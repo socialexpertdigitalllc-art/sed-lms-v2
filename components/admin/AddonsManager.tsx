@@ -153,6 +153,7 @@ export function AddonsManager({ initial }: { initial: Addon[] }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-wide text-text-faint border-b border-border-subtle">
+                <th className="py-2 px-4 font-semibold">#</th>
                 <th className="py-2 px-4 font-semibold">Label</th>
                 <th className="px-4 font-semibold">Price</th>
                 <th className="px-4 font-semibold">Status</th>
@@ -160,8 +161,11 @@ export function AddonsManager({ initial }: { initial: Addon[] }) {
               </tr>
             </thead>
             <tbody>
-              {addons.map((a) => (
+              {addons.map((a, i) => (
                 <tr key={a.id} className="border-t border-border-subtle">
+                  <td className="py-2.5 px-4">
+                    <span className="text-text-faint text-xs tabular-nums">{i + 1}</span>
+                  </td>
                   <td className="py-2.5 px-4 text-text">{a.label}</td>
                   <td className="px-4 text-text-muted font-mono">
                     {a.price != null ? `$${a.price}` : "—"}

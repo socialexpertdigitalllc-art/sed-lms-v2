@@ -103,6 +103,7 @@ export function LogsViewer({
               <table className="w-full text-sm">
                 <thead className="bg-surface-2">
                   <tr className="border-b border-border text-left text-[10px] uppercase tracking-wide text-text-faint">
+                    <th className="px-4 py-3">#</th>
                     <th className="px-4 py-3">Date</th>
                     <th className="px-4 py-3">User</th>
                     <th className="px-4 py-3">First in</th>
@@ -114,10 +115,13 @@ export function LogsViewer({
                 </thead>
                 <tbody>
                   {signinRows.length === 0 ? (
-                    <tr><td colSpan={7} className="px-4 py-10 text-center text-text-faint">No sign-in activity.</td></tr>
+                    <tr><td colSpan={8} className="px-4 py-10 text-center text-text-faint">No sign-in activity.</td></tr>
                   ) : (
-                    signinRows.map((r) => (
+                    signinRows.map((r, i) => (
                       <tr key={`${r.userId}|${r.date}`} className="border-b border-border-subtle last:border-0">
+                        <td className="px-4 py-2">
+                          <span className="text-text-faint text-xs tabular-nums">{i + 1}</span>
+                        </td>
                         <td className="px-4 py-2 text-text-muted whitespace-nowrap">{r.date}</td>
                         <td className="px-4 py-2 text-text">{nameById[r.userId] ?? r.userId}</td>
                         <td className="px-4 py-2 text-text-muted font-mono text-xs">{r.firstIn}</td>
@@ -145,6 +149,7 @@ export function LogsViewer({
             <table className="w-full text-sm">
               <thead className="bg-surface-2">
                 <tr className="border-b border-border text-left text-[10px] uppercase tracking-wide text-text-faint">
+                  <th className="px-4 py-3">#</th>
                   <th className="px-4 py-3">When</th><th className="px-4 py-3">User</th>
                   {tab === "movement" ? (<><th className="px-4 py-3">Type</th><th className="px-4 py-3">Action</th><th className="px-4 py-3">Path</th></>)
                     : (<><th className="px-4 py-3">Action</th><th className="px-4 py-3">Entity</th><th className="px-4 py-3">Details</th></>)}
@@ -152,9 +157,12 @@ export function LogsViewer({
               </thead>
               <tbody>
                 {tab === "movement" ? (
-                  moveRows.length === 0 ? <tr><td colSpan={5} className="px-4 py-10 text-center text-text-faint">No activity.</td></tr> :
-                  moveRows.map((r) => (
+                  moveRows.length === 0 ? <tr><td colSpan={6} className="px-4 py-10 text-center text-text-faint">No activity.</td></tr> :
+                  moveRows.map((r, i) => (
                     <tr key={r.id} className="border-b border-border-subtle last:border-0">
+                      <td className="px-4 py-2">
+                        <span className="text-text-faint text-xs tabular-nums">{i + 1}</span>
+                      </td>
                       <td className="px-4 py-2 text-text-muted whitespace-nowrap">{formatDateTime(r.created_at)}</td>
                       <td className="px-4 py-2 text-text">{r.user_id ? (nameById[r.user_id] ?? "—") : "—"}</td>
                       <td className="px-4 py-2"><span className="text-[11px] px-2 py-0.5 rounded-full bg-surface-2 text-text-muted">{r.type}</span></td>
@@ -163,9 +171,12 @@ export function LogsViewer({
                     </tr>
                   ))
                 ) : (
-                  auditRows.length === 0 ? <tr><td colSpan={5} className="px-4 py-10 text-center text-text-faint">No audit entries.</td></tr> :
-                  auditRows.map((r) => (
+                  auditRows.length === 0 ? <tr><td colSpan={6} className="px-4 py-10 text-center text-text-faint">No audit entries.</td></tr> :
+                  auditRows.map((r, i) => (
                     <tr key={r.id} className="border-b border-border-subtle last:border-0">
+                      <td className="px-4 py-2">
+                        <span className="text-text-faint text-xs tabular-nums">{i + 1}</span>
+                      </td>
                       <td className="px-4 py-2 text-text-muted whitespace-nowrap">{formatDateTime(r.created_at)}</td>
                       <td className="px-4 py-2 text-text">{r.user_id ? (nameById[r.user_id] ?? "—") : "—"}</td>
                       <td className="px-4 py-2 text-text font-mono text-xs">{r.action}</td>
