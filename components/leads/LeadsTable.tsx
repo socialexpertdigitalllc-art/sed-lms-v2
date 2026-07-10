@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Download, ArrowUp, ArrowDown } from "lucide-react";
+import { Download, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -33,6 +33,8 @@ import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { useUrlState } from "@/hooks/useUrlState";
 import { MonthFilter } from "@/components/common/MonthFilter";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
+import { serialColumn } from "@/components/common/tableSerial";
+import { CopyButton } from "@/components/common/CopyButton";
 
 const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
@@ -110,6 +112,7 @@ export function LeadsTable({
 
   const columns = useMemo<ColumnDef<Lead>[]>(
     () => [
+      serialColumn<Lead>(),
       ...(canBulk
         ? [{
             id: "select",
@@ -136,7 +139,21 @@ export function LeadsTable({
         accessorKey: "status",
         header: "Status",
         filterFn: "equalsString",
-        cell: (c) => <StatusPill status={c.getValue<string>()} />,
+        cell: (c) => {
+          const link = c.row.original.website_link;
+          return (
+            <span className="inline-flex items-center gap-1.5">
+              <StatusPill status={c.getValue<string>()} />
+              {link && link.trim() && (
+                <a href={link} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+                  title="Open website" aria-label="Open website"
+                  className="inline-flex items-center text-accent-ink hover:text-accent">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
+            </span>
+          );
+        },
       },
       {
         id: "agent",
@@ -177,7 +194,17 @@ export function LeadsTable({
       {
         accessorKey: "business_phone",
         header: "Phone",
-        cell: (c) => <span className="text-text-muted font-mono text-xs whitespace-nowrap">{c.getValue<string>() ?? "—"}</span>,
+        cell: (c) => {
+          const phone = c.getValue<string>();
+          return phone ? (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span className="text-text-muted font-mono text-xs">{phone}</span>
+              <CopyButton value={phone} title="Copy phone" />
+            </span>
+          ) : (
+            <span className="text-text-muted">—</span>
+          );
+        },
       },
       {
         accessorKey: "price_quoted",

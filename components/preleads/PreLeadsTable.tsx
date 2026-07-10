@@ -23,6 +23,8 @@ import { FollowUpModal } from "./FollowUpModal";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { useUrlState } from "@/hooks/useUrlState";
+import { serialColumn } from "@/components/common/tableSerial";
+import { CopyButton } from "@/components/common/CopyButton";
 
 type FollowFilter = "all" | "due" | "past";
 type Modal = { mode: "follow" | null; lead: PreLead | null };
@@ -88,6 +90,7 @@ export function PreLeadsTable({
 
   const columns = useMemo<ColumnDef<PreLead>[]>(
     () => [
+      serialColumn<PreLead>(),
       {
         accessorKey: "business_name",
         header: "Business",
@@ -97,6 +100,21 @@ export function PreLeadsTable({
             <div className="text-xs text-text-faint truncate">{c.row.original.owner_name ?? ""}</div>
           </div>
         ),
+      },
+      {
+        accessorKey: "phone_number",
+        header: "Phone",
+        cell: (c) => {
+          const phone = c.getValue<string>();
+          return phone ? (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span className="text-text-muted font-mono text-xs">{phone}</span>
+              <CopyButton value={phone} title="Copy phone" />
+            </span>
+          ) : (
+            <span className="text-text-muted">—</span>
+          );
+        },
       },
       {
         accessorKey: "lead_category",
