@@ -23,6 +23,8 @@ import { CategoryPill, PreLeadStatusPill } from "./CategoryPill";
 import { FollowUpModal } from "./FollowUpModal";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
+import { usePageClamp } from "@/hooks/usePageClamp";
+import { noAutoPageReset } from "@/lib/tables/pagination";
 import { useUrlState } from "@/hooks/useUrlState";
 import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
@@ -243,11 +245,15 @@ export function PreLeadsTable({
         (v ?? "").toString().toLowerCase().includes(q)
       );
     },
+    // Data refreshes (router.refresh / realtime) must never yank the page back
+    // to 1 — see lib/tables/pagination.ts. Filter handlers reset it explicitly.
+    ...noAutoPageReset,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   });
+  usePageClamp(pagination.pageIndex, table.getPageCount(), (p) => setPs({ page: p }));
 
   async function remove(lead: PreLead) {
     if (!window.confirm(`Delete pre-lead “${lead.business_name}”? This cannot be undone.`)) return;

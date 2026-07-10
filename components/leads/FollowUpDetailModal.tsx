@@ -18,7 +18,7 @@ export function FollowUpDetailModal({
   const labelCls = "block text-[10px] uppercase tracking-wide text-text-faint mb-1";
 
   return (
-    <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4" onClick={onClose}>
+    <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="bg-surface border border-border rounded-lg p-6 w-full max-w-[400px] max-h-[90vh] overflow-y-auto"

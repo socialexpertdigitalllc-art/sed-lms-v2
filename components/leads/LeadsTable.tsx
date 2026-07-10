@@ -46,6 +46,8 @@ import { ColumnsMenu } from "@/components/common/ColumnsMenu";
 import { EmptyState } from "@/components/common/EmptyState";
 import { SavedViews } from "@/components/common/SavedViews";
 import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
+import { usePageClamp } from "@/hooks/usePageClamp";
+import { noAutoPageReset } from "@/lib/tables/pagination";
 
 const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
@@ -352,21 +354,29 @@ export function LeadsTable({
       return [l.business_name, l.business_email, agentName, l.status, l.business_phone]
         .some((v) => (v ?? "").toString().toLowerCase().includes(s));
     },
+    // Data refreshes (router.refresh / realtime) must never yank the page back
+    // to 1 — see lib/tables/pagination.ts. Filter handlers reset it explicitly.
+    ...noAutoPageReset,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   });
+  usePageClamp(pagination.pageIndex, table.getPageCount(), (p) => setUrlState({ page: p }));
 
   const rows = table.getRowModel().rows;
   const { highlightedIndex } = useTableKeyboardNav({
     count: rows.length,
     searchInputRef,
+    enabled: !modalLead && !followUpLead,
     onOpen: (i) => {
       const id = rows[i]?.original.id;
       if (id) router.push(`/leads/${id}`);
     },
-    onEscape: () => setUrlState({ q: "", page: "0" }),
+    // Esc clears an active search; it must not touch the page otherwise.
+    onEscape: () => {
+      if (q) setUrlState({ q: "", page: "0" });
+    },
   });
   const filteredCount = table.getFilteredRowModel().rows.length;
   const selectedRows = table.getSelectedRowModel().rows;

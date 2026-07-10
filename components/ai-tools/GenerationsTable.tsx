@@ -18,6 +18,8 @@ import { formatDateTime, initials } from "@/lib/leads/format";
 import { TOOLS } from "@/lib/ai-tools/config";
 import type { AiGeneration } from "@/lib/ai-tools/types";
 import { useUrlState } from "@/hooks/useUrlState";
+import { usePageClamp } from "@/hooks/usePageClamp";
+import { noAutoPageReset } from "@/lib/tables/pagination";
 import { serialColumn } from "@/components/common/tableSerial";
 import { Select } from "@/components/common/Select";
 import { useUiPrefs } from "@/providers/UiPrefsProvider";
@@ -184,7 +186,11 @@ export function GenerationsTable({
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    // Data refreshes (router.refresh / realtime) must never yank the page back
+    // to 1 — see lib/tables/pagination.ts. Filter handlers reset it explicitly.
+    ...noAutoPageReset,
   });
+  usePageClamp(pagination.pageIndex, table.getPageCount(), (p) => setGs({ page: p }));
 
   const tableRows = table.getRowModel().rows;
 
