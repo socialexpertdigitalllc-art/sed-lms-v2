@@ -28,7 +28,7 @@ import { computeExtendedKpis, revenueByStatus, ticketStatusSplit } from "@/lib/d
 import type { dashboardVisibility } from "@/lib/dashboard/visibility";
 import type { Lead } from "@/lib/leads/types";
 import { filterLeadsByRegions, type RegionFacet } from "@/lib/geo/regions";
-import { RegionScopeBar } from "@/components/dashboard/RegionScopeBar";
+import { RegionFilter } from "@/components/leads/RegionFilter";
 import { useUrlState } from "@/hooks/useUrlState";
 import { MonthFilter } from "@/components/common/MonthFilter";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
@@ -112,7 +112,7 @@ export function DashboardBoard({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
         {canScopeMonth && <MonthFilter options={monthOpts} value={month} onChange={(v) => setDashUrl({ month: v })} />}
-        <RegionScopeBar facets={facets} selected={selected} onChange={setSelected} />
+        <RegionFilter facets={facets} selected={selected} onChange={setSelected} />
       </div>
 
       <div>
