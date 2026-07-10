@@ -1,9 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { UserManager } from "@/components/admin/UserManager";
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { BackLink } from "@/components/common/BackLink";
 
 export default async function UserDetail({
   params,
@@ -53,9 +52,7 @@ export default async function UserDetail({
 
   return (
     <div className="max-w-3xl">
-      <Link href="/admin/users" className="text-xs text-text-muted hover:text-text inline-flex items-center gap-1">
-        <ArrowLeft className="w-4 h-4" /> Users
-      </Link>
+      <BackLink href="/admin/users" label="Users" />
       <h1 className="text-xl font-semibold text-text mt-2">
         {profile.display_name ?? profile.email}
       </h1>

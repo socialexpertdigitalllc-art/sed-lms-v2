@@ -1,8 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { PermissionToggleGrid } from "@/components/admin/PermissionToggleGrid";
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { BackLink } from "@/components/common/BackLink";
 
 export default async function DeptDetail({
   params,
@@ -34,9 +33,7 @@ export default async function DeptDetail({
 
   return (
     <div>
-      <Link href="/admin/departments" className="text-xs text-text-muted hover:text-text inline-flex items-center gap-1">
-        <ArrowLeft className="w-4 h-4" /> Departments
-      </Link>
+      <BackLink href="/admin/departments" label="Departments" />
       <div className="flex items-center gap-2 mt-2 mb-1">
         <span className="w-3.5 h-3.5 rounded-sm" style={{ background: dept.color ?? "#0D9488" }} />
         <h1 className="text-xl font-semibold text-text">{dept.name}</h1>

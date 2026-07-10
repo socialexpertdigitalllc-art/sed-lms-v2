@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Download, ArrowUp, ArrowDown } from "lucide-react";
 import {
@@ -28,13 +28,10 @@ import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
 import { RegionFilter } from "./RegionFilter";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
+import { useUrlState } from "@/hooks/useUrlState";
 
-const SORTS: Record<string, { id: string; desc: boolean }> = {
-  created_desc: { id: "created_at", desc: true },
-  followup_asc: { id: "follow_up_time", desc: false },
-  rating_desc: { id: "rating", desc: true },
-  name_asc: { id: "business_name", desc: false },
-};
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", sort: "created_at:desc", page: "0" };
+const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
 
 export function LeadsTable({
   leads,
@@ -64,14 +61,25 @@ export function LeadsTable({
     URL.revokeObjectURL(url);
   }
 
-  const [globalFilter, setGlobalFilter] = useState("");
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
-  const [sortKey, setSortKey] = useState<string>("created_desc");
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-  const [statusTab, setStatusTab] = useState<string>("All");
   const [modalLead, setModalLead] = useState<Lead | null>(null);
   const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
-  const [regionSel, setRegionSel] = useState<string[]>([]);
+
+  const [urlState, setUrlState] = useUrlState(LEADS_DEFAULTS);
+  const { q, status, agent, type, sort, page } = urlState;
+  const regionSel = useMemo(() => (urlState.region ? urlState.region.split(",") : []), [urlState.region]);
+  const sorting = useMemo<SortingState>(() => {
+    const [id, dir] = sort.split(":");
+    return id ? [{ id, desc: dir !== "asc" }] : [];
+  }, [sort]);
+  const pagination = useMemo(() => ({ pageIndex: Math.max(0, Number(page) || 0), pageSize: 15 }), [page]);
+  const columnFilters = useMemo<ColumnFiltersState>(() => {
+    const f: ColumnFiltersState = [];
+    if (status !== "All") f.push({ id: "status", value: status });
+    if (agent) f.push({ id: "agent", value: agent });
+    if (type) f.push({ id: "site_type", value: type });
+    if (regionSel.length) f.push({ id: "region", value: regionSel });
+    return f;
+  }, [status, agent, type, regionSel]);
 
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = { All: leads.length };
@@ -224,32 +232,34 @@ export function LeadsTable({
   const table = useReactTable({
     data: leads,
     columns,
-    state: { globalFilter, sorting, columnFilters },
-    onGlobalFilterChange: setGlobalFilter,
-    onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
+    state: { globalFilter: q, sorting, columnFilters, pagination },
+    onGlobalFilterChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: string) => string)(q) : (updater as string);
+      setUrlState({ q: next ?? "", page: "0" });
+    },
+    onSortingChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: SortingState) => SortingState)(sorting) : updater;
+      const t = next[0];
+      setUrlState({ sort: t ? `${t.id}:${t.desc ? "desc" : "asc"}` : "", page: "0" });
+    },
+    onColumnFiltersChange: () => {},
+    onPaginationChange: (updater) => {
+      const next = typeof updater === "function" ? (updater as (o: typeof pagination) => typeof pagination)(pagination) : updater;
+      setUrlState({ page: String(next.pageIndex) });
+    },
     globalFilterFn: (row, _col, value) => {
-      const q = String(value).toLowerCase();
+      const s = String(value).toLowerCase();
       const l = row.original;
-      const agent = (l.agent_id && agentNameById[l.agent_id]) || "";
-      return [l.business_name, l.business_email, agent, l.status, l.business_phone]
-        .some((v) => (v ?? "").toString().toLowerCase().includes(q));
+      const agentName = (l.agent_id && agentNameById[l.agent_id]) || "";
+      return [l.business_name, l.business_email, agentName, l.status, l.business_phone]
+        .some((v) => (v ?? "").toString().toLowerCase().includes(s));
     },
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 15 }, columnVisibility: { region: false } },
+    initialState: { columnVisibility: { region: false } },
   });
-
-  useEffect(() => {
-    table.getColumn("region")?.setFilterValue(regionSel.length ? regionSel : undefined);
-  }, [regionSel, table]);
-
-  function selectStatus(tab: string) {
-    setStatusTab(tab);
-    table.getColumn("status")?.setFilterValue(tab === "All" ? undefined : tab);
-  }
 
   const rows = table.getRowModel().rows;
   const filteredCount = table.getFilteredRowModel().rows.length;
@@ -274,10 +284,10 @@ export function LeadsTable({
         {["All", ...visible].map((tab) => (
           <button
             key={tab}
-            onClick={() => selectStatus(tab)}
+            onClick={() => setUrlState({ status: tab, page: "0" })}
             className={
               "text-sm rounded-md px-3 py-1.5 font-medium transition-colors " +
-              (statusTab === tab ? "bg-accent-soft text-accent-ink" : "text-text-muted hover:bg-surface-2")
+              (status === tab ? "bg-accent-soft text-accent-ink" : "text-text-muted hover:bg-surface-2")
             }
           >
             {tab}
@@ -289,39 +299,38 @@ export function LeadsTable({
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input
-          value={globalFilter}
-          onChange={(e) => setGlobalFilter(e.target.value)}
+          value={q}
+          onChange={(e) => setUrlState({ q: e.target.value, page: "0" })}
           placeholder="Search business, email, agent…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
         <select
-          onChange={(e) => table.getColumn("agent")?.setFilterValue(e.target.value || undefined)}
+          value={agent}
+          onChange={(e) => setUrlState({ agent: e.target.value, page: "0" })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="">All agents</option>
           {agentOptions.map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
         <select
-          onChange={(e) => table.getColumn("site_type")?.setFilterValue(e.target.value || undefined)}
+          value={type}
+          onChange={(e) => setUrlState({ type: e.target.value, page: "0" })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="">All types</option>
           {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
-        <RegionFilter facets={regionFacets} selected={regionSel} onChange={setRegionSel} />
+        <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(","), page: "0" })} />
         <select
-          value={sortKey}
-          onChange={(e) => {
-            const key = e.target.value;
-            setSortKey(key);
-            setSorting([SORTS[key]]);
-          }}
+          value={sort}
+          onChange={(e) => setUrlState({ sort: e.target.value, page: "0" })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
-          <option value="created_desc">Submitted date</option>
-          <option value="followup_asc">Follow-up time</option>
-          <option value="rating_desc">Rating</option>
-          <option value="name_asc">Alphabetical</option>
+          <option value="created_at:desc">Submitted date</option>
+          <option value="follow_up_time:asc">Follow-up time</option>
+          <option value="rating:desc">Rating</option>
+          <option value="business_name:asc">Alphabetical</option>
+          {!SORT_PRESETS.includes(sort) && <option value={sort}>Custom</option>}
         </select>
         {canExport && (
           <button onClick={exportCsv} className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted hover:bg-surface-2 whitespace-nowrap inline-flex items-center gap-1.5">
