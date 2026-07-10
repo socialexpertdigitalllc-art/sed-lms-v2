@@ -32,6 +32,8 @@ export function LeadDetail({
   agents,
   followUps,
   closedByName,
+  closingUsers,
+  canEditClosedBy,
   tickets,
   sla,
 }: {
@@ -39,6 +41,8 @@ export function LeadDetail({
   agents: Agent[];
   followUps: LeadFollowUp[];
   closedByName: string | null;
+  closingUsers: { id: string; display_name: string }[];
+  canEditClosedBy: boolean;
   tickets: Ticket[];
   sla: Record<TicketPriority, number>;
 }) {
@@ -176,7 +180,15 @@ export function LeadDetail({
           <SectionCard n={2} icon={ClipboardList} title="Lead info" subtitle="Status, pricing & rating" done={false} delay={60}>
             <div className={grid}>
               <FieldRow label="Agent" value={lead.agent_id ?? ""} type="select" options={agentOptions} display={agentName} canEdit={canEdit} onSave={(v) => patch({ agent_id: v || null })} />
-              <FieldRow label="Closed by" value={lead.closed_by ?? ""} display={closedByName} />
+              <FieldRow
+                label="Closed by"
+                value={lead.closed_by ?? ""}
+                type="select"
+                options={[{ value: "", label: "— (none) —" }, ...closingUsers.map((u) => ({ value: u.id, label: u.display_name }))]}
+                display={closedByName}
+                canEdit={canEditClosedBy}
+                onSave={(v) => patch({ closed_by: v || null })}
+              />
               {/* Status is read-only here — edited via the "Change status" button (respects category permissions). */}
               <FieldRow label="Status" value={lead.status} display={<StatusPill status={lead.status} />} />
               <FieldRow label="Site type" value={lead.site_type ?? ""} type="select" options={[{ value: "", label: "—" }, ...SITE_TYPES.map((s) => ({ value: s, label: s }))]} canEdit={canEdit} onSave={(v) => patch({ site_type: v || null })} />

@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getUserPermissions } from "@/lib/permissions/resolver";
 import { LeadDetail } from "@/components/leads/LeadDetail";
 import type { Lead } from "@/lib/leads/types";
 import type { LeadFollowUp } from "@/lib/leads/followups";
@@ -82,12 +83,57 @@ export default async function LeadDetailPage({
   }));
   const closedByName = lead.closed_by ? names.get(lead.closed_by) ?? null : null;
 
+  // Current user + permissions for the "Closed by" edit allowance.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const perms = user ? await getUserPermissions(user.id) : new Set<string>();
+
+  // Closing-department members for the "Closed by" picker (two FKs to profiles → pin the FK).
+  const { data: closingDept } = await supabase
+    .from("departments")
+    .select("id")
+    .eq("slug", "closing")
+    .single();
+  let closingUsers: { id: string; display_name: string }[] = [];
+  if (closingDept) {
+    const { data: members } = await supabase
+      .from("department_members")
+      .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
+      .eq("department_id", closingDept.id);
+    closingUsers = (members ?? [])
+      .map((m: any) => ({ id: m.profiles?.id, display_name: m.profiles?.display_name }))
+      .filter((u: any) => u.id);
+  }
+
+  // A Sales-department member may edit Closed-by even without leads.edit.
+  let isSalesMember = false;
+  if (user) {
+    const { data: salesDept } = await supabase
+      .from("departments")
+      .select("id")
+      .eq("slug", "sales")
+      .single();
+    if (salesDept) {
+      const { data: membership } = await admin
+        .from("department_members")
+        .select("user_id")
+        .eq("department_id", salesDept.id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      isSalesMember = !!membership;
+    }
+  }
+  const canEditClosedBy = perms.has("leads.edit") || isSalesMember;
+
   return (
     <LeadDetail
       lead={lead}
       agents={agents ?? []}
       followUps={followUps}
       closedByName={closedByName}
+      closingUsers={closingUsers}
+      canEditClosedBy={canEditClosedBy}
       tickets={tickets}
       sla={settings.ticket_sla}
     />

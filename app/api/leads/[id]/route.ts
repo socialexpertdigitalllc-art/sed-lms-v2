@@ -7,6 +7,26 @@ import { updateLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 
+/** True when the user belongs to the Sales department (slug "sales"). */
+async function isSalesMember(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string
+): Promise<boolean> {
+  const { data: dept } = await admin
+    .from("departments")
+    .select("id")
+    .eq("slug", "sales")
+    .single();
+  if (!dept) return false;
+  const { data: membership } = await admin
+    .from("department_members")
+    .select("user_id")
+    .eq("department_id", dept.id)
+    .eq("user_id", userId)
+    .maybeSingle();
+  return !!membership;
+}
+
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -19,6 +39,7 @@ export async function PATCH(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const perms = await getUserPermissions(user.id);
+  const admin = createAdminClient();
 
   const body = await req.json();
   const keys = Object.keys(body ?? {});
@@ -29,8 +50,12 @@ export async function PATCH(
     keys.includes("status") &&
     keys.every((k) => k === "status" || k === "website_link");
   const needed = statusOnly ? "leads.status_change" : "leads.edit";
+  const closedByOnly = keys.length === 1 && keys[0] === "closed_by";
   if (!perms.has(needed)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    // A Sales-department member may set "Closed by" without leads.edit.
+    if (!(closedByOnly && (await isSalesMember(admin, user.id)))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
   }
 
   const parsed = updateLeadSchema.safeParse(body);
@@ -41,7 +66,6 @@ export async function PATCH(
     );
   }
 
-  const admin = createAdminClient();
   const { data: before } = await admin
     .from("leads")
     .select("*")
