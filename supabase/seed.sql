@@ -64,7 +64,11 @@ insert into public.permissions (key, name, description, category, is_sensitive) 
   ('dashboard.chart.revenue_by_status','Chart: Revenue by Status',null,'dashboard',false),
   ('dashboard.chart.ticket_status_split','Chart: Ticket Status Split',null,'dashboard',false),
   ('payments.view','View Payment Links',null,'payments',false),
-  ('payments.manage','Manage Payment Links',null,'payments',true)
+  ('payments.manage','Manage Payment Links',null,'payments',true),
+  ('templates.manage','Manage Website Templates',null,'templates',true),
+  ('templates.generate','Generate From Templates',null,'templates',false),
+  ('templates.deploy','Deploy Generated Websites',null,'templates',true),
+  ('analytics.view_templates','View Template Engine Analytics',null,'templates',false)
 on conflict (key) do nothing;
 
 insert into public.departments (name, slug, description, color, icon) values

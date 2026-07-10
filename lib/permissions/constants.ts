@@ -62,8 +62,12 @@ export const PERMISSIONS = [
   { key: "dashboard.chart.ticket_status_split", name: "Chart: Ticket Status Split", category: "dashboard" },
   { key: "payments.view", name: "View Payment Links", category: "payments" },
   { key: "payments.manage", name: "Manage Payment Links", category: "payments", is_sensitive: true },
+  { key: "templates.manage", name: "Manage Website Templates", category: "templates", is_sensitive: true },
+  { key: "templates.generate", name: "Generate From Templates", category: "templates" },
+  { key: "templates.deploy", name: "Deploy Generated Websites", category: "templates", is_sensitive: true },
+  { key: "analytics.view_templates", name: "View Template Engine Analytics", category: "templates" },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 
-export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard", "payments"] as const;
+export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard", "payments", "templates"] as const;
