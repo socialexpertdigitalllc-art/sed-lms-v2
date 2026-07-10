@@ -19,11 +19,19 @@ function toBool(v: string): boolean | null {
   if (["no", "false", "0", "n"].includes(s)) return false;
   return null;
 }
+// A parsed date is only usable if it's real AND in a sane range — spreadsheets
+// often carry garbage in date cells (serial numbers, concatenations) that
+// otherwise parse to absurd years and blow up the timestamptz insert.
+function inRange(d: Date): boolean {
+  if (Number.isNaN(d.getTime())) return false;
+  const y = d.getFullYear();
+  return y >= 1990 && y <= 2100;
+}
 function toDate(v: string): string | null {
   const s = v.trim();
   if (!s) return null;
   const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) return d.toISOString();
+  if (inRange(d)) return d.toISOString();
   const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if (m) {
     const a = m[1], b = m[2];
@@ -31,7 +39,7 @@ function toDate(v: string): string | null {
     // if the first part can't be a month, treat it as day (DD/MM); else month (MM/DD)
     const iso = Number(a) > 12 ? `${yr}-${b.padStart(2, "0")}-${a.padStart(2, "0")}` : `${yr}-${a.padStart(2, "0")}-${b.padStart(2, "0")}`;
     const d2 = new Date(iso);
-    if (!Number.isNaN(d2.getTime())) return d2.toISOString();
+    if (inRange(d2)) return d2.toISOString();
   }
   return null;
 }
