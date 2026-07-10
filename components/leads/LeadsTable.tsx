@@ -411,7 +411,7 @@ export function LeadsTable({
 
       {/* table */}
       <div className="bg-surface border border-border rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-auto max-h-[70vh]">
           <table className="w-full text-sm">
             <thead className="bg-surface-2 sticky top-0 z-10">
               {table.getHeaderGroups().map((hg) => (
