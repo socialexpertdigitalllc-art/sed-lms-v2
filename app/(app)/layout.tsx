@@ -5,6 +5,8 @@ import { getBranding } from "@/lib/settings/appSettings";
 import { PermissionProvider } from "@/providers/PermissionProvider";
 import { AppShell } from "@/components/layout/AppShell";
 import { ActivityTracker } from "@/providers/ActivityTracker";
+import { ToastProvider } from "@/components/common/Toast";
+import { NotificationToaster } from "@/components/layout/NotificationToaster";
 
 export default async function AppLayout({
   children,
@@ -30,10 +32,13 @@ export default async function AppLayout({
 
   return (
     <PermissionProvider value={[...perms]}>
-      <ActivityTracker />
-      <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
-        {children}
-      </AppShell>
+      <ToastProvider>
+        <ActivityTracker />
+        <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
+          {children}
+        </AppShell>
+        <NotificationToaster />
+      </ToastProvider>
     </PermissionProvider>
   );
 }

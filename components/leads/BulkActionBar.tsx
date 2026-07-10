@@ -6,6 +6,7 @@ import { X, Loader2 } from "lucide-react";
 import type { Lead } from "@/lib/leads/types";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
 import { Select } from "@/components/common/Select";
+import { useToast } from "@/components/common/Toast";
 
 type BulkAction = "status" | "assign" | "archive";
 
@@ -25,6 +26,7 @@ export function BulkActionBar({
   onClear: () => void;
 }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const count = selectedIds.length;
@@ -40,13 +42,17 @@ export function BulkActionBar({
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        setErr(j.error ?? "Bulk action failed");
+        const text = j.error ?? "Bulk action failed";
+        setErr(text);
+        toast({ kind: "error", title: "Bulk action failed", body: text });
         return;
       }
       onClear();
       router.refresh();
+      toast({ kind: "success", title: `Updated ${selectedIds.length} lead(s)` });
     } catch {
       setErr("Network error");
+      toast({ kind: "error", title: "Bulk action failed", body: "Network error" });
     } finally {
       setBusy(false);
     }

@@ -10,6 +10,7 @@ import type { Ticket, TicketPriority } from "@/lib/tickets/types";
 import { SITE_TYPES, FRESH_OPTIONS } from "@/lib/leads/types";
 import { toDateTimeLocal, formatDateTime, formatCurrency } from "@/lib/leads/format";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useToast } from "@/components/common/Toast";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
 import { DeleteLeadModal } from "./DeleteLeadModal";
@@ -49,6 +50,7 @@ export function LeadDetail({
   const canDeepseek = has("ai_tools.deepseek");
   const canQueue = canWebcraft || canDeepseek;
   const router = useRouter();
+  const { toast } = useToast();
 
   const [statusOpen, setStatusOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -66,6 +68,10 @@ export function LeadDetail({
     setQueuing(false);
     const j = await res.json().catch(() => ({}));
     setQueueMsg(res.ok ? "Queued for generation" : (j.error ?? "Could not queue"));
+    toast({
+      kind: res.ok ? "success" : "error",
+      title: res.ok ? "Queued for website generation" : (j.error ?? "Could not queue"),
+    });
   }
 
   /** PATCH a single field; throws so FieldRow surfaces the error and stays in edit. */

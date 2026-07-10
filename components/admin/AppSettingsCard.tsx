@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { AppSettings } from "@/lib/settings/appSettings";
 import { BrandMark } from "@/components/branding/BrandMark";
+import { useToast } from "@/components/common/Toast";
 
 const inputCls =
   "w-full px-3 py-2 rounded-md border border-border bg-surface text-sm text-text outline-none focus:ring-2 focus:ring-accent";
@@ -42,6 +43,7 @@ export function AppSettingsCard({
   initialLogoUrl: string | null;
 }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [companyName, setCompanyName] = useState(initial.company_name);
   const [workStartTime, setWorkStartTime] = useState(hhmm(initial.work_start_time));
   const [workTimezone, setWorkTimezone] = useState(initial.work_timezone);
@@ -77,9 +79,11 @@ export function AppSettingsCard({
     setSaving(false);
     if (!res.ok) {
       setMsg({ ok: false, text: (await res.json().catch(() => ({}))).error ?? "Failed to save" });
+      toast({ kind: "error", title: "Couldn't save settings" });
       return;
     }
     setMsg({ ok: true, text: "Settings saved" });
+    toast({ kind: "success", title: "Settings saved" });
     router.refresh();
   }
 
