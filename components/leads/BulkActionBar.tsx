@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { X, Loader2 } from "lucide-react";
 import type { Lead } from "@/lib/leads/types";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
+import { Select } from "@/components/common/Select";
 
 type BulkAction = "status" | "assign" | "archive";
 
@@ -73,20 +74,20 @@ export function BulkActionBar({
       <div className="w-px h-5 bg-border" />
 
       {can.status && (
-        <select className={selectCls} disabled={busy} defaultValue=""
+        <Select className={selectCls} disabled={busy} defaultValue=""
           onChange={(e) => { const v = e.target.value; e.currentTarget.value = ""; if (v) void run("status", v); }}>
           <option value="" disabled>Set status…</option>
           {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        </Select>
       )}
 
       {can.assign && (
-        <select className={selectCls} disabled={busy} defaultValue=""
+        <Select className={selectCls} disabled={busy} defaultValue=""
           onChange={(e) => { const v = e.target.value; e.currentTarget.value = ""; if (v) void run("assign", v === "__unassign__" ? "" : v); }}>
           <option value="" disabled>Assign to…</option>
           <option value="__unassign__">Unassigned</option>
           {Object.entries(agentNameById).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-        </select>
+        </Select>
       )}
 
       {can.export && (

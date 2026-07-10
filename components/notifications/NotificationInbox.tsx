@@ -7,6 +7,7 @@ import { formatDateTime } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { cn } from "@/lib/utils";
+import { Select } from "@/components/common/Select";
 
 function BellTag({ bell }: { bell: NotifyBell }) {
   return (
@@ -77,7 +78,7 @@ export function NotificationInbox({ initial }: { initial: AppNotification[] }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <select
+          <Select
             className={inputCls + " w-auto"}
             value={bellFilter}
             onChange={(e) => setBellFilter(e.target.value as NotifyBell | "")}
@@ -85,15 +86,15 @@ export function NotificationInbox({ initial }: { initial: AppNotification[] }) {
             <option value="">All bells</option>
             <option value="website">Website</option>
             <option value="general">General</option>
-          </select>
-          <select
+          </Select>
+          <Select
             className={inputCls + " w-auto"}
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as "" | "unread")}
           >
             <option value="">All</option>
             <option value="unread">Unread</option>
-          </select>
+          </Select>
           <button
             type="button"
             onClick={markAllRead}

@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type { RegionFacet } from "@/lib/geo/regions";
 
 export function RegionFilter({ facets, selected, onChange }: {
@@ -20,9 +21,10 @@ export function RegionFilter({ facets, selected, onChange }: {
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen((o) => !o)}
-        className={"px-3 py-2 rounded-md border text-sm outline-none focus:ring-2 focus:ring-accent " +
+        className={"inline-flex items-center gap-1 px-3 py-2 rounded-md border text-sm outline-none focus:ring-2 focus:ring-accent " +
           (selected.length ? "border-accent bg-accent-soft text-accent-ink" : "border-border bg-surface text-text-muted")}>
-        {label} ▾
+        {label}
+        <ChevronDown className="w-3.5 h-3.5 shrink-0" />
       </button>
       {open && (
         <div className="absolute z-20 mt-1 w-64 max-h-72 overflow-auto bg-surface border border-border rounded-md shadow-lg p-1">

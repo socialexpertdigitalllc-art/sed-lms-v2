@@ -25,6 +25,7 @@ import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { useUrlState } from "@/hooks/useUrlState";
 import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
+import { Select } from "@/components/common/Select";
 
 type FollowFilter = "all" | "due" | "past";
 type Modal = { mode: "follow" | null; lead: PreLead | null };
@@ -266,7 +267,7 @@ export function PreLeadsTable({
           placeholder="Search business, owner, email, phone…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
-        <select
+        <Select
           value={followFilter}
           onChange={(e) => setPs({ follow: e.target.value })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
@@ -274,8 +275,8 @@ export function PreLeadsTable({
           <option value="all">All follow-ups</option>
           <option value="due">Due 24h</option>
           <option value="past">Past due</option>
-        </select>
-        <select
+        </Select>
+        <Select
           value={ps.status}
           onChange={(e) => setPs({ status: e.target.value })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
@@ -286,7 +287,7 @@ export function PreLeadsTable({
               {s}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
       {/* table */}

@@ -9,6 +9,7 @@ import { formatDateTime, initials } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { useUrlState } from "@/hooks/useUrlState";
+import { Select } from "@/components/common/Select";
 import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
 
 export type QueueTicket = Ticket & {
@@ -177,7 +178,7 @@ export function TicketQueue({
               Assigned to me
             </label>
           )}
-          <select
+          <Select
             className={inputCls + " w-auto"}
             value={statusFilter}
             onChange={(e) => setTs({ status: e.target.value })}
@@ -188,7 +189,7 @@ export function TicketQueue({
                 {s}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
       </div>
 

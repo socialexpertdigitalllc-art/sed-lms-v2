@@ -35,6 +35,7 @@ import { MonthFilter } from "@/components/common/MonthFilter";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
+import { Select } from "@/components/common/Select";
 
 const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
@@ -366,25 +367,25 @@ export function LeadsTable({
           placeholder="Search business, email, agent…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
-        <select
+        <Select
           value={agent}
           onChange={(e) => setUrlState({ agent: e.target.value, page: "0" })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="">All agents</option>
           {agentOptions.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select
+        </Select>
+        <Select
           value={type}
           onChange={(e) => setUrlState({ type: e.target.value, page: "0" })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="">All types</option>
           {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
+        </Select>
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(","), page: "0" })} />
         {canScopeMonth && <MonthFilter options={monthOptions(leads)} value={month} onChange={(v) => setUrlState({ month: v, page: "0" })} />}
-        <select
+        <Select
           value={sort}
           onChange={(e) => setUrlState({ sort: e.target.value, page: "0" })}
           className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
@@ -394,7 +395,7 @@ export function LeadsTable({
           <option value="rating:desc">Rating</option>
           <option value="business_name:asc">Alphabetical</option>
           {!SORT_PRESETS.includes(sort) && <option value={sort}>Custom</option>}
-        </select>
+        </Select>
         {canExport && (
           <button onClick={exportCsv} className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted hover:bg-surface-2 whitespace-nowrap inline-flex items-center gap-1.5">
             <Download className="w-4 h-4" /> Export CSV

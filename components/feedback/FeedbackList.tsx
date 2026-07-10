@@ -6,6 +6,7 @@ import { FEEDBACK_STATUSES, type Feedback, type FeedbackStatus } from "@/lib/fee
 import { formatDateTime } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
+import { Select } from "@/components/common/Select";
 
 const STATUS_CLS: Record<FeedbackStatus, string> = {
   Open: "bg-surface-2 text-text-muted",
@@ -89,7 +90,7 @@ export function FeedbackList({
       <div className="flex items-center justify-between gap-2 mb-4">
         <div className="text-sm font-semibold text-text">{title}</div>
         {manage && (
-          <select
+          <Select
             className={inputCls + " w-auto"}
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as FeedbackStatus | "")}
@@ -100,7 +101,7 @@ export function FeedbackList({
                 {s}
               </option>
             ))}
-          </select>
+          </Select>
         )}
       </div>
 
