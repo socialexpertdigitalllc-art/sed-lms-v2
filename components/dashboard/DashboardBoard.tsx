@@ -29,7 +29,7 @@ import type { dashboardVisibility } from "@/lib/dashboard/visibility";
 import type { Lead } from "@/lib/leads/types";
 import { filterLeadsByRegions, type RegionFacet } from "@/lib/geo/regions";
 import { RegionFilter } from "@/components/leads/RegionFilter";
-import { useUrlState } from "@/hooks/useUrlState";
+import { useViewState } from "@/hooks/useViewState";
 import { MonthFilter } from "@/components/common/MonthFilter";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 
@@ -77,7 +77,7 @@ export function DashboardBoard({
   const [selected, setSelected] = useState<string[]>([]);
   const selSet = useMemo(() => new Set(selected), [selected]);
 
-  const [dashUrl, setDashUrl] = useUrlState(DASH_DEFAULTS);
+  const [dashUrl, setDashUrl] = useViewState(DASH_DEFAULTS);
   const month = canScopeMonth ? dashUrl.month : "";
   const monthOpts = useMemo(() => monthOptions(leads), [leads]);
   const scoping = selSet.size > 0 || month !== "";

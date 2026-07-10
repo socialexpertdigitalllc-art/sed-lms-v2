@@ -25,7 +25,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
-import { useUrlState } from "@/hooks/useUrlState";
+import { useViewState } from "@/hooks/useViewState";
 import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Select } from "@/components/common/Select";
@@ -61,7 +61,7 @@ export function PreLeadsTable({
   const canFollowUp = has("pre_leads.followup");
   const canDelete = has("pre_leads.delete");
 
-  const [ps, setPs] = useUrlState(PRELEADS_DEFAULTS);
+  const [ps, setPs] = useViewState(PRELEADS_DEFAULTS);
   const categoryTab = ps.category;
   const followFilter = ps.follow as FollowFilter;
   const sorting = useMemo<SortingState>(() => {

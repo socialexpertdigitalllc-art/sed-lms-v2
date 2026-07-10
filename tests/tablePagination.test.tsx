@@ -18,7 +18,7 @@ const makeRows = (n = 30): Row[] => Array.from({ length: n }, (_, i) => ({ id: S
 /**
  * Mirrors how LeadsTable/PreLeadsTable/GenerationsTable wire react-table:
  * fully controlled pagination + onPaginationChange writing back (in the app,
- * into useUrlState). `stable` toggles our noAutoPageReset options on/off.
+ * into useViewState). `stable` toggles our noAutoPageReset options on/off.
  */
 function Harness({ data, stable }: { data: Row[]; stable: boolean }) {
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 10 });

@@ -17,7 +17,7 @@ import {
 import { formatDateTime, initials } from "@/lib/leads/format";
 import { TOOLS } from "@/lib/ai-tools/config";
 import type { AiGeneration } from "@/lib/ai-tools/types";
-import { useUrlState } from "@/hooks/useUrlState";
+import { useViewState } from "@/hooks/useViewState";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
 import { serialColumn } from "@/components/common/tableSerial";
@@ -39,7 +39,7 @@ export function GenerationsTable({
   rows: AiGeneration[];
   agentNameById: Record<string, string>;
 }) {
-  const [gs, setGs] = useUrlState(GEN_DEFAULTS);
+  const [gs, setGs] = useViewState(GEN_DEFAULTS);
   const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = gs.sort.split(":");

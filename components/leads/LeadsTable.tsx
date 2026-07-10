@@ -33,7 +33,8 @@ import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
 import { RegionFilter } from "./RegionFilter";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
-import { useUrlState } from "@/hooks/useUrlState";
+import { useViewState } from "@/hooks/useViewState";
+import { buildQuery } from "@/lib/url/buildQuery";
 import { MonthFilter } from "@/components/common/MonthFilter";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 import { serialColumn } from "@/components/common/tableSerial";
@@ -92,7 +93,7 @@ export function LeadsTable({
   const router = useRouter();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const [urlState, setUrlState] = useUrlState(LEADS_DEFAULTS);
+  const [urlState, setUrlState] = useViewState(LEADS_DEFAULTS);
   const { q, status, agent, type, sort, page, size } = urlState;
   const canScopeMonth = has("analytics.view_all_agents");
   const month = canScopeMonth ? urlState.month : "";
@@ -460,7 +461,11 @@ export function LeadsTable({
         )}
         <DensityToggle />
         <ColumnsMenu table={table} />
-        <SavedViews path="/leads" onApply={(params) => setUrlState({ ...LEADS_DEFAULTS, ...params })} />
+        <SavedViews
+          path="/leads"
+          getQuery={() => buildQuery("", LEADS_DEFAULTS, urlState)}
+          onApply={(params) => setUrlState({ ...LEADS_DEFAULTS, ...params })}
+        />
       </div>
 
       {/* table */}

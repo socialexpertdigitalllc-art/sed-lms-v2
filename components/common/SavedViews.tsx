@@ -8,9 +8,12 @@ type SavedView = { id: string; name: string; path: string; query: string; create
 
 export function SavedViews({
   path,
+  getQuery,
   onApply,
 }: {
   path: string;
+  /** Serialize the CURRENT view state (the URL no longer carries it). */
+  getQuery: () => string;
   onApply: (params: Record<string, string>) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -48,7 +51,7 @@ export function SavedViews({
     if (!trimmed || busy) return;
     setBusy(true);
     try {
-      const query = window.location.search; // live query at click time
+      const query = getQuery(); // live view state at click time
       const res = await fetch("/api/me/views", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

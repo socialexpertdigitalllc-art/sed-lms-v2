@@ -8,7 +8,7 @@ import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime, initials } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
-import { useUrlState } from "@/hooks/useUrlState";
+import { useViewState } from "@/hooks/useViewState";
 import { Select } from "@/components/common/Select";
 import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
 
@@ -41,15 +41,15 @@ export function TicketQueue({
   // assignees, so the "assigned to me" filter is only meaningful for them.
   const canFilterMine = canAssign || canResolve;
 
-  const [ts, setTs] = useUrlState(TICKETS_DEFAULTS);
+  const [ts, setTs] = useViewState(TICKETS_DEFAULTS);
   const statusFilter = ts.status as TicketStatus | "";
   const mineOnly = ts.mine === "1";
   const leadFilter = ts.lead || null;
 
   // `initialMine`/`initialLeadId` come from the page's own searchParams read
-  // (?mine=1&lead=<id>), which useUrlState's parse already picks up directly
-  // since the keys match — this is a defensive seed for callers/cases where
-  // the URL doesn't carry them yet but the prop does.
+  // (?mine=1&lead=<id>), which useViewState's deep-link consume already picks
+  // up directly since the keys match — this is a defensive seed for
+  // callers/cases where the URL doesn't carry them yet but the prop does.
   useEffect(() => {
     const patch: Partial<typeof TICKETS_DEFAULTS> = {};
     if (initialMine && canFilterMine && !ts.mine) patch.mine = "1";
