@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { ArrowUp, ArrowDown } from "lucide-react";
+import { ArrowUp, ArrowDown, Sparkles } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -23,6 +23,7 @@ import { Select } from "@/components/common/Select";
 import { useUiPrefs } from "@/providers/UiPrefsProvider";
 import { DensityToggle } from "@/components/common/DensityToggle";
 import { ColumnsMenu } from "@/components/common/ColumnsMenu";
+import { EmptyState } from "@/components/common/EmptyState";
 import "@/lib/tables/columnMeta";
 
 const GEN_DEFAULTS = { q: "", sort: "created_at:desc", page: "0", size: "15" };
@@ -224,7 +225,7 @@ export function GenerationsTable({
             </thead>
             <tbody>
               {tableRows.length === 0 ? (
-                <tr><td colSpan={columns.length} className="px-4 py-12 text-center text-text-faint">No generations yet.</td></tr>
+                <tr><td colSpan={columns.length}><EmptyState icon={Sparkles} title="No generations yet" hint="Website generations will appear here." /></td></tr>
               ) : (
                 tableRows.map((row) => (
                   <tr key={row.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">

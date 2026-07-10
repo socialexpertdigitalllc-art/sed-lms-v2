@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import "@/lib/tables/columnMeta";
-import { Download, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
+import { Download, ArrowUp, ArrowDown, ExternalLink, Users } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -43,6 +43,7 @@ import { Select } from "@/components/common/Select";
 import { useUiPrefs } from "@/providers/UiPrefsProvider";
 import { DensityToggle } from "@/components/common/DensityToggle";
 import { ColumnsMenu } from "@/components/common/ColumnsMenu";
+import { EmptyState } from "@/components/common/EmptyState";
 import { SavedViews } from "@/components/common/SavedViews";
 import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
 
@@ -478,7 +479,7 @@ export function LeadsTable({
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={columns.length} className="px-4 py-12 text-center text-text-faint">No leads match your filters.</td></tr>
+                <tr><td colSpan={columns.length}><EmptyState icon={Users} title="No leads found" hint="Try adjusting filters or search." /></td></tr>
               ) : (
                 rows.map((row, i) => (
                   <tr

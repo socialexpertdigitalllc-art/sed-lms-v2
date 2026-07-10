@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowUp, ArrowDown } from "lucide-react";
+import { ArrowUp, ArrowDown, Inbox } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -30,6 +30,7 @@ import { Select } from "@/components/common/Select";
 import { useUiPrefs } from "@/providers/UiPrefsProvider";
 import { DensityToggle } from "@/components/common/DensityToggle";
 import { ColumnsMenu } from "@/components/common/ColumnsMenu";
+import { EmptyState } from "@/components/common/EmptyState";
 import "@/lib/tables/columnMeta";
 
 type FollowFilter = "all" | "due" | "past";
@@ -352,8 +353,8 @@ export function PreLeadsTable({
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-4 py-12 text-center text-text-faint">
-                    No pre-leads match your filters.
+                  <td colSpan={columns.length}>
+                    <EmptyState icon={Inbox} title="No pre-leads found" hint="Try adjusting filters or search." />
                   </td>
                 </tr>
               ) : (
