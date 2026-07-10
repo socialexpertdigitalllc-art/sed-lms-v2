@@ -59,3 +59,6 @@ yarn-error.log*
 .vscode/*
 !.vscode/extensions.json
 .idea
+
+# local DB safety backups (contain demo data — never commit)
+backups/
