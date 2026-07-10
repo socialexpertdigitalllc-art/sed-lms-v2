@@ -227,7 +227,7 @@ export function PreLeadsTable({
   return (
     <div>
       {/* header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h1 className="text-xl font-semibold text-text">All Pre-Leads</h1>
           <p className="text-sm text-text-muted mt-0.5">{filteredCount} shown</p>

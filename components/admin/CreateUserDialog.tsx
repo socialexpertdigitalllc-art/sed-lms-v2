@@ -81,7 +81,7 @@ export function CreateUserDialog({
           <form
             onClick={(e) => e.stopPropagation()}
             onSubmit={handleSubmit(onSubmit)}
-            className="bg-surface border border-border rounded-lg p-6 w-[440px] max-h-[90vh] overflow-auto"
+            className="bg-surface border border-border rounded-lg p-6 w-full max-w-[440px] max-h-[90vh] overflow-auto"
           >
             <h2 className="font-semibold text-text mb-4">Create user</h2>
 

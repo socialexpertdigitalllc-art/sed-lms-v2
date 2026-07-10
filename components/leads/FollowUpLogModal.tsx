@@ -21,7 +21,7 @@ export function FollowUpLogModal({
     <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-surface border border-border rounded-lg p-6 w-[460px]"
+        className="bg-surface border border-border rounded-lg p-6 w-full max-w-[460px] max-h-[90vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-semibold text-text">Follow-up history ({followUps.length})</h2>

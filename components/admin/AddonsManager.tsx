@@ -150,6 +150,7 @@ export function AddonsManager({ initial }: { initial: Addon[] }) {
         {addons.length === 0 ? (
           <div className="p-5 text-sm text-text-muted">No add-ons configured yet.</div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-wide text-text-faint border-b border-border-subtle">
@@ -197,6 +198,7 @@ export function AddonsManager({ initial }: { initial: Addon[] }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

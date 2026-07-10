@@ -146,7 +146,7 @@ export function TicketModal({
     <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-surface border border-border rounded-lg p-6 w-[440px] max-h-[90vh] overflow-auto"
+        className="bg-surface border border-border rounded-lg p-6 w-full max-w-[440px] max-h-[90vh] overflow-auto"
       >
         <h2 className="font-semibold text-text">New ticket</h2>
         <p className="text-sm text-text-muted mt-1 mb-4">Log a change or improvement request for this lead</p>

@@ -18,7 +18,7 @@ export default async function UsersPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
           <h1 className="text-xl font-semibold text-text">Users</h1>
           <p className="text-sm text-text-muted mt-0.5">

@@ -23,6 +23,7 @@ export function UserTable({ users }: { users: UserRow[] }) {
   }
   return (
     <div className="bg-surface border border-border rounded-lg overflow-hidden">
+      <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-[10px] uppercase tracking-wide text-text-faint border-b border-border">
@@ -86,6 +87,7 @@ export function UserTable({ users }: { users: UserRow[] }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

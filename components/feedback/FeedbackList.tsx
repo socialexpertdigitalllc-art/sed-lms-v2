@@ -87,7 +87,7 @@ export function FeedbackList({
 
   return (
     <section className="bg-surface border border-border rounded-lg p-5">
-      <div className="flex items-center justify-between gap-2 mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div className="text-sm font-semibold text-text">{title}</div>
         {manage && (
           <Select

@@ -83,6 +83,7 @@ export function SheetImporter({ initialConfig }: { initialConfig: ImportConfig }
             <span className="text-text-muted">Dupes: <b className="text-notready-fg font-mono">{preview.dup}</b></span>
             <span className="text-text-muted">Invalid: <b className="text-dropped-fg font-mono">{preview.invalid}</b></span>
           </div>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-[10px] uppercase tracking-wide text-text-faint"><th className="py-2 pr-3">Business</th><th className="pr-3">Status</th><th className="pr-3">Agent</th><th className="pr-3"></th></tr></thead>
             <tbody>
@@ -96,6 +97,7 @@ export function SheetImporter({ initialConfig }: { initialConfig: ImportConfig }
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

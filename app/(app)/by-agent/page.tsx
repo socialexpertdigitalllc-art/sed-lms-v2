@@ -68,6 +68,7 @@ export default async function ByAgentPage() {
                 <Stat label="Closed" value={c.closed} tone="text-closed-fg" />
               </div>
 
+              <div className="overflow-x-auto">
               <table className="w-full text-sm mt-4">
                 <tbody>
                   {c.recent.map((l) => (
@@ -85,6 +86,7 @@ export default async function ByAgentPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           ))}
         </div>

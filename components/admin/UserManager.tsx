@@ -351,7 +351,7 @@ export function UserManager({
 
       {deleteOpen && (
         <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4" onClick={() => setDeleteOpen(false)}>
-          <div onClick={(e) => e.stopPropagation()} className="bg-surface border border-border rounded-lg p-6 w-[400px]">
+          <div onClick={(e) => e.stopPropagation()} className="bg-surface border border-border rounded-lg p-6 w-full max-w-[400px] max-h-[90vh] overflow-y-auto">
             <h2 className="font-semibold text-text">Delete user</h2>
             <p className="text-sm text-text-muted mt-2">
               Permanently delete <span className="font-medium text-text">{email}</span>? This removes their

@@ -21,7 +21,7 @@ export function FollowUpDetailModal({
     <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-surface border border-border rounded-lg p-6 w-[400px]"
+        className="bg-surface border border-border rounded-lg p-6 w-full max-w-[400px] max-h-[90vh] overflow-y-auto"
       >
         <div className="flex items-center gap-2">
           <FuStatusChip status={followUp.fu_status} />

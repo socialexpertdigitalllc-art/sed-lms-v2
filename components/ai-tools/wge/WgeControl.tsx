@@ -82,7 +82,7 @@ export function WgeControl({ initialConfig, leads }: { initialConfig: WgeConfig;
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5 gap-4">
+      <div className="flex flex-wrap items-center justify-between mb-5 gap-4">
         <div>
           <h1 className="text-xl font-semibold text-text">Website Engine (WGE) Control</h1>
           <p className="text-sm text-text-muted mt-0.5">Edit the prompt, field mapping, and engine settings used by every generation.</p>

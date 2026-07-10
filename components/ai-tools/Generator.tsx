@@ -177,7 +177,7 @@ export function Generator({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5 gap-4">
+      <div className="flex flex-wrap items-center justify-between mb-5 gap-4">
         <div>
           <h1 className="text-xl font-semibold text-text flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full" style={{ background: cfg.accent }} />
