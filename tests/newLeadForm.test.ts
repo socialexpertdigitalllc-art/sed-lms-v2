@@ -7,6 +7,7 @@ import {
   emptyNewLead,
   type NewLeadFormState,
 } from "@/lib/leads/newLeadForm";
+import { createLeadSchema } from "@/lib/leads/schema";
 
 function validState(): NewLeadFormState {
   return {
@@ -269,6 +270,49 @@ describe("polish-3: design_reference_links validation", () => {
       NOW
     );
     expect(e.design_reference_links).toBeFalsy();
+  });
+});
+
+describe("form audit: worst-case submission (every optional skipped)", () => {
+  // A state that fills ONLY what the UI marks required. This exact shape used to
+  // reach the DB and die on the design_reference_links / add_ons not-null
+  // constraints (relaxed in migration 0031) — pin the whole pipeline.
+  function minimalState(): NewLeadFormState {
+    return {
+      ...emptyNewLead("Not Ready"),
+      site_type: "Redesign", // exercises the optional reference_link branch too
+      business_name: "Minimal Lead",
+      business_phone: "(252) 401-2775",
+      no_email: true, // email skipped
+      platform: "Google",
+      business_profile_link: "https://maps.google.com/x",
+      has_service_areas: "No",
+      services: ["Plumbing"],
+      client_experience: "3",
+      specify_pages: ["Home"],
+      color_scheme: "blue",
+      follow_up_time: "2027-01-01T10:00",
+      price_quoted: "250",
+      comments: "ok",
+      rating: 5,
+      fresh_or_followup: "Fresh",
+    };
+  }
+
+  it("passes client validation with every optional empty", () => {
+    expect(validateNewLead(minimalState(), NOW)).toEqual({});
+  });
+
+  it("builds a payload that createLeadSchema accepts, with nullable empties", () => {
+    const payload = buildLeadPayload(minimalState());
+    const parsed = createLeadSchema.parse(payload);
+    expect(parsed.design_reference_links).toBeNull();
+    expect(parsed.add_ons).toBeNull();
+    expect(parsed.image_links).toBeNull();
+    expect(parsed.service_areas).toBeNull();
+    expect(parsed.reference_link).toBeNull();
+    expect(parsed.business_email).toBeNull();
+    expect(parsed.yearly_price).toBe("None");
   });
 });
 
