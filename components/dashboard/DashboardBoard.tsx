@@ -44,12 +44,20 @@ type TicketRow = {
 
 function ChartCard({ title, children, className = "" }: { title: string; children: ReactNode; className?: string }) {
   return (
-    <div className={"bg-surface border border-border rounded-lg p-4 " + className}>
+    <div className={"bg-surface border border-border rounded-lg p-3 " + className}>
       <div className="text-sm font-semibold text-text mb-3">{title}</div>
       {children}
     </div>
   );
 }
+
+/** Static span→class map — Tailwind can't see dynamically built class strings. */
+const SPAN: Record<number, string> = {
+  2: "lg:col-span-2",
+  3: "lg:col-span-3",
+  4: "lg:col-span-4",
+  6: "lg:col-span-6",
+};
 
 const DASH_DEFAULTS = { month: "" };
 
@@ -108,6 +116,99 @@ export function DashboardBoard({
     (flags.ready && visible.includes("Ready")) ||
     flags.avgRating;
 
+  const charts = [
+    {
+      key: "leadsOverTime",
+      show: flags.leadsOverTime,
+      span: 4,
+      title: "Leads over time",
+      node: <LeadsTrend data={leadsOverTime(fLeads)} />,
+    },
+    {
+      key: "pipelineByStatus",
+      show: flags.pipelineByStatus,
+      span: 2,
+      title: "Pipeline by status",
+      node: (
+        <>
+          <StatusDonut data={byStatus(fLeads)} />
+          <Legend items={STATUS_LEGEND.filter((i) => visible.includes(i.name))} />
+        </>
+      ),
+    },
+    {
+      key: "leadsByAgent",
+      show: flags.leadsByAgent,
+      span: 2,
+      title: "Leads by agent",
+      node: <LeadsByAgent data={byAgent(fLeads, agentNameById)} />,
+    },
+    {
+      key: "siteTypeSplit",
+      show: flags.siteTypeSplit,
+      span: 2,
+      title: "Site type split",
+      node: (
+        <>
+          <SiteTypeDonut data={siteData} />
+          <Legend
+            items={siteData.map((d, i) => ({
+              name: d.name,
+              color: SITE_PALETTE[i % SITE_PALETTE.length],
+            }))}
+          />
+        </>
+      ),
+    },
+    {
+      key: "ratingDistribution",
+      show: flags.ratingDistribution,
+      span: 2,
+      title: "Rating distribution",
+      node: <RatingBars data={ratingDistribution(fLeads)} />,
+    },
+    {
+      key: "revenueByStatus",
+      show: flags.revenueByStatus,
+      span: 3,
+      title: "Revenue by status",
+      node: <RevenueByStatus data={revenueByStatus(fLeads).filter((d) => visible.includes(d.name))} />,
+    },
+    {
+      key: "ticketStatusSplit",
+      show: flags.ticketStatusSplit,
+      span: 3,
+      title: "Ticket status split",
+      node: <TicketStatusDonut data={ticketStatusSplit(fTickets)} />,
+    },
+    {
+      key: "freshVsFollowup",
+      show: flags.freshVsFollowup,
+      span: 6,
+      title: "Fresh vs follow-up",
+      node: (
+        <>
+          <div className="flex items-center gap-4">
+            <div className="flex-1 h-3 rounded-full overflow-hidden bg-border-subtle flex">
+              <div className="h-full bg-accent" style={{ width: `${(fvf.fresh / freshTotal) * 100}%` }} />
+              <div className="h-full bg-longterm-fg" style={{ width: `${(fvf.followUp / freshTotal) * 100}%` }} />
+            </div>
+          </div>
+          <div className="flex gap-6 mt-3 text-sm">
+            <span className="flex items-center gap-2 text-text-muted">
+              <span className="w-2.5 h-2.5 rounded-sm bg-accent" /> Fresh
+              <span className="font-mono text-text">{fvf.fresh}</span>
+            </span>
+            <span className="flex items-center gap-2 text-text-muted">
+              <span className="w-2.5 h-2.5 rounded-sm bg-longterm-fg" /> Follow Up
+              <span className="font-mono text-text">{fvf.followUp}</span>
+            </span>
+          </div>
+        </>
+      ),
+    },
+  ].filter((c) => c.show);
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
@@ -140,82 +241,14 @@ export function DashboardBoard({
 
       {flags.statusStrip && <StatusStrip kpis={kpis} statuses={visible} />}
 
-      {(flags.leadsOverTime || flags.pipelineByStatus) && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {flags.leadsOverTime && (
-            <ChartCard title="Leads over time" className="lg:col-span-2">
-              <LeadsTrend data={leadsOverTime(fLeads)} />
+      {charts.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-6 gap-4">
+          {charts.map((c) => (
+            <ChartCard key={c.key} title={c.title} className={SPAN[c.span]}>
+              {c.node}
             </ChartCard>
-          )}
-          {flags.pipelineByStatus && (
-            <ChartCard title="Pipeline by status">
-              <StatusDonut data={byStatus(fLeads)} />
-              <Legend items={STATUS_LEGEND.filter((i) => visible.includes(i.name))} />
-            </ChartCard>
-          )}
+          ))}
         </div>
-      )}
-
-      {(flags.leadsByAgent || flags.siteTypeSplit || flags.ratingDistribution) && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {flags.leadsByAgent && (
-            <ChartCard title="Leads by agent">
-              <LeadsByAgent data={byAgent(fLeads, agentNameById)} />
-            </ChartCard>
-          )}
-          {flags.siteTypeSplit && (
-            <ChartCard title="Site type split">
-              <SiteTypeDonut data={siteData} />
-              <Legend
-                items={siteData.map((d, i) => ({
-                  name: d.name,
-                  color: SITE_PALETTE[i % SITE_PALETTE.length],
-                }))}
-              />
-            </ChartCard>
-          )}
-          {flags.ratingDistribution && (
-            <ChartCard title="Rating distribution">
-              <RatingBars data={ratingDistribution(fLeads)} />
-            </ChartCard>
-          )}
-        </div>
-      )}
-
-      {(flags.revenueByStatus || flags.ticketStatusSplit) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {flags.revenueByStatus && (
-            <ChartCard title="Revenue by status">
-              <RevenueByStatus data={revenueByStatus(fLeads).filter((d) => visible.includes(d.name))} />
-            </ChartCard>
-          )}
-          {flags.ticketStatusSplit && (
-            <ChartCard title="Ticket status split">
-              <TicketStatusDonut data={ticketStatusSplit(fTickets)} />
-            </ChartCard>
-          )}
-        </div>
-      )}
-
-      {flags.freshVsFollowup && (
-        <ChartCard title="Fresh vs follow-up">
-          <div className="flex items-center gap-4">
-            <div className="flex-1 h-3 rounded-full overflow-hidden bg-border-subtle flex">
-              <div className="h-full bg-accent" style={{ width: `${(fvf.fresh / freshTotal) * 100}%` }} />
-              <div className="h-full bg-longterm-fg" style={{ width: `${(fvf.followUp / freshTotal) * 100}%` }} />
-            </div>
-          </div>
-          <div className="flex gap-6 mt-3 text-sm">
-            <span className="flex items-center gap-2 text-text-muted">
-              <span className="w-2.5 h-2.5 rounded-sm bg-accent" /> Fresh
-              <span className="font-mono text-text">{fvf.fresh}</span>
-            </span>
-            <span className="flex items-center gap-2 text-text-muted">
-              <span className="w-2.5 h-2.5 rounded-sm bg-longterm-fg" /> Follow Up
-              <span className="font-mono text-text">{fvf.followUp}</span>
-            </span>
-          </div>
-        </ChartCard>
       )}
     </div>
   );

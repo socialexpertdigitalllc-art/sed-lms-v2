@@ -32,9 +32,13 @@ export default async function AppLayout({
 
   const uiPrefs = (profile?.ui_preferences as Record<string, unknown>) ?? {};
   const sidebarPinned = (uiPrefs.sidebarPinned as boolean | undefined) ?? false;
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : [];
+  const rawOrder = uiPrefs.dashboardOrder as { hero?: unknown; tiles?: unknown } | undefined;
   const uiInitial = {
     density: (uiPrefs.density === "compact" ? "compact" : "comfortable") as Density,
     columns: (uiPrefs.columns as Record<string, Record<string, boolean>>) ?? {},
+    dashboardOrder: { hero: strArr(rawOrder?.hero), tiles: strArr(rawOrder?.tiles) },
   };
 
   return (

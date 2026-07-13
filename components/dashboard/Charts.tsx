@@ -37,7 +37,7 @@ const axisProps = {
 
 function EmptyChart({ label }: { label: string }) {
   return (
-    <div className="h-full min-h-[180px] grid place-items-center text-sm text-text-faint">
+    <div className="h-full min-h-[150px] grid place-items-center text-sm text-text-faint">
       {label}
     </div>
   );
@@ -50,7 +50,7 @@ export function LeadsTrend({ data }: { data: NameValue[] }) {
     return `${d.getMonth() + 1}/${d.getDate()}`;
   };
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ResponsiveContainer width="100%" height={170}>
       <AreaChart data={data} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
         <defs>
           <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
@@ -71,7 +71,7 @@ export function LeadsTrend({ data }: { data: NameValue[] }) {
 export function LeadsByAgent({ data }: { data: NameValue[] }) {
   if (!data.length) return <EmptyChart label="No agents yet" />;
   return (
-    <ResponsiveContainer width="100%" height={Math.max(160, data.length * 38)}>
+    <ResponsiveContainer width="100%" height={Math.max(140, data.length * 32)}>
       <BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 8, bottom: 0 }}>
         <CartesianGrid stroke={GRID} horizontal={false} />
         <XAxis type="number" {...axisProps} allowDecimals={false} />
@@ -86,7 +86,7 @@ export function LeadsByAgent({ data }: { data: NameValue[] }) {
 export function RevenueByStatus({ data }: { data: { name: string; value: number }[] }) {
   if (!data.length) return <EmptyChart label="No revenue yet" />;
   return (
-    <ResponsiveContainer width="100%" height={Math.max(160, data.length * 38)}>
+    <ResponsiveContainer width="100%" height={Math.max(140, data.length * 32)}>
       <BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 8, bottom: 0 }}>
         <CartesianGrid stroke={GRID} horizontal={false} />
         <XAxis type="number" {...axisProps} allowDecimals={false} />
@@ -109,7 +109,7 @@ export function RevenueByStatus({ data }: { data: { name: string; value: number 
 export function StatusDonut({ data }: { data: NameValue[] }) {
   if (!data.length) return <EmptyChart label="No leads yet" />;
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ResponsiveContainer width="100%" height={170}>
       <PieChart>
         <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={72} paddingAngle={2} stroke="none" isAnimationActive={false}>
           {data.map((d) => (
@@ -125,7 +125,7 @@ export function StatusDonut({ data }: { data: NameValue[] }) {
 export function TicketStatusDonut({ data }: { data: { name: string; value: number }[] }) {
   if (!data.length) return <EmptyChart label="No tickets yet" />;
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ResponsiveContainer width="100%" height={170}>
       <PieChart>
         <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={72} paddingAngle={2} stroke="none" isAnimationActive={false}>
           {data.map((d) => (
@@ -141,7 +141,7 @@ export function TicketStatusDonut({ data }: { data: { name: string; value: numbe
 export function SiteTypeDonut({ data }: { data: NameValue[] }) {
   if (!data.length) return <EmptyChart label="No site types yet" />;
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ResponsiveContainer width="100%" height={170}>
       <PieChart>
         <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={72} paddingAngle={2} stroke="none" isAnimationActive={false}>
           {data.map((d, i) => (
@@ -158,7 +158,7 @@ export function RatingBars({ data }: { data: NameValue[] }) {
   const hasAny = data.some((d) => d.value > 0);
   if (!hasAny) return <EmptyChart label="No ratings yet" />;
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ResponsiveContainer width="100%" height={170}>
       <BarChart data={data} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
         <CartesianGrid stroke={GRID} vertical={false} />
         <XAxis dataKey="name" {...axisProps} />

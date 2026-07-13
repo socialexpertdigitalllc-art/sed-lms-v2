@@ -1,6 +1,12 @@
+"use client";
+
+import { GripVertical } from "lucide-react";
 import { formatCompactCurrency } from "@/lib/leads/format";
 import type { ExtendedKpis } from "@/lib/dashboard/metrics";
 import type { DashboardVisibility } from "@/lib/dashboard/visibility";
+import { applyOrder } from "@/lib/dashboard/orderCards";
+import { useCardDnd } from "@/hooks/useCardDnd";
+import { useUiPrefs } from "@/providers/UiPrefsProvider";
 
 const fmtHours = (h: number | null) =>
   h === null ? "—" : h < 48 ? `${Math.round(h)}h` : `${(h / 24).toFixed(1)}d`;
@@ -15,6 +21,7 @@ interface Tile {
 }
 
 export function StatGrid({ kpis, show }: { kpis: ExtendedKpis; show: DashboardVisibility }) {
+  const { dashboardOrder, setDashboardOrder } = useUiPrefs();
   const tiles: Tile[] = [
     {
       key: "closedRevenue",
@@ -90,15 +97,34 @@ export function StatGrid({ kpis, show }: { kpis: ExtendedKpis; show: DashboardVi
     },
   ];
 
-  const shown = tiles.filter((t) => t.show);
+  const shown = applyOrder(tiles.filter((t) => t.show), dashboardOrder.tiles);
+  const { overKey, cardProps } = useCardDnd(
+    shown.map((t) => t.key),
+    (next) => {
+      const hidden = dashboardOrder.tiles.filter((k) => !next.includes(k));
+      setDashboardOrder({ ...dashboardOrder, tiles: [...next, ...hidden] });
+    }
+  );
+
   if (shown.length === 0) return null;
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
       {shown.map((t) => (
-        <div key={t.key} className="bg-surface border border-border rounded-lg p-3">
+        <div
+          key={t.key}
+          {...cardProps(t.key)}
+          className={
+            "group relative bg-surface border border-border rounded-lg p-2.5" +
+            (overKey === t.key ? " ring-2 ring-accent/40" : "")
+          }
+        >
+          <GripVertical
+            aria-hidden
+            className="absolute top-2 right-2 w-3.5 h-3.5 text-text-faint opacity-0 group-hover:opacity-100 cursor-grab"
+          />
           <div className="text-[10px] uppercase tracking-wide text-text-faint">{t.label}</div>
-          <div className={"text-lg font-semibold text-text mt-1" + (t.valueClass ?? "")}>
+          <div className={"text-base font-semibold text-text mt-1" + (t.valueClass ?? "")}>
             {t.value}
           </div>
           <div className="text-xs text-text-muted mt-0.5">{t.sub}</div>
