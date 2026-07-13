@@ -38,6 +38,18 @@ export default async function LeadDetailPage({
     .eq("lead_id", id)
     .order("created_at", { ascending: false });
 
+  // Tags applied to this lead + the catalog. Both RLS-scoped on the user client
+  // (leads.tags.view/manage) — they return [] for users without a tag perm.
+  const { data: leadTagRows } = await supabase
+    .from("lead_tag_links")
+    .select("tag_id")
+    .eq("lead_id", id);
+  const leadTagIds = (leadTagRows ?? []).map((r) => r.tag_id as string);
+  const { data: allTags } = await supabase
+    .from("lead_tags")
+    .select("id, name, color")
+    .order("name");
+
   const admin = createAdminClient();
   const settings = await getAppSettings();
 
@@ -89,6 +101,8 @@ export default async function LeadDetailPage({
     data: { user },
   } = await supabase.auth.getUser();
   const perms = user ? await getUserPermissions(user.id) : new Set<string>();
+  const canManageTags = perms.has("leads.tags.manage");
+  const canViewTags = canManageTags || perms.has("leads.tags.view");
 
   // Ticket user-scoping for the Tickets card: without `tickets.view_all`,
   // only tickets the user created or tickets on leads assigned to them.
@@ -147,6 +161,10 @@ export default async function LeadDetailPage({
       canEditClosedBy={canEditClosedBy}
       tickets={visibleTickets}
       sla={settings.ticket_sla}
+      allTags={allTags ?? []}
+      leadTagIds={leadTagIds}
+      canViewTags={canViewTags}
+      canManageTags={canManageTags}
     />
   );
 }

@@ -1,15 +1,21 @@
 import { createClient } from "@/lib/supabase/server";
+import { getUserPermissions } from "@/lib/permissions/resolver";
 import { LeadsTable } from "@/components/leads/LeadsTable";
-import type { Lead } from "@/lib/leads/types";
+import type { Lead, LeadTag } from "@/lib/leads/types";
 
 export default async function LeadsPage() {
   const supabase = await createClient();
   const { data: leadsData } = await supabase
     .from("leads")
-    .select("*")
+    .select("*, lead_tag_links(tag_id)")
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
-  const leads = (leadsData ?? []) as Lead[];
+  // Flatten the embedded links into `tag_ids` and drop the nested field.
+  // For users without a tag permission, RLS returns no link rows → `tag_ids: []`.
+  const leads: Lead[] = (leadsData ?? []).map((row: any) => {
+    const { lead_tag_links, ...rest } = row;
+    return { ...rest, tag_ids: (lead_tag_links ?? []).map((l: any) => l.tag_id) } as Lead;
+  });
 
   const { data: agents } = await supabase.from("profiles").select("id, display_name");
   const agentNameById: Record<string, string> = {};
@@ -32,5 +38,28 @@ export default async function LeadsPage() {
       .filter((u: any) => u.id);
   }
 
-  return <LeadsTable leads={leads} agentNameById={agentNameById} salesAgents={salesAgents} />;
+  // Tag catalog — RLS returns [] without leads.tags.view/manage.
+  const { data: tagsData } = await supabase
+    .from("lead_tags")
+    .select("id, name, color")
+    .order("name");
+  const tags = (tagsData ?? []) as LeadTag[];
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const perms = user ? await getUserPermissions(user.id) : new Set<string>();
+  const canManageTags = perms.has("leads.tags.manage");
+  const canViewTags = canManageTags || perms.has("leads.tags.view");
+
+  return (
+    <LeadsTable
+      leads={leads}
+      agentNameById={agentNameById}
+      salesAgents={salesAgents}
+      tags={tags}
+      canViewTags={canViewTags}
+      canManageTags={canManageTags}
+    />
+  );
 }

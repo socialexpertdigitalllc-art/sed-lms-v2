@@ -13,6 +13,8 @@ export const PERMISSIONS = [
   { key: "leads.export", name: "Export Leads", category: "leads" },
   { key: "leads.duplicate.override", name: "Override Duplicate Lead Block", category: "leads", is_sensitive: true },
   { key: "leads.followup", name: "Log Lead Follow-ups", category: "leads" },
+  { key: "leads.tags.view", name: "View & Filter Tags", category: "leads" },
+  { key: "leads.tags.manage", name: "Manage Lead Tags", category: "leads" },
   { key: "pre_leads.view", name: "View Pre-Leads", category: "pre_leads" },
   { key: "pre_leads.create", name: "Create Pre-Lead", category: "pre_leads" },
   { key: "pre_leads.edit", name: "Edit Pre-Lead", category: "pre_leads" },

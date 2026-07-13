@@ -22,6 +22,9 @@ export const STATUS_PILL: Record<string, string> = {
 
 export type AddOn = { id: string; label: string; price: number | null };
 
+/** A custom lead tag from the `lead_tags` catalog. */
+export type LeadTag = { id: string; name: string; color: string };
+
 export interface Lead {
   id: string;
   status: string;
@@ -63,4 +66,6 @@ export interface Lead {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  /** Populated client-side from `lead_tag_links` (not a column on `leads`). */
+  tag_ids?: string[];
 }

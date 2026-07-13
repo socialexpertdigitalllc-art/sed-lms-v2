@@ -3,8 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon, LayoutTemplate } from "lucide-react";
-import type { Lead } from "@/lib/leads/types";
+import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon, LayoutTemplate, Tags, X, Plus } from "lucide-react";
+import type { Lead, LeadTag } from "@/lib/leads/types";
+import { tagColor } from "@/lib/leads/tagColors";
+import { toggleTag } from "@/lib/leads/tagFilter";
+import { Select } from "@/components/common/Select";
 import type { LeadFollowUp } from "@/lib/leads/followups";
 import type { Ticket, TicketPriority } from "@/lib/tickets/types";
 import { SITE_TYPES, FRESH_OPTIONS } from "@/lib/leads/types";
@@ -37,6 +40,10 @@ export function LeadDetail({
   canEditClosedBy,
   tickets,
   sla,
+  allTags,
+  leadTagIds,
+  canViewTags,
+  canManageTags,
 }: {
   lead: Lead;
   agents: Agent[];
@@ -46,6 +53,10 @@ export function LeadDetail({
   canEditClosedBy: boolean;
   tickets: Ticket[];
   sla: Record<TicketPriority, number>;
+  allTags: LeadTag[];
+  leadTagIds: string[];
+  canViewTags: boolean;
+  canManageTags: boolean;
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
@@ -63,6 +74,34 @@ export function LeadDetail({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [queueMsg, setQueueMsg] = useState<string | null>(null);
   const [queuing, setQueuing] = useState(false);
+
+  // Tag editor — optimistic local set; PUT replaces the whole set, reverts on error.
+  const [tagIds, setTagIds] = useState<string[]>(leadTagIds);
+  const [savingTags, setSavingTags] = useState(false);
+  const tagById = Object.fromEntries(allTags.map((t) => [t.id, t] as const));
+  const availableTags = allTags.filter((t) => !tagIds.includes(t.id));
+
+  async function saveTags(next: string[]) {
+    const prev = tagIds;
+    setTagIds(next);
+    setSavingTags(true);
+    const res = await fetch(`/api/leads/${lead.id}/tags`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tagIds: next }),
+    });
+    setSavingTags(false);
+    if (!res.ok) {
+      setTagIds(prev);
+      const j = await res.json().catch(() => ({}));
+      toast({ kind: "error", title: j.error ?? "Could not update tags" });
+      return;
+    }
+    toast({ kind: "success", title: "Tags updated" });
+    router.refresh();
+  }
+  const removeTag = (id: string) => saveTags(toggleTag(tagIds, id));
+  const addTag = (id: string) => { if (id && !tagIds.includes(id)) saveTags(toggleTag(tagIds, id)); };
 
   async function queueForGeneration() {
     setQueuing(true);
@@ -248,6 +287,60 @@ export function LeadDetail({
           <SectionCard n={5} icon={ImageIcon} title="Images" subtitle="Reference imagery" done={false} delay={240}>
             <FieldRow label="Image links (one per line)" value={(lead.image_links ?? []).join("\n")} type="textarea" copy={(lead.image_links ?? []).join("\n")} canEdit={canEdit} onSave={(v) => patch({ image_links: lines(v) })} />
           </SectionCard>
+
+          {canViewTags && (
+            <SectionCard n={6} icon={Tags} title="Tags" subtitle="Categorize this lead" done={false} delay={300}>
+              <div className="flex flex-wrap items-center gap-2">
+                {tagIds.length === 0 && <span className="text-sm text-text-faint">No tags</span>}
+                {tagIds.map((id) => {
+                  const t = tagById[id];
+                  if (!t) return null;
+                  const col = tagColor(t.color);
+                  return (
+                    <span
+                      key={id}
+                      style={{ background: col.chipBg, color: col.chipFg, borderColor: col.hex + "55" }}
+                      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium"
+                    >
+                      {t.name}
+                      {canManageTags && (
+                        <button
+                          type="button"
+                          onClick={() => removeTag(id)}
+                          disabled={savingTags}
+                          aria-label={`Remove tag ${t.name}`}
+                          className="hover:opacity-70 disabled:opacity-50"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
+                    </span>
+                  );
+                })}
+              </div>
+              {canManageTags && availableTags.length > 0 && (
+                <div className="mt-3 inline-flex items-center gap-2">
+                  <Plus className="h-4 w-4 text-text-faint" />
+                  <Select
+                    value=""
+                    onChange={(e) => addTag(e.target.value)}
+                    disabled={savingTags}
+                    className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+                  >
+                    <option value="">Add tag…</option>
+                    {availableTags.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </Select>
+                </div>
+              )}
+              {canManageTags && allTags.length === 0 && (
+                <p className="mt-2 text-xs text-text-faint">
+                  No tags in the catalog yet — create tags from the Tags filter on the Leads list.
+                </p>
+              )}
+            </SectionCard>
+          )}
 
           {canDelete && (
             <div className="pt-1">

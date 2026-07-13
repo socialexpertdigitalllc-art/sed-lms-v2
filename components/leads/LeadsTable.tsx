@@ -18,7 +18,7 @@ import {
   type RowSelectionState,
   type VisibilityState,
 } from "@tanstack/react-table";
-import type { Lead } from "@/lib/leads/types";
+import type { Lead, LeadTag } from "@/lib/leads/types";
 import { SITE_TYPES } from "@/lib/leads/types";
 import { visibleStatuses, settableStatuses } from "@/lib/leads/categories";
 import { formatCurrency, formatDateTime, initials } from "@/lib/leads/format";
@@ -32,6 +32,9 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
 import { RegionFilter } from "./RegionFilter";
+import { TagFilter } from "./TagFilter";
+import { tagColor } from "@/lib/leads/tagColors";
+import { leadMatchesTags } from "@/lib/leads/tagFilter";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { useViewState } from "@/hooks/useViewState";
 import { buildQuery } from "@/lib/url/buildQuery";
@@ -50,19 +53,26 @@ import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", month: "", sort: "created_at:desc", page: "0", size: "15" };
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", tags: "", month: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
 
 export function LeadsTable({
   leads,
   agentNameById,
   salesAgents,
+  tags,
+  canViewTags,
+  canManageTags,
 }: {
   leads: Lead[];
   agentNameById: Record<string, string>;
   salesAgents: { id: string; name: string }[];
+  tags: LeadTag[];
+  canViewTags: boolean;
+  canManageTags: boolean;
 }) {
   const { has, all } = usePermissions();
+  const tagById = useMemo(() => Object.fromEntries(tags.map((t) => [t.id, t])), [tags]);
   const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   const visible = useMemo(() => visibleStatuses(all), [all]);
   useRealtimeRefresh("leads");
@@ -98,26 +108,28 @@ export function LeadsTable({
   const canScopeMonth = has("analytics.view_all_agents");
   const month = canScopeMonth ? urlState.month : "";
   const regionSel = useMemo(() => (urlState.region ? urlState.region.split(",") : []), [urlState.region]);
+  const tagSel = useMemo(() => (urlState.tags ? urlState.tags.split(",") : []), [urlState.tags]);
   // Any non-default filter — drives a visible "Clear filters" escape so a
   // persisted filter can never silently hide leads.
   const filtersActive =
-    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.region !== "" || urlState.month !== "";
+    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "";
   const clearFilters = () =>
-    setUrlState({ q: "", status: "All", agent: "", type: "", region: "", month: "", page: "0" });
+    setUrlState({ q: "", status: "All", agent: "", type: "", region: "", tags: "", month: "", page: "0" });
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
   }, [sort]);
   const pagination = useMemo(() => ({ pageIndex: Math.max(0, Number(page) || 0), pageSize: Math.max(1, Number(size) || 15) }), [page, size]);
-  const columnVisibility = useMemo<VisibilityState>(() => ({ ...(columnPrefs.leads ?? {}), region: false }), [columnPrefs]);
+  const columnVisibility = useMemo<VisibilityState>(() => ({ ...(columnPrefs.leads ?? {}), region: false, tags: false }), [columnPrefs]);
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const f: ColumnFiltersState = [];
     if (status !== "All") f.push({ id: "status", value: status });
     if (agent) f.push({ id: "agent", value: agent });
     if (type) f.push({ id: "site_type", value: type });
     if (regionSel.length) f.push({ id: "region", value: regionSel });
+    if (tagSel.length) f.push({ id: "tags", value: tagSel });
     return f;
-  }, [status, agent, type, regionSel]);
+  }, [status, agent, type, regionSel, tagSel]);
 
   const scopedLeads = useMemo(() => leads.filter((l) => inMonth(l.created_at, month)), [leads, month]);
 
@@ -211,22 +223,50 @@ export function LeadsTable({
         enableSorting: false,
       },
       {
+        id: "tags",
+        accessorFn: (row) => row.tag_ids ?? [],
+        filterFn: (row, id, value: string[]) => leadMatchesTags(row.getValue<string[]>(id), value),
+        enableSorting: false,
+        enableHiding: false,
+      },
+      {
         accessorKey: "business_name",
         header: "Business",
-        cell: (c) => (
-          <div className="min-w-0">
-            <div className="font-medium text-text truncate">
-              <Link
-                href={`/leads/${c.row.original.id}`}
-                onClick={(e) => e.stopPropagation()}
-                className="hover:underline"
-              >
-                {c.row.original.business_name}
-              </Link>
+        cell: (c) => {
+          const tagIds = c.row.original.tag_ids ?? [];
+          return (
+            <div className="min-w-0">
+              <div className="font-medium text-text truncate">
+                <Link
+                  href={`/leads/${c.row.original.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="hover:underline"
+                >
+                  {c.row.original.business_name}
+                </Link>
+              </div>
+              <div className="text-xs text-text-faint truncate">{c.row.original.business_email ?? ""}</div>
+              {canViewTags && tagIds.length > 0 && (
+                <div className="mt-1 hidden sm:flex flex-wrap gap-1">
+                  {tagIds.map((tid) => {
+                    const t = tagById[tid];
+                    if (!t) return null;
+                    const col = tagColor(t.color);
+                    return (
+                      <span
+                        key={tid}
+                        style={{ background: col.chipBg, color: col.chipFg, borderColor: col.hex + "55" }}
+                        className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none"
+                      >
+                        {t.name}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            <div className="text-xs text-text-faint truncate">{c.row.original.business_email ?? ""}</div>
-          </div>
-        ),
+          );
+        },
       },
       {
         accessorKey: "business_phone",
@@ -326,7 +366,7 @@ export function LeadsTable({
         ),
       },
     ],
-    [agentNameById, canChangeStatus, canFollowUp, canBulk]
+    [agentNameById, canChangeStatus, canFollowUp, canBulk, canViewTags, tagById]
   );
 
   const table = useReactTable({
@@ -448,6 +488,14 @@ export function LeadsTable({
           {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </Select>
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(","), page: "0" })} />
+        {canViewTags && (
+          <TagFilter
+            tags={tags}
+            selected={tagSel}
+            canManage={canManageTags}
+            onChange={(next) => setUrlState({ tags: next.join(","), page: "0" })}
+          />
+        )}
         {canScopeMonth && <MonthFilter options={monthOptions(leads)} value={month} onChange={(v) => setUrlState({ month: v, page: "0" })} />}
         <Select
           value={sort}
