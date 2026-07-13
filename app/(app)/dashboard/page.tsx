@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { dashboardVisibility, anyDashboardVisible } from "@/lib/dashboard/visibility";
 import type { Lead } from "@/lib/leads/types";
 import { getUserPermissions } from "@/lib/permissions/resolver";
@@ -22,6 +23,27 @@ export default async function DashboardPage() {
   const { data: tickets } = await supabase
     .from("lead_tickets")
     .select("status, due_date, created_at, resolved_at, lead_id");
+
+  // Sales-department members — targets for the admin per-agent analytics filter.
+  // Loaded via the admin client so the roster is complete for admins (the only
+  // ones who see the control; it is gated on `analytics.view_all_agents`).
+  const admin = createAdminClient();
+  const { data: salesDept } = await admin
+    .from("departments")
+    .select("id")
+    .eq("slug", "sales")
+    .single();
+  let salesUsers: { id: string; display_name: string }[] = [];
+  if (salesDept) {
+    const { data: members } = await admin
+      .from("department_members")
+      .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
+      .eq("department_id", salesDept.id);
+    salesUsers = (members ?? [])
+      .map((m: any) => ({ id: m.profiles?.id, display_name: m.profiles?.display_name ?? "—" }))
+      .filter((u: { id?: string }) => u.id)
+      .sort((a, b) => a.display_name.localeCompare(b.display_name));
+  }
 
   const { data: { user } } = await supabase.auth.getUser();
   const perms = user ? await getUserPermissions(user.id) : new Set<string>();
@@ -54,6 +76,7 @@ export default async function DashboardPage() {
       facets={facets}
       now={new Date().toISOString()}
       canScopeMonth={perms.has("analytics.view_all_agents")}
+      salesUsers={salesUsers}
     />
   );
 }

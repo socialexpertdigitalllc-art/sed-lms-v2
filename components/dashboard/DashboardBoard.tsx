@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
-import { FilterX } from "lucide-react";
+import { FilterX, Users } from "lucide-react";
 import { KpiHero } from "@/components/dashboard/KpiHero";
 import { StatusStrip } from "@/components/dashboard/StatusStrip";
 import { StatGrid } from "@/components/dashboard/StatGrid";
@@ -32,6 +32,7 @@ import { filterLeadsByRegions, type RegionFacet } from "@/lib/geo/regions";
 import { RegionFilter } from "@/components/leads/RegionFilter";
 import { useViewState } from "@/hooks/useViewState";
 import { MonthFilter } from "@/components/common/MonthFilter";
+import { Select } from "@/components/common/Select";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 
 type FollowUpRow = { fu_status: string; lead_id: string | null };
@@ -72,6 +73,7 @@ export function DashboardBoard({
   facets,
   now,
   canScopeMonth,
+  salesUsers,
 }: {
   leads: Lead[];
   followUps: FollowUpRow[];
@@ -82,18 +84,26 @@ export function DashboardBoard({
   facets: RegionFacet[];
   now: string;
   canScopeMonth: boolean;
+  salesUsers: { id: string; display_name: string }[];
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const selSet = useMemo(() => new Set(selected), [selected]);
 
+  // Ephemeral, session-scoped per-agent analytics filter (admins only). Not
+  // persisted to view state on purpose.
+  const [agentId, setAgentId] = useState("");
+
   const [dashUrl, setDashUrl] = useViewState(DASH_DEFAULTS);
   const month = canScopeMonth ? dashUrl.month : "";
   const monthOpts = useMemo(() => monthOptions(leads), [leads]);
-  const scoping = selSet.size > 0 || month !== "";
+  const scoping = selSet.size > 0 || month !== "" || agentId !== "";
 
   const fLeads = useMemo(
-    () => filterLeadsByRegions(leads, selSet).filter((l) => inMonth(l.created_at, month)),
-    [leads, selSet, month]
+    () =>
+      filterLeadsByRegions(leads, selSet)
+        .filter((l) => inMonth(l.created_at, month))
+        .filter((l) => !agentId || l.agent_id === agentId),
+    [leads, selSet, month, agentId]
   );
   const scopedIds = useMemo(() => new Set(fLeads.map((l) => l.id)), [fLeads]);
   const fFollowUps = useMemo(
@@ -214,13 +224,31 @@ export function DashboardBoard({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
         {canScopeMonth && <MonthFilter options={monthOpts} value={month} onChange={(v) => setDashUrl({ month: v })} />}
+        {canScopeMonth && (
+          <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted focus-within:ring-2 focus-within:ring-accent">
+            <Users className="w-4 h-4 shrink-0" />
+            <Select
+              value={agentId}
+              onChange={(e) => setAgentId(e.target.value)}
+              className="bg-transparent outline-none text-sm text-text-muted"
+            >
+              <option value="">All agents</option>
+              {salesUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.display_name}
+                </option>
+              ))}
+            </Select>
+          </label>
+        )}
         <RegionFilter facets={facets} selected={selected} onChange={setSelected} />
-        {(month !== "" || selected.length > 0) && (
+        {(month !== "" || selected.length > 0 || agentId !== "") && (
           <button
             type="button"
             onClick={() => {
               setDashUrl({ month: "" });
               setSelected([]);
+              setAgentId("");
             }}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-dropped-fg/40 text-sm text-dropped-fg hover:bg-dropped-bg whitespace-nowrap"
           >
