@@ -94,12 +94,28 @@ describe("validateNewLead", () => {
     expect(e.follow_up_time).toBeTruthy();
   });
 
-  it("requires https reference link for Redesign", () => {
+  it("rejects an invalid non-empty reference link for Redesign", () => {
     const e = validateNewLead(
       { ...validState(), site_type: "Redesign", reference_link: "not-a-url" },
       now
     );
     expect(e.reference_link).toBeTruthy();
+  });
+
+  it("allows an empty reference link for Redesign (optional field)", () => {
+    const e = validateNewLead(
+      { ...validState(), site_type: "Redesign", reference_link: "" },
+      now
+    );
+    expect(e.reference_link).toBeFalsy();
+  });
+
+  it("allows a whitespace-only reference link for Redesign", () => {
+    const e = validateNewLead(
+      { ...validState(), site_type: "Redesign", reference_link: "   " },
+      now
+    );
+    expect(e.reference_link).toBeFalsy();
   });
 
   it("requires rating and comments and fresh/follow-up", () => {
@@ -245,6 +261,14 @@ describe("polish-3: design_reference_links validation", () => {
       NOW
     );
     expect(e.design_reference_links).toBeTruthy();
+  });
+
+  it("ignores empty and whitespace-only design reference rows (look empty, are empty)", () => {
+    const e = validateNewLead(
+      { ...validState(), design_reference_links: ["", "   ", "https://ok.com"] },
+      NOW
+    );
+    expect(e.design_reference_links).toBeFalsy();
   });
 });
 

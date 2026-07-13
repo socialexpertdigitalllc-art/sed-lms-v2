@@ -161,8 +161,10 @@ export function validateNewLead(
     e.color_scheme = "Color scheme is required.";
   }
 
-  for (const u of f.design_reference_links)
-    if (u && !/^https?:\/\/.+/.test(u.trim())) e.design_reference_links = "Enter valid URLs.";
+  for (const u of f.design_reference_links) {
+    const t = u.trim();
+    if (t && !/^https?:\/\/.+/.test(t)) e.design_reference_links = "Enter valid URLs.";
+  }
 
   const t = new Date(f.follow_up_time).getTime();
   if (!f.follow_up_time || Number.isNaN(t) || t <= now.getTime())
@@ -174,8 +176,10 @@ export function validateNewLead(
     (f.price_custom.trim() === "" || Number.isNaN(price) || price < 0)
   )
     e.price_custom = "Enter a valid custom price.";
-  if (f.site_type === "Redesign" && !/^https?:\/\/.+/.test(f.reference_link.trim()))
-    e.reference_link = "A valid reference site URL is required for redesigns.";
+  // Optional even for redesigns — only the FORMAT is checked when filled.
+  const ref = f.reference_link.trim();
+  if (f.site_type === "Redesign" && ref && !/^https?:\/\/.+/.test(ref))
+    e.reference_link = "Enter a valid reference site URL.";
   if (!f.comments.trim()) e.comments = "Please enter comments about the client.";
   if (f.rating === 0) e.rating = "Please rate the lead.";
   if (!f.fresh_or_followup) e.fresh_or_followup = "Please select Fresh or Follow Up.";

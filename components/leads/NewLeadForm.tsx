@@ -639,7 +639,7 @@ export function NewLeadForm({
             <F error={errors.direct_line_saved} label="Direct Line saved?">
               <RadioPillGroup options={["Yes", "No"]} value={f.direct_line_saved} onChange={(v) => set("direct_line_saved", v as "Yes" | "No")} />
             </F>
-            <ConditionalBlock open={f.site_type === "Redesign"} label="Reference Site (Redesign only)">
+            <ConditionalBlock open={f.site_type === "Redesign"} label="Reference Site (optional)">
               <div data-error={errors.reference_link ? "true" : undefined}>
                 <input type="url" value={f.reference_link} onChange={(e) => set("reference_link", e.target.value)} placeholder="https://referencesite.com" className={inputCls} />
                 <FieldError error={errors.reference_link} />
