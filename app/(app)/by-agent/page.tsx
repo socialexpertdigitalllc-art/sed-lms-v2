@@ -1,11 +1,21 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getUserPermissions } from "@/lib/permissions/resolver";
 import type { Lead } from "@/lib/leads/types";
 import { StatusPill } from "@/components/leads/StatusPill";
 import { formatCompactCurrency, initials } from "@/lib/leads/format";
 
 export default async function ByAgentPage() {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
+
+  const perms = await getUserPermissions(user.id);
+  if (!perms.has("analytics.by_agent")) redirect("/dashboard");
+
   const { data: leadsData } = await supabase
     .from("leads")
     .select("*")

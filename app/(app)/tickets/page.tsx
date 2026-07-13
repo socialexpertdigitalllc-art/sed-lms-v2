@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { TicketQueue, type QueueTicket } from "@/components/tickets/TicketQueue";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
 
@@ -28,7 +29,14 @@ export default async function TicketsPage({
     .from("lead_tickets")
     .select("*")
     .order("created_at", { ascending: false });
-  const ticketRows = (ticketsRaw ?? []) as Ticket[];
+
+  // Ticket user-scoping: without `tickets.view_all`, only tickets the user
+  // created or tickets on leads assigned to them. Filter before the
+  // enrichment queries so ids/names load only for visible tickets.
+  const scope = await allowedTicketScope(admin, user.id, perms);
+  const ticketRows = ((ticketsRaw ?? []) as Ticket[]).filter((t) =>
+    ticketInScope(t, user.id, scope)
+  );
 
   const ticketIds = ticketRows.map((t) => t.id);
   const leadIds = Array.from(new Set(ticketRows.map((t) => t.lead_id)));

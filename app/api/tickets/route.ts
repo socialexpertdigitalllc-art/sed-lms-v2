@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
 
 export async function GET(req: Request) {
@@ -36,7 +37,12 @@ export async function GET(req: Request) {
   const { data: rows, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  const tickets = (rows ?? []) as Ticket[];
+  // Ticket user-scoping: without `tickets.view_all`, only tickets the user
+  // created or tickets on leads assigned to them.
+  const scope = await allowedTicketScope(admin, user.id, perms);
+  const tickets = ((rows ?? []) as Ticket[]).filter((t) =>
+    ticketInScope(t, user.id, scope)
+  );
   const ticketIds = tickets.map((t) => t.id);
   const leadIds = Array.from(new Set(tickets.map((t) => t.lead_id)));
 

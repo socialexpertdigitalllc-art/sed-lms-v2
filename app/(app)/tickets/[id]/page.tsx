@@ -2,6 +2,7 @@ import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { techMembers } from "@/lib/tickets/notify";
 import { TicketDetail } from "@/components/tickets/TicketDetail";
 import type { Ticket, TicketItem, TicketAttachment } from "@/lib/tickets/types";
@@ -32,6 +33,11 @@ export default async function TicketDetailPage({
     .single();
   if (!ticketRow) notFound();
   const ticket = ticketRow as Ticket;
+
+  // Ticket user-scoping: without `tickets.view_all`, only tickets the user
+  // created or tickets on leads assigned to them.
+  const scope = await allowedTicketScope(admin, user.id, perms);
+  if (!ticketInScope(ticket, user.id, scope)) redirect("/tickets");
 
   const { data: itemsRaw } = await admin
     .from("ticket_items")

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { isTicketEligible } from "@/lib/tickets/logic";
 import { createTicketSchema } from "@/lib/tickets/schema";
 import { notifyTicket } from "@/lib/tickets/notify";
@@ -33,9 +34,16 @@ export async function GET(
     .order("created_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  const tickets = (rows ?? []) as Ticket[];
-  const ticketIds = tickets.map((t) => t.id);
   const admin = createAdminClient();
+
+  // Ticket user-scoping on top of the lead-visibility RLS scope above:
+  // without `tickets.view_all`, only tickets the user created or tickets on
+  // leads assigned to them.
+  const scope = await allowedTicketScope(admin, user.id, perms);
+  const tickets = ((rows ?? []) as Ticket[]).filter((t) =>
+    ticketInScope(t, user.id, scope)
+  );
+  const ticketIds = tickets.map((t) => t.id);
 
   // Items + creator/assignee/resolver display names resolved via the admin
   // client so they're never RLS-nulled/missing for users other than the viewer.

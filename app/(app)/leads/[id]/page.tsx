@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { LeadDetail } from "@/components/leads/LeadDetail";
 import type { Lead } from "@/lib/leads/types";
 import type { LeadFollowUp } from "@/lib/leads/followups";
@@ -89,6 +90,14 @@ export default async function LeadDetailPage({
   } = await supabase.auth.getUser();
   const perms = user ? await getUserPermissions(user.id) : new Set<string>();
 
+  // Ticket user-scoping for the Tickets card: without `tickets.view_all`,
+  // only tickets the user created or tickets on leads assigned to them.
+  let visibleTickets: Ticket[] = [];
+  if (user) {
+    const ticketScope = await allowedTicketScope(admin, user.id, perms);
+    visibleTickets = tickets.filter((t) => ticketInScope(t, user.id, ticketScope));
+  }
+
   // Closing-department members for the "Closed by" picker (two FKs to profiles → pin the FK).
   const { data: closingDept } = await supabase
     .from("departments")
@@ -134,7 +143,7 @@ export default async function LeadDetailPage({
       closedByName={closedByName}
       closingUsers={closingUsers}
       canEditClosedBy={canEditClosedBy}
-      tickets={tickets}
+      tickets={visibleTickets}
       sla={settings.ticket_sla}
     />
   );

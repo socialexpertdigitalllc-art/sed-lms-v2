@@ -22,7 +22,7 @@ const MAIN: NavItem[] = [
   { href: "/leads", label: "Leads", icon: Building2, perm: "leads.view" },
   { href: "/leads/follow-ups", label: "Follow-ups", icon: PhoneCall, perm: "leads.view" },
   { href: "/tickets", label: "Tickets", icon: Ticket, perm: "tickets.view" },
-  { href: "/by-agent", label: "By Agent", icon: BarChart3, perm: "analytics.view" },
+  { href: "/by-agent", label: "By Agent", icon: BarChart3, perm: "analytics.by_agent" },
   { href: "/feedback", label: "Feedback", icon: MessageSquare, perm: "feedback.submit" },
   { href: "/payments", label: "Payments", icon: CreditCard, perm: "payments.view" },
   { href: "/notifications", label: "Notifications", icon: Bell },

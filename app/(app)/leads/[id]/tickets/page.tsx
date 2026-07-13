@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { TicketQueue, type QueueTicket } from "@/components/tickets/TicketQueue";
 import { StatusPill } from "@/components/leads/StatusPill";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
@@ -41,7 +42,14 @@ export default async function LeadTicketsPage({
     .select("*")
     .eq("lead_id", id)
     .order("created_at", { ascending: false });
-  const ticketRows = (ticketsRaw ?? []) as Ticket[];
+
+  // Ticket user-scoping: without `tickets.view_all`, only tickets the user
+  // created or tickets on leads assigned to them — even on a colleague's
+  // lead the user can open.
+  const scope = await allowedTicketScope(admin, user.id, perms);
+  const ticketRows = ((ticketsRaw ?? []) as Ticket[]).filter((t) =>
+    ticketInScope(t, user.id, scope)
+  );
   const ticketIds = ticketRows.map((t) => t.id);
 
   // Items (for progress)
