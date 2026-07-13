@@ -137,6 +137,23 @@ export async function PATCH(
     }
   }
 
+  const newLink = parsed.data.website_link;
+  if (typeof newLink === "string" && newLink.trim() && newLink !== before.website_link) {
+    const nonce = new Date().toISOString();
+    try {
+      await notify(
+        "website_link_added",
+        { leadId: id, lead: { agent_id: before.agent_id, closed_by: before.closed_by }, actorId: user.id },
+        {
+          title: "Website live",
+          body: `${before.business_name}'s website is live: ${newLink}`,
+          dedupKey: `website_link_added:${id}:${nonce}`,
+          targetUrl: `/leads/${id}`,
+        }
+      );
+    } catch {}
+  }
+
   return NextResponse.json({ ok: true });
 }
 

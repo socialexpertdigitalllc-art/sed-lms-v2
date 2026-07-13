@@ -8,6 +8,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { ActivityTracker } from "@/providers/ActivityTracker";
 import { ToastProvider } from "@/components/common/Toast";
 import { NotificationToaster } from "@/components/layout/NotificationToaster";
+import { TabBadge } from "@/components/layout/TabBadge";
 
 export default async function AppLayout({
   children,
@@ -46,6 +47,7 @@ export default async function AppLayout({
           </AppShell>
         </UiPrefsProvider>
         <NotificationToaster />
+        <TabBadge />
       </ToastProvider>
     </PermissionProvider>
   );

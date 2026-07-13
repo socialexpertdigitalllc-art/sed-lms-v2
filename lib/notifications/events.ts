@@ -90,6 +90,16 @@ export const NOTIFICATION_EVENTS = [
     timingMode: "none",
   },
   {
+    key: "website_link_added",
+    label: "Website link added",
+    description: "A website link was set on a lead — the website is live.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: ["lead_agent", "lead_closer"],
+    timingMode: "none",
+  },
+  {
     key: "lead_submitted",
     label: "New lead submitted",
     description: "A sales user created a new lead.",

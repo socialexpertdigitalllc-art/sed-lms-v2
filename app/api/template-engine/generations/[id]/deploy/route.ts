@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { notify } from "@/lib/notifications/notify";
 import { daConfigured, createSubdomain, subdomainExists, uploadZipAndExtract } from "@/lib/template-engine/directadmin";
 import { businessSlug, websiteId } from "@/lib/template-engine/slug";
 import type { GenStep } from "@/lib/template-engine/types";
@@ -43,7 +44,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   }
   const { data: lead } = await admin
     .from("leads")
-    .select("id, business_name")
+    .select("id, business_name, agent_id, closed_by, website_link")
     .eq("id", gen.lead_id)
     .maybeSingle();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
@@ -169,6 +170,20 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     entity_id: gen.lead_id,
     new_value: { website_link: url, generation_id: id },
   });
+  if (url !== lead.website_link) {
+    try {
+      await notify(
+        "website_link_added",
+        { leadId: gen.lead_id, lead: { agent_id: lead.agent_id, closed_by: lead.closed_by }, actorId: user.id },
+        {
+          title: "Website live",
+          body: `${lead.business_name}'s website is live: ${url}`,
+          dedupKey: `website_link_added:${gen.lead_id}:${new Date().toISOString()}`,
+          targetUrl: `/leads/${gen.lead_id}`,
+        }
+      );
+    } catch {}
+  }
   state.currentKey = null;
   await end("done", url, { status: "deployed", deployed_url: url });
 
