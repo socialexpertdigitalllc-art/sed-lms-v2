@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import { inputCls } from "./Field";
+import { splitCommaRow } from "@/lib/forms/splitCommaRow";
 
 export function DynamicList({
   values,
@@ -32,6 +33,11 @@ export function DynamicList({
             type={inputType}
             value={v}
             onChange={(e) => setAt(i, e.target.value)}
+            onBlur={() => {
+              // "a, b, c" typed into one row becomes three rows on blur.
+              const next = splitCommaRow(values, i);
+              if (next) onChange(next);
+            }}
             placeholder={placeholder}
             className={"flex-1 " + inputCls}
           />

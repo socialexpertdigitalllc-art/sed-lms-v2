@@ -1,3 +1,5 @@
+import { toDateTimeLocal as dateToDateTimeLocal } from "@/lib/dates/datetimeLocal";
+
 export function formatCurrency(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
   return new Intl.NumberFormat("en-US", {
@@ -54,8 +56,7 @@ export function toDateTimeLocal(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return dateToDateTimeLocal(d);
 }
 
 /** US phone mask: (XXX) XXX-XXXX as digits arrive. */

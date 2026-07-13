@@ -604,6 +604,37 @@ export function NewLeadForm({
                   <span className="text-xs text-text-muted">No add-ons configured.</span>
                 )}
               </div>
+              {f.add_ons.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {f.add_ons.map((x) => (
+                    <div key={x.id} className="flex items-center gap-3">
+                      <span className="min-w-0 flex-1 truncate text-sm text-text">{x.label}</span>
+                      <div className="relative w-36 shrink-0">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-text-muted">$</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={x.price ?? ""}
+                          onChange={(e) =>
+                            set(
+                              "add_ons",
+                              f.add_ons.map((y) =>
+                                y.id === x.id
+                                  ? { ...y, price: e.target.value === "" ? null : Number(e.target.value) }
+                                  : y
+                              )
+                            )
+                          }
+                          placeholder="Quoted price"
+                          aria-label={`Quoted price for ${x.label}`}
+                          className={inputCls + " pl-7"}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </F>
             <F error={errors.direct_line_saved} label="Direct Line saved?">
               <RadioPillGroup options={["Yes", "No"]} value={f.direct_line_saved} onChange={(v) => set("direct_line_saved", v as "Yes" | "No")} />

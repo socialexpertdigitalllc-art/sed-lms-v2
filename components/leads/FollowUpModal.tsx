@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation";
 import { validateFollowUp } from "@/lib/leads/followups";
 import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
+import { inMinutes } from "@/lib/dates/datetimeLocal";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { inputCls } from "@/components/forms/Field";
+
+const QUICK_MINUTE_PRESETS = [15, 30, 60, 120] as const;
 
 export function FollowUpModal({
   leadId,
@@ -24,6 +27,8 @@ export function FollowUpModal({
   const [fu_status, setFuStatus] = useState<"" | "Pickup" | "No Pickup">("");
   const [comments, setComments] = useState("");
   const [next_follow_up_time, setNextFollowUpTime] = useState("");
+  // "In X minutes" quick-set; cleared when the datetime is edited by hand (one-way).
+  const [quickMins, setQuickMins] = useState("");
   const [status_change, setStatusChange] = useState("");
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -40,6 +45,16 @@ export function FollowUpModal({
       delete next[key];
       return next;
     });
+  }
+
+  /** Typing a minute count (or clicking a preset) sets the datetime to now + n minutes. */
+  function applyQuickMinutes(raw: string) {
+    setQuickMins(raw);
+    const n = Number(raw);
+    if (raw !== "" && Number.isFinite(n) && n >= 1) {
+      setNextFollowUpTime(inMinutes(Math.floor(n)));
+      clearError("next_follow_up_time");
+    }
   }
 
   async function save() {
@@ -119,12 +134,40 @@ export function FollowUpModal({
           {fu_status && (
             <div>
               <label className={labelCls}>Next Follow Up time</label>
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-text-muted">In</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={quickMins}
+                  onChange={(e) => applyQuickMinutes(e.target.value)}
+                  aria-label="Next follow-up in minutes"
+                  className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-sm text-text outline-none focus:ring-2 focus:ring-accent"
+                />
+                <span className="text-xs text-text-muted">min</span>
+                {QUICK_MINUTE_PRESETS.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => applyQuickMinutes(String(m))}
+                    className={
+                      "rounded-full border px-2.5 py-1 text-xs transition-colors " +
+                      (quickMins === String(m)
+                        ? "border-accent bg-accent-soft font-medium text-accent-ink"
+                        : "border-border text-text-muted hover:bg-surface-2")
+                    }
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
               <input
                 type="datetime-local"
                 className={inputCls}
                 value={next_follow_up_time}
                 onChange={(e) => {
                   setNextFollowUpTime(e.target.value);
+                  setQuickMins("");
                   clearError("next_follow_up_time");
                 }}
               />

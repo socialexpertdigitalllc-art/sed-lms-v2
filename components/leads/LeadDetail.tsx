@@ -18,6 +18,7 @@ import { RecentFollowUps } from "./RecentFollowUps";
 import { TicketsCard } from "@/components/tickets/TicketsCard";
 import { SectionCard } from "@/components/forms/formShell";
 import { FieldRow, type SelectOption } from "@/components/detail/FieldRow";
+import { RatingStars } from "@/components/common/RatingStars";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -213,7 +214,7 @@ export function LeadDetail({
               ) : (
                 <FieldRow className="sm:col-span-2" label="Add-ons" value="" />
               )}
-              <FieldRow label="Rating (1–10)" value={lead.rating?.toString() ?? ""} type="number" display={lead.rating != null ? `${lead.rating}/10` : undefined} canEdit={canEdit} onSave={(v) => patch({ rating: num(v) })} />
+              <FieldRow label="Rating (1–10)" value={lead.rating?.toString() ?? ""} type="number" display={<RatingStars value={lead.rating} />} canEdit={canEdit} onSave={(v) => patch({ rating: num(v) })} />
               <FieldRow label="Fresh or follow-up" value={lead.fresh_or_followup ?? ""} type="select" options={[{ value: "", label: "—" }, ...FRESH_OPTIONS.map((s) => ({ value: s, label: s }))]} canEdit={canEdit} onSave={(v) => patch({ fresh_or_followup: v || null })} />
             </div>
           </SectionCard>

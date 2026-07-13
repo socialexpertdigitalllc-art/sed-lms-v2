@@ -9,6 +9,9 @@ import {
   LEAD_CATEGORIES,
 } from "@/lib/preleads/types";
 import { toDateTimeLocal } from "@/lib/leads/format";
+import { inMinutes } from "@/lib/dates/datetimeLocal";
+
+const QUICK_MINUTE_PRESETS = [15, 30, 60, 120] as const;
 
 export function FollowUpModal({
   preLead,
@@ -23,6 +26,8 @@ export function FollowUpModal({
   const [status, setStatus] = useState(preLead.status);
   const [reason, setReason] = useState("");
   const [followUpTime, setFollowUpTime] = useState(toDateTimeLocal(preLead.follow_up_time));
+  // "In X minutes" quick-set; cleared when the datetime is edited by hand (one-way).
+  const [quickMins, setQuickMins] = useState("");
   const [category, setCategory] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +35,15 @@ export function FollowUpModal({
   if (!open) return null;
 
   const isFollowUp = status === "Next follow up";
+
+  /** Typing a minute count (or clicking a preset) sets the datetime to now + n minutes. */
+  function applyQuickMinutes(raw: string) {
+    setQuickMins(raw);
+    const n = Number(raw);
+    if (raw !== "" && Number.isFinite(n) && n >= 1) {
+      setFollowUpTime(inMinutes(Math.floor(n)));
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -111,10 +125,40 @@ export function FollowUpModal({
               <label className="text-[10px] uppercase tracking-wide text-text-faint">
                 Next follow-up
               </label>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-text-muted">In</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={quickMins}
+                  onChange={(e) => applyQuickMinutes(e.target.value)}
+                  aria-label="Next follow-up in minutes"
+                  className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-accent"
+                />
+                <span className="text-xs text-text-muted">min</span>
+                {QUICK_MINUTE_PRESETS.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => applyQuickMinutes(String(m))}
+                    className={
+                      "rounded-full border px-2.5 py-1 text-xs transition-colors " +
+                      (quickMins === String(m)
+                        ? "border-accent bg-accent-soft font-medium text-accent-ink"
+                        : "border-border text-text-muted hover:bg-surface-2")
+                    }
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
               <input
                 type="datetime-local"
                 value={followUpTime}
-                onChange={(e) => setFollowUpTime(e.target.value)}
+                onChange={(e) => {
+                  setFollowUpTime(e.target.value);
+                  setQuickMins("");
+                }}
                 className="w-full mt-1.5 px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
               />
             </div>
