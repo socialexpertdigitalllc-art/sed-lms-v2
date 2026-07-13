@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import { parseViewState, pickStoredView } from "@/lib/url/viewState";
 import { useViewState } from "@/hooks/useViewState";
+import { ViewScopeProvider } from "@/providers/ViewScopeProvider";
 
 // The hook reads Next's pathname + searchParams; drive them from the test.
 let mockPath = "/leads";
@@ -80,7 +81,7 @@ describe("useViewState", () => {
   });
 
   it("applies incoming deep-link params over the stored view and consumes them", () => {
-    sessionStorage.setItem("view:/leads", JSON.stringify({ q: "stored", status: "Ready", page: "2" }));
+    sessionStorage.setItem("view:anon:/leads", JSON.stringify({ q: "stored", status: "Ready", page: "2" }));
     mockQs = "status=Closed";
     const spy = vi.spyOn(window.history, "replaceState");
 
@@ -89,7 +90,7 @@ describe("useViewState", () => {
     expect(r.getByTestId("status").textContent).toBe("Closed");
     expect(r.getByTestId("q").textContent).toBe("");
     // consumed: persisted for this path + address bar cleaned exactly once
-    expect(JSON.parse(sessionStorage.getItem("view:/leads")!)).toEqual({ q: "", status: "Closed", page: "0" });
+    expect(JSON.parse(sessionStorage.getItem("view:anon:/leads")!)).toEqual({ q: "", status: "Closed", page: "0" });
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith(null, "", window.location.pathname);
     spy.mockRestore();
@@ -105,5 +106,31 @@ describe("useViewState", () => {
     mockPath = "/pre-leads";
     const r2 = render(<Harness />);
     expect(r2.getByTestId("q").textContent).toBe(""); // untouched path starts at defaults
+  });
+
+  it("does NOT share filter state between users on the same browser (the cross-account bleed)", () => {
+    // User A sets a filter on /leads…
+    const a = render(
+      <ViewScopeProvider userId="user-A">
+        <Harness />
+      </ViewScopeProvider>
+    );
+    act(() => {
+      a.getByTestId("set").click();
+    });
+    expect(a.getByTestId("q").textContent).toBe("cafe");
+    a.unmount();
+
+    // …then user B signs in on the same tab (session storage survives) and must start clean.
+    const b = render(
+      <ViewScopeProvider userId="user-B">
+        <Harness />
+      </ViewScopeProvider>
+    );
+    expect(b.getByTestId("q").textContent).toBe("");
+    expect(b.getByTestId("status").textContent).toBe("All");
+
+    // User A's stored filter is untouched under their own key.
+    expect(JSON.parse(sessionStorage.getItem("view:user-A:/leads")!)).toMatchObject({ q: "cafe" });
   });
 });

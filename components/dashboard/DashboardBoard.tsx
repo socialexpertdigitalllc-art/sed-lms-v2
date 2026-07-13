@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
+import { FilterX } from "lucide-react";
 import { KpiHero } from "@/components/dashboard/KpiHero";
 import { StatusStrip } from "@/components/dashboard/StatusStrip";
 import { StatGrid } from "@/components/dashboard/StatGrid";
@@ -214,6 +215,18 @@ export function DashboardBoard({
       <div className="flex flex-wrap items-center gap-2">
         {canScopeMonth && <MonthFilter options={monthOpts} value={month} onChange={(v) => setDashUrl({ month: v })} />}
         <RegionFilter facets={facets} selected={selected} onChange={setSelected} />
+        {(month !== "" || selected.length > 0) && (
+          <button
+            type="button"
+            onClick={() => {
+              setDashUrl({ month: "" });
+              setSelected([]);
+            }}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-dropped-fg/40 text-sm text-dropped-fg hover:bg-dropped-bg whitespace-nowrap"
+          >
+            <FilterX className="w-4 h-4" /> Clear filters
+          </button>
+        )}
       </div>
 
       <div>

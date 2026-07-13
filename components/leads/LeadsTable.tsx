@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import "@/lib/tables/columnMeta";
-import { Download, ArrowUp, ArrowDown, ExternalLink, Users } from "lucide-react";
+import { Download, ArrowUp, ArrowDown, ExternalLink, Users, FilterX } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -98,6 +98,12 @@ export function LeadsTable({
   const canScopeMonth = has("analytics.view_all_agents");
   const month = canScopeMonth ? urlState.month : "";
   const regionSel = useMemo(() => (urlState.region ? urlState.region.split(",") : []), [urlState.region]);
+  // Any non-default filter — drives a visible "Clear filters" escape so a
+  // persisted filter can never silently hide leads.
+  const filtersActive =
+    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.region !== "" || urlState.month !== "";
+  const clearFilters = () =>
+    setUrlState({ q: "", status: "All", agent: "", type: "", region: "", month: "", page: "0" });
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
@@ -457,6 +463,15 @@ export function LeadsTable({
         {canExport && (
           <button onClick={exportCsv} className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted hover:bg-surface-2 whitespace-nowrap inline-flex items-center gap-1.5">
             <Download className="w-4 h-4" /> Export CSV
+          </button>
+        )}
+        {filtersActive && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-dropped-fg/40 text-sm text-dropped-fg hover:bg-dropped-bg whitespace-nowrap"
+          >
+            <FilterX className="w-4 h-4" /> Clear filters
           </button>
         )}
         <DensityToggle />

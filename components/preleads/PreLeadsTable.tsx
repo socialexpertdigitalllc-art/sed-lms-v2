@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowUp, ArrowDown, Inbox } from "lucide-react";
+import { ArrowUp, ArrowDown, Inbox, FilterX } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -328,6 +328,15 @@ export function PreLeadsTable({
             </option>
           ))}
         </Select>
+        {(ps.q !== "" || ps.category !== "All" || ps.follow !== "all" || ps.status !== "") && (
+          <button
+            type="button"
+            onClick={() => setPs({ q: "", category: "All", follow: "all", status: "", page: "0" })}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-dropped-fg/40 text-sm text-dropped-fg hover:bg-dropped-bg whitespace-nowrap"
+          >
+            <FilterX className="w-4 h-4" /> Clear filters
+          </button>
+        )}
         <DensityToggle />
         <ColumnsMenu table={table} />
       </div>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { parseViewState, pickStoredView } from "@/lib/url/viewState";
+import { useViewScope } from "@/providers/ViewScopeProvider";
 
 // Client-only layout effect: restores the stored view BEFORE paint (no flash
 // of the default view); on the server it degrades to a no-op useEffect,
@@ -34,7 +35,10 @@ export function useViewState<T extends Record<string, string>>(
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const spString = searchParams.toString();
-  const storageKey = `view:${pathname}`;
+  // Keyed by the signed-in user so a different account on the same browser tab
+  // never inherits the previous account's filters (see ViewScopeProvider).
+  const scope = useViewScope();
+  const storageKey = `view:${scope}:${pathname}`;
 
   // SSR-consistent seed (deep-link params over defaults) — no hydration mismatch.
   const [state, setLocal] = useState<T>(() => parseViewState(defaults, spString));

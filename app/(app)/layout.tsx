@@ -4,6 +4,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { getBranding } from "@/lib/settings/appSettings";
 import { PermissionProvider } from "@/providers/PermissionProvider";
 import { UiPrefsProvider, type Density } from "@/providers/UiPrefsProvider";
+import { ViewScopeProvider } from "@/providers/ViewScopeProvider";
 import { AppShell } from "@/components/layout/AppShell";
 import { ActivityTracker } from "@/providers/ActivityTracker";
 import { ToastProvider } from "@/components/common/Toast";
@@ -43,16 +44,18 @@ export default async function AppLayout({
 
   return (
     <PermissionProvider value={[...perms]}>
-      <ToastProvider>
-        <ActivityTracker />
-        <UiPrefsProvider initial={uiInitial}>
-          <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
-            {children}
-          </AppShell>
-        </UiPrefsProvider>
-        <NotificationToaster />
-        <TabBadge />
-      </ToastProvider>
+      <ViewScopeProvider userId={user.id}>
+        <ToastProvider>
+          <ActivityTracker />
+          <UiPrefsProvider initial={uiInitial}>
+            <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
+              {children}
+            </AppShell>
+          </UiPrefsProvider>
+          <NotificationToaster />
+          <TabBadge />
+        </ToastProvider>
+      </ViewScopeProvider>
     </PermissionProvider>
   );
 }

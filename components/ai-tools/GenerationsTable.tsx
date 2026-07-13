@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { ArrowUp, ArrowDown, Sparkles } from "lucide-react";
+import { ArrowUp, ArrowDown, Sparkles, FilterX } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -203,6 +203,15 @@ export function GenerationsTable({
           placeholder="Search business, agent, model…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
+        {gs.q !== "" && (
+          <button
+            type="button"
+            onClick={() => setGs({ q: "", page: "0" })}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-dropped-fg/40 text-sm text-dropped-fg hover:bg-dropped-bg whitespace-nowrap"
+          >
+            <FilterX className="w-4 h-4" /> Clear
+          </button>
+        )}
         <DensityToggle />
         <ColumnsMenu table={table} />
       </div>
