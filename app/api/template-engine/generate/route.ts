@@ -61,7 +61,8 @@ export async function POST(req: Request) {
   }
 
   const admin = createAdminClient();
-  const { data: lead } = await admin
+  // RLS-scoped lookup: a lead this user cannot see must 404, not generate.
+  const { data: lead } = await supabase
     .from("leads")
     .select("id")
     .eq("id", leadId)

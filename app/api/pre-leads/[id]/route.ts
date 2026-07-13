@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { isAdminMember } from "@/lib/permissions/isAdminMember";
 import { updatePreLeadSchema } from "@/lib/preleads/schema";
 
 const FOLLOWUP_KEYS = new Set(["status", "lead_category", "follow_up_time", "reason"]);
@@ -45,6 +46,19 @@ export async function PATCH(
   }
 
   const admin = createAdminClient();
+
+  // Ownership mirror of the pre_leads RLS read policy (agent_id = auth.uid()
+  // or is_admin()) — the admin-client write is not a backdoor around it.
+  const { data: preLead } = await admin
+    .from("pre_leads")
+    .select("agent_id")
+    .eq("id", id)
+    .single();
+  if (!preLead) return NextResponse.json({ error: "Pre-lead not found" }, { status: 404 });
+  if (preLead.agent_id !== user.id && !(await isAdminMember(admin, user.id))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { error } = await admin.from("pre_leads").update(update).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
@@ -76,6 +90,19 @@ export async function DELETE(
   }
 
   const admin = createAdminClient();
+
+  // Ownership mirror of the pre_leads RLS read policy (agent_id = auth.uid()
+  // or is_admin()) — the admin-client write is not a backdoor around it.
+  const { data: preLead } = await admin
+    .from("pre_leads")
+    .select("agent_id")
+    .eq("id", id)
+    .single();
+  if (!preLead) return NextResponse.json({ error: "Pre-lead not found" }, { status: 404 });
+  if (preLead.agent_id !== user.id && !(await isAdminMember(admin, user.id))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { error } = await admin
     .from("pre_leads")
     .update({ deleted_at: new Date().toISOString() })

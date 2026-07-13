@@ -25,3 +25,15 @@ export function visibleStatuses(perms: Set<string>): LeadStatus[] {
 export function settableStatuses(perms: Set<string>): LeadStatus[] {
   return LEAD_STATUSES.filter((s) => perms.has(catSetKey(s)));
 }
+
+/**
+ * Server-side gate for any status write. Returns an error message when the
+ * status is unknown or the user lacks its `leads.cat_set.*` permission, null
+ * when allowed. Every status-writing route must use this (or catSetKey
+ * directly) — hiding options in the UI is not enforcement.
+ */
+export function statusSetError(perms: Set<string>, status: string): string | null {
+  if (!LEAD_STATUSES.includes(status as LeadStatus)) return `Unknown status "${status}".`;
+  if (!perms.has(catSetKey(status))) return `You are not allowed to set leads to "${status}".`;
+  return null;
+}

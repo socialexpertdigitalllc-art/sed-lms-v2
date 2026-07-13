@@ -99,14 +99,16 @@ export default async function LeadDetailPage({
   }
 
   // Closing-department members for the "Closed by" picker (two FKs to profiles → pin the FK).
-  const { data: closingDept } = await supabase
+  // Admin client: department_members RLS is "self or admin" — a user client would
+  // return an empty list for regular users.
+  const { data: closingDept } = await admin
     .from("departments")
     .select("id")
     .eq("slug", "closing")
     .single();
   let closingUsers: { id: string; display_name: string }[] = [];
   if (closingDept) {
-    const { data: members } = await supabase
+    const { data: members } = await admin
       .from("department_members")
       .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
       .eq("department_id", closingDept.id);

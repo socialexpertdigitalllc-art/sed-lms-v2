@@ -3,6 +3,8 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { statusSetError } from "@/lib/leads/categories";
+import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 
 const schema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(500),
@@ -33,6 +35,10 @@ export async function POST(req: Request) {
   let update: Record<string, unknown>;
   if (action === "status") {
     if (!value) return NextResponse.json({ error: "A status is required" }, { status: 422 });
+    // Same per-category gate as single-lead status changes — the bulk path is
+    // not a backdoor around leads.cat_set.*.
+    const gateError = statusSetError(perms, value);
+    if (gateError) return NextResponse.json({ error: gateError }, { status: 403 });
     update = { status: value };
   } else if (action === "assign") {
     if (value) {
@@ -66,7 +72,15 @@ export async function POST(req: Request) {
     .update(update, { count: "exact" })
     .in("id", ids)
     .is("deleted_at", null);
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) {
+    if (isReadyGuardError(error)) {
+      return NextResponse.json(
+        { error: `${READY_GUARD_MESSAGE} (one or more selected leads has no website link)` },
+        { status: 422 }
+      );
+    }
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
 
   await admin.from("activity_log").insert({
     user_id: user.id,

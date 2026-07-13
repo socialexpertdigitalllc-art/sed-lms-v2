@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { createLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
+import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { enqueueLeadIfReady } from "@/lib/ai-tools/queue";
 import { findCollisions, type DupRow } from "@/lib/leads/duplicate";
@@ -70,6 +71,10 @@ export async function POST(req: Request) {
   }
 
   const admin = createAdminClient();
+
+  if (!(await isAllowedClosedBy(admin, user.id, payload.closed_by))) {
+    return NextResponse.json({ error: CLOSED_BY_MESSAGE }, { status: 422 });
+  }
 
   // Authoritative duplicate re-check — the client-side check is advisory only and
   // can be bypassed, so collisions are re-verified here before the insert.

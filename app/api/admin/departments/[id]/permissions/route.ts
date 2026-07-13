@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { isKnownPermissionKey } from "@/lib/permissions/constants";
 
 export async function POST(
   req: Request,
@@ -20,6 +21,9 @@ export async function POST(
   }
 
   const { permissionKey, enabled } = await req.json();
+  if (!isKnownPermissionKey(permissionKey)) {
+    return NextResponse.json({ error: "Unknown permission key" }, { status: 422 });
+  }
   const admin = createAdminClient();
 
   if (enabled) {

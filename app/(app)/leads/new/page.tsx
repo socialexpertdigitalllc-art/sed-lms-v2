@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { NewLeadForm } from "@/components/leads/NewLeadForm";
 
@@ -25,14 +26,17 @@ export default async function NewLeadPage() {
     : { data: [] };
 
   // Closing-department members for the "Closed by" picker (two FKs to profiles → must pin the FK).
-  const { data: closingDept } = await supabase
+  // Admin client: department_members RLS is "self or admin", which would return an
+  // EMPTY list for regular users and reduce the picker to "Self".
+  const admin = createAdminClient();
+  const { data: closingDept } = await admin
     .from("departments")
     .select("id")
     .eq("slug", "closing")
     .single();
   let closingUsers: { id: string; display_name: string }[] = [];
   if (closingDept) {
-    const { data: members } = await supabase
+    const { data: members } = await admin
       .from("department_members")
       .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
       .eq("department_id", closingDept.id);

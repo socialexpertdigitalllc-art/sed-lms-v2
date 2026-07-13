@@ -5,7 +5,30 @@ import {
   catSetKey,
   visibleStatuses,
   settableStatuses,
+  statusSetError,
 } from "@/lib/leads/categories";
+
+describe("statusSetError (server-side status gate)", () => {
+  const salesPerms = new Set([
+    "leads.status_change",
+    "leads.cat_set.ready",
+    "leads.cat_set.not_ready",
+    "leads.cat_view.closed", // can SEE closed — must not imply can SET
+  ]);
+
+  it("allows a status the user holds cat_set for", () => {
+    expect(statusSetError(salesPerms, "Ready")).toBeNull();
+    expect(statusSetError(salesPerms, "Not Ready")).toBeNull();
+  });
+
+  it("rejects a status the user can only view (the bulk-bypass bug)", () => {
+    expect(statusSetError(salesPerms, "Closed")).toMatch(/not allowed/);
+  });
+
+  it("rejects unknown statuses outright", () => {
+    expect(statusSetError(salesPerms, "Banana")).toMatch(/Unknown status/);
+  });
+});
 
 describe("category permission helpers", () => {
   it("slugs statuses (lowercase, spaces to underscores)", () => {

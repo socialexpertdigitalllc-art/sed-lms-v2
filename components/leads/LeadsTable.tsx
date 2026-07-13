@@ -20,7 +20,7 @@ import {
 } from "@tanstack/react-table";
 import type { Lead } from "@/lib/leads/types";
 import { SITE_TYPES } from "@/lib/leads/types";
-import { visibleStatuses } from "@/lib/leads/categories";
+import { visibleStatuses, settableStatuses } from "@/lib/leads/categories";
 import { formatCurrency, formatDateTime, initials } from "@/lib/leads/format";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
@@ -583,7 +583,7 @@ export function LeadsTable({
         <BulkActionBar
           selectedIds={selectedIds}
           selectedLeads={selectedLeads}
-          statuses={visible}
+          statuses={settableStatuses(all)}
           agentNameById={agentNameById}
           salesAgents={salesAgents}
           can={{ status: canChangeStatus, assign: canAssign, archive: canDelete, export: canExport }}

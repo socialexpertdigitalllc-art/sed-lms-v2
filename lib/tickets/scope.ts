@@ -31,3 +31,16 @@ export function ticketInScope(
   if (scope.all) return true;
   return (t.created_by !== null && t.created_by === userId) || scope.leadIds.has(t.lead_id);
 }
+
+/**
+ * Object-level gate for ticket mutations (resolve, item toggles): the actor
+ * must have the ticket in view scope OR be its current assignee. Assignees
+ * stay able to work tickets on leads that aren't theirs.
+ */
+export function canActOnTicket(
+  t: { created_by: string | null; lead_id: string; assigned_to: string | null },
+  userId: string,
+  scope: TicketScope
+): boolean {
+  return ticketInScope(t, userId, scope) || t.assigned_to === userId;
+}

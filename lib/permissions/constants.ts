@@ -1,3 +1,6 @@
+import { LEAD_STATUSES } from "@/lib/leads/types";
+import { catViewKey, catSetKey } from "@/lib/leads/categories";
+
 export const PERMISSIONS = [
   { key: "leads.view", name: "View Leads", category: "leads" },
   { key: "leads.create", name: "Create Lead", category: "leads" },
@@ -9,6 +12,7 @@ export const PERMISSIONS = [
   { key: "leads.view_all", name: "View All Agents' Leads", category: "leads" },
   { key: "leads.export", name: "Export Leads", category: "leads" },
   { key: "leads.duplicate.override", name: "Override Duplicate Lead Block", category: "leads", is_sensitive: true },
+  { key: "leads.followup", name: "Log Lead Follow-ups", category: "leads" },
   { key: "pre_leads.view", name: "View Pre-Leads", category: "pre_leads" },
   { key: "pre_leads.create", name: "Create Pre-Lead", category: "pre_leads" },
   { key: "pre_leads.edit", name: "Edit Pre-Lead", category: "pre_leads" },
@@ -74,3 +78,14 @@ export const PERMISSIONS = [
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 
 export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard", "payments", "templates"] as const;
+
+/**
+ * Is this a grantable permission key? The static catalog plus the per-lead-
+ * category keys (`leads.cat_view.*` / `leads.cat_set.*`, seeded by migration
+ * 0011 and toggled in the same admin grids).
+ */
+export function isKnownPermissionKey(key: unknown): boolean {
+  if (typeof key !== "string") return false;
+  if (PERMISSIONS.some((p) => p.key === key)) return true;
+  return LEAD_STATUSES.some((s) => key === catViewKey(s) || key === catSetKey(s));
+}

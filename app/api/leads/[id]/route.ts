@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { updateLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
+import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 
 /** True when the user belongs to the Sales department (slug "sales"). */
@@ -74,6 +75,26 @@ export async function PATCH(
     .single();
   if (!before) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
+  // Ownership scope (defense-in-depth mirror of the leads read policy):
+  // without leads.view_all a user may only touch their own leads. The Sales
+  // closed-by path stays intact — it applies to the member's own leads.
+  if (!perms.has("leads.view_all") && before.agent_id !== user.id) {
+    return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
+  }
+
+  // Reassignment is sensitive and has its own permission — leads.edit alone
+  // must not be able to move a lead between agents.
+  if (
+    parsed.data.agent_id !== undefined &&
+    parsed.data.agent_id !== before.agent_id &&
+    !perms.has("leads.assign")
+  ) {
+    return NextResponse.json(
+      { error: "Reassigning leads requires the assign permission." },
+      { status: 403 }
+    );
+  }
+
   if (
     parsed.data.status !== undefined &&
     parsed.data.status !== before.status &&
@@ -83,6 +104,14 @@ export async function PATCH(
       { error: `You are not allowed to set status "${parsed.data.status}"` },
       { status: 403 }
     );
+  }
+
+  if (
+    parsed.data.closed_by !== undefined &&
+    parsed.data.closed_by !== before.closed_by &&
+    !(await isAllowedClosedBy(admin, user.id, parsed.data.closed_by))
+  ) {
+    return NextResponse.json({ error: CLOSED_BY_MESSAGE }, { status: 422 });
   }
 
   const { error } = await admin.from("leads").update(parsed.data).eq("id", id);
@@ -174,6 +203,20 @@ export async function DELETE(
   }
 
   const admin = createAdminClient();
+
+  // Ownership scope (defense-in-depth mirror of the leads read policy):
+  // without leads.view_all a user may only delete their own leads.
+  const { data: before } = await admin
+    .from("leads")
+    .select("agent_id")
+    .eq("id", id)
+    .is("deleted_at", null)
+    .single();
+  if (!before) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  if (!perms.has("leads.view_all") && before.agent_id !== user.id) {
+    return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
+  }
+
   const { error } = await admin
     .from("leads")
     .update({ deleted_at: new Date().toISOString() })

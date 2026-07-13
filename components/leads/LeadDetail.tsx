@@ -49,6 +49,7 @@ export function LeadDetail({
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
+  const canAssign = has("leads.assign");
   const canDelete = has("leads.delete");
   const canChangeStatus = has("leads.status_change");
   const canWebcraft = has("ai_tools.webcraft");
@@ -180,7 +181,7 @@ export function LeadDetail({
 
           <SectionCard n={2} icon={ClipboardList} title="Lead info" subtitle="Status, pricing & rating" done={false} delay={60}>
             <div className={grid}>
-              <FieldRow label="Agent" value={lead.agent_id ?? ""} type="select" options={agentOptions} display={agentName} canEdit={canEdit} onSave={(v) => patch({ agent_id: v || null })} />
+              <FieldRow label="Agent" value={lead.agent_id ?? ""} type="select" options={agentOptions} display={agentName} canEdit={canAssign} onSave={(v) => patch({ agent_id: v || null })} />
               <FieldRow
                 label="Closed by"
                 value={lead.closed_by ?? ""}

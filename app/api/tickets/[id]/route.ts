@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { allowedTicketScope, canActOnTicket } from "@/lib/tickets/scope";
 import { canTransition } from "@/lib/tickets/logic";
 import { ticketActionSchema } from "@/lib/tickets/schema";
 import { notifyTicket } from "@/lib/tickets/notify";
@@ -54,6 +55,29 @@ export async function PATCH(
       }
       if (!canTransition(ticket.status, "Assigned")) {
         return NextResponse.json({ error: "Invalid transition" }, { status: 409 });
+      }
+      // Same server-side membership gate as the assignment picker (which only
+      // lists Tech members) — the API is not a backdoor around it.
+      {
+        const { data: techDept } = await admin
+          .from("departments")
+          .select("id")
+          .eq("slug", "tech")
+          .single();
+        const { data: membership } = techDept
+          ? await admin
+              .from("department_members")
+              .select("user_id")
+              .eq("department_id", techDept.id)
+              .eq("user_id", parsed.data.assigned_to)
+              .maybeSingle()
+          : { data: null };
+        if (!membership) {
+          return NextResponse.json(
+            { error: "Tickets can only be assigned to Tech department members." },
+            { status: 422 }
+          );
+        }
       }
 
       const { data: updated, error } = await admin
@@ -123,6 +147,11 @@ export async function PATCH(
 
     case "resolve": {
       if (!perms.has("tickets.resolve")) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      // Only the assignee or someone with this ticket in view scope may resolve it.
+      const scope = await allowedTicketScope(admin, user.id, perms);
+      if (!canActOnTicket(ticket, user.id, scope)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
       if (!canTransition(ticket.status, "Resolved")) {

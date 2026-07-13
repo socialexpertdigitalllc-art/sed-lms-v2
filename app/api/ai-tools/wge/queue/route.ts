@@ -39,6 +39,15 @@ export async function POST(req: Request) {
   const leadId = typeof body?.leadId === "string" ? body.leadId : null;
   if (!leadId) return NextResponse.json({ error: "Missing leadId" }, { status: 400 });
 
+  // RLS-scoped lookup: a lead this user cannot see must 404, not enqueue.
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("id")
+    .eq("id", leadId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
   const reason = await enqueueManual(leadId, user.id);
   if (reason) return NextResponse.json({ error: reason }, { status: 400 });
   return NextResponse.json({ queued: true }, { status: 201 });

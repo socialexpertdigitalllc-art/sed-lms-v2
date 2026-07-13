@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { allowedTicketScope, canActOnTicket } from "@/lib/tickets/scope";
 
 const toggleItemSchema = z.object({ is_done: z.boolean() });
 
@@ -22,6 +23,20 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  const admin = createAdminClient();
+  const { data: ticket } = await admin
+    .from("lead_tickets")
+    .select("id, created_by, lead_id, assigned_to")
+    .eq("id", id)
+    .single();
+  if (!ticket) return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
+
+  // Only the assignee or someone with this ticket in view scope may check items.
+  const scope = await allowedTicketScope(admin, user.id, perms);
+  if (!canActOnTicket(ticket, user.id, scope)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const parsed = toggleItemSchema.safeParse(await req.json());
   if (!parsed.success) {
     return NextResponse.json(
@@ -32,7 +47,6 @@ export async function PATCH(
   const { is_done } = parsed.data;
   const now = new Date().toISOString();
 
-  const admin = createAdminClient();
   const { data: item, error } = await admin
     .from("ticket_items")
     .update({
