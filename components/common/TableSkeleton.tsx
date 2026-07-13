@@ -1,13 +1,23 @@
 import { Skeleton } from "./Skeleton";
 
-export function TableSkeleton({ rows = 8, cols = 6 }: { rows?: number; cols?: number }) {
+export function TableSkeleton({
+  rows = 8,
+  cols = 6,
+  toolbar = true,
+}: {
+  rows?: number;
+  cols?: number;
+  toolbar?: boolean;
+}) {
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Skeleton className="h-9 w-full max-w-xs" />
-        <Skeleton className="h-9 w-24" />
-        <Skeleton className="h-9 w-24" />
-      </div>
+      {toolbar && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Skeleton className="h-9 w-full max-w-xs" />
+          <Skeleton className="h-9 w-24" />
+          <Skeleton className="h-9 w-24" />
+        </div>
+      )}
       <div className="bg-surface border border-border rounded-lg overflow-hidden">
         <div className="border-b border-border bg-surface-2 px-4 py-3 flex gap-4">
           {Array.from({ length: cols }).map((_, i) => (
