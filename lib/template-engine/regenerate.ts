@@ -28,6 +28,8 @@ export interface RegenerateArgs {
   /** The template's demo identity — must not survive into the output. */
   demoTokens: string[];
   model?: string;
+  /** On a verification-repair pass, the exact leak/structure problems to fix. */
+  repairNote?: string;
 }
 
 /**
@@ -42,11 +44,15 @@ export function regenPrompt(args: {
   contentModel: unknown;
   imagesForFile: unknown;
   demoTokens: string[];
+  repairNote?: string;
 }): string {
-  const { file, source, contentModel, imagesForFile, demoTokens } = args;
+  const { file, source, contentModel, imagesForFile, demoTokens, repairNote } = args;
   const blacklist = demoTokens.length
     ? demoTokens.map((t) => `- ${t}`).join("\n")
     : "- (none recorded for this template)";
+  const repair = repairNote
+    ? `\n\nYOUR PREVIOUS ATTEMPT FAILED VERIFICATION. Fix exactly these problems and change nothing else:\n${repairNote}`
+    : "";
   return `Rewrite the file "${file}" so it belongs to the business described by this content model, keeping the template's structure and code identical.
 
 CONTENT MODEL (the only source of business facts):
@@ -56,7 +62,7 @@ IMAGES for this file — replace the template's image src/srcset and alt text wi
 ${JSON.stringify(imagesForFile, null, 2)}
 
 FORBIDDEN TOKENS — the template's demo identity. None of these may appear anywhere in your output, in any casing:
-${blacklist}
+${blacklist}${repair}
 
 SOURCE FILE (return the COMPLETE rewritten file — same tags, classes, ids, data-* and JS identifiers; only human-visible text, data values, contact details and image URLs change):
 ${source}`;

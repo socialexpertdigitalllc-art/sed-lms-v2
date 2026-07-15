@@ -108,7 +108,7 @@ function stringArray(v: unknown): string[] {
 }
 
 /** Recursively list every file under a prefix in a storage bucket. */
-async function listStorageFiles(admin: SupabaseClient, bucket: string, prefix: string): Promise<string[]> {
+export async function listStorageFiles(admin: SupabaseClient, bucket: string, prefix: string): Promise<string[]> {
   const out: string[] = [];
   async function walk(dir: string): Promise<void> {
     const { data, error } = await admin.storage.from(bucket).list(dir, { limit: 1000 });

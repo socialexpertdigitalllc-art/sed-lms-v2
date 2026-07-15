@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { runTemplateGeneration } from "./runner";
+import { runTemplateGenerationV2 } from "./runnerV2";
 
 // Fire-and-forget kick of the template processor (does not await; ignores errors).
 // Reuses the WGE self-origin + shared secret env pair.
@@ -31,8 +31,8 @@ export async function processTemplateQueue(): Promise<{ processed: number }> {
         .from("template_generations")
         .update({ status: "running", updated_at: new Date().toISOString() })
         .eq("id", row.generation_id);
-      // The runner sets the generation's terminal status (ready_for_review / failed).
-      await runTemplateGeneration(row.generation_id);
+      // The v2 runner sets the generation's terminal status (review / failed).
+      await runTemplateGenerationV2(row.generation_id);
       await admin
         .from("template_gen_queue")
         .update({ status: "done", finished_at: new Date().toISOString() })
