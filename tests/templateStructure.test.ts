@@ -35,10 +35,60 @@ describe("js identifier gate", () => {
   });
 });
 
+// This template's interactivity is bound entirely through data attributes
+// (script.js does qa('[data-faq]'), querySelector('[data-faq-q]')). A dropped
+// data-faq is a dead accordion with no leak and no tag change: green gate,
+// broken site. That is the exact silent failure v2 exists to eliminate.
+describe("data attribute gate", () => {
+  const faq = `<div class="faq-item" data-faq="1"><button data-faq-q>Q</button><p data-faq-a>A</p></div>`;
+
+  it("fails when a data attribute is dropped, and names it", () => {
+    const dropped = `<div class="faq-item" data-faq="1"><button data-faq-q>Q</button><p>A</p></div>`;
+    const r = compareSkeleton(htmlSkeleton(faq), htmlSkeleton(dropped));
+    expect(r.ok).toBe(false);
+    expect(r.missingDataAttrs).toContain("data-faq-a");
+  });
+  it("fails when a data attribute is renamed", () => {
+    const renamed = `<div class="faq-item" data-question="1"><button data-faq-q>Q</button><p data-faq-a>A</p></div>`;
+    const r = compareSkeleton(htmlSkeleton(faq), htmlSkeleton(renamed));
+    expect(r.ok).toBe(false);
+    expect(r.missingDataAttrs).toContain("data-faq");
+  });
+  it("passes when only the VALUE changed — values are content", () => {
+    const revalued = `<div class="faq-item" data-faq="2"><button data-faq-q>Q</button><p data-faq-a>A</p></div>`;
+    expect(compareSkeleton(htmlSkeleton(faq), htmlSkeleton(revalued)).ok).toBe(true);
+  });
+  it("passes when a new data attribute is added", () => {
+    const added = `<div class="faq-item" data-faq="1" data-x="new"><button data-faq-q>Q</button><p data-faq-a>A</p></div>`;
+    expect(compareSkeleton(htmlSkeleton(faq), htmlSkeleton(added)).ok).toBe(true);
+  });
+  it("collects valueless data attributes", () => {
+    expect([...htmlSkeleton(`<button data-faq-q>Q</button>`).dataAttrs]).toEqual(["data-faq-q"]);
+  });
+});
+
 // The gate blocks real generations, so its deliberate tolerances are pinned
 // here: each of these, if it regressed, would fail a good site rather than
 // catch a bad one.
 describe("structure gate tolerances", () => {
+  it("does not mistake prose or hrefs for data attributes", () => {
+    // "big-data-analysis" is copy the AI rewrites freely; a phantom data-analysis
+    // would vanish with it and fail a perfectly good page.
+    const s = htmlSkeleton(`<a href="/big-data-analysis">Our big-data-driven process</a>`);
+    expect([...s.dataAttrs]).toEqual([]);
+  });
+  it("counts inline handlers and fails when one is dropped", () => {
+    const before = htmlSkeleton(`<a onclick="callNow('303-555-0101')">Call</a><form onsubmit="return v()"></form>`);
+    const revalued = htmlSkeleton(`<a onclick="callNow('720-555-0199')">Call</a><form onsubmit="return v()"></form>`);
+    const stripped = htmlSkeleton(`<a>Call</a><form onsubmit="return v()"></form>`);
+    expect(compareSkeleton(before, revalued).ok).toBe(true); // the phone number IS meant to change
+    const r = compareSkeleton(before, stripped);
+    expect(r.ok).toBe(false);
+    expect(r.handlerDiff).toContain("onclick: 1 -> 0");
+  });
+  it("does not mistake prose for an inline handler", () => {
+    expect(htmlSkeleton(`<p title="click on the button">on the roof</p>`).handlers).toEqual({});
+  });
   it("allows additions — a real business may have more services than the demo", () => {
     const template = htmlSkeleton(`<div class="cards"><article class="card">a</article></div>`);
     const grown = htmlSkeleton(

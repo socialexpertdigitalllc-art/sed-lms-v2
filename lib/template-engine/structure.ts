@@ -19,14 +19,21 @@ export interface HtmlSkeleton {
   tags: Record<string, number>;
   classes: Set<string>;
   ids: Set<string>;
+  /** every `data-*` attribute NAME present, e.g. `data-faq`. Names only. */
+  dataAttrs: Set<string>;
+  /** inline handler name (lowercased) -> occurrences, e.g. `{ onclick: 3 }` */
+  handlers: Record<string, number>;
 }
 
 export interface SkeletonDiff {
   ok: boolean;
   missingClasses: string[];
   missingIds: string[];
+  missingDataAttrs: string[];
   /** one `tag: before -> after` line per tag whose count dropped */
   tagDiff: string[];
+  /** one `handler: before -> after` line per inline handler that was dropped */
+  handlerDiff: string[];
 }
 
 export interface JsDiff {
@@ -55,18 +62,36 @@ const CLASS_ATTR_RE = /\bclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
 const ID_ATTR_RE = /\bid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
 
 /**
- * The structural fingerprint of a page: which tags, how many, and every styling
- * hook. Values (text, href, src, alt) are deliberately absent — those are
- * exactly what regeneration is supposed to change.
+ * Behavioural attributes are scanned ONLY inside an opening tag, because copy
+ * is not markup. A page that reads "our big-data-driven process" or links to
+ * `/big-data-analysis` must not register a phantom `data-driven` — that phantom
+ * would vanish the moment the AI rewrote the sentence, failing a good page over
+ * prose. Confining the scan to tags is what makes this rule safe to enforce.
+ */
+const TAG_OPEN_RE = /<[a-zA-Z][\w-]*\b[^>]*>/g;
+/** `data-faq="1"` and the valueless `data-faq` alike; the name, never the value. */
+const DATA_ATTR_RE = /(?:^|\s)(data-[a-zA-Z][\w-]*)(?=[\s=/>]|$)/gi;
+/** `on` + at least two letters + `=` — tight enough that prose ("on = ") cannot match. */
+const HANDLER_RE = /(?:^|\s)(on[a-z]{2,})\s*=/gi;
+
+/**
+ * The structural fingerprint of a page: which tags, how many, every styling
+ * hook, and every behavioural hook. Values (text, href, src, alt, and the value
+ * side of a data attribute) are deliberately absent — those are exactly what
+ * regeneration is supposed to change.
  *
- * Known limits: the scan is textual, so an inline script with a tight
+ * `dataAttrs` is not decoration. This template binds its interactivity entirely
+ * through data attributes — `script.js` reaches for `[data-faq]`, `[data-faq-q]`,
+ * `[data-faq-a]` — so a dropped or renamed `data-faq` is a silently dead
+ * accordion: no leaked token, no tag change, green gate, broken site in front of
+ * a paying client. Styling hooks alone do not cover behaviour.
+ *
+ * Known limits: the tag scan is textual, so an inline script with a tight
  * comparison (`i<divs.length`, no space) registers a phantom tag named `divs`,
- * and markup built inside a JS string is counted as real structure. Both are
- * harmless while stable — they are counted identically on both sides — and only
- * a phantom that DISAPPEARS trips the gate: a false failure, never a silent
- * pass. Values are not the only blind spot either: `data-*` attributes and
- * inline handlers, which the regeneration prompt also promises to preserve, are
- * not fingerprinted here.
+ * and markup built inside a JS string is counted as real structure. An opening
+ * tag whose attribute value contains a raw `>` is read as ending early. All are
+ * harmless while stable — they are read identically on both sides — and only a
+ * phantom that DISAPPEARS trips the gate: a false failure, never a silent pass.
  */
 export function htmlSkeleton(html: string): HtmlSkeleton {
   const src = html.replace(HTML_COMMENT_RE, " ");
@@ -89,7 +114,30 @@ export function htmlSkeleton(html: string): HtmlSkeleton {
     if (value) ids.add(value);
   }
 
-  return { tags, classes, ids };
+  const dataAttrs = new Set<string>();
+  const handlers: Record<string, number> = {};
+  for (const tag of src.matchAll(TAG_OPEN_RE)) {
+    const open = tag[0];
+    // HTML attribute names are case-insensitive, so `data-Faq` and `data-faq`
+    // are the same hook and must not read as two.
+    for (const m of open.matchAll(DATA_ATTR_RE)) dataAttrs.add(m[1].toLowerCase());
+    for (const m of open.matchAll(HANDLER_RE)) {
+      const name = m[1].toLowerCase();
+      handlers[name] = (handlers[name] ?? 0) + 1;
+    }
+  }
+
+  return { tags, classes, ids, dataAttrs, handlers };
+}
+
+/** `name: before -> after` for every key whose count dropped. Growth is fine. */
+function countDrops(before: Record<string, number>, after: Record<string, number>): string[] {
+  const drops: string[] = [];
+  for (const [name, count] of Object.entries(before)) {
+    const now = after[name] ?? 0;
+    if (now < count) drops.push(`${name}: ${count} -> ${now}`);
+  }
+  return drops;
 }
 
 /**
@@ -98,24 +146,33 @@ export function htmlSkeleton(html: string): HtmlSkeleton {
  *
  * Additions are allowed on purpose: a real business with five services where
  * the demo had three needs two more `<article class="card">`, and a model may
- * add a modifier class. Growth is legitimate; LOSS is the failure — a dropped
- * class is a dead CSS rule and a visibly broken section.
+ * add a modifier class or a new data attribute. Growth is legitimate; LOSS is
+ * the failure — a dropped class is a dead CSS rule and a visibly broken
+ * section, a dropped `data-*` is a control that no longer responds.
+ *
+ * Data attributes compare by NAME, not by count: five FAQ items collapsing to
+ * one still leaves `data-faq` present, but that loss is already caught by the
+ * tag and class counts.
  */
 export function compareSkeleton(a: HtmlSkeleton, b: HtmlSkeleton): SkeletonDiff {
   const missingClasses = [...a.classes].filter((c) => !b.classes.has(c));
   const missingIds = [...a.ids].filter((i) => !b.ids.has(i));
-
-  const tagDiff: string[] = [];
-  for (const [tag, count] of Object.entries(a.tags)) {
-    const after = b.tags[tag] ?? 0;
-    if (after < count) tagDiff.push(`${tag}: ${count} -> ${after}`);
-  }
+  const missingDataAttrs = [...a.dataAttrs].filter((d) => !b.dataAttrs.has(d));
+  const tagDiff = countDrops(a.tags, b.tags);
+  const handlerDiff = countDrops(a.handlers, b.handlers);
 
   return {
-    ok: missingClasses.length === 0 && missingIds.length === 0 && tagDiff.length === 0,
+    ok:
+      missingClasses.length === 0 &&
+      missingIds.length === 0 &&
+      missingDataAttrs.length === 0 &&
+      tagDiff.length === 0 &&
+      handlerDiff.length === 0,
     missingClasses,
     missingIds,
+    missingDataAttrs,
     tagDiff,
+    handlerDiff,
   };
 }
 
