@@ -32,7 +32,7 @@ export default async function AiToolsOverview() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-        {TOOL_IDS.map((id) => {
+        {TOOL_IDS.filter((id) => !TOOLS[id].internal).map((id) => {
           const cfg = TOOLS[id];
           const allowed = perms.has(cfg.perm);
           return (
