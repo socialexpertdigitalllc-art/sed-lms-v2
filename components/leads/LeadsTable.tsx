@@ -34,7 +34,7 @@ import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
 import { RegionFilter } from "./RegionFilter";
 import { TagFilter } from "./TagFilter";
 import { tagColor } from "@/lib/leads/tagColors";
-import { leadMatchesTags } from "@/lib/leads/tagFilter";
+import { leadMatchesTags, ownTags } from "@/lib/leads/tagFilter";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { useViewState } from "@/hooks/useViewState";
 import { buildQuery } from "@/lib/url/buildQuery";
@@ -77,6 +77,8 @@ export function LeadsTable({
 }) {
   const { has, all } = usePermissions();
   const tagById = useMemo(() => Object.fromEntries(tags.map((t) => [t.id, t])), [tags]);
+  // Only the caller's OWN tags are appliable via bulk (user-scoped tags).
+  const ownTagList = useMemo(() => ownTags(tags, currentUserId), [tags, currentUserId]);
   const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   const visible = useMemo(() => visibleStatuses(all), [all]);
   useRealtimeRefresh("leads");
@@ -86,7 +88,8 @@ export function LeadsTable({
   const canExport = has("leads.export");
   const canAssign = has("leads.assign");
   const canDelete = has("leads.delete");
-  const canBulk = canChangeStatus || canAssign || canDelete || canExport;
+  // Taggers get the bulk bar too, so they can apply tags to many leads at once.
+  const canBulk = canChangeStatus || canAssign || canDelete || canExport || canManageTags;
 
   function exportCsv() {
     const rows = table.getFilteredRowModel().rows.map((r) => leadCsvRow(r.original, agentNameById));
@@ -655,7 +658,8 @@ export function LeadsTable({
           statuses={settableStatuses(all)}
           agentNameById={agentNameById}
           salesAgents={salesAgents}
-          can={{ status: canChangeStatus, assign: canAssign, archive: canDelete, export: canExport }}
+          tags={ownTagList}
+          can={{ status: canChangeStatus, assign: canAssign, archive: canDelete, export: canExport, tag: canManageTags }}
           onClear={() => setRowSelection({})}
         />
       )}

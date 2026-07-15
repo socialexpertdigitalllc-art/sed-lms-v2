@@ -5,10 +5,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { statusSetError } from "@/lib/leads/categories";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
+import { buildTagLinkRows } from "@/lib/leads/tagFilter";
 
 const schema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(500),
-  action: z.enum(["status", "assign", "archive"]),
+  action: z.enum(["status", "assign", "archive", "tag"]),
   value: z.string().optional(),
 });
 
@@ -16,6 +17,7 @@ const PERM: Record<string, string> = {
   status: "leads.status_change",
   assign: "leads.assign",
   archive: "leads.delete",
+  tag: "leads.tags.manage",
 };
 
 export async function POST(req: Request) {
@@ -31,6 +33,41 @@ export async function POST(req: Request) {
   if (!perms.has(PERM[action])) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const admin = createAdminClient();
+
+  // Bulk tag: ADD the caller's own tags to every selected lead (never a replace,
+  // never touches the `leads` table). Branches out before the leads.update below.
+  if (action === "tag") {
+    const tagIds = Array.from(
+      new Set((value ?? "").split(",").map((s) => s.trim()).filter(Boolean))
+    );
+    if (tagIds.length === 0) {
+      return NextResponse.json({ error: "Select at least one tag." }, { status: 422 });
+    }
+    // Tags are user-scoped: a user may only apply their OWN tags.
+    const { data: owned } = await admin
+      .from("lead_tags")
+      .select("id")
+      .in("id", tagIds)
+      .eq("owner_id", user.id);
+    if ((owned?.length ?? 0) !== tagIds.length) {
+      return NextResponse.json({ error: "You can only apply your own tags." }, { status: 422 });
+    }
+    // Cartesian product ids × tagIds; existing links are left intact (idempotent).
+    const rows = buildTagLinkRows(ids, tagIds, user.id);
+    const { error: tagError } = await admin
+      .from("lead_tag_links")
+      .upsert(rows, { onConflict: "lead_id,tag_id", ignoreDuplicates: true });
+    if (tagError) return NextResponse.json({ error: tagError.message }, { status: 400 });
+
+    await admin.from("activity_log").insert({
+      user_id: user.id,
+      action: "lead.bulk_tag",
+      entity_type: "lead",
+      new_value: { ids, tagIds, count: ids.length },
+    });
+
+    return NextResponse.json({ ok: true, updated: ids.length });
+  }
 
   let update: Record<string, unknown>;
   if (action === "status") {

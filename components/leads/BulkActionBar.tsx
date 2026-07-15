@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { X, Loader2 } from "lucide-react";
-import type { Lead } from "@/lib/leads/types";
+import { X, Loader2, Tags } from "lucide-react";
+import type { Lead, LeadTag } from "@/lib/leads/types";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
+import { toggleTag } from "@/lib/leads/tagFilter";
+import { tagColor } from "@/lib/leads/tagColors";
 import { Select } from "@/components/common/Select";
 import { useToast } from "@/components/common/Toast";
 
-type BulkAction = "status" | "assign" | "archive";
+type BulkAction = "status" | "assign" | "archive" | "tag";
 
 export function BulkActionBar({
   selectedIds,
@@ -16,6 +18,7 @@ export function BulkActionBar({
   statuses,
   agentNameById,
   salesAgents,
+  tags,
   can,
   onClear,
 }: {
@@ -24,14 +27,34 @@ export function BulkActionBar({
   statuses: string[];
   agentNameById: Record<string, string>;
   salesAgents: { id: string; name: string }[];
-  can: { status: boolean; assign: boolean; archive: boolean; export: boolean };
+  tags: LeadTag[];
+  can: { status: boolean; assign: boolean; archive: boolean; export: boolean; tag: boolean };
   onClear: () => void;
 }) {
   const router = useRouter();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [tagOpen, setTagOpen] = useState(false);
+  const [checkedTags, setCheckedTags] = useState<string[]>([]);
+  const tagRef = useRef<HTMLDivElement>(null);
   const count = selectedIds.length;
+
+  // Outside-click closes the Tag popover (same ref+mousedown pattern as TagFilter).
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (tagRef.current && !tagRef.current.contains(e.target as Node)) setTagOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  async function applyTags() {
+    if (!checkedTags.length || busy) return;
+    await run("tag", checkedTags.join(","));
+    setCheckedTags([]);
+    setTagOpen(false);
+  }
 
   async function run(action: BulkAction, value?: string) {
     setBusy(true);
@@ -98,6 +121,52 @@ export function BulkActionBar({
             ? <option value="" disabled>No Sales members</option>
             : salesAgents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
+      )}
+
+      {can.tag && tags.length > 0 && (
+        <div ref={tagRef} className="relative">
+          <button
+            type="button"
+            className={btnCls + " inline-flex items-center gap-1.5"}
+            onClick={() => setTagOpen((o) => !o)}
+            disabled={busy}
+            aria-expanded={tagOpen}
+          >
+            <Tags className="w-4 h-4" /> Tag
+          </button>
+          {tagOpen && (
+            <div className="absolute bottom-full mb-1 left-0 w-56 max-h-72 overflow-auto bg-surface border border-border rounded-md shadow-xl p-1">
+              {tags.map((t) => {
+                const col = tagColor(t.color);
+                return (
+                  <label
+                    key={t.id}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-2 text-sm cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      className="accent-accent"
+                      checked={checkedTags.includes(t.id)}
+                      onChange={() => setCheckedTags((prev) => toggleTag(prev, t.id))}
+                    />
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: col.hex }} />
+                    <span className="flex-1 text-text truncate">{t.name}</span>
+                  </label>
+                );
+              })}
+              <div className="border-t border-border-subtle mt-1 pt-1 px-1 pb-0.5">
+                <button
+                  type="button"
+                  onClick={applyTags}
+                  disabled={busy || checkedTags.length === 0}
+                  className="w-full inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-md bg-accent text-white text-sm font-medium hover:bg-accent-ink disabled:opacity-50"
+                >
+                  Apply{checkedTags.length ? ` (${checkedTags.length})` : ""}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {can.export && (

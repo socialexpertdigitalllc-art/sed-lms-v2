@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toggleTag, leadMatchesTags, ownTags, canApplyTag } from "@/lib/leads/tagFilter";
+import { toggleTag, leadMatchesTags, ownTags, canApplyTag, buildTagLinkRows } from "@/lib/leads/tagFilter";
 import { tagColor, TAG_COLORS, TAG_COLOR_KEYS } from "@/lib/leads/tagColors";
 
 describe("toggleTag", () => {
@@ -68,6 +68,31 @@ describe("ownTags", () => {
     const src = [...tags];
     ownTags(tags, "u1");
     expect(tags).toEqual(src);
+  });
+});
+
+describe("buildTagLinkRows", () => {
+  it("builds the cartesian product of leads × tags", () => {
+    expect(buildTagLinkRows(["L1", "L2"], ["t1", "t2"], "u1")).toEqual([
+      { lead_id: "L1", tag_id: "t1", added_by: "u1" },
+      { lead_id: "L1", tag_id: "t2", added_by: "u1" },
+      { lead_id: "L2", tag_id: "t1", added_by: "u1" },
+      { lead_id: "L2", tag_id: "t2", added_by: "u1" },
+    ]);
+  });
+  it("dedupes repeated lead and tag ids", () => {
+    expect(buildTagLinkRows(["L1", "L1"], ["t1", "t1"], "u1")).toEqual([
+      { lead_id: "L1", tag_id: "t1", added_by: "u1" },
+    ]);
+  });
+  it("stamps every row's added_by with the given user id", () => {
+    const rows = buildTagLinkRows(["L1", "L2"], ["t1"], "u9");
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.added_by === "u9")).toBe(true);
+  });
+  it("returns an empty array when either list is empty", () => {
+    expect(buildTagLinkRows([], ["t1"], "u1")).toEqual([]);
+    expect(buildTagLinkRows(["L1"], [], "u1")).toEqual([]);
   });
 });
 
