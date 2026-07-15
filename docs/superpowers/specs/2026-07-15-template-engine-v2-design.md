@@ -56,12 +56,21 @@ Extend `template_generations` (keep existing columns):
 Reserved for the deferred **image preservation library** (create table now, unused until phase 2):
 - `curated_images(id, service_key text, business_type text, url text, thumb text, source text, vision jsonb, approved_by uuid, times_used int default 0, created_at)` + index on `(service_key, business_type)`. Later: the candidate fetcher consults this first.
 
-## 5. Provider — Gemini
+## 5. Provider — Gemini (**VERIFIED against the live account 2026-07-15**)
 
 Add a `gemini` provider to `lib/ai-tools/config.ts` using Google's **OpenAI-compatible endpoint** so the existing `callProvider` (`lib/ai-tools/run.ts:81`) is reused with no new HTTP client:
-- Base: `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, auth `Authorization: Bearer ${GEMINI_API_KEY}`.
-- Models: `gemini-2.5-pro` (plan + regeneration), `gemini-2.5-flash` (vision ranking, verification). Exact model ids to be confirmed against the account at build time; keep them in config, not hard-coded at call sites.
-- `maxOutputTokens`: **≥32000** (kills the v1 truncation class of bug). Vision via OpenAI-style `image_url` content parts.
+- Base: `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, auth `Authorization: Bearer ${GEMINI_API_KEY}` — **verified HTTP 200**.
+- **Model IDs (probed, not assumed):**
+  - `gemini-3.1-pro-preview` → **plan + whole-file regeneration** (newest pro tier that works on the compat endpoint).
+  - `gemini-3.5-flash` → **vision ranking + verification** (newest flash tier).
+  - Fallbacks that also verified 200: `gemini-2.5-pro`, `gemini-2.5-flash`.
+  - **`gemini-3-pro-preview` returns 404 on the compat endpoint** despite being listed by `/v1beta/models` — do not use it; keep all ids in config so they're swappable without touching call sites.
+- `maxOutputTokens`: **≥32000** (kills the v1 truncation class of bug).
+- **Vision verified on real Pexels photos** via OpenAI-style `image_url` parts. Probe results:
+  - `…/1388944/floor-flooring-hand-man…` → `{"people":true,"relevance":0,"quality":0.8,"reason":"Shows flooring installation, not house painting"}` — caught a bare hand **and** independently judged trade-relevance.
+  - `…/3615730/…` → `{"people":false,"relevance":0.9,"quality":0.9,"reason":"Clean shot of a paintbrush on wood."}`
+  - Conclusion: the §7 vision gate is sound — it delivers both "no people" **and** the per-trade "sense" that text search cannot.
+- **Parsing note:** Gemini wraps JSON in ```` ```json ```` fences. Reuse `parseOps`' existing fence/prose tolerance (`editOps.ts:10-56`) for every JSON response, or set `response_format:{type:"json_object"}` — never `JSON.parse` raw.
 - Keep Kimi/DeepSeek selectable as fallbacks.
 
 ## 6. Phase 1-2 — Brief + Content Plan
