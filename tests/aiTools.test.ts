@@ -5,6 +5,7 @@ import { buildPrompt } from "@/lib/ai-tools/prompt";
 import { EMPTY_INPUT } from "@/lib/ai-tools/prompt";
 import { computeAiKpis, byTool, generationsOverTime } from "@/lib/ai-tools/analytics";
 import { mapLeadToInput } from "@/lib/ai-tools/leadPrefill";
+import { TOOLS, TOOL_IDS, isToolId, isPublicToolId } from "@/lib/ai-tools/config";
 import type { AiGeneration } from "@/lib/ai-tools/types";
 
 const ml = (p: Partial<AiGeneration>): AiGeneration => ({
@@ -181,5 +182,27 @@ describe("mapLeadToInput", () => {
       { key: "name", label: "n", type: "text", fallback: "", lead_column: "business_name", join: ", " },
     ]);
     expect(f).toEqual({ name: "X" });
+  });
+});
+
+describe("isPublicToolId", () => {
+  it("accepts the standalone generators", () => {
+    expect(isPublicToolId("webcraft")).toBe(true);
+    expect(isPublicToolId("deepseek")).toBe(true);
+  });
+
+  it("rejects internal providers, so they get no generate/save endpoint", () => {
+    expect(TOOLS.gemini.internal).toBe(true);
+    expect(isToolId("gemini")).toBe(true); // still a real provider
+    expect(isPublicToolId("gemini")).toBe(false); // but not a public one
+  });
+
+  it("rejects unknown tools", () => {
+    expect(isPublicToolId("nope")).toBe(false);
+  });
+
+  it("keeps every public tool reachable from the generator grid", () => {
+    // The /ai-tools grid renders exactly the non-internal tools.
+    expect(TOOL_IDS.filter((id) => !TOOLS[id].internal)).toEqual(["webcraft", "deepseek"]);
   });
 });

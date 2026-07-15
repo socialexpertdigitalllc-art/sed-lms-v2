@@ -76,7 +76,9 @@ export const TOOLS: Record<ToolId, ToolConfig> = {
     // Generous cap: truncated output silently produced no-op edits in v1.
     maxOutputTokens: 32000,
     defaultMaxTokens: 32000,
-    costPer1kUsd: 0.005, // unverified rough estimate — display-only, not billing truth
+    // Unverified estimate: persisted to cost_usd and aggregated into analytics.
+    // Refine when real pricing is confirmed.
+    costPer1kUsd: 0.005,
     accent: "#4285F4",
     // Powers the Template Engine; not a standalone generator (no /ai-tools/gemini page).
     internal: true,
@@ -87,6 +89,15 @@ export const TOOL_IDS = Object.keys(TOOLS) as ToolId[];
 
 export function isToolId(v: string): v is ToolId {
   return v === "webcraft" || v === "deepseek" || v === "gemini";
+}
+
+// A public tool is a standalone generator: it has an /ai-tools/<id> page and
+// its own generate/save endpoints. Internal providers are reachable only via
+// the subsystem that owns them, so route handlers must gate on this rather
+// than isToolId — otherwise /api/ai-tools/gemini/generate would expose an
+// arbitrary-prompt passthrough on our Gemini key.
+export function isPublicToolId(v: string): v is ToolId {
+  return isToolId(v) && !TOOLS[v].internal;
 }
 
 // Named roles so call sites never hard-code model ids.

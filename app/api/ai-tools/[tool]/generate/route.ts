@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { TOOLS, isToolId } from "@/lib/ai-tools/config";
+import { TOOLS, isPublicToolId } from "@/lib/ai-tools/config";
 import { getWgeConfig } from "@/lib/ai-tools/wge";
 import { generateSchema } from "@/lib/ai-tools/schema";
 
@@ -10,7 +10,8 @@ export const maxDuration = 300;
 
 export async function POST(req: Request, { params }: { params: Promise<{ tool: string }> }) {
   const { tool } = await params;
-  if (!isToolId(tool)) {
+  // Internal providers are indistinguishable from an unknown tool here.
+  if (!isPublicToolId(tool)) {
     return NextResponse.json({ error: "Unknown tool" }, { status: 404 });
   }
   const cfg = TOOLS[tool];
