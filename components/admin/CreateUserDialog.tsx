@@ -77,7 +77,7 @@ export function CreateUserDialog({
       </button>
 
       {open && (
-        <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4" onClick={close}>
+        <div className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4">
           <form
             onClick={(e) => e.stopPropagation()}
             onSubmit={handleSubmit(onSubmit)}
