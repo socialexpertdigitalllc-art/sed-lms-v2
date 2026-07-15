@@ -42,7 +42,26 @@ export async function PUT(
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
   const admin = createAdminClient();
-  const { error: delError } = await admin.from("lead_tag_links").delete().eq("lead_id", id);
+
+  // Tags are user-scoped: a user may only apply their OWN tags. Verify every
+  // incoming id is owned by the caller before touching any links.
+  if (tagIds.length) {
+    const { data: owned } = await admin
+      .from("lead_tags")
+      .select("id")
+      .in("id", tagIds)
+      .eq("owner_id", user.id);
+    if ((owned?.length ?? 0) !== tagIds.length) {
+      return NextResponse.json({ error: "You can only apply your own tags." }, { status: 422 });
+    }
+  }
+
+  // Replace only the caller's own links on this lead — other users' tags stay put.
+  const { error: delError } = await admin
+    .from("lead_tag_links")
+    .delete()
+    .eq("lead_id", id)
+    .eq("added_by", user.id);
   if (delError) return NextResponse.json({ error: delError.message }, { status: 400 });
 
   if (tagIds.length) {

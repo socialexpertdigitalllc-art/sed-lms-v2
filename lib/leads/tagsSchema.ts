@@ -21,4 +21,10 @@ export const leadTagsSchema = z.object({
   tagIds: z.array(z.string().uuid()),
 });
 
+/** POST /api/tags/shares — share the caller's tags with a user or department. */
+export const tagShareSchema = z.object({
+  target_type: z.enum(["user", "department"]),
+  target_id: z.string().uuid(),
+});
+
 export type CreateTagInput = z.infer<typeof createTagSchema>;

@@ -47,7 +47,7 @@ export default async function LeadDetailPage({
   const leadTagIds = (leadTagRows ?? []).map((r) => r.tag_id as string);
   const { data: allTags } = await supabase
     .from("lead_tags")
-    .select("id, name, color")
+    .select("id, name, color, owner_id")
     .order("name");
 
   const admin = createAdminClient();
@@ -165,6 +165,7 @@ export default async function LeadDetailPage({
       leadTagIds={leadTagIds}
       canViewTags={canViewTags}
       canManageTags={canManageTags}
+      currentUserId={user?.id ?? ""}
     />
   );
 }

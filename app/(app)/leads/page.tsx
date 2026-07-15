@@ -17,7 +17,7 @@ export default async function LeadsPage() {
         .order("created_at", { ascending: false }),
       supabase.from("profiles").select("id, display_name"),
       supabase.from("departments").select("id").eq("slug", "sales").single(),
-      supabase.from("lead_tags").select("id, name, color").order("name"),
+      supabase.from("lead_tags").select("id, name, color, owner_id").order("name"),
     ]);
 
   // Flatten the embedded links into `tag_ids` and drop the nested field.
@@ -51,6 +51,7 @@ export default async function LeadsPage() {
   const perms = user ? await getUserPermissions(user.id) : new Set<string>();
   const canManageTags = perms.has("leads.tags.manage");
   const canViewTags = canManageTags || perms.has("leads.tags.view");
+  const canShareTags = perms.has("leads.tags.share");
 
   return (
     <LeadsTable
@@ -60,6 +61,8 @@ export default async function LeadsPage() {
       tags={tags}
       canViewTags={canViewTags}
       canManageTags={canManageTags}
+      canShareTags={canShareTags}
+      currentUserId={user?.id ?? ""}
     />
   );
 }

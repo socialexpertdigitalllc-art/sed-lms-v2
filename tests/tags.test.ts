@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toggleTag, leadMatchesTags } from "@/lib/leads/tagFilter";
+import { toggleTag, leadMatchesTags, ownTags, canApplyTag } from "@/lib/leads/tagFilter";
 import { tagColor, TAG_COLORS, TAG_COLOR_KEYS } from "@/lib/leads/tagColors";
 
 describe("toggleTag", () => {
@@ -37,6 +37,37 @@ describe("leadMatchesTags", () => {
     expect(leadMatchesTags([], ["a"])).toBe(false);
     expect(leadMatchesTags(null, ["a"])).toBe(false);
     expect(leadMatchesTags(undefined, ["a"])).toBe(false);
+  });
+});
+
+describe("canApplyTag", () => {
+  it("is true only for the caller's own tag", () => {
+    expect(canApplyTag({ owner_id: "u1" }, "u1")).toBe(true);
+    expect(canApplyTag({ owner_id: "u2" }, "u1")).toBe(false);
+  });
+  it("is false for an empty/mismatched user id", () => {
+    expect(canApplyTag({ owner_id: "u1" }, "")).toBe(false);
+  });
+});
+
+describe("ownTags", () => {
+  const tags = [
+    { id: "a", name: "A", color: "red", owner_id: "u1" },
+    { id: "b", name: "B", color: "blue", owner_id: "u2" },
+    { id: "c", name: "C", color: "teal", owner_id: "u1" },
+  ];
+  it("returns only the tags owned by the given user", () => {
+    expect(ownTags(tags, "u1").map((t) => t.id)).toEqual(["a", "c"]);
+    expect(ownTags(tags, "u2").map((t) => t.id)).toEqual(["b"]);
+  });
+  it("returns an empty array when the user owns none", () => {
+    expect(ownTags(tags, "u3")).toEqual([]);
+    expect(ownTags(tags, "")).toEqual([]);
+  });
+  it("does not mutate the input array", () => {
+    const src = [...tags];
+    ownTags(tags, "u1");
+    expect(tags).toEqual(src);
   });
 });
 

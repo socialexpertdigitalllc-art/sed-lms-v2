@@ -1,15 +1,18 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Tag, Plus, Trash2, Loader2 } from "lucide-react";
+import { ChevronDown, Tag, Plus, Trash2, Loader2, Share2 } from "lucide-react";
 import type { LeadTag } from "@/lib/leads/types";
 import { tagColor, TAG_COLOR_KEYS } from "@/lib/leads/tagColors";
-import { toggleTag } from "@/lib/leads/tagFilter";
+import { toggleTag, canApplyTag } from "@/lib/leads/tagFilter";
+import { TagSharingModal } from "./TagSharingModal";
 
-export function TagFilter({ tags, selected, canManage, onChange }: {
+export function TagFilter({ tags, selected, canManage, canShare, userId, onChange }: {
   tags: LeadTag[];
   selected: string[];
   canManage: boolean;
+  canShare: boolean;
+  userId: string;
   onChange: (next: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -20,6 +23,7 @@ export function TagFilter({ tags, selected, canManage, onChange }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [sharingOpen, setSharingOpen] = useState(false);
 
   useEffect(() => {
     function onDoc(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }
@@ -84,7 +88,7 @@ export function TagFilter({ tags, selected, canManage, onChange }: {
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: col.hex }} />
                   <span className="flex-1 text-text truncate">{t.name}</span>
                 </label>
-                {canManage && (
+                {canManage && canApplyTag(t, userId) && (
                   <button type="button" onClick={() => remove(t.id)} disabled={deletingId === t.id}
                     title="Delete tag" aria-label={`Delete tag ${t.name}`}
                     className="text-text-faint hover:text-dropped-fg disabled:opacity-50 opacity-0 group-hover/tag:opacity-100 transition-opacity">
@@ -98,6 +102,15 @@ export function TagFilter({ tags, selected, canManage, onChange }: {
           {selected.length > 0 && (
             <button type="button" onClick={() => onChange([])}
               className="w-full text-left px-2 py-1.5 mt-1 text-xs text-dropped-fg hover:bg-surface-2 rounded">Clear</button>
+          )}
+
+          {canShare && (
+            <div className="mt-1 border-t border-border-subtle pt-1">
+              <button type="button" onClick={() => { setSharingOpen(true); setOpen(false); }}
+                className="w-full inline-flex items-center gap-2 px-2 py-1.5 text-xs text-text-muted hover:bg-surface-2 rounded">
+                <Share2 className="w-3.5 h-3.5 shrink-0" /> Manage tag sharing
+              </button>
+            </div>
           )}
 
           {canManage && (
@@ -125,6 +138,7 @@ export function TagFilter({ tags, selected, canManage, onChange }: {
           )}
         </div>
       )}
+      {canShare && <TagSharingModal open={sharingOpen} onClose={() => setSharingOpen(false)} />}
     </div>
   );
 }

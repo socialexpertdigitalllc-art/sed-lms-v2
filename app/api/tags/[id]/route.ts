@@ -39,15 +39,23 @@ export async function PATCH(
   }
 
   const admin = createAdminClient();
+  // Ownership check: the route uses the admin client (bypasses RLS), so verify
+  // the caller owns this tag before mutating it.
+  const { data: existing } = await admin.from("lead_tags").select("owner_id").eq("id", id).single();
+  if (!existing) return NextResponse.json({ error: "Tag not found" }, { status: 404 });
+  if (existing.owner_id !== auth.userId) {
+    return NextResponse.json({ error: "You can only edit your own tags." }, { status: 403 });
+  }
+
   const { data, error } = await admin
     .from("lead_tags")
     .update(parsed.data)
     .eq("id", id)
-    .select("id, name, color")
+    .select("id, name, color, owner_id")
     .single();
   if (error || !data) {
     if (error?.code === "23505") {
-      return NextResponse.json({ error: "A tag with that name already exists." }, { status: 422 });
+      return NextResponse.json({ error: "You already have a tag with that name." }, { status: 422 });
     }
     return NextResponse.json({ error: error?.message ?? "Update failed" }, { status: 400 });
   }
@@ -72,6 +80,12 @@ export async function DELETE(
   const { id } = await params;
 
   const admin = createAdminClient();
+  // Ownership check (admin client bypasses RLS — verify explicitly).
+  const { data: existing } = await admin.from("lead_tags").select("owner_id").eq("id", id).single();
+  if (!existing) return NextResponse.json({ error: "Tag not found" }, { status: 404 });
+  if (existing.owner_id !== auth.userId) {
+    return NextResponse.json({ error: "You can only edit your own tags." }, { status: 403 });
+  }
   // Links are removed by the `on delete cascade` on lead_tag_links.tag_id.
   const { error } = await admin.from("lead_tags").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

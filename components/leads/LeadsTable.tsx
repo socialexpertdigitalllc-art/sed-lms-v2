@@ -63,6 +63,8 @@ export function LeadsTable({
   tags,
   canViewTags,
   canManageTags,
+  canShareTags,
+  currentUserId,
 }: {
   leads: Lead[];
   agentNameById: Record<string, string>;
@@ -70,6 +72,8 @@ export function LeadsTable({
   tags: LeadTag[];
   canViewTags: boolean;
   canManageTags: boolean;
+  canShareTags: boolean;
+  currentUserId: string;
 }) {
   const { has, all } = usePermissions();
   const tagById = useMemo(() => Object.fromEntries(tags.map((t) => [t.id, t])), [tags]);
@@ -493,6 +497,8 @@ export function LeadsTable({
             tags={tags}
             selected={tagSel}
             canManage={canManageTags}
+            canShare={canShareTags}
+            userId={currentUserId}
             onChange={(next) => setUrlState({ tags: next.join(","), page: "0" })}
           />
         )}

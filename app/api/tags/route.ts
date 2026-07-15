@@ -29,14 +29,16 @@ export async function GET() {
   const auth = await guard(["leads.tags.view", "leads.tags.manage"]);
   if ("error" in auth) return guardError(auth.error);
 
-  const admin = createAdminClient();
-  const { data, error } = await admin
+  // Read via the USER (RLS) client so owner-scoping applies — `can_see_user_tags`
+  // returns the caller's own tags plus any shared with them (or all with view_all).
+  const supabase = await createClient();
+  const { data, error } = await supabase
     .from("lead_tags")
-    .select("id, name, color")
+    .select("id, name, color, owner_id")
     .order("name");
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  return NextResponse.json({ tags: data ?? [] });
+  return NextResponse.json({ tags: data ?? [], userId: auth.userId });
 }
 
 export async function POST(req: Request) {
@@ -54,13 +56,13 @@ export async function POST(req: Request) {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("lead_tags")
-    .insert({ name: parsed.data.name, color: parsed.data.color, created_by: auth.userId })
-    .select("id, name, color")
+    .insert({ name: parsed.data.name, color: parsed.data.color, owner_id: auth.userId, created_by: auth.userId })
+    .select("id, name, color, owner_id")
     .single();
   if (error || !data) {
-    // 23505 = unique_violation on name.
+    // 23505 = unique_violation on (owner_id, name) — now scoped per owner.
     if (error?.code === "23505") {
-      return NextResponse.json({ error: "A tag with that name already exists." }, { status: 422 });
+      return NextResponse.json({ error: "You already have a tag with that name." }, { status: 422 });
     }
     return NextResponse.json({ error: error?.message ?? "Create failed" }, { status: 400 });
   }

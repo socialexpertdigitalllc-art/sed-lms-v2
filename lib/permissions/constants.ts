@@ -15,6 +15,8 @@ export const PERMISSIONS = [
   { key: "leads.followup", name: "Log Lead Follow-ups", category: "leads" },
   { key: "leads.tags.view", name: "View & Filter Tags", category: "leads" },
   { key: "leads.tags.manage", name: "Manage Lead Tags", category: "leads" },
+  { key: "leads.tags.view_all", name: "View All Users' Tags", category: "leads", is_sensitive: true },
+  { key: "leads.tags.share", name: "Share Tags", category: "leads", is_sensitive: true },
   { key: "pre_leads.view", name: "View Pre-Leads", category: "pre_leads" },
   { key: "pre_leads.create", name: "Create Pre-Lead", category: "pre_leads" },
   { key: "pre_leads.edit", name: "Edit Pre-Lead", category: "pre_leads" },

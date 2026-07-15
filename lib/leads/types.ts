@@ -22,8 +22,8 @@ export const STATUS_PILL: Record<string, string> = {
 
 export type AddOn = { id: string; label: string; price: number | null };
 
-/** A custom lead tag from the `lead_tags` catalog. */
-export type LeadTag = { id: string; name: string; color: string };
+/** A custom lead tag from the `lead_tags` catalog. Owned by a single user. */
+export type LeadTag = { id: string; name: string; color: string; owner_id: string };
 
 export interface Lead {
   id: string;

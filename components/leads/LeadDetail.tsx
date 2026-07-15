@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon, LayoutTemplate, Tags, X, Plus } from "lucide-react";
+import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon, LayoutTemplate, Tags, X, Plus, Lock } from "lucide-react";
 import type { Lead, LeadTag } from "@/lib/leads/types";
 import { tagColor } from "@/lib/leads/tagColors";
-import { toggleTag } from "@/lib/leads/tagFilter";
+import { toggleTag, ownTags } from "@/lib/leads/tagFilter";
 import { Select } from "@/components/common/Select";
 import type { LeadFollowUp } from "@/lib/leads/followups";
 import type { Ticket, TicketPriority } from "@/lib/tickets/types";
@@ -44,6 +44,7 @@ export function LeadDetail({
   leadTagIds,
   canViewTags,
   canManageTags,
+  currentUserId,
 }: {
   lead: Lead;
   agents: Agent[];
@@ -57,6 +58,7 @@ export function LeadDetail({
   leadTagIds: string[];
   canViewTags: boolean;
   canManageTags: boolean;
+  currentUserId: string;
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
@@ -75,11 +77,17 @@ export function LeadDetail({
   const [queueMsg, setQueueMsg] = useState<string | null>(null);
   const [queuing, setQueuing] = useState(false);
 
-  // Tag editor — optimistic local set; PUT replaces the whole set, reverts on error.
-  const [tagIds, setTagIds] = useState<string[]>(leadTagIds);
-  const [savingTags, setSavingTags] = useState(false);
+  // Tags are user-scoped. The editor only ever touches the caller's OWN tags;
+  // tags owned by other users (visible via view_all/shares) render read-only.
+  const myTagIds = useMemo(() => new Set(ownTags(allTags, currentUserId).map((t) => t.id)), [allTags, currentUserId]);
   const tagById = Object.fromEntries(allTags.map((t) => [t.id, t] as const));
-  const availableTags = allTags.filter((t) => !tagIds.includes(t.id));
+  // Optimistic local set of the caller's own applied tags; PUT replaces exactly
+  // this set (server keeps other users' links intact), reverts on error.
+  const [tagIds, setTagIds] = useState<string[]>(() => leadTagIds.filter((id) => myTagIds.has(id)));
+  const [savingTags, setSavingTags] = useState(false);
+  // Read-only chips: tags on this lead owned by someone else that we can see.
+  const otherOwnerTagIds = leadTagIds.filter((id) => !myTagIds.has(id));
+  const availableTags = ownTags(allTags, currentUserId).filter((t) => !tagIds.includes(t.id));
 
   async function saveTags(next: string[]) {
     const prev = tagIds;
@@ -291,7 +299,10 @@ export function LeadDetail({
           {canViewTags && (
             <SectionCard n={6} icon={Tags} title="Tags" subtitle="Categorize this lead" done={false} delay={300}>
               <div className="flex flex-wrap items-center gap-2">
-                {tagIds.length === 0 && <span className="text-sm text-text-faint">No tags</span>}
+                {tagIds.length === 0 && otherOwnerTagIds.length === 0 && (
+                  <span className="text-sm text-text-faint">No tags</span>
+                )}
+                {/* Editable — the caller's own tags */}
                 {tagIds.map((id) => {
                   const t = tagById[id];
                   if (!t) return null;
@@ -317,6 +328,23 @@ export function LeadDetail({
                     </span>
                   );
                 })}
+                {/* Read-only — tags owned by another user, visible via sharing / view-all */}
+                {otherOwnerTagIds.map((id) => {
+                  const t = tagById[id];
+                  if (!t) return null;
+                  const col = tagColor(t.color);
+                  return (
+                    <span
+                      key={id}
+                      title="Owned by another user — read-only"
+                      style={{ background: col.chipBg, color: col.chipFg, borderColor: col.hex + "55" }}
+                      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium opacity-80"
+                    >
+                      <Lock className="h-2.5 w-2.5 shrink-0" />
+                      {t.name}
+                    </span>
+                  );
+                })}
               </div>
               {canManageTags && availableTags.length > 0 && (
                 <div className="mt-3 inline-flex items-center gap-2">
@@ -334,9 +362,9 @@ export function LeadDetail({
                   </Select>
                 </div>
               )}
-              {canManageTags && allTags.length === 0 && (
+              {canManageTags && availableTags.length === 0 && tagIds.length === 0 && (
                 <p className="mt-2 text-xs text-text-faint">
-                  No tags in the catalog yet — create tags from the Tags filter on the Leads list.
+                  You have no tags yet — create tags from the Tags filter on the Leads list.
                 </p>
               )}
             </SectionCard>
