@@ -16,14 +16,12 @@ export default async function ByAgentPage() {
   const perms = await getUserPermissions(user.id);
   if (!perms.has("analytics.by_agent")) redirect("/dashboard");
 
-  const { data: leadsData } = await supabase
-    .from("leads")
-    .select("*")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
+  const [{ data: leadsData }, { data: agents }] = await Promise.all([
+    supabase.from("leads").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
+    supabase.from("profiles").select("id, display_name"),
+  ]);
   const leads = (leadsData ?? []) as Lead[];
 
-  const { data: agents } = await supabase.from("profiles").select("id, display_name");
   const nameById: Record<string, string> = {};
   for (const a of agents ?? []) nameById[a.id] = a.display_name ?? "—";
 

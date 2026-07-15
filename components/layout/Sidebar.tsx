@@ -11,7 +11,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useNavCounts } from "@/hooks/useNavCounts";
+import { navCountKey, navCountTone } from "@/lib/nav/counts";
 import { cn } from "@/lib/utils";
+import { NavItemContent } from "@/components/layout/NavItemContent";
 import { BrandMark } from "@/components/branding/BrandMark";
 import type { Branding } from "@/lib/settings/appSettings";
 
@@ -71,6 +74,7 @@ export function Sidebar({
 }) {
   const { has, hasAny } = usePermissions();
   const path = usePathname();
+  const counts = useNavCounts();
 
   const [hovering, setHovering] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -102,7 +106,8 @@ export function Sidebar({
 
   function renderItem(n: NavItem, showLabels: boolean) {
     const active = n.href === bestHref;
-    const Icon = n.icon;
+    const key = navCountKey(n.href);
+    const count = key ? counts[key] : undefined;
     return (
       <Link
         key={n.href}
@@ -115,8 +120,13 @@ export function Sidebar({
           active ? "bg-accent-soft text-accent-ink" : "text-text-muted hover:bg-surface hover:text-text"
         )}
       >
-        <Icon className="w-[18px] h-[18px] shrink-0" />
-        {showLabels && <span className="truncate">{n.label}</span>}
+        <NavItemContent
+          icon={n.icon}
+          label={n.label}
+          count={count}
+          showLabels={showLabels}
+          tone={navCountTone(key)}
+        />
       </Link>
     );
   }

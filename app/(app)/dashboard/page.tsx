@@ -9,41 +9,42 @@ import { DashboardBoard } from "@/components/dashboard/DashboardBoard";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
-  const { data: leadsData } = await supabase
-    .from("leads")
-    .select("*")
-    .is("deleted_at", null);
-  const leads = (leadsData ?? []) as Lead[];
-
-  const { data: agents } = await supabase.from("profiles").select("id, display_name");
-  const agentNameById: Record<string, string> = {};
-  for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
-
-  const { data: followUps } = await supabase.from("lead_follow_ups").select("fu_status, lead_id");
-  const { data: tickets } = await supabase
-    .from("lead_tickets")
-    .select("status, due_date, created_at, resolved_at, lead_id");
+  const admin = createAdminClient();
 
   // Sales-department members — targets for the admin per-agent analytics filter.
   // Loaded via the admin client so the roster is complete for admins (the only
-  // ones who see the control; it is gated on `analytics.view_all_agents`).
-  const admin = createAdminClient();
-  const { data: salesDept } = await admin
-    .from("departments")
-    .select("id")
-    .eq("slug", "sales")
-    .single();
-  let salesUsers: { id: string; display_name: string }[] = [];
-  if (salesDept) {
+  // ones who see the control; it is gated on `analytics.view_all_agents`). Runs
+  // concurrently with the independent reads below; the salesDept→members hop
+  // stays a chain inside this promise.
+  const salesUsersPromise = (async (): Promise<{ id: string; display_name: string }[]> => {
+    const { data: salesDept } = await admin
+      .from("departments")
+      .select("id")
+      .eq("slug", "sales")
+      .single();
+    if (!salesDept) return [];
     const { data: members } = await admin
       .from("department_members")
       .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
       .eq("department_id", salesDept.id);
-    salesUsers = (members ?? [])
+    return (members ?? [])
       .map((m: any) => ({ id: m.profiles?.id, display_name: m.profiles?.display_name ?? "—" }))
       .filter((u: { id?: string }) => u.id)
       .sort((a, b) => a.display_name.localeCompare(b.display_name));
-  }
+  })();
+
+  // Independent reads fire together; salesUsers resolves in parallel.
+  const [{ data: leadsData }, { data: agents }, { data: followUps }, { data: tickets }, salesUsers] =
+    await Promise.all([
+      supabase.from("leads").select("*").is("deleted_at", null),
+      supabase.from("profiles").select("id, display_name"),
+      supabase.from("lead_follow_ups").select("fu_status, lead_id"),
+      supabase.from("lead_tickets").select("status, due_date, created_at, resolved_at, lead_id"),
+      salesUsersPromise,
+    ]);
+  const leads = (leadsData ?? []) as Lead[];
+  const agentNameById: Record<string, string> = {};
+  for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 
   const { data: { user } } = await supabase.auth.getUser();
   const perms = user ? await getUserPermissions(user.id) : new Set<string>();

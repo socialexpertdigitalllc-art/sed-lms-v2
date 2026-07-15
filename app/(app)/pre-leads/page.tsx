@@ -5,14 +5,12 @@ import { WorldClocks } from "@/components/layout/WorldClocks";
 
 export default async function PreLeadsPage() {
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("pre_leads")
-    .select("*")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
+  const [{ data }, { data: agents }] = await Promise.all([
+    supabase.from("pre_leads").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
+    supabase.from("profiles").select("id, display_name"),
+  ]);
   const preLeads = (data ?? []) as PreLead[];
 
-  const { data: agents } = await supabase.from("profiles").select("id, display_name");
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 

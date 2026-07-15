@@ -5,11 +5,21 @@ import type { Lead, LeadTag } from "@/lib/leads/types";
 
 export default async function LeadsPage() {
   const supabase = await createClient();
-  const { data: leadsData } = await supabase
-    .from("leads")
-    .select("*, lead_tag_links(tag_id)")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
+
+  // Independent reads fire together. `department_members` still follows because
+  // it depends on the resolved `salesDept.id`.
+  const [{ data: leadsData }, { data: agents }, { data: salesDept }, { data: tagsData }] =
+    await Promise.all([
+      supabase
+        .from("leads")
+        .select("*, lead_tag_links(tag_id)")
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false }),
+      supabase.from("profiles").select("id, display_name"),
+      supabase.from("departments").select("id").eq("slug", "sales").single(),
+      supabase.from("lead_tags").select("id, name, color").order("name"),
+    ]);
+
   // Flatten the embedded links into `tag_ids` and drop the nested field.
   // For users without a tag permission, RLS returns no link rows → `tag_ids: []`.
   const leads: Lead[] = (leadsData ?? []).map((row: any) => {
@@ -17,16 +27,10 @@ export default async function LeadsPage() {
     return { ...rest, tag_ids: (lead_tag_links ?? []).map((l: any) => l.tag_id) } as Lead;
   });
 
-  const { data: agents } = await supabase.from("profiles").select("id, display_name");
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 
   // Sales-department members — the only valid targets for bulk assignment.
-  const { data: salesDept } = await supabase
-    .from("departments")
-    .select("id")
-    .eq("slug", "sales")
-    .single();
   let salesAgents: { id: string; name: string }[] = [];
   if (salesDept) {
     const { data: members } = await supabase
@@ -39,10 +43,6 @@ export default async function LeadsPage() {
   }
 
   // Tag catalog — RLS returns [] without leads.tags.view/manage.
-  const { data: tagsData } = await supabase
-    .from("lead_tags")
-    .select("id, name, color")
-    .order("name");
   const tags = (tagsData ?? []) as LeadTag[];
 
   const {

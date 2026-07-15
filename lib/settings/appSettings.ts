@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export type AppSettings = {
@@ -23,7 +24,9 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 // Read the singleton company settings row; lazily materialise the default
 // row if missing. Uses the service-role client so it works both in admin
 // UI requests and in headless pollers (no session) — mirrors getWgeConfig.
-export async function getAppSettings(): Promise<AppSettings> {
+// Wrapped in React's request-level cache so the metadata + layout reads within
+// a single render dedupe to one DB round-trip.
+export const getAppSettings = cache(async (): Promise<AppSettings> => {
   const admin = createAdminClient();
   const { data } = await admin
     .from("app_settings")
@@ -38,7 +41,7 @@ export async function getAppSettings(): Promise<AppSettings> {
     .from("app_settings")
     .upsert({ singleton: true, ...DEFAULT_APP_SETTINGS }, { onConflict: "singleton" });
   return DEFAULT_APP_SETTINGS;
-}
+});
 
 export function logoPublicUrl(logoPath: string | null): string | null {
   if (!logoPath) return null;
@@ -48,11 +51,11 @@ export function logoPublicUrl(logoPath: string | null): string | null {
 export type Branding = { companyName: string; logoUrl: string | null };
 
 /** Fallback-safe: never throws (metadata generation must not crash a render/build). */
-export async function getBranding(): Promise<Branding> {
+export const getBranding = cache(async (): Promise<Branding> => {
   try {
     const s = await getAppSettings();
     return { companyName: s.company_name || "SED LMS", logoUrl: logoPublicUrl(s.logo_path) };
   } catch {
     return { companyName: "SED LMS", logoUrl: null };
   }
-}
+});
