@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { unzipToMap } from "@/lib/template-engine/zip";
 import { buildManifest, validateTemplate } from "@/lib/template-engine/manifest";
+import { extractDemoTokens } from "@/lib/template-engine/demoTokens";
 import { businessSlug } from "@/lib/template-engine/slug";
 import { contentTypeFor } from "@/lib/template-engine/runner";
 
@@ -82,6 +83,17 @@ export async function POST(req: Request) {
   const invalid = validateTemplate(manifest);
   if (invalid) return NextResponse.json({ error: invalid }, { status: 422 });
 
+  // Derive the template's demo identity ONCE, here, so the post-build leak gate
+  // has something to check for. A template uploaded without this ships with
+  // demo_tokens = [] and the gate protects nothing — which is exactly how v1
+  // shipped "Northpoint Remodeling" to a client who bought a Warrior site.
+  const templateText: Record<string, string> = {};
+  const decoder = new TextDecoder();
+  for (const [path, data] of Object.entries(filesMap)) {
+    if (/\.(html?|js|mjs)$/i.test(path)) templateText[path] = decoder.decode(data);
+  }
+  const demoTokens = extractDemoTokens(templateText);
+
   const admin = createAdminClient();
 
   // unique slug from the name (-2, -3, ... on collision)
@@ -119,6 +131,7 @@ export async function POST(req: Request) {
       slug,
       storage_prefix: templateId,
       manifest,
+      demo_tokens: demoTokens,
       page_count: manifest.pages.length,
       status: "active",
       created_by: auth.userId,

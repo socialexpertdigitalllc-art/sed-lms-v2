@@ -62,3 +62,6 @@ yarn-error.log*
 
 # local DB safety backups (contain demo data — never commit)
 backups/
+
+# Session handoff notes (local only)
+.remember/
