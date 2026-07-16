@@ -1,5 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { VISION_SYSTEM, visionPrompt, parseVisionVerdicts } from "@/lib/template-engine/vision";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { VISION_SYSTEM, visionPrompt, parseVisionVerdicts, rankImages } from "@/lib/template-engine/vision";
+import { callProvider } from "@/lib/ai-tools/run";
+
+vi.mock("@/lib/ai-tools/run", () => ({
+  callProvider: vi.fn(),
+}));
 
 describe("visionPrompt", () => {
   const brief = { query: "modern kitchen remodel", kind: "hero", businessType: "kitchen remodeling" };
@@ -73,5 +78,115 @@ describe("parseVisionVerdicts", () => {
   it("returns all-conservative verdicts for unparseable garbage", () => {
     const out = parseVisionVerdicts("not json at all, sorry about that", 2);
     expect(out).toEqual([conservative, conservative]);
+  });
+});
+
+describe("parseVisionVerdicts — truncation salvage", () => {
+  const conservative = { people: true, relevance: 0, quality: 0, reason: "unreadable" };
+
+  it("keeps the complete leading verdicts of a truncated array and pads the rest conservative", () => {
+    // The real 2026-07-16 failure: gemini-3.5-flash hit max_tokens mid-array
+    // (thinking tokens ate the budget), returning 200 + a cut-off JSON array.
+    // The complete leading verdicts are independently safe — losing ALL 12
+    // because verdict #5 was cut is what emptied whole image slots.
+    const truncated =
+      '[{"people":false,"relevance":0.9,"quality":0.8,"reason":"clean roof shot"},' +
+      '{"people":true,"relevance":0.5,"quality":0.7,"reason":"crew visible"},' +
+      '{"people":false,"relevance":0.7,"qual';
+    const out = parseVisionVerdicts(truncated, 4);
+    expect(out).toEqual([
+      { people: false, relevance: 0.9, quality: 0.8, reason: "clean roof shot" },
+      { people: true, relevance: 0.5, quality: 0.7, reason: "crew visible" },
+      conservative,
+      conservative,
+    ]);
+  });
+
+  it("salvages a truncated array inside an unterminated ```json fence", () => {
+    const fenced = '```json\n[{"people":false,"relevance":1,"quality":1,"reason":"ok"},{"people":fa';
+    const out = parseVisionVerdicts(fenced, 2);
+    expect(out).toEqual([{ people: false, relevance: 1, quality: 1, reason: "ok" }, conservative]);
+  });
+});
+
+describe("rankImages", () => {
+  const brief = { query: "new roof", kind: "service", businessType: "General Contractor" };
+  const mockCall = vi.mocked(callProvider);
+  const goodVerdicts = (n: number) =>
+    JSON.stringify(
+      Array.from({ length: n }, (_, i) => ({
+        people: false,
+        relevance: 0.9,
+        quality: 0.8,
+        reason: `photo ${i} fine`,
+      })),
+    );
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockCall.mockReset();
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errSpy.mockRestore();
+  });
+
+  it("gives the vision call enough output budget for thinking tokens (>= 8000)", async () => {
+    mockCall.mockResolvedValue({ text: goodVerdicts(2), tokens: 100 });
+    await rankImages([{ url: "a" }, { url: "b" }], brief);
+    expect(mockCall).toHaveBeenCalledTimes(1);
+    const opts = mockCall.mock.calls[0][4];
+    // 2000 was eaten almost entirely by gemini-3.5-flash's hidden thinking
+    // tokens (~1600-1800/call), truncating the verdicts JSON.
+    expect(opts.maxTokens).toBeGreaterThanOrEqual(8000);
+  });
+
+  it("retries a chunk whose response was fully unreadable and uses the retry's verdicts", async () => {
+    mockCall
+      .mockResolvedValueOnce({ text: "totally not json", tokens: 10 })
+      .mockResolvedValueOnce({ text: goodVerdicts(2), tokens: 100 });
+    const out = await rankImages([{ url: "a" }, { url: "b" }], brief);
+    expect(mockCall).toHaveBeenCalledTimes(2);
+    expect(out).toEqual([
+      { people: false, relevance: 0.9, quality: 0.8, reason: "photo 0 fine" },
+      { people: false, relevance: 0.9, quality: 0.8, reason: "photo 1 fine" },
+    ]);
+  });
+
+  it("retries when the provider throws, then succeeds", async () => {
+    mockCall
+      .mockRejectedValueOnce(new Error("HTTP 429"))
+      .mockResolvedValueOnce({ text: goodVerdicts(1), tokens: 50 });
+    const out = await rankImages([{ url: "a" }], brief);
+    expect(mockCall).toHaveBeenCalledTimes(2);
+    expect(out).toEqual([{ people: false, relevance: 0.9, quality: 0.8, reason: "photo 0 fine" }]);
+  });
+
+  it("does NOT retry a chunk that salvaged some real verdicts", async () => {
+    // Partial salvage means the call fundamentally worked; a retry would just
+    // burn quota. The missing tail stays conservative (dropped upstream).
+    const truncated = '[{"people":false,"relevance":0.9,"quality":0.8,"reason":"ok"},{"people":fa';
+    mockCall.mockResolvedValue({ text: truncated, tokens: 100 });
+    const out = await rankImages([{ url: "a" }, { url: "b" }], brief);
+    expect(mockCall).toHaveBeenCalledTimes(1);
+    expect(out[0]).toEqual({ people: false, relevance: 0.9, quality: 0.8, reason: "ok" });
+    expect(out[1]).toEqual({ people: true, relevance: 0, quality: 0, reason: "unreadable" });
+  });
+
+  it("settles on all-conservative verdicts and logs loudly after every attempt fails", async () => {
+    mockCall.mockResolvedValue({ text: "garbage every time", tokens: 10 });
+    const out = await rankImages([{ url: "a" }, { url: "b" }], brief);
+    expect(mockCall.mock.calls.length).toBeGreaterThanOrEqual(2); // must have retried
+    expect(out).toEqual([
+      { people: true, relevance: 0, quality: 0, reason: "unreadable" },
+      { people: true, relevance: 0, quality: 0, reason: "unreadable" },
+    ]);
+    expect(errSpy).toHaveBeenCalled(); // silent-empty slots are how this bug shipped
+  });
+
+  it("returns [] for no candidates without calling the provider", async () => {
+    const out = await rankImages([], brief);
+    expect(out).toEqual([]);
+    expect(mockCall).not.toHaveBeenCalled();
   });
 });

@@ -10,7 +10,7 @@
 
 import { callProvider } from "@/lib/ai-tools/run";
 import { GEMINI_FLASH_MODEL } from "@/lib/ai-tools/config";
-import { parseJsonLoose } from "@/lib/ai/json";
+import { parseJsonArrayPrefix, parseJsonLoose } from "@/lib/ai/json";
 import type { VisionVerdict } from "./imageSlots";
 
 export const VISION_SYSTEM = `You are an exacting visual curator for home-service business websites. You inspect stock photos and return ONLY strict, well-formed JSON verdicts — no prose, no commentary, no markdown fences. You are deliberately conservative about detecting people: any human being or any part of a human body — face, hand, arm, leg, or otherwise — visible anywhere in the frame (even partially, blurred, or in the background) counts as a person present. When genuinely uncertain, you judge relevance and quality strictly rather than guessing generously.`;
@@ -73,7 +73,11 @@ function isValidVerdict(v: unknown): v is VisionVerdict {
  */
 export function parseVisionVerdicts(raw: string, n: number): VisionVerdict[] {
   const parsed = parseJsonLoose<unknown>(raw);
-  const arr = Array.isArray(parsed) ? parsed : [];
+  // Not a complete array? Salvage the complete leading verdicts of a truncated
+  // one (gemini-3.5-flash hitting max_tokens returns 200 + a cut-off array;
+  // each verdict maps independently to one image, so a prefix is safe — losing
+  // all 12 because verdict #5 was cut off is what emptied whole image slots).
+  const arr = Array.isArray(parsed) ? parsed : parseJsonArrayPrefix<unknown>(raw);
   const out: VisionVerdict[] = [];
   for (let i = 0; i < n; i++) {
     const entry = arr[i];
@@ -90,6 +94,23 @@ export function parseVisionVerdicts(raw: string, n: number): VisionVerdict[] {
 // batches are chunked so no single call is starved of attention or hits a
 // provider-side limit.
 const MAX_IMAGES_PER_CALL = 12;
+
+// Output budget per vision call. gemini-3.5-flash spends HIDDEN thinking
+// tokens (~1,600-1,800 measured live 2026-07-17) that count against
+// max_tokens; at the old 2000 the verdict JSON was truncated (HTTP 200 +
+// finish_reason=length) and every slot whose chunks both truncated came out
+// empty. 12 verdicts need ~500 output tokens, so 8000 leaves ~4x headroom.
+const VISION_MAX_TOKENS = 8000;
+
+// Attempts per chunk. Thinking length varies run to run (the same request can
+// truncate once and fit the next time) and Gemini throws transient 429/fetch
+// errors; one blip must not zero out a whole batch of images.
+const RANK_ATTEMPTS = 3;
+
+/** True when the verdict carries real signal (not the conservative unreadable default). */
+function isReadableVerdict(v: VisionVerdict): boolean {
+  return !(v.people === true && v.relevance === 0 && v.quality === 0 && v.reason === "unreadable");
+}
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -114,16 +135,41 @@ export async function rankImages(
 
   const out: VisionVerdict[] = [];
   for (const batch of chunk(candidates, MAX_IMAGES_PER_CALL)) {
-    try {
-      const { text } = await callProvider("gemini", model, VISION_SYSTEM, visionPrompt(brief), {
-        maxTokens: 2000,
-        temperature: 0,
-        images: batch.map((c) => c.url),
-      });
-      out.push(...parseVisionVerdicts(text, batch.length));
-    } catch {
-      out.push(...batch.map((): VisionVerdict => ({ ...CONSERVATIVE_VERDICT })));
+    let settled: VisionVerdict[] | null = null;
+    let lastNote = "";
+    for (let attempt = 1; attempt <= RANK_ATTEMPTS; attempt++) {
+      try {
+        const { text } = await callProvider("gemini", model, VISION_SYSTEM, visionPrompt(brief), {
+          maxTokens: VISION_MAX_TOKENS,
+          temperature: 0,
+          images: batch.map((c) => c.url),
+        });
+        const verdicts = parseVisionVerdicts(text, batch.length);
+        // At least one readable verdict = the call fundamentally worked (a
+        // truncated tail stays conservative; retrying would just burn quota).
+        // ALL unreadable = the response was garbage/fully truncated — retry.
+        if (verdicts.some(isReadableVerdict)) {
+          settled = verdicts;
+          break;
+        }
+        lastNote = `unreadable response (${text.length} chars)`;
+      } catch (e) {
+        lastNote = e instanceof Error ? e.message : String(e);
+      }
+      if (attempt < RANK_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 250 * attempt)); // linear backoff
+      }
     }
+    if (!settled) {
+      // Loud by design: an unrated chunk means these images get dropped by the
+      // excludePeople gate — silently, this is exactly how empty slots shipped.
+      console.error(
+        `[vision] chunk of ${batch.length} images unrated after ${RANK_ATTEMPTS} attempts` +
+          ` (${brief.kind} "${brief.query}"): ${lastNote}`,
+      );
+      settled = batch.map((): VisionVerdict => ({ ...CONSERVATIVE_VERDICT }));
+    }
+    out.push(...settled);
   }
   return out;
 }
