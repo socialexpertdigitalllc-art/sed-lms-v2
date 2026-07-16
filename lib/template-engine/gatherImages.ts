@@ -24,6 +24,11 @@ const CLIENT_PHOTO_KINDS = new Set(["hero", "about"]);
 // doesn't hammer the Pexels/Gemini APIs at once.
 const SLOT_GATHER_CONCURRENCY = 3;
 
+// A WIDE net per page so the vision pass has plenty to rank and drop from.
+// Pexels caps per_page at 80; 24 gives a healthy pool while keeping each
+// vision call (chunked at <=12) to at most two requests.
+const WIDE_NET_PER_PAGE = 24;
+
 /** Pure: map one Pexels photo to a candidate. No vision verdict yet — that's rankImages' job. */
 export function pexelsToCandidate(photo: PexelsPhoto): ImageCandidate {
   return {
@@ -38,18 +43,16 @@ export function pexelsToCandidate(photo: PexelsPhoto): ImageCandidate {
 }
 
 /**
- * Gather + vet candidates for one slot: search Pexels, drop already-seen ids,
- * vision-rank what's left, and keep the vetted top `presentMax`.
+ * Gather + vet candidates for one slot: search Pexels (a WIDE `page` of the
+ * net), drop already-seen ids, vision-rank what's left, and keep the vetted
+ * top `presentMax`.
  *
- * DEVIATION FROM THE PLAN: the plan describes a "wide net (~24)". The real
- * `searchPexels` (lib/template-engine/pexels.ts) takes no count/page-size
- * argument — `per_page` is hardcoded to 15 — and its 30-day cache key is
- * `{orientation}:{normalized query}`, so a second call with the same query
- * would just replay the same cached 15 results, not fetch more. Widening the
- * net would mean changing searchPexels's signature/cache key, which is out of
- * this task's file list (only gatherImages.ts + its test). So this pulls
- * whatever searchPexels actually returns (<=15, cached) as the net and vets
- * that — a real deviation from "~24", not a rounding difference.
+ * `page` is a first-class arg so Task 5's "show different ones" (/more) can
+ * fetch page 2, 3, ... and get genuinely fresh photos — the page is now part
+ * of searchPexels's cache key (see pexels.ts), so a later page never replays
+ * an earlier one. `excludeIds` is kept as belt-and-suspenders: paging should
+ * already return new photos, but filtering seen ids guarantees no repeat even
+ * if Pexels overlaps pages.
  */
 export async function gatherSlotCandidates(args: {
   brief: ImageBrief;
@@ -58,11 +61,15 @@ export async function gatherSlotCandidates(args: {
   excludePeople: boolean;
   excludeIds: number[];
   presentMax: number;
+  page?: number;
 }): Promise<ImageCandidate[]> {
   if (args.presentMax <= 0) return [];
 
   const excludeSet = new Set(args.excludeIds);
-  const photos = await searchPexels(args.brief.query, "landscape", args.admin);
+  const photos = await searchPexels(args.brief.query, "landscape", args.admin, fetch, {
+    page: args.page ?? 1,
+    perPage: WIDE_NET_PER_PAGE,
+  });
   const fresh = photos.filter((p) => !excludeSet.has(p.id)).map(pexelsToCandidate);
   if (fresh.length === 0) return [];
 
@@ -142,6 +149,7 @@ export async function buildInitialSlots(
       excludePeople: args.excludePeople,
       excludeIds: [],
       presentMax: Math.max(0, present_max - reservedSeats),
+      page: 1,
     });
 
     const candidates = clientCandidate ? [clientCandidate, ...gathered] : gathered;
@@ -158,6 +166,7 @@ export async function buildInitialSlots(
       candidates,
       selected: clientCandidate ? [clientCandidate.url] : [],
       seen_pexels_ids: seenPexelsIds,
+      next_page: 2, // page 1 was just gathered; "show different ones" starts at 2
     };
   });
 }

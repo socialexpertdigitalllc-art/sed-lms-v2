@@ -176,6 +176,31 @@ describe("searchPexels (network isolated)", () => {
     expect(String(upserts[0].query_norm)).toContain("roof repair");
   });
 
+  it("threads page + perPage into the request URL and the cache key", async () => {
+    const { admin, upserts } = makeAdmin(null);
+    const calls: { url: string }[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push({ url });
+      return { ok: true, json: async () => ({ photos: [rawPhoto] }) };
+    });
+    await searchPexels("Roof Repair", "landscape", admin, fetchImpl as unknown as typeof fetch, { page: 2, perPage: 24 });
+    expect(calls[0].url).toContain("per_page=24");
+    expect(calls[0].url).toContain("page=2");
+    // Cache key carries perPage + page so page 2 never replays page 1's rows.
+    expect(String(upserts[0].query_norm)).toBe("landscape:roof repair:24:2");
+  });
+
+  it("caps perPage at Pexels' max of 80", async () => {
+    const { admin } = makeAdmin(null);
+    const calls: { url: string }[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push({ url });
+      return { ok: true, json: async () => ({ photos: [] }) };
+    });
+    await searchPexels("x", "square", admin, fetchImpl as unknown as typeof fetch, { perPage: 500 });
+    expect(calls[0].url).toContain("per_page=80");
+  });
+
   it("returns [] when fetch fails, the response is not ok, or the key is missing", async () => {
     const { admin } = makeAdmin(null);
     const boom = vi.fn(async () => {

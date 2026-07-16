@@ -135,18 +135,30 @@ function toPhoto(raw: unknown): PexelsPhoto | null {
   };
 }
 
+// Pexels caps per_page at 80; page is 1-based.
+const PEXELS_MAX_PER_PAGE = 80;
+const DEFAULT_PER_PAGE = 15;
+
 /**
- * Search Pexels with a 30-day cache in `pexels_image_cache` (key: "{orientation}:{normQuery}").
+ * Search Pexels with a 30-day cache in `pexels_image_cache`.
+ * Cache key: "{orientation}:{normQuery}:{perPage}:{page}" — the page + perPage
+ * MUST be in the key, otherwise page 2 replays page 1's cached rows (which
+ * silently breaks both the wide net and the operator's "show different ones").
+ * `opts` is a trailing 5th arg so every existing 3-arg / 4-arg (fetchImpl)
+ * caller keeps its exact behaviour: page defaults to 1, perPage to 15.
  * Returns [] on ANY failure (missing key, network, non-2xx, bad json) — never throws.
  */
 export async function searchPexels(
   query: string,
   orientation: "landscape" | "square",
   admin: SupabaseClient,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  opts: { page?: number; perPage?: number } = {}
 ): Promise<PexelsPhoto[]> {
   const qn = normQuery(query);
-  const cacheKey = `${orientation}:${qn}`;
+  const page = Math.max(1, Math.floor(opts.page ?? 1));
+  const perPage = Math.min(PEXELS_MAX_PER_PAGE, Math.max(1, Math.floor(opts.perPage ?? DEFAULT_PER_PAGE)));
+  const cacheKey = `${orientation}:${qn}:${perPage}:${page}`;
 
   try {
     const { data } = await admin
@@ -170,7 +182,7 @@ export async function searchPexels(
   if (!apiKey) return [];
 
   try {
-    const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(qn)}&per_page=15&orientation=${orientation}`;
+    const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(qn)}&per_page=${perPage}&page=${page}&orientation=${orientation}`;
     const res = await fetchImpl(url, { headers: { Authorization: apiKey } });
     if (!res.ok) return [];
     const json = (await res.json()) as { photos?: unknown[] };

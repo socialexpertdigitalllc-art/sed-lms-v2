@@ -42,7 +42,8 @@ export interface ImageSlot {
   present_max: number; // hero 6, service 5
   candidates: ImageCandidate[];
   selected: string[]; // chosen urls (<= pick_max)
-  seen_pexels_ids: number[]; // powers "show different ones"
+  seen_pexels_ids: number[]; // powers "show different ones" (belt-and-suspenders with paging)
+  next_page?: number; // next Pexels page to fetch on "show more" (Task 5's /more increments it)
 }
 
 /** Hero slots get a bigger gallery + multi-pick; every other kind is single-pick. */
