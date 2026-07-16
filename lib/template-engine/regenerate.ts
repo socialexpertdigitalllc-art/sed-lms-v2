@@ -9,15 +9,17 @@
 import { callProvider } from "@/lib/ai-tools/run";
 import { GEMINI_PRO_MODEL } from "@/lib/ai-tools/config";
 
-export const REGEN_SYSTEM = `You rewrite one file of a website template so it belongs to a specific real business, while preserving the template's design and code exactly.
+export const REGEN_SYSTEM = `You are a precise COPY-EDITOR for website templates. You are given ONE file of an existing template plus a business's content model, and you return the SAME file with only its human-visible text and image URLs swapped to that business.
+
+THIS IS A COPY-EDIT, NOT A REDESIGN. Reproduce the file's markup EXACTLY — every element, in the same order, at the same nesting depth. Do NOT simplify, shorten, summarize, merge, deduplicate, or omit anything. If the template has 6 gallery cards, output 6. If it has 8 process steps, output 8. If it has an <app-footer>, <booking-section>, or <map-embed> custom element, keep it. The output must contain the SAME COUNT of every tag as the input — a shorter file is a FAILED file, no matter how good it reads.
 
 ABSOLUTE RULES
-- Output ONLY the complete file content. No prose, no fences.
-- THE #1 RULE: preserve EXACTLY, verbatim, every css class, id, data-* attribute, inline handler (onclick etc.), tag, and JS class/function/method/variable name. Never drop, rename, add, or reorder any of them. Ids, classes and data-* attributes are wired to the CSS and JavaScript — dropping even one, including a brand-looking one like id="np-faq", breaks the site.
-- Replace 100% of the demo business's HUMAN-VISIBLE identity — business name, city, service areas, phone, email, person names — everywhere it is READ by a human: visible text, alt attributes, <title>, meta descriptions, and code comments. No demo brand may remain in any visible text or comment.
-- In JavaScript, change only string/data VALUES (testimonial text, service names, labels) and comments; never touch identifiers or control flow. The brand identifier has already been neutralized upstream, so you will not see it.
-- Use ONLY the supplied content model for facts. Never invent licenses, awards or certifications.
-- Rewrite image src/srcset and alt text using the supplied image URLs. Never keep a template image path.`;
+- Output ONLY the complete file content, from the first character to the last. No prose, no markdown fences, no "..." elisions, never truncate.
+- Reproduce every tag, and every css class, id, data-* attribute, inline handler (onclick etc.), custom element, and JS class/function/method/variable name — VERBATIM, same count, same order, same depth. Dropping even one (including a brand-looking id like id="np-faq") breaks the site. This obligation overrides brevity: never shorten the file to save effort.
+- Change ONLY: human-visible text, alt attributes, <title>, meta descriptions, code comments, contact details (phone/email/address), JS string/data VALUES (testimonials, service names, labels), and image src/srcset URLs.
+- Replace 100% of the demo business's identity in that changeable text — business name, city, service areas, phone, email, person names — including in code comments. No demo brand may remain in any visible text or comment.
+- In JavaScript, change only string/data VALUES and comments; never touch identifiers or control flow. The brand identifier was already neutralized upstream, so you will not see it.
+- Use ONLY the supplied content model for facts. Never invent licenses, awards or certifications. Never keep a template image path.`;
 
 export interface RegenerateArgs {
   file: string;
@@ -87,18 +89,37 @@ function stripFence(raw: string): string {
  * finished step, and this function exists so that can never happen silently. The
  * leak/structure gates (runGates) validate the content itself afterwards.
  */
+/** Max attempts per file. Gemini occasionally returns a transient "fetch failed"
+ *  (network/timeout) on a long generation; a 7-10 call run will hit one, and one
+ *  blip must not waste the whole pipeline. Retried on ANY failure (network,
+ *  empty, or source-unchanged) since a fresh sample can clear all three. */
+const REGEN_ATTEMPTS = 3;
+
 export async function regenerateFile(args: RegenerateArgs): Promise<string> {
-  const { text } = await callProvider(
-    "gemini",
-    args.model ?? GEMINI_PRO_MODEL,
-    REGEN_SYSTEM,
-    regenPrompt(args),
-    { maxTokens: 32000, temperature: 0.4 },
-  );
-  const out = stripFence(text);
-  if (!out) throw new Error(`Regeneration of ${args.file} returned empty output`);
-  if (out === args.source.trim()) {
-    throw new Error(`Regeneration of ${args.file} returned the source unchanged (the v1 no-op bug)`);
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
+    try {
+      const { text } = await callProvider(
+        "gemini",
+        args.model ?? GEMINI_PRO_MODEL,
+        REGEN_SYSTEM,
+        regenPrompt(args),
+        // Low temperature for maximum fidelity (this is a copy-edit, not creative
+        // writing), and a high token budget so a large page is never shortened to fit.
+        { maxTokens: 64000, temperature: 0.15 },
+      );
+      const out = stripFence(text);
+      if (!out) throw new Error(`Regeneration of ${args.file} returned empty output`);
+      if (out === args.source.trim()) {
+        throw new Error(`Regeneration of ${args.file} returned the source unchanged (the v1 no-op bug)`);
+      }
+      return out;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < REGEN_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt)); // linear backoff
+      }
+    }
   }
-  return out;
+  throw lastErr instanceof Error ? lastErr : new Error(`Regeneration of ${args.file} failed`);
 }

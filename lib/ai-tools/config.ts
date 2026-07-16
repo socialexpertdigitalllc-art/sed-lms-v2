@@ -73,8 +73,10 @@ export const TOOLS: Record<ToolId, ToolConfig> = {
     // on this endpoint despite being listed by /v1beta/models — do not add it.
     models: ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
     defaultModel: "gemini-3.1-pro-preview",
-    // Generous cap: truncated output silently produced no-op edits in v1.
-    maxOutputTokens: 32000,
+    // Generous cap: truncated output silently produced no-op edits in v1, and a
+    // large page (index.html ~78KB) needs headroom to be reproduced whole without
+    // the model shortening it to fit. gemini-3.x pro supports up to 64k output.
+    maxOutputTokens: 64000,
     defaultMaxTokens: 32000,
     // Unverified estimate: persisted to cost_usd and aggregated into analytics.
     // Refine when real pricing is confirmed.
