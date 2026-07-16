@@ -29,6 +29,31 @@ const SLOT_GATHER_CONCURRENCY = 3;
 // vision call (chunked at <=12) to at most two requests.
 const WIDE_NET_PER_PAGE = 24;
 
+// A generation only ever shows a handful of images (hero + featured service
+// cards + gallery), so cap the service slots the operator has to curate. The
+// planner is told to emit ~7 briefs, but a business with 50 services once made
+// it emit 54 — capping here means a runaway plan can never spawn dozens of
+// Pexels+vision gathers (which rate-limited and left slots empty).
+const MAX_SERVICE_SLOTS = 8;
+
+/**
+ * Pure: keep every non-service brief (hero/about/gallery) plus the first
+ * `maxService` service briefs, in order. Guarantees a bounded, curatable set of
+ * image slots no matter how many services the plan produced.
+ */
+export function capImageBriefs(briefs: ImageBrief[], maxService = MAX_SERVICE_SLOTS): ImageBrief[] {
+  const out: ImageBrief[] = [];
+  let serviceCount = 0;
+  for (const b of briefs) {
+    if (b.kind === "service") {
+      if (serviceCount >= maxService) continue;
+      serviceCount++;
+    }
+    out.push(b);
+  }
+  return out;
+}
+
 /** Pure: map one Pexels photo to a candidate. No vision verdict yet — that's rankImages' job. */
 export function pexelsToCandidate(photo: PexelsPhoto): ImageCandidate {
   return {
@@ -125,19 +150,22 @@ export async function buildInitialSlots(
   args: { brief: GenerationBrief; admin: SupabaseClient; excludePeople: boolean },
 ): Promise<ImageSlot[]> {
   const businessType = deriveBusinessType(args.brief);
+  // Bound the slot count before doing any I/O — a plan that emitted one brief per
+  // service must not spawn dozens of Pexels+vision gathers (which rate-limit).
+  const cappedBriefs = capImageBriefs(briefs);
 
   // Claim client-photo seats up front, in brief order — before any concurrent
   // gather starts — so two slots can never race for the same photo.
   const clientPhotos = [...args.brief.client_photos];
   const clientCandidateFor = new Map<string, ImageCandidate>();
-  for (const b of briefs) {
+  for (const b of cappedBriefs) {
     if (CLIENT_PHOTO_KINDS.has(b.kind) && clientPhotos.length > 0) {
       const url = clientPhotos.shift()!;
       clientCandidateFor.set(b.slot_id, { url, thumb: url, source: "client" });
     }
   }
 
-  return mapWithConcurrency(briefs, SLOT_GATHER_CONCURRENCY, async (b): Promise<ImageSlot> => {
+  return mapWithConcurrency(cappedBriefs, SLOT_GATHER_CONCURRENCY, async (b): Promise<ImageSlot> => {
     const { pick_max, present_max } = slotDefaults(b.kind);
     const clientCandidate = clientCandidateFor.get(b.slot_id);
     const reservedSeats = clientCandidate ? 1 : 0;

@@ -48,7 +48,7 @@ ${emailRule}
 - Testimonials must be plausible and LOCALIZED to the brief's real service_areas (name those cities/areas in "meta"); attribute each to a realistic first name + last initial with a matching "initials". Do not reference any area that is not in the brief.
 - NEVER invent licenses, awards, certifications, insurance claims, or numbers not present in the brief. Leave identity.license_line "" when none was provided. Set identity.years only from the brief's years_experience; omit it otherwise.
 - Copy must be specific to THIS business and trade — concrete and non-generic. No lorem, no placeholder text, no "[insert ...]" tokens.
-- image_briefs: emit one hero brief (slot_id "hero-1", kind "hero") plus exactly one per service (kind "service", slot_id equal to that service's "key"). "query" describes the stock photo to search for; every "avoid" MUST be exactly "people, text overlays, watermarks".${designRule}
+- image_briefs: these are the ONLY images the finished website displays, so keep this set SMALL — NEVER one per service. Emit exactly: one hero brief (slot_id "hero-1", kind "hero"), PLUS one brief for each of the SIX most representative services (kind "service", slot_id equal to that service's "key" from services[]). At most 7 image_briefs total, even when the business has dozens of services. "query" describes the stock photo to search for; every "avoid" MUST be exactly "people, text overlays, watermarks".${designRule}
 - Output MUST be a single valid JSON object, parseable as-is. No commentary before or after.`;
 }
 

@@ -1,6 +1,29 @@
 import { describe, it, expect } from "vitest";
-import { pexelsToCandidate } from "@/lib/template-engine/gatherImages";
+import { pexelsToCandidate, capImageBriefs } from "@/lib/template-engine/gatherImages";
 import type { PexelsPhoto } from "@/lib/template-engine/pexels";
+import type { ImageBrief } from "@/lib/template-engine/contentModel";
+
+const brief = (slot_id: string, kind: "hero" | "service"): ImageBrief => ({
+  slot_id, kind, query: `${slot_id} photo`, must_show: "", avoid: "people, text overlays, watermarks",
+});
+
+describe("capImageBriefs", () => {
+  it("keeps the hero + caps service briefs (the 54-slot bug)", () => {
+    const briefs = [brief("hero-1", "hero"), ...Array.from({ length: 53 }, (_, i) => brief(`svc-${i}`, "service"))];
+    const capped = capImageBriefs(briefs, 8);
+    expect(capped.filter((b) => b.kind === "hero")).toHaveLength(1);
+    expect(capped.filter((b) => b.kind === "service")).toHaveLength(8);
+    expect(capped).toHaveLength(9);
+  });
+  it("keeps every non-service brief and preserves order", () => {
+    const briefs = [brief("hero-1", "hero"), brief("a", "service"), brief("b", "service"), brief("c", "service")];
+    expect(capImageBriefs(briefs, 2).map((b) => b.slot_id)).toEqual(["hero-1", "a", "b"]);
+  });
+  it("leaves a small set untouched", () => {
+    const briefs = [brief("hero-1", "hero"), brief("a", "service"), brief("b", "service")];
+    expect(capImageBriefs(briefs)).toHaveLength(3);
+  });
+});
 
 const photo = (over: Partial<PexelsPhoto> = {}): PexelsPhoto => ({
   id: 42,
