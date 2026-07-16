@@ -78,16 +78,26 @@ export async function persistGeneration(input: PersistInput): Promise<{ id: stri
 }
 
 // Non-streamed OpenAI-compatible chat completion. Returns { text, tokens }.
+// `opts.images`, when present and non-empty, sends the user turn as a
+// multimodal content array (one text part + one image_url part per url) —
+// verified against Gemini's OpenAI-compat endpoint for vision ranking
+// (lib/template-engine/vision.ts). Every existing caller omits `images`, so
+// `userContent` stays the same plain string as before — this is additive only.
 export async function callProvider(
   tool: ToolId,
   model: string,
   systemPrompt: string,
   userPrompt: string,
-  opts: { maxTokens: number; temperature: number }
+  opts: { maxTokens: number; temperature: number; images?: string[] }
 ): Promise<{ text: string; tokens: number }> {
   const cfg = TOOLS[tool];
   const apiKey = process.env[cfg.envKey];
   if (!apiKey) throw new Error(`${cfg.label} is not configured (missing ${cfg.envKey}).`);
+
+  const userContent =
+    opts.images && opts.images.length > 0
+      ? [{ type: "text", text: userPrompt }, ...opts.images.map((url) => ({ type: "image_url", image_url: { url } }))]
+      : userPrompt;
 
   const res = await fetch(cfg.endpoint, {
     method: "POST",
@@ -99,7 +109,7 @@ export async function callProvider(
       stream: false,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
+        { role: "user", content: userContent },
       ],
     }),
   });
