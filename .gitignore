@@ -65,3 +65,7 @@ backups/
 
 # Session handoff notes (local only)
 .remember/
+
+# Local template-engine test artifacts
+.site_check/
+.te_process.json
