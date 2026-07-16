@@ -181,27 +181,43 @@ export async function searchPexels(
   const apiKey = process.env.PEXELS_API_KEY;
   if (!apiKey) return [];
 
-  try {
-    const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(qn)}&per_page=${perPage}&page=${page}&orientation=${orientation}`;
-    const res = await fetchImpl(url, { headers: { Authorization: apiKey } });
-    if (!res.ok) return [];
-    const json = (await res.json()) as { photos?: unknown[] };
-    const photos = Array.isArray(json?.photos)
-      ? json.photos.map(toPhoto).filter((p): p is PexelsPhoto => p !== null)
-      : [];
+  const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(qn)}&per_page=${perPage}&page=${page}&orientation=${orientation}`;
+  // Retry a transient 429/5xx a couple of times with backoff so a momentary rate
+  // limit (many slots gather at once) doesn't leave a slot empty. A hard quota
+  // exhaustion still ends up empty, but the operator's "show different ones"
+  // recovers it once the window resets.
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await admin.from(CACHE_TABLE).upsert({
-        query_norm: cacheKey,
-        results: photos,
-        fetched_at: new Date().toISOString(),
-      });
+      const res = await fetchImpl(url, { headers: { Authorization: apiKey } });
+      if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+        continue;
+      }
+      if (!res.ok) return [];
+      const json = (await res.json()) as { photos?: unknown[] };
+      const photos = Array.isArray(json?.photos)
+        ? json.photos.map(toPhoto).filter((p): p is PexelsPhoto => p !== null)
+        : [];
+      // Only cache a NON-EMPTY result — an empty page from a transient outage
+      // must never poison the 30-day cache and persist as "no photos".
+      if (photos.length > 0) {
+        try {
+          await admin.from(CACHE_TABLE).upsert({
+            query_norm: cacheKey,
+            results: photos,
+            fetched_at: new Date().toISOString(),
+          });
+        } catch {
+          // cache write is best-effort
+        }
+      }
+      return photos;
     } catch {
-      // cache write is best-effort
+      if (attempt >= 3) return [];
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
-    return photos;
-  } catch {
-    return [];
   }
+  return [];
 }
 
 /** Download an image to bytes; null on any failure — never throws. */
