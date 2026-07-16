@@ -92,3 +92,25 @@ export function mergeCandidates(existing: ImageCandidate[], fresh: ImageCandidat
   }
   return merged;
 }
+
+/**
+ * Defensive read of `template_generations.image_slots` — DB JSONB, shape not
+ * guaranteed at compile time. Keeps only entries that look like a real
+ * ImageSlot (string id/kind, array candidates/selected); a corrupt or
+ * partial row degrades to fewer slots rather than throwing. Mirrors the
+ * runner's own read of the same column (runnerV2.ts) so both the plan/build
+ * pipeline and the curation APIs (Task 5) agree on what counts as valid.
+ */
+export function parseImageSlots(v: unknown): ImageSlot[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((s): s is ImageSlot => {
+    if (!s || typeof s !== "object") return false;
+    const slot = s as Partial<ImageSlot>;
+    return (
+      typeof slot.id === "string" &&
+      typeof slot.kind === "string" &&
+      Array.isArray(slot.candidates) &&
+      Array.isArray(slot.selected)
+    );
+  });
+}

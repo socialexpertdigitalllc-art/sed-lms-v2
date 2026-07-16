@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { slotDefaults, rankAndTrim, mergeCandidates, type ImageCandidate } from "@/lib/template-engine/imageSlots";
+import {
+  slotDefaults,
+  rankAndTrim,
+  mergeCandidates,
+  parseImageSlots,
+  type ImageCandidate,
+} from "@/lib/template-engine/imageSlots";
 
 const candidate = (over: Partial<ImageCandidate> = {}): ImageCandidate => ({
   url: "https://example.com/a.jpg",
@@ -82,5 +88,36 @@ describe("mergeCandidates", () => {
     const round1 = mergeCandidates(existing, [candidate({ url: "b" })]);
     const round2 = mergeCandidates(round1, [candidate({ url: "a" }), candidate({ url: "c" })]);
     expect(round2.map((c) => c.url)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("parseImageSlots", () => {
+  it("returns an empty array for non-array input", () => {
+    expect(parseImageSlots(null)).toEqual([]);
+    expect(parseImageSlots(undefined)).toEqual([]);
+    expect(parseImageSlots({})).toEqual([]);
+    expect(parseImageSlots("nope")).toEqual([]);
+  });
+
+  it("keeps only entries that look like a real ImageSlot", () => {
+    const good = { id: "hero", kind: "hero", label: "Hero", pick_max: 3, present_max: 6, candidates: [], selected: [] };
+    const missingId = { kind: "hero", candidates: [], selected: [] };
+    const candidatesNotArray = { id: "x", kind: "hero", candidates: "nope", selected: [] };
+    const notAnObject = 42;
+    expect(parseImageSlots([good, missingId, candidatesNotArray, null, notAnObject])).toEqual([good]);
+  });
+
+  it("passes optional fields like next_page through untouched", () => {
+    const withPage = {
+      id: "hero",
+      kind: "hero",
+      label: "Hero",
+      pick_max: 3,
+      present_max: 6,
+      candidates: [],
+      selected: [],
+      next_page: 4,
+    };
+    expect(parseImageSlots([withPage])[0].next_page).toBe(4);
   });
 });

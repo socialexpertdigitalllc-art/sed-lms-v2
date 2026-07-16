@@ -91,8 +91,8 @@ function humanizeSlotId(slotId: string): string {
   return words.length ? words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : slotId;
 }
 
-/** Prefer the lead's own site_type ("Roofing"); fall back to its services list, then a generic label. */
-function deriveBusinessType(brief: GenerationBrief): string {
+/** Prefer the lead's own site_type ("Roofing"); fall back to its services list, then a generic label. Exported so the /more curation route (Task 5) can derive the same businessType a fresh gather needs, without re-deriving the rule. */
+export function deriveBusinessType(brief: GenerationBrief): string {
   if (brief.site_type && brief.site_type.trim()) return brief.site_type.trim();
   if (brief.services.length) return brief.services.join(", ");
   return "home service business";
