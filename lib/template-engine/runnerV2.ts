@@ -17,6 +17,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { buildBrief, type GenerationBrief } from "./brief";
 import { planContent } from "./plan";
 import { classifyFiles } from "./classify";
+import { selectContentFiles, type ManifestPage } from "./pageSelect";
+import { neutralizeAppIdentifier } from "./neutralize";
 import { regenerateFile } from "./regenerate";
 import { runGates, type GateResult } from "./gates";
 import { zipFromMap } from "./zip";
@@ -35,6 +37,19 @@ const IMAGE_EXCLUDE_KINDS = new Set(["hero", "about"]); // slots that prefer a r
 
 function stringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string" && s.trim().length > 0) : [];
+}
+
+/** Defensive read of `website_templates.manifest.pages` — DB JSON, shape not guaranteed. */
+function manifestPagesOf(manifest: unknown): ManifestPage[] {
+  const pages = manifest && typeof manifest === "object" ? (manifest as { pages?: unknown }).pages : undefined;
+  if (!Array.isArray(pages)) return [];
+  return pages.filter(
+    (p): p is ManifestPage =>
+      !!p &&
+      typeof p === "object" &&
+      typeof (p as ManifestPage).file === "string" &&
+      typeof (p as ManifestPage).kind === "string",
+  );
 }
 
 /** A resolved image for a slot — a direct CDN url (client photo or Pexels), no rehost. */
@@ -218,7 +233,7 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
     if (!lead) throw new Error("Lead not found");
     const { data: template } = await admin
       .from("website_templates")
-      .select("id, name, storage_prefix, demo_tokens")
+      .select("id, name, storage_prefix, demo_tokens, manifest")
       .eq("id", gen.template_id)
       .single();
     if (!template) throw new Error("Template not found");
@@ -246,13 +261,43 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
 
     // 4. prepare: download the template + classify content vs passthrough -------
     await beginStep("prepare", "Preparing template", { status: "building" });
-    const { textFiles, binaryFiles } = await downloadTemplate(admin, String(template.storage_prefix));
-    if (Object.keys(textFiles).length === 0) throw new Error("Template files not found in storage");
+    const { textFiles: downloadedTextFiles, binaryFiles } = await downloadTemplate(
+      admin,
+      String(template.storage_prefix),
+    );
+    if (Object.keys(downloadedTextFiles).length === 0) throw new Error("Template files not found in storage");
+    // Deterministically rename the demo app identifier (NorthpointApp/northpointApp
+    // -> SiteApp/siteApp) BEFORE anything downstream reads these files. This keeps
+    // the structure gate's baseline and the AI's input free of the demo brand from
+    // the start, so the "preserve every identifier" and "leak nothing" rules never
+    // conflict — see neutralize.ts.
+    const { files: textFiles, renames: appRenames } = neutralizeAppIdentifier(downloadedTextFiles);
     const { content, passthrough } = classifyFiles([...Object.keys(textFiles), ...Object.keys(binaryFiles)]);
-    const contentFiles = content.filter((f) => textFiles[f] !== undefined);
+    const classifiedContentFiles = content.filter((f) => textFiles[f] !== undefined);
+    // Build only what the client actually requested (plus shared content JS,
+    // which is never itself a requestable "page"), and never an area page for a
+    // client with no service areas to de-leak it with — see pageSelect.ts.
+    const manifestPages = manifestPagesOf(template.manifest);
+    const hasServiceAreas = brief.service_areas.length > 0;
+    const sel = selectContentFiles({
+      contentFiles: classifiedContentFiles,
+      manifestPages,
+      requestedPages,
+      hasServiceAreas,
+    });
+    const contentFiles = sel.build;
     const contentSources: Record<string, string> = {};
     for (const f of contentFiles) contentSources[f] = textFiles[f];
-    await endStep("done", `${contentFiles.length} content file(s), ${passthrough.length} passthrough`);
+    const droppedDetail = sel.dropped.length
+      ? `, ${sel.dropped.length} dropped (${sel.dropped.map((d) => `${d.file}: ${d.reason}`).join("; ")})`
+      : "";
+    const renameDetail = appRenames.length
+      ? `, neutralized ${appRenames.map((r) => `${r.from}->${r.to}`).join(", ")}`
+      : "";
+    await endStep(
+      "done",
+      `${contentFiles.length} content file(s), ${passthrough.length} passthrough${droppedDetail}${renameDetail}`,
+    );
 
     // 5. regenerate every content file whole (concurrency-capped) ---------------
     // Pre-register one step per file so concurrent workers each update only their

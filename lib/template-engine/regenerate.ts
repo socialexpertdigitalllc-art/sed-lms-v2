@@ -12,10 +12,10 @@ import { GEMINI_PRO_MODEL } from "@/lib/ai-tools/config";
 export const REGEN_SYSTEM = `You rewrite one file of a website template so it belongs to a specific real business, while preserving the template's design and code exactly.
 
 ABSOLUTE RULES
-- Output ONLY the complete file content. No prose, no markdown fences.
-- Preserve EVERY css class, id, data-* attribute, inline handler, and tag structure. Never drop or rename any of them.
-- In JavaScript: preserve every class/function/method/variable name and all control flow. The file must still parse and behave identically. Change ONLY string/data VALUES (e.g. testimonial text, service names, labels).
-- Replace 100% of the template's demo business identity — name, city, areas, phone, email, people names, and any identifier-like branding in text. NOTHING of the demo business may remain.
+- Output ONLY the complete file content. No prose, no fences.
+- THE #1 RULE: preserve EXACTLY, verbatim, every css class, id, data-* attribute, inline handler (onclick etc.), tag, and JS class/function/method/variable name. Never drop, rename, add, or reorder any of them. Ids, classes and data-* attributes are wired to the CSS and JavaScript — dropping even one, including a brand-looking one like id="np-faq", breaks the site.
+- Replace 100% of the demo business's HUMAN-VISIBLE identity — business name, city, service areas, phone, email, person names — everywhere it is READ by a human: visible text, alt attributes, <title>, meta descriptions, and code comments. No demo brand may remain in any visible text or comment.
+- In JavaScript, change only string/data VALUES (testimonial text, service names, labels) and comments; never touch identifiers or control flow. The brand identifier has already been neutralized upstream, so you will not see it.
 - Use ONLY the supplied content model for facts. Never invent licenses, awards or certifications.
 - Rewrite image src/srcset and alt text using the supplied image URLs. Never keep a template image path.`;
 
@@ -64,7 +64,7 @@ ${JSON.stringify(imagesForFile, null, 2)}
 FORBIDDEN TOKENS — the template's demo identity. None of these may appear anywhere in your output, in any casing:
 ${blacklist}${repair}
 
-SOURCE FILE (return the COMPLETE rewritten file — same tags, classes, ids, data-* and JS identifiers; only human-visible text, data values, contact details and image URLs change):
+SOURCE FILE (return the COMPLETE rewritten file — tags, classes, ids, data-* attributes and JS identifiers unchanged; only human-visible text, code comments, data values, contact details and image URLs change):
 ${source}`;
 }
 
