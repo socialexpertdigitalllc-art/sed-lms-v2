@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { daConfigured, createSubdomain, subdomainExists, uploadZipAndExtract } from "@/lib/template-engine/directadmin";
 import { businessSlug, websiteId } from "@/lib/template-engine/slug";
+import { DEPLOYABLE_STATUSES, isDeployableStatus } from "@/lib/template-engine/wizard";
 import type { GenStep } from "@/lib/template-engine/types";
 
 export const runtime = "nodejs";
@@ -32,12 +33,19 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const admin = createAdminClient();
   const { data: gen } = await admin
     .from("template_generations")
-    .select("id, lead_id, status, steps, site_slug, zip_path")
+    .select("id, lead_id, status, steps, site_slug, zip_path, gate_results")
     .eq("id", id)
     .maybeSingle();
   if (!gen) return NextResponse.json({ error: "Generation not found" }, { status: 404 });
-  if (gen.status !== "ready_for_review" && gen.status !== "deployed") {
+  if (!isDeployableStatus(gen.status)) {
     return NextResponse.json({ error: "Generation is not ready to deploy" }, { status: 409 });
+  }
+  const gr = gen.gate_results as { ok?: boolean } | null;
+  if (gr && gr.ok === false) {
+    return NextResponse.json(
+      { error: "Verification gates failed — rebuild before deploying" },
+      { status: 409 },
+    );
   }
   if (!gen.zip_path) {
     return NextResponse.json({ error: "This generation has no packaged zip" }, { status: 409 });
@@ -158,6 +166,29 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   // deploy:link --------------------------------------------------------------------
   await begin("deploy:link", "Saving website link");
+  // Guard against a mid-deploy reopen: CAS the status flip FIRST — only a
+  // still-deployable run may become "deployed" and have the lead's website
+  // link overwritten. If the operator reopened the run (review → curating)
+  // while the upload was in flight, stop here: the uploaded site sits unused
+  // on the subdomain, exactly like any failed deploy attempt.
+  const { data: flipped, error: flipErr } = await admin
+    .from("template_generations")
+    .update({ status: "deployed", deployed_url: url, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .in("status", [...DEPLOYABLE_STATUSES])
+    .select("id")
+    .maybeSingle();
+  if (flipErr) {
+    await failStep(flipErr.message);
+    return NextResponse.json({ error: flipErr.message }, { status: 400 });
+  }
+  if (!flipped) {
+    await failStep("Run was reopened during deploy — link not saved");
+    return NextResponse.json(
+      { error: "Run was reopened during the deploy — the site was uploaded but not linked. Rebuild and deploy again." },
+      { status: 409 }
+    );
+  }
   const { error: linkErr } = await admin.from("leads").update({ website_link: url }).eq("id", gen.lead_id);
   if (linkErr) {
     await failStep(linkErr.message);
@@ -185,7 +216,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     } catch {}
   }
   state.currentKey = null;
-  await end("done", url, { status: "deployed", deployed_url: url });
+  await end("done", url); // status/deployed_url were already CAS-flipped above
 
   return NextResponse.json({ url });
 }

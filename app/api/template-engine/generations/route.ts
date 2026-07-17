@@ -15,9 +15,12 @@ export async function GET() {
   }
 
   const admin = createAdminClient();
+  // Slim list projection: heavy jsonb (brief, content_model, image_slots, gate_results) stays on the detail route; keep in sync with RunsList/board rendered fields.
   const { data, error } = await admin
     .from("template_generations")
-    .select("*")
+    .select(
+      "id, lead_id, template_id, tool, model, requested_pages, status, current_step, steps, estimate_ms, total_ms, tokens_used, cost_usd, pages_built, images_used, ops_applied, ops_missed, site_slug, zip_path, deployed_url, error, created_at, updated_at"
+    )
     .order("created_at", { ascending: false })
     .limit(50);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

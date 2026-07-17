@@ -1,0 +1,73 @@
+/**
+ * Pure status/step helpers for the 5-step generation wizard (design §10).
+ * The generation row is the wizard's single source of truth; everything here
+ * derives UI state from `template_generations.status` and friends. No I/O.
+ */
+
+import type { ImageSlot } from "./imageSlots";
+
+/** Statuses with a finished, downloadable/deployable site zip. "review" is the
+ *  v2 terminal build status; "ready_for_review" is v1-legacy (old rows only). */
+export const DEPLOYABLE_STATUSES = ["review", "ready_for_review", "deployed"] as const;
+
+export function isDeployableStatus(status: string): boolean {
+  return (DEPLOYABLE_STATUSES as readonly string[]).includes(status);
+}
+
+/** The five operator steps, in rail order. */
+export const WIZARD_STEPS = [
+  { n: 1, key: "setup", label: "Setup" },
+  { n: 2, key: "content", label: "Content" },
+  { n: 3, key: "images", label: "Images" },
+  { n: 4, key: "build", label: "Build" },
+  { n: 5, key: "review", label: "Review" },
+] as const;
+
+export type WizardStepN = 1 | 2 | 3 | 4 | 5;
+
+/**
+ * The step the operator should land on for a given status. While the pipeline
+ * owns the run (queued/running/planning/building/failed) that's the tracker;
+ * the human checkpoints are curating (step 3) and review/deployed (step 5).
+ */
+export function activeWizardStep(status: string): WizardStepN {
+  if (status === "curating") return 3;
+  if (status === "review" || status === "ready_for_review" || status === "deployed") return 5;
+  return 4;
+}
+
+/**
+ * Highest step reachable via the rail: operators may look back at earlier
+ * steps (read-only where the status no longer allows edits) but never ahead
+ * of what the pipeline has produced.
+ */
+export function maxReachedStep(status: string): WizardStepN {
+  if (status === "curating") return 3;
+  if (status === "review" || status === "ready_for_review" || status === "deployed") return 5;
+  return 4;
+}
+
+/** Status pill map covering ALL v2 statuses (the v1 board only knew five). */
+export const V2_STATUS_PILL: Record<string, { label: string; cls: string }> = {
+  queued: { label: "Queued", cls: "bg-surface-2 text-text-muted" },
+  running: { label: "Running", cls: "bg-accent-soft text-accent-ink" },
+  planning: { label: "Planning", cls: "bg-accent-soft text-accent-ink" },
+  curating: { label: "Awaiting curation", cls: "bg-notready-bg text-notready-fg" },
+  building: { label: "Building", cls: "bg-accent-soft text-accent-ink" },
+  review: { label: "Ready for review", cls: "bg-notready-bg text-notready-fg" },
+  ready_for_review: { label: "Ready for review", cls: "bg-notready-bg text-notready-fg" },
+  deployed: { label: "Deployed", cls: "bg-ready-bg text-ready-fg" },
+  failed: { label: "Failed", cls: "bg-dropped-bg text-dropped-fg" },
+};
+
+export function statusPill(status: string): { label: string; cls: string } {
+  return V2_STATUS_PILL[status] ?? V2_STATUS_PILL.queued;
+}
+
+/** Curation progress: how many slots have at least one selected image. */
+export function slotProgress(slots: ImageSlot[]): { chosen: number; total: number } {
+  return {
+    chosen: slots.filter((s) => s.selected.length > 0).length,
+    total: slots.length,
+  };
+}
