@@ -187,8 +187,11 @@ export async function searchPexels(
   // exhaustion still ends up empty, but the operator's "show different ones"
   // recovers it once the window resets.
   for (let attempt = 1; attempt <= 3; attempt++) {
+    // Bound each attempt — a stalled Pexels connection must not wedge the slot.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const res = await fetchImpl(url, { headers: { Authorization: apiKey } });
+      const res = await fetchImpl(url, { headers: { Authorization: apiKey }, signal: controller.signal });
       if ((res.status === 429 || res.status >= 500) && attempt < 3) {
         await new Promise((r) => setTimeout(r, 1500 * attempt));
         continue;
@@ -215,6 +218,8 @@ export async function searchPexels(
     } catch {
       if (attempt >= 3) return [];
       await new Promise((r) => setTimeout(r, 1500 * attempt));
+    } finally {
+      clearTimeout(timer);
     }
   }
   return [];
