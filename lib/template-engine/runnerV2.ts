@@ -27,6 +27,7 @@ import { buildBrief, type GenerationBrief } from "./brief";
 import { planContent } from "./plan";
 import type { ContentModel } from "./contentModel";
 import { buildThemeOverrideCss } from "./themeCss";
+import { planFanout } from "./fanout";
 import { classifyFiles } from "./classify";
 import { selectContentFiles, type ManifestPage } from "./pageSelect";
 import { neutralizeAppIdentifier } from "./neutralize";
@@ -325,9 +326,55 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     requestedPages,
     hasServiceAreas,
   });
-  const contentFiles = sel.build;
+
+  // Fan out one page per service / area from the template's detail-page samples,
+  // driven entirely by the lead's own services/areas (no operator toggles).
+  const fan = planFanout({
+    services: contentModel.services.map((s) => ({ key: s.key, name: s.name })),
+    areas: brief.service_areas,
+    manifestPages,
+    buildFiles: sel.build,
+  });
+
+  const contentFiles = [...sel.build];
   const contentSources: Record<string, string> = {};
-  for (const f of contentFiles) contentSources[f] = textFiles[f];
+  for (const f of sel.build) contentSources[f] = textFiles[f];
+  // Each fanned page is regenerated FROM its (neutralized) sample source.
+  for (const p of fan.pages) {
+    if (textFiles[p.sampleFile] === undefined) continue;
+    contentFiles.push(p.file);
+    contentSources[p.file] = textFiles[p.sampleFile];
+  }
+
+  // Per-file regen context: which fanned pages focus on one service/area, which
+  // hubs must emit one card per item, and each fanned service page's own image.
+  const focusByFile = new Map<string, { noun: string; name: string }>();
+  const imageKeyByFile = new Map<string, string>();
+  for (const p of fan.pages) {
+    focusByFile.set(p.file, { noun: p.kind === "area_detail" ? "service area" : "service", name: p.focus });
+    if (p.kind === "service_detail") imageKeyByFile.set(p.file, p.focusKey);
+  }
+  const hubByFile = new Map<string, { noun: string; items: { name: string; file: string }[] }>();
+  if (fan.serviceHub) {
+    hubByFile.set(fan.serviceHub, {
+      noun: "service",
+      items: fan.pages.filter((p) => p.kind === "service_detail").map((p) => ({ name: p.focus, file: p.file })),
+    });
+  }
+  if (fan.areaHub) {
+    hubByFile.set(fan.areaHub, {
+      noun: "service area",
+      items: fan.pages.filter((p) => p.kind === "area_detail").map((p) => ({ name: p.focus, file: p.file })),
+    });
+  }
+  // A focused service page leads with its own service image; everything else
+  // uses the full curated list (hero first).
+  const imagesFor = (file: string): SelectedImage[] => {
+    const key = imageKeyByFile.get(file);
+    if (!key) return imagesForFile;
+    const own = imagesForFile.find((im) => im.slot_id === key);
+    return own ? [own, ...imagesForFile.filter((im) => im !== own)] : imagesForFile;
+  };
   const droppedDetail = sel.dropped.length
     ? `, ${sel.dropped.length} dropped (${sel.dropped.map((d) => `${d.file}: ${d.reason}`).join("; ")})`
     : "";
@@ -359,8 +406,10 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
         file,
         source: contentSources[file],
         contentModel,
-        imagesForFile,
+        imagesForFile: imagesFor(file),
         demoTokens,
+        pageFocus: focusByFile.get(file),
+        hubExpand: hubByFile.get(file),
       });
       rebuilt[file] = out;
       progress.pagesBuilt++;
@@ -380,7 +429,8 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
 
   // 6. verify: leak + structure gates, with one targeted repair pass ----------
   await beginStep("verify", "Verifying");
-  let gate = runGates({ template: contentSources, output: rebuilt, demoTokens });
+  const structureExempt = [...hubByFile.keys()]; // hubs emit a variable card count
+  let gate = runGates({ template: contentSources, output: rebuilt, demoTokens, structureExempt });
   if (!gate.ok) {
     for (const file of offenderFiles(gate)) {
       if (contentSources[file] === undefined) continue;
@@ -389,15 +439,17 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
           file,
           source: contentSources[file],
           contentModel,
-          imagesForFile,
+          imagesForFile: imagesFor(file),
           demoTokens,
           repairNote: repairNoteFor(file, gate),
+          pageFocus: focusByFile.get(file),
+          hubExpand: hubByFile.get(file),
         });
       } catch {
         // keep the prior output; the re-run gate below still fails and reports it
       }
     }
-    gate = runGates({ template: contentSources, output: rebuilt, demoTokens });
+    gate = runGates({ template: contentSources, output: rebuilt, demoTokens, structureExempt });
   }
   await writeThrough({ gate_results: gate });
   if (!gate.ok) {

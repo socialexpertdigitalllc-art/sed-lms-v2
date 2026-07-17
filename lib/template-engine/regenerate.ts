@@ -25,6 +25,16 @@ ABSOLUTE RULES
 - In JavaScript, change only string/data VALUES and comments; never touch identifiers or control flow. The brand identifier was already neutralized upstream, so you will not see it.
 - Use ONLY the supplied content model for facts. Never invent licenses, awards or certifications. Never keep a template image path.`;
 
+/** One card the hub page must emit — a service or area, linked to its own page. */
+export interface HubCard {
+  name: string;
+  file: string;
+}
+export interface HubExpand {
+  noun: string; // "service" | "service area"
+  items: HubCard[];
+}
+
 export interface RegenerateArgs {
   file: string;
   source: string;
@@ -36,6 +46,10 @@ export interface RegenerateArgs {
   model?: string;
   /** On a verification-repair pass, the exact leak/structure problems to fix. */
   repairNote?: string;
+  /** When set, this file is an individual detail page centered on ONE service/area. */
+  pageFocus?: { noun: string; name: string };
+  /** When set, this file is a hub that must emit one card per item, each linked to its page. */
+  hubExpand?: HubExpand;
 }
 
 /**
@@ -51,15 +65,28 @@ export function regenPrompt(args: {
   imagesForFile: unknown;
   demoTokens: string[];
   repairNote?: string;
+  pageFocus?: { noun: string; name: string };
+  hubExpand?: HubExpand;
 }): string {
-  const { file, source, contentModel, imagesForFile, demoTokens, repairNote } = args;
+  const { file, source, contentModel, imagesForFile, demoTokens, repairNote, pageFocus, hubExpand } = args;
   const blacklist = demoTokens.length
     ? demoTokens.map((t) => `- ${t}`).join("\n")
     : "- (none recorded for this template)";
   const repair = repairNote
     ? `\n\nYOUR PREVIOUS ATTEMPT FAILED VERIFICATION. Fix exactly these problems and change nothing else:\n${repairNote}`
     : "";
-  return `Rewrite the file "${file}" so it belongs to the business described by this content model, keeping the template's structure and code identical.
+  // Individual detail page: the sample is a detail page for one thing; re-point
+  // it at THIS service/area. Still a strict copy-edit — same structure.
+  const focus = pageFocus
+    ? `\n\nTHIS IS THE DETAIL PAGE FOR ONE ${pageFocus.noun.toUpperCase()}: "${pageFocus.name}". The source is the template's sample ${pageFocus.noun} page. Rewrite ALL of its ${pageFocus.noun}-specific copy (title, headings, body, meta, breadcrumb, image alts) to be about "${pageFocus.name}" for THIS business. Keep the page structure identical to the sample; only the subject changes.`
+    : "";
+  // Hub page: emit one card per item, using the sample's card markup as the
+  // exact pattern. This is the ONE place the output tag count may differ from
+  // the source (the structure gate exempts hub pages).
+  const hub = hubExpand
+    ? `\n\nHUB EXPANSION — IMPORTANT: this page shows a grid/list of ${hubExpand.noun} cards. The template has a few SAMPLE cards; you must output EXACTLY ONE card per ${hubExpand.noun} listed below, cloning the sample card's markup VERBATIM as the pattern (same tags, classes, data-* attributes, inner layers and styles) and changing only: the card's title/heading to the ${hubExpand.noun} name, its short blurb, its image (use an appropriate image), and its link — set the card's click target (the onclick "window.location.href='…'" and/or the <a href>) to the given file. Remove any leftover sample cards. Do NOT change any other part of the page.\n${hubExpand.items.map((c) => `- ${c.name} -> ${c.file}`).join("\n")}`
+    : "";
+  return `Rewrite the file "${file}" so it belongs to the business described by this content model, keeping the template's structure and code identical.${focus}${hub}
 
 CONTENT MODEL (the only source of business facts):
 ${JSON.stringify(contentModel, null, 2)}

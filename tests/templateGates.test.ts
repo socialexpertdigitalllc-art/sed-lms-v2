@@ -29,4 +29,17 @@ describe("runGates", () => {
     expect(() => JSON.stringify(r)).not.toThrow();
     expect(r).toHaveProperty("ok");
   });
+
+  it("skips the structure check for an exempt hub page but still leak-scans it", () => {
+    // A hub with one card per service legitimately changes its skeleton.
+    const hub = { "services.html": `<div class="grid"><article>A</article></div>` };
+    const expanded = { "services.html": `<div class="grid"><article>A</article><article>B</article><article>C</article></div>` };
+    const clean = runGates({ template: hub, output: expanded, demoTokens: tokens, structureExempt: ["services.html"] });
+    expect(clean.ok).toBe(true); // structure difference tolerated
+    // ...but a leaked demo token on the same exempt page still fails.
+    const leakyHub = { "services.html": `<div class="grid"><article>Northpoint Remodeling</article></div>` };
+    const withLeak = runGates({ template: hub, output: leakyHub, demoTokens: tokens, structureExempt: ["services.html"] });
+    expect(withLeak.ok).toBe(false);
+    expect(withLeak.leaks.length).toBeGreaterThan(0);
+  });
 });

@@ -50,9 +50,16 @@ export function runGates(args: {
   template: Record<string, string>;
   output: Record<string, string>;
   demoTokens: string[];
+  /**
+   * Files whose structure MAY legitimately differ from the template — hub pages
+   * that emit one card per service/area (a variable card count). They are still
+   * leak-scanned; only the tag-count/skeleton preservation is skipped.
+   */
+  structureExempt?: string[];
   now?: string;
 }): GateResult {
   const { template, output, demoTokens } = args;
+  const exempt = new Set(args.structureExempt ?? []);
 
   // 1. Identity-leak scan across all output files (hard fail).
   const leaks = findLeaks(output, demoTokens);
@@ -61,7 +68,7 @@ export function runGates(args: {
   const structure: { file: string; ok: boolean; detail?: string }[] = [];
   for (const [file, out] of Object.entries(output)) {
     const src = template[file];
-    if (src === undefined) continue; // new/cloned file — nothing to preserve
+    if (src === undefined || exempt.has(file)) continue; // new/cloned or hub — nothing to preserve
     if (HTML_RE.test(file)) {
       const diff = compareSkeleton(htmlSkeleton(src), htmlSkeleton(out));
       structure.push(diff.ok ? { file, ok: true } : { file, ok: false, detail: describeSkeleton(diff) });
