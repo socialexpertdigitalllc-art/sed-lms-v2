@@ -1,23 +1,15 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { isToolId } from "@/lib/ai-tools/config";
 import { kickTemplateProcessor } from "@/lib/template-engine/queue";
+import { generateInputSchema } from "@/lib/template-engine/generateInput";
 import type { TemplateManifest } from "@/lib/template-engine/types";
 
 const DEFAULT_PER_PAGE_MS = 25000;
 const BASE_OVERHEAD_MS = 15000;
-
-const generateSchema = z.object({
-  leadId: z.string().uuid(),
-  templateId: z.string().uuid(),
-  pages: z.array(z.string().min(1)).min(1),
-  tool: z.string().min(1),
-  model: z.string().min(1),
-});
 
 // avg ai_ms per built page over the last 5 successful runs (template+tool,
 // falling back to global, falling back to 25s/page)
@@ -51,7 +43,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const parsed = generateSchema.safeParse(await req.json());
+  const parsed = generateInputSchema.safeParse(await req.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid input", issues: parsed.error.flatten() }, { status: 422 });
   }
@@ -104,6 +96,7 @@ export async function POST(req: Request) {
       status: "queued",
       estimate_ms: estimateMs,
       created_by: user.id,
+      options: parsed.data.options,
     })
     .select("id")
     .single();
