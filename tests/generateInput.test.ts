@@ -29,4 +29,15 @@ describe("generateInputSchema", () => {
     expect(generateInputSchema.safeParse({ ...base, pages: [] }).success).toBe(false);
     expect(generateInputSchema.safeParse({ ...base, pages: [""] }).success).toBe(false);
   });
+  // Options-shape pins, now that a real client (SetupPanel) sends `options`.
+  it("defaults exclude_people to true when options is an empty object", () => {
+    expect(generateInputSchema.parse({ ...base, options: {} }).options.exclude_people).toBe(true);
+  });
+  it("strips unknown option keys", () => {
+    const out = generateInputSchema.parse({ ...base, options: { exclude_people: false, foo: 1 } });
+    expect(out.options).toEqual({ exclude_people: false });
+  });
+  it("rejects a non-boolean exclude_people", () => {
+    expect(generateInputSchema.safeParse({ ...base, options: { exclude_people: "yes" } }).success).toBe(false);
+  });
 });

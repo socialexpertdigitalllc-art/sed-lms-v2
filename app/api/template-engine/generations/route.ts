@@ -15,6 +15,7 @@ export async function GET() {
   }
 
   const admin = createAdminClient();
+  // Slim list projection: heavy jsonb (brief, content_model, image_slots, gate_results) stays on the detail route; keep in sync with RunsList/board rendered fields.
   const { data, error } = await admin
     .from("template_generations")
     .select(
