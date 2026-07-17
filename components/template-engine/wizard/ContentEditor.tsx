@@ -29,21 +29,26 @@ export function ContentEditor({ gen, onSaved }: { gen: GenerationDetail; onSaved
 
   async function save() {
     setSaving(true);
-    const res = await fetch(`/api/template-engine/generations/${gen.id}/content`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(model),
-    });
-    setSaving(false);
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      const detail = j.detail ?? j.error ?? "Could not save content";
-      // detail can be a raw multi-line ZodError message — keep the toast readable.
-      toast({ kind: "error", title: "Save failed", body: String(detail).split("\n")[0] });
-      return;
+    try {
+      const res = await fetch(`/api/template-engine/generations/${gen.id}/content`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(model),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        const detail = j.detail ?? j.error ?? "Could not save content";
+        // detail can be a raw multi-line ZodError message — keep the toast readable.
+        toast({ kind: "error", title: "Save failed", body: String(detail).split("\n")[0] });
+        return;
+      }
+      toast({ kind: "success", title: "Content saved", body: "Your edits will be used when the site builds." });
+      onSaved();
+    } catch {
+      toast({ kind: "error", title: "Save failed", body: "Network error — try again" });
+    } finally {
+      setSaving(false);
     }
-    toast({ kind: "success", title: "Content saved", body: "Your edits will be used when the site builds." });
-    onSaved();
   }
 
   return (
@@ -55,6 +60,7 @@ export function ContentEditor({ gen, onSaved }: { gen: GenerationDetail; onSaved
       ) : null}
 
       <fieldset disabled={!editable} className="space-y-5">
+        <legend className="sr-only">Website content</legend>
         <Card title="Identity">
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Business name" required>
