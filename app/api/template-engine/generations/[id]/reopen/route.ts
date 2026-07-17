@@ -25,17 +25,24 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     .maybeSingle();
   if (!gen) return NextResponse.json({ error: "Generation not found" }, { status: 404 });
 
-  const { data: lead } = await supabase.from("leads").select("id").eq("id", gen.lead_id).maybeSingle();
-  if (!lead) return NextResponse.json({ error: "Generation not found" }, { status: 404 });
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("id")
+    .eq("id", gen.lead_id)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
   if (gen.status !== "review") {
     return NextResponse.json({ error: "Only a built, undeployed run can be reopened" }, { status: 409 });
   }
 
   // CAS review -> curating (same pattern as build's curating -> building flip).
+  // gate_results belongs to the build being discarded — clear it so the
+  // tracker never shows a previous build's verdict as current.
   const { data: updated, error } = await admin
     .from("template_generations")
-    .update({ status: "curating", updated_at: new Date().toISOString() })
+    .update({ status: "curating", gate_results: null, updated_at: new Date().toISOString() })
     .eq("id", id)
     .eq("status", "review")
     .select("id")

@@ -92,14 +92,14 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
             <Download className="h-4 w-4" /> Download zip
           </a>
           {gen.status === "review" ? (
-            <button type="button" disabled={reopening} onClick={reopen}
+            <button type="button" disabled={reopening || deploying} onClick={reopen}
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text disabled:opacity-50">
               {reopening ? <Loader2 className="h-4 w-4 animate-spin" /> : <PencilLine className="h-4 w-4" />}
               Reopen for edits
             </button>
           ) : null}
           {canDeploy ? (
-            <button type="button" onClick={() => setConfirming(true)} disabled={deploying}
+            <button type="button" onClick={() => setConfirming(true)} disabled={deploying || reopening}
               className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
               {deploying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
               {gen.status === "deployed" ? "Redeploy" : "Deploy"}
