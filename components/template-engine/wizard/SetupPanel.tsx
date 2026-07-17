@@ -46,23 +46,29 @@ export function SetupPanel({ leads, templates }: { leads: LeadOption[]; template
   async function start() {
     if (!leadId || !templateId) return;
     setSubmitting(true);
-    const res = await fetch("/api/template-engine/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        leadId,
-        templateId,
-        pages: selectedPages,
-        options: { exclude_people: excludePeople },
-      }),
-    });
-    if (!res.ok) {
+    try {
+      const res = await fetch("/api/template-engine/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadId,
+          templateId,
+          pages: selectedPages,
+          options: { exclude_people: excludePeople },
+        }),
+      });
+      if (!res.ok) {
+        setSubmitting(false);
+        toast({ kind: "error", title: "Could not start", body: (await res.json().catch(() => ({}))).error ?? "Generation failed to queue" });
+        return;
+      }
+      const { id } = await res.json();
+      // submitting stays true through the navigation — double-submit guard
+      router.push(`/ai-tools/template-engine/${id}`);
+    } catch {
       setSubmitting(false);
-      toast({ kind: "error", title: "Could not start", body: (await res.json().catch(() => ({}))).error ?? "Generation failed to queue" });
-      return;
+      toast({ kind: "error", title: "Could not start", body: "Network error — try again" });
     }
-    const { id } = await res.json();
-    router.push(`/ai-tools/template-engine/${id}`);
   }
 
   return (
@@ -77,11 +83,12 @@ export function SetupPanel({ leads, templates }: { leads: LeadOption[]; template
             <input
               className={cn(inputCls, "pl-8")}
               placeholder="Search leads by business name"
+              aria-label="Search leads"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <Select className={inputCls} value={leadId} onChange={(e) => setLeadId(e.target.value)}>
+          <Select className={inputCls} aria-label="Lead" value={leadId} onChange={(e) => setLeadId(e.target.value)}>
             <option value="">Select a lead…</option>
             {filtered.map((l) => (
               <option key={l.id} value={l.id}>{l.business_name} — {l.status}</option>
@@ -147,7 +154,7 @@ export function SetupPanel({ leads, templates }: { leads: LeadOption[]; template
           type="button"
           disabled={!leadId || !templateId || selectedPages.length === 0 || submitting}
           onClick={start}
-          className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-ink disabled:opacity-60"
         >
           {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
           Start generation
