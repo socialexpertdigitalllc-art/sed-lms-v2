@@ -91,24 +91,34 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
 
       {/* Per-page tabs + iframe. Rebuilt pages reference assets relatively, so
           the iframe resolves them under the same preview prefix. */}
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="flex flex-wrap gap-1 border-b border-border-subtle p-2">
-          {pages.map((f) => (
-            <button key={f} type="button" onClick={() => setPage(f)}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-xs",
-                f === page ? "bg-accent-soft font-medium text-accent-ink" : "text-text-muted hover:text-text",
-              )}>
-              {f}
-            </button>
-          ))}
+      {pages.length === 0 ? (
+        <div className="rounded-lg border border-border bg-surface p-5 text-sm text-text-muted">
+          No pages were built for this run — check the Build step's timeline for what happened.
         </div>
-        <iframe key={page} src={previewSrc} title={`Preview ${page}`} className="h-[70vh] w-full bg-white" />
-      </div>
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <div className="flex flex-wrap gap-1 border-b border-border-subtle p-2">
+            {pages.map((f) => (
+              <button key={f} type="button" onClick={() => setPage(f)}
+                className={cn(
+                  "rounded-md px-3 py-1.5 text-xs",
+                  f === page ? "bg-accent-soft font-medium text-accent-ink" : "text-text-muted hover:text-text",
+                )}>
+                {f}
+              </button>
+            ))}
+          </div>
+          {/* sandbox WITHOUT allow-same-origin: the preview runs AI-generated
+              HTML+JS which must never touch this origin's storage/session. */}
+          <iframe key={page} src={previewSrc} title={`Preview ${page}`}
+            sandbox="allow-scripts allow-popups allow-forms"
+            className="h-[70vh] w-full bg-white" />
+        </div>
+      )}
 
       {/* Deploy confirm — modal closes only via its buttons (house rule) */}
       {confirming ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Deploy this site?">
           <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5 shadow-lg">
             <h3 className="text-sm font-semibold text-text">Deploy this site?</h3>
             <p className="mt-2 text-sm text-text-muted">
