@@ -78,6 +78,30 @@ export function ContentEditor({ gen, onSaved }: { gen: GenerationDetail; onSaved
           </div>
         </Card>
 
+        <Card title="Brand assets & colors">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Logo URL" className="sm:col-span-2">
+              <input className={inputCls} value={model.identity.logo_url ?? ""} placeholder="https://…"
+                onChange={(e) => set({ identity: { ...model.identity, logo_url: e.target.value } })} />
+            </Field>
+            <Field label="Business profile / reviews link" className="sm:col-span-2">
+              <input className={inputCls} value={model.identity.profile_link ?? ""} placeholder="https://…"
+                onChange={(e) => set({ identity: { ...model.identity, profile_link: e.target.value } })} />
+            </Field>
+            <Field label="Map embed (full <iframe> …)" className="sm:col-span-2">
+              <textarea className={areaCls} value={model.identity.map_embed ?? ""} placeholder='<iframe src="https://www.google.com/maps/embed?…"></iframe>'
+                onChange={(e) => set({ identity: { ...model.identity, map_embed: e.target.value } })} />
+            </Field>
+            <ColorField label="Brand color" value={model.theme?.brand ?? ""}
+              onChange={(v) => set({ theme: { ...(model.theme ?? { brand: "", brand_deep: "", accent: "" }), brand: v } })} />
+            <ColorField label="Brand deep (headers)" value={model.theme?.brand_deep ?? ""}
+              onChange={(v) => set({ theme: { ...(model.theme ?? { brand: "", brand_deep: "", accent: "" }), brand_deep: v } })} />
+            <ColorField label="Accent color" value={model.theme?.accent ?? ""}
+              onChange={(v) => set({ theme: { ...(model.theme ?? { brand: "", brand_deep: "", accent: "" }), accent: v } })} />
+          </div>
+          <p className="mt-2 text-xs text-text-faint">Colors are applied over the template palette (leave blank to keep the template&apos;s own colors). Hex like #1d4ed8.</p>
+        </Card>
+
         <Card title="Hero">
           <div className="space-y-3">
             <Field label="Headline parts (rendered as one headline)">
@@ -223,6 +247,22 @@ export function ContentEditor({ gen, onSaved }: { gen: GenerationDetail; onSaved
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** A hex text input paired with a native color swatch, kept in sync. */
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const isHex = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value.trim());
+  return (
+    <Field label={label}>
+      <div className="flex items-center gap-2">
+        <input type="color" value={isHex ? value : "#000000"} aria-label={`${label} swatch`}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-9 w-10 shrink-0 cursor-pointer rounded border border-border bg-surface p-0.5" />
+        <input className={inputCls} value={value} placeholder="#1d4ed8 (or blank)"
+          onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </Field>
   );
 }
 

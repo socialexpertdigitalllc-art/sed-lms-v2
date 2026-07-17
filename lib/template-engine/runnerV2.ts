@@ -26,6 +26,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { buildBrief, type GenerationBrief } from "./brief";
 import { planContent } from "./plan";
 import type { ContentModel } from "./contentModel";
+import { buildThemeOverrideCss } from "./themeCss";
 import { classifyFiles } from "./classify";
 import { selectContentFiles, type ManifestPage } from "./pageSelect";
 import { neutralizeAppIdentifier } from "./neutralize";
@@ -414,7 +415,13 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   // half of the pipeline. style.css is included here unchanged, which is what
   // keeps the design identical. (A template whose CSS carried url() image refs
   // would get a deterministic rewrite here; this one has none, so it is a no-op.)
-  for (const f of passthrough) if (textFiles[f] !== undefined) finalText[f] = textFiles[f];
+  // The ONE deterministic edit: append the client's brand-color `:root` override
+  // to each stylesheet, applying their colors without regenerating any CSS.
+  const themeCss = buildThemeOverrideCss(contentModel.theme);
+  for (const f of passthrough) {
+    if (textFiles[f] === undefined) continue;
+    finalText[f] = f.toLowerCase().endsWith(".css") ? textFiles[f] + themeCss : textFiles[f];
+  }
 
   const encoder = new TextEncoder();
   const siteMap: Record<string, Uint8Array> = {};
@@ -524,7 +531,19 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
 
     // 2. plan the content model (Gemini Pro) ------------------------------------
     await beginStep("plan", "Planning content", { status: "planning" });
-    const { model: contentModel } = await planContent(brief, requestedPages);
+    const { model: planned } = await planContent(brief, requestedPages);
+    // Inject the lead's verbatim assets deterministically — a map <iframe>, a
+    // logo URL and a profile link must never be routed through the model, which
+    // could mangle them. The regenerator wires these into the template's slots.
+    const contentModel: ContentModel = {
+      ...planned,
+      identity: {
+        ...planned.identity,
+        logo_url: brief.logo_link ?? "",
+        map_embed: brief.map_embed ?? "",
+        profile_link: brief.profile_link ?? "",
+      },
+    };
     await endStep(
       "done",
       `${contentModel.services.length} services, ${contentModel.image_briefs.length} image briefs`,

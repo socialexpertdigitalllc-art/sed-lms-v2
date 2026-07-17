@@ -39,6 +39,22 @@ export const identitySchema = z.object({
   // Gemini may emit the years as a number (20) or a string ("20+"); accept both.
   years: z.union([z.number(), z.string()]).optional(),
   license_line: z.string().optional(),
+  // Verbatim passthroughs from the lead — injected deterministically by the
+  // runner (never rewritten by the model, so a map <iframe> or logo URL can't
+  // be mangled). The regenerator wires these into the matching template slots.
+  logo_url: z.string().default(""),
+  map_embed: z.string().default(""), // full google-maps <iframe>…</iframe>
+  profile_link: z.string().default(""), // reviews / business profile URL
+});
+
+/**
+ * The client's brand colors as hex, applied as a `:root` override over the
+ * template palette (themeCss.ts). Empty strings keep the template's own colors.
+ */
+export const themeSchema = z.object({
+  brand: z.string().default(""),
+  brand_deep: z.string().default(""),
+  accent: z.string().default(""),
 });
 
 export const heroSchema = z.object({
@@ -87,9 +103,11 @@ export const contentModelSchema = z.object({
   about: aboutSchema,
   pages: z.record(z.string(), pageSchema),
   image_briefs: z.array(imageBriefSchema).default([]),
+  theme: themeSchema.default({ brand: "", brand_deep: "", accent: "" }),
 });
 
 export type ContentModel = z.infer<typeof contentModelSchema>;
+export type Theme = z.infer<typeof themeSchema>;
 export type Service = z.infer<typeof serviceSchema>;
 export type ImageBrief = z.infer<typeof imageBriefSchema>;
 
@@ -101,7 +119,7 @@ export type ImageBrief = z.infer<typeof imageBriefSchema>;
 export function emptyContentModel(name: string): ContentModel {
   const n = name.trim() || "New Business";
   return {
-    identity: { name: n, tagline: "", positioning: "", areas: [] },
+    identity: { name: n, tagline: "", positioning: "", areas: [], logo_url: "", map_embed: "", profile_link: "" },
     hero: { eyebrow: "", headline_parts: [], subcopy: "", cta_primary: "", cta_secondary: "" },
     services: [
       { key: "service-1", name: "Service", short: "", long: "", bullets: [], image_query: `${n} service` },
@@ -112,5 +130,6 @@ export function emptyContentModel(name: string): ContentModel {
     about: { story: "", why_us: [] },
     pages: { "index.html": { title: n, meta_description: "" } },
     image_briefs: [],
+    theme: { brand: "", brand_deep: "", accent: "" },
   };
 }

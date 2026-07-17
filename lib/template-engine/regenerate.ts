@@ -18,6 +18,10 @@ ABSOLUTE RULES
 - Reproduce every tag, and every css class, id, data-* attribute, inline handler (onclick etc.), custom element, and JS class/function/method/variable name — VERBATIM, same count, same order, same depth. Dropping even one (including a brand-looking id like id="np-faq") breaks the site. This obligation overrides brevity: never shorten the file to save effort.
 - Change ONLY: human-visible text, alt attributes, <title>, meta descriptions, code comments, contact details (phone/email/address), JS string/data VALUES (testimonials, service names, labels), and image src/srcset URLs.
 - Replace 100% of the demo business's identity in that changeable text — business name, city, service areas, phone, email, person names — including in code comments. No demo brand may remain in any visible text or comment.
+- CLIENT ASSETS from the content model, used only where the template already has the matching slot (never add or remove elements):
+  - If identity.map_embed is non-empty and this file has a map (an <iframe> with a maps URL in src, or a <map-embed> element), replace the ENTIRE existing map <iframe> with identity.map_embed verbatim. If it is empty, leave the template's map as-is.
+  - If identity.logo_url is non-empty and the template's header/footer logo is an <img>, set its src to identity.logo_url. If the logo is text, leave it as the business name.
+  - If identity.profile_link is non-empty, use it as the href for any existing "reviews", "Google", "Yelp", or "view our profile" link/button. Never invent such a link.
 - In JavaScript, change only string/data VALUES and comments; never touch identifiers or control flow. The brand identifier was already neutralized upstream, so you will not see it.
 - Use ONLY the supplied content model for facts. Never invent licenses, awards or certifications. Never keep a template image path.`;
 
