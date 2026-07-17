@@ -1,8 +1,29 @@
 # Service / Area Individual-Page Fan-Out — Design + Plan
 
-**Goal:** When the operator opts in, generate one individual page per service (from the template's `service_detail` sample) and one per service area (from the `area_detail` sample), fully cross-linked from the hub pages and nav.
+**Goal:** Generate one individual page per service (from the template's `service_detail` sample) and one per service area (from the `area_detail` sample), linked from the hub pages.
 
-**User decision (2026-07-17):** build **ALL** individual service pages and **ALL** area pages, but **only when the operator selects those page types**. No cap.
+**STATUS (2026-07-18): IMPLEMENTED on branch `service-area-fanout` (commits + planFanout foundation), static gates green (tsc, 631 tests, prod build). NOT merged — awaiting a live E2E when the shared prod DB is idle (the hub card multiplication is AI-driven and unproven at runtime).**
+
+**Final design (revised from the user's 2026-07-18 clarification "no manual page selection; generate all required pages from the lead"):** fan-out is **fully automatic from lead details — NO operator toggles.** When the lead's resolved pages include the Services hub → one page per service; include the Areas hub AND the lead has areas → one page per area. Build ALL of them, no cap.
+
+**Nav finding:** the template's nav/header/footer are **web components** (`<app-header>` rendered by components.js) — there are no literal page links in the HTML nav. So individual pages are linked from the **hub pages** (the standard local-SEO pattern), NOT injected into the shared JS nav. The hub's `<article data-card onclick="location.href='…'">` grid is the link surface.
+
+**What shipped:**
+- `lib/template-engine/fanout.ts::planFanout` (pure, TDD) — the fanned page list + slugs + which hubs expanded.
+- runnerV2: expands the build set with fanned pages (sourced from the sample), regenerates each focused on its one service/area (leading its own service image), and passes each hub a `hubExpand` (one card per item → its page).
+- regenerate: `pageFocus` + `hubExpand` prompt instructions.
+- gates: `structureExempt` skips the hub tag-count check (variable cards) while still leak-scanning.
+
+**Remaining before merge/deploy:**
+1. **Live E2E when prod idle** — a lead with services + areas (e.g. DRL Construction, 18 svc + 14 areas) whose specify_pages include "Services" + "Service Areas". Confirm: N service pages + N area pages built; each hub shows one card per item linking to the right file; detail pages are focused + de-leaked (no Cherry Creek/Denver/kitchen); build completes; runtime acceptable.
+2. If the AI hub multiplication is unreliable, fall back to **deterministic card duplication** (clone the `<article data-card>` node N times) — the markers are clean (`data-card`, `data-layer`). Kept as a fallback, not built yet.
+3. Runtime: 18+14 ≈ 35 pages will be slow (~40-60 min) — the standing chunking/parallelism concern becomes urgent for big leads.
+
+---
+
+## (Original design notes below — superseded where they mention toggles/caps)
+
+**Superseded user decision (2026-07-17):** build ALL, but "only when selected" — reinterpreted 2026-07-18 as "only when the lead's pages include that hub", i.e. automatic, no UI toggle.
 
 ---
 
