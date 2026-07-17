@@ -16,6 +16,10 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
   const slots = Array.isArray(gen.image_slots) ? gen.image_slots : [];
   const { chosen, total } = slotProgress(slots);
   const [building, setBuilding] = useState(false);
+  // One mutation in flight per GENERATION, not per slot: the curation routes
+  // read-modify-write the whole image_slots array, so two concurrent slot
+  // updates would silently lose one of them (last writer wins).
+  const [mutating, setMutating] = useState(false);
   const { toast } = useToast();
 
   async function startBuild() {
@@ -53,7 +57,7 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
           {editable ? " — every slot needs at least one image before the build" : ""}
         </p>
         {editable ? (
-          <button type="button" onClick={startBuild} disabled={building || chosen < total}
+          <button type="button" onClick={startBuild} disabled={building || mutating || chosen < total}
             className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
             {building ? <Loader2 className="h-4 w-4 animate-spin" /> : <Hammer className="h-4 w-4" />}
             Build the site
@@ -62,20 +66,24 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
       </div>
 
       {slots.map((slot) => (
-        <SlotGrid key={slot.id} genId={gen.id} slot={slot} editable={editable} onChanged={onChanged} />
+        <SlotGrid key={slot.id} genId={gen.id} slot={slot} editable={editable} onChanged={onChanged}
+          mutating={mutating} setMutating={setMutating} />
       ))}
     </div>
   );
 }
 
-function SlotGrid({ genId, slot, editable, onChanged }: {
+function SlotGrid({ genId, slot, editable, onChanged, mutating, setMutating }: {
   genId: string; slot: ImageSlot; editable: boolean; onChanged: () => void;
+  mutating: boolean; setMutating: (v: boolean) => void;
 }) {
   const [busy, setBusy] = useState<"more" | "select" | "custom" | null>(null);
   const [customUrl, setCustomUrl] = useState("");
   const { toast } = useToast();
 
   async function post(path: string, body?: unknown, kind: "more" | "select" | "custom" = "select") {
+    if (mutating) return false; // another slot's write is in flight — see the lost-update note above
+    setMutating(true);
     setBusy(kind);
     try {
       const res = await fetch(`/api/template-engine/generations/${genId}/images/${slot.id}/${path}`, {
@@ -94,6 +102,7 @@ function SlotGrid({ genId, slot, editable, onChanged }: {
       return false;
     } finally {
       setBusy(null);
+      setMutating(false);
     }
   }
 
@@ -130,7 +139,7 @@ function SlotGrid({ genId, slot, editable, onChanged }: {
           </span>
         </h2>
         {editable ? (
-          <button type="button" onClick={() => post("more", undefined, "more")} disabled={busy !== null}
+          <button type="button" onClick={() => post("more", undefined, "more")} disabled={mutating}
             className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:text-text disabled:opacity-50">
             {busy === "more" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             Show different ones
@@ -142,7 +151,7 @@ function SlotGrid({ genId, slot, editable, onChanged }: {
         {slot.candidates.map((c) => {
           const selected = slot.selected.includes(c.url);
           return (
-            <button key={c.url} type="button" onClick={() => toggle(c.url)} disabled={!editable || busy !== null}
+            <button key={c.url} type="button" onClick={() => toggle(c.url)} disabled={!editable || mutating}
               className={cn(
                 "group relative aspect-[4/3] overflow-hidden rounded-md border-2 transition-colors",
                 selected ? "border-accent" : "border-transparent hover:border-border",
@@ -179,10 +188,11 @@ function SlotGrid({ genId, slot, editable, onChanged }: {
           <div className="relative flex-1">
             <Link2 className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-text-faint" />
             <input className={cn(inputCls, "pl-8")} placeholder="Custom image URL (https://…)"
+              aria-label="Custom image URL"
               value={customUrl} onChange={(e) => setCustomUrl(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") addCustom(); }} />
           </div>
-          <button type="button" onClick={addCustom} disabled={busy !== null || !customUrl.trim()}
+          <button type="button" onClick={addCustom} disabled={mutating || !customUrl.trim()}
             className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text disabled:opacity-50">
             {busy === "custom" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
             Add
