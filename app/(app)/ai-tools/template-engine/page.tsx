@@ -29,11 +29,14 @@ export default async function TemplateEnginePage() {
     admin
       .from("leads")
       .select(
-        "id, business_name, services, service_areas, image_links, site_type, color_scheme, status"
+        "id, business_name, status, business_phone, business_email, no_email, business_profile_link, logo_link, map_embed_link, site_type, services, service_areas, num_webpages, specify_pages, client_experience, color_scheme, color_same_as_logo, image_links"
       )
+      // Only "Not Ready" leads are candidates for a new website — a Ready lead
+      // already has a site, and Closed/Dropped/Long Term aren't being worked.
+      .eq("status", "Not Ready")
       .is("deleted_at", null)
       .order("created_at", { ascending: false })
-      .limit(200),
+      .limit(300),
     admin
       .from("website_templates")
       .select("id, name, manifest, page_count")

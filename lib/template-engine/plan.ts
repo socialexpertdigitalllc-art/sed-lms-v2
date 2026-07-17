@@ -30,7 +30,7 @@ ${pageList}
 
 RETURN EXACTLY this JSON shape and nothing else (no prose, no markdown fences):
 {
-  "identity": { "name": string, "tagline": string, "positioning": string, "phone": string, "email": string, "areas": string[], "years": number, "license_line": string },
+  "identity": { "name": string, "tagline": string, "positioning": string, "phone": string, "email": string, "areas": string[], "years": number, "license_line": string, "logo_url": "", "map_embed": "", "profile_link": "" },
   "hero": { "eyebrow": string, "headline_parts": string[], "subcopy": string, "cta_primary": string, "cta_secondary": string },
   "services": [ { "key": "kebab-slug", "name": string, "short": string, "long": string, "bullets": string[], "image_query": string } ],
   "stats": [ { "value": string, "label": string } ],
@@ -38,7 +38,8 @@ RETURN EXACTLY this JSON shape and nothing else (no prose, no markdown fences):
   "faq": [ { "q": string, "a": string } ],
   "about": { "story": string, "why_us": string[] },
   "pages": { "<file.html>": { "title": string, "meta_description": string } },
-  "image_briefs": [ { "slot_id": string, "kind": "hero"|"service", "query": string, "must_show": string, "avoid": string } ]
+  "image_briefs": [ { "slot_id": string, "kind": "hero"|"service", "query": string, "must_show": string, "avoid": string } ],
+  "theme": { "brand": string, "brand_deep": string, "accent": string }
 }
 
 RULES
@@ -48,6 +49,8 @@ ${emailRule}
 - Testimonials must be plausible and LOCALIZED to the brief's real service_areas (name those cities/areas in "meta"); attribute each to a realistic first name + last initial with a matching "initials". Do not reference any area that is not in the brief.
 - NEVER invent licenses, awards, certifications, insurance claims, or numbers not present in the brief. Leave identity.license_line "" when none was provided. Set identity.years only from the brief's years_experience; omit it otherwise.
 - Copy must be specific to THIS business and trade — concrete and non-generic. No lorem, no placeholder text, no "[insert ...]" tokens.
+- identity.logo_url, identity.map_embed and identity.profile_link: ALWAYS set these to "" (empty string). They are injected verbatim from the brief afterwards; do not copy or invent them.
+- theme: translate the brief's "color_scheme" into hex. Set "brand" (primary), "brand_deep" (a darker shade of brand for headers/footers) and "accent" (a contrasting highlight) to concrete hex colors like "#1d4ed8". If the brief already gives hex codes, use them in order. If color_scheme is empty, "up to us", or "match the logo", set ALL THREE theme values to "" (the template's own colors are kept). Never guess a color when none was given.
 - image_briefs: these are the ONLY images the finished website displays, so keep this set SMALL — NEVER one per service. Emit exactly: one hero brief (slot_id "hero-1", kind "hero"), PLUS one brief for each of the SIX most representative services (kind "service", slot_id equal to that service's "key" from services[]). At most 7 image_briefs total, even when the business has dozens of services. "query" describes the stock photo to search for; every "avoid" MUST be exactly "people, text overlays, watermarks".${designRule}
 - Output MUST be a single valid JSON object, parseable as-is. No commentary before or after.`;
 }
