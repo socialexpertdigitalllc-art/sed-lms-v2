@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { daConfigured, createSubdomain, subdomainExists, uploadZipAndExtract } from "@/lib/template-engine/directadmin";
 import { businessSlug, websiteId } from "@/lib/template-engine/slug";
+import { isDeployableStatus } from "@/lib/template-engine/wizard";
 import type { GenStep } from "@/lib/template-engine/types";
 
 export const runtime = "nodejs";
@@ -32,12 +33,19 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const admin = createAdminClient();
   const { data: gen } = await admin
     .from("template_generations")
-    .select("id, lead_id, status, steps, site_slug, zip_path")
+    .select("id, lead_id, status, steps, site_slug, zip_path, gate_results")
     .eq("id", id)
     .maybeSingle();
   if (!gen) return NextResponse.json({ error: "Generation not found" }, { status: 404 });
-  if (gen.status !== "ready_for_review" && gen.status !== "deployed") {
+  if (!isDeployableStatus(gen.status)) {
     return NextResponse.json({ error: "Generation is not ready to deploy" }, { status: 409 });
+  }
+  const gr = gen.gate_results as { ok?: boolean } | null;
+  if (gr && gr.ok === false) {
+    return NextResponse.json(
+      { error: "Verification gates failed — rebuild before deploying" },
+      { status: 409 },
+    );
   }
   if (!gen.zip_path) {
     return NextResponse.json({ error: "This generation has no packaged zip" }, { status: 409 });

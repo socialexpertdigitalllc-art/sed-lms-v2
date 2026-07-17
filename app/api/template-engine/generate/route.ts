@@ -26,7 +26,7 @@ async function avgPerPageMs(admin: SupabaseClient, templateId: string, tool: str
     let query = admin
       .from("template_generations")
       .select("ai_ms, pages_built")
-      .in("status", ["ready_for_review", "deployed"])
+      .in("status", ["review", "ready_for_review", "deployed"])
       .not("ai_ms", "is", null)
       .gt("pages_built", 0)
       .order("created_at", { ascending: false })

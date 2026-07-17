@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { isDeployableStatus } from "@/lib/template-engine/wizard";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -22,7 +23,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     .eq("id", id)
     .maybeSingle();
   if (!gen) return NextResponse.json({ error: "Generation not found" }, { status: 404 });
-  if (gen.status !== "ready_for_review" && gen.status !== "deployed") {
+  if (!isDeployableStatus(gen.status)) {
     return NextResponse.json({ error: "Generation is not ready for download" }, { status: 409 });
   }
   if (!gen.zip_path) {
