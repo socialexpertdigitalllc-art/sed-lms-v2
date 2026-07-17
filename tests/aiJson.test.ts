@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseJsonLoose } from "@/lib/ai/json";
+import { parseJsonLoose, parseJsonArrayPrefix } from "@/lib/ai/json";
 
 describe("parseJsonLoose", () => {
   it("parses plain JSON", () => {
@@ -71,5 +71,54 @@ describe("parseJsonLoose — extraction from prose", () => {
 
   it("skips a bracketed markdown placeholder before a fence", () => {
     expect(parseJsonLoose('- fill in [placeholder]\n```json\n{"a":1}\n```')).toEqual({ a: 1 });
+  });
+});
+
+// Salvage for per-item verdict arrays: unlike parseJsonLoose (whose contract is
+// "never return a partial value" — right for content models, where a partial
+// payload is dangerous), parseJsonArrayPrefix exists for arrays whose elements
+// are independently safe (one vision verdict per image). A truncated response
+// yields the complete leading elements instead of nothing.
+describe("parseJsonArrayPrefix", () => {
+  it("returns all elements of a complete array", () => {
+    expect(parseJsonArrayPrefix('[{"a":1},{"b":2}]')).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it("returns the complete leading elements of an array truncated mid-element", () => {
+    // The exact gemini-3.5-flash failure: thinking tokens ate the budget and the
+    // verdict array was cut off mid-object with a 200 + finish_reason=length.
+    const truncated = '[{"people":false,"relevance":0.4,"quality":0.4,"reason":"blurry"},{"people":true,"relevance":0.7,"qual';
+    expect(parseJsonArrayPrefix(truncated)).toEqual([
+      { people: false, relevance: 0.4, quality: 0.4, reason: "blurry" },
+    ]);
+  });
+
+  it("handles an unterminated ```json fence around a truncated array", () => {
+    const fencedTruncated = '```json\n[{"a":1},{"b":2},{"c"';
+    expect(parseJsonArrayPrefix(fencedTruncated)).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it("is string-aware: braces and commas inside string values are not element boundaries", () => {
+    const truncated = '[{"reason":"shows } and , inside"},{"reason":"cut';
+    expect(parseJsonArrayPrefix(truncated)).toEqual([{ reason: "shows } and , inside" }]);
+  });
+
+  it("survives an escaped quote before the cut", () => {
+    const truncated = '[{"reason":"a \\"quoted\\" word"},{"reason":"x';
+    expect(parseJsonArrayPrefix(truncated)).toEqual([{ reason: 'a "quoted" word' }]);
+  });
+
+  it("returns [] when no array is present", () => {
+    expect(parseJsonArrayPrefix("not json at all")).toEqual([]);
+    expect(parseJsonArrayPrefix("")).toEqual([]);
+    expect(parseJsonArrayPrefix('{"a":1}')).toEqual([]);
+  });
+
+  it("returns [] for an array cut before its first complete element", () => {
+    expect(parseJsonArrayPrefix('[{"people":false,"rel')).toEqual([]);
+  });
+
+  it("ignores prose before the array", () => {
+    expect(parseJsonArrayPrefix('Here are the verdicts:\n[{"a":1},{"b"')).toEqual([{ a: 1 }]);
   });
 });

@@ -38,6 +38,81 @@ function balancedEnd(s: string, start: number): number {
   return -1; // Ran off the end: truncated. Never return a partial value.
 }
 
+/**
+ * Salvage the complete leading elements of a (possibly truncated) JSON array.
+ *
+ * parseJsonLoose's contract is "never return a partial value" — right when the
+ * payload is one indivisible document (a content model), where acting on half
+ * a value is dangerous. This function is the deliberate opt-in for the other
+ * case: arrays whose elements are independently safe (e.g. one vision verdict
+ * per image). A response truncated mid-element (Gemini hitting max_tokens
+ * returns HTTP 200 + a cut-off array) yields every element that completed
+ * instead of nothing. Returns [] when no array elements can be recovered.
+ */
+export function parseJsonArrayPrefix<T = unknown>(raw: string): T[] {
+  if (!raw) return [];
+  let s = raw.trim();
+  // Strip a leading ```/```json fence even when truncation lost the closing
+  // fence (parseJsonLoose's fence regex requires both ends).
+  const openFence = s.match(/^```(?:json)?\s*\n?/i);
+  if (openFence) s = s.slice(openFence[0].length);
+
+  let best: T[] = [];
+  let starts = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "[") continue;
+    if (++starts > MAX_CANDIDATE_STARTS) break;
+    const elements = arrayPrefixAt(s, i) as T[];
+    if (elements.length > best.length) best = elements;
+  }
+  return best;
+}
+
+/** Parse the complete elements of the array opening at s[start], stopping at truncation. */
+function arrayPrefixAt(s: string, start: number): unknown[] {
+  const out: unknown[] = [];
+  let i = start + 1;
+  for (;;) {
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (i >= s.length || s[i] === "]") return out; // done or truncated between elements
+    if (s[i] === ",") {
+      i++;
+      continue;
+    }
+    let slice: string;
+    if (s[i] === "{" || s[i] === "[") {
+      const end = balancedEnd(s, i);
+      if (end === -1) return out; // element truncated mid-value
+      slice = s.slice(i, end + 1);
+      i = end + 1;
+    } else {
+      // String or primitive: scan (string-aware) to the next top-level , or ]
+      let j = i;
+      let inStr = false;
+      let esc = false;
+      for (; j < s.length; j++) {
+        const c = s[j];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (c === "\\") esc = true;
+          else if (c === '"') inStr = false;
+          continue;
+        }
+        if (c === '"') inStr = true;
+        else if (c === "," || c === "]") break;
+      }
+      if (j >= s.length) return out; // ran off the end: truncated
+      slice = s.slice(i, j);
+      i = j;
+    }
+    try {
+      out.push(JSON.parse(slice));
+    } catch {
+      return out; // not a complete value: stop at the last good element
+    }
+  }
+}
+
 export function parseJsonLoose<T = unknown>(raw: string): T | null {
   if (!raw) return null;
   let s = raw.trim();
