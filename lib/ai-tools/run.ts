@@ -83,12 +83,19 @@ export async function persistGeneration(input: PersistInput): Promise<{ id: stri
 // verified against Gemini's OpenAI-compat endpoint for vision ranking
 // (lib/template-engine/vision.ts). Every existing caller omits `images`, so
 // `userContent` stays the same plain string as before — this is additive only.
+// Hard ceiling on any single provider call. A hung/stalled connection (Gemini
+// commonly stalls when its vision endpoint is rate-limited) must ABORT, not
+// hang forever — a hang can't be retried because it never throws, and it was
+// what wedged the image step for 30-40 minutes. Callers may pass a tighter
+// `timeoutMs` (vision does); big whole-file regens keep the generous default.
+const DEFAULT_CALL_TIMEOUT_MS = 300000; // 5 min
+
 export async function callProvider(
   tool: ToolId,
   model: string,
   systemPrompt: string,
   userPrompt: string,
-  opts: { maxTokens: number; temperature: number; images?: string[] }
+  opts: { maxTokens: number; temperature: number; images?: string[]; timeoutMs?: number }
 ): Promise<{ text: string; tokens: number }> {
   const cfg = TOOLS[tool];
   const apiKey = process.env[cfg.envKey];
@@ -99,20 +106,34 @@ export async function callProvider(
       ? [{ type: "text", text: userPrompt }, ...opts.images.map((url) => ({ type: "image_url", image_url: { url } }))]
       : userPrompt;
 
-  const res = await fetch(cfg.endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      max_tokens: Math.min(opts.maxTokens, cfg.maxOutputTokens),
-      temperature: opts.temperature,
-      stream: false,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-    }),
-  });
+  const controller = new AbortController();
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(cfg.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        max_tokens: Math.min(opts.maxTokens, cfg.maxOutputTokens),
+        temperature: opts.temperature,
+        stream: false,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+      }),
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error(`${cfg.label} call timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try {

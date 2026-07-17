@@ -104,8 +104,15 @@ const VISION_MAX_TOKENS = 8000;
 
 // Attempts per chunk. Thinking length varies run to run (the same request can
 // truncate once and fit the next time) and Gemini throws transient 429/fetch
-// errors; one blip must not zero out a whole batch of images.
-const RANK_ATTEMPTS = 3;
+// errors; one retry clears the common blip. Kept at 2 (was 3) so a
+// persistently rate-limited chunk fails fast to conservative instead of
+// burning ~3x the time — the whole point of lightening this step.
+const RANK_ATTEMPTS = 2;
+
+// Per-vision-call timeout. A vision call is ~20s normally; 60s is generous
+// headroom, and — crucially — bounds a stalled/rate-limited connection that
+// would otherwise hang the whole image step forever.
+const VISION_TIMEOUT_MS = 60000;
 
 /** True when the verdict carries real signal (not the conservative unreadable default). */
 function isReadableVerdict(v: VisionVerdict): boolean {
@@ -143,6 +150,7 @@ export async function rankImages(
           maxTokens: VISION_MAX_TOKENS,
           temperature: 0,
           images: batch.map((c) => c.url),
+          timeoutMs: VISION_TIMEOUT_MS,
         });
         const verdicts = parseVisionVerdicts(text, batch.length);
         // At least one readable verdict = the call fundamentally worked (a

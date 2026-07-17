@@ -24,17 +24,18 @@ const CLIENT_PHOTO_KINDS = new Set(["hero", "about"]);
 // doesn't hammer the Pexels/Gemini APIs at once.
 const SLOT_GATHER_CONCURRENCY = 3;
 
-// A WIDE net per page so the vision pass has plenty to rank and drop from.
-// Pexels caps per_page at 80; 24 gives a healthy pool while keeping each
-// vision call (chunked at <=12) to at most two requests.
-const WIDE_NET_PER_PAGE = 24;
+// Candidates fetched per slot. 12 = exactly ONE vision call per slot (the
+// vision chunk cap), not two — the single biggest lever for making the image
+// step lighter. present_max is 5-6, so 12 is still a comfortable pool to rank
+// and trim from; "show different ones" fetches a fresh page on demand.
+const WIDE_NET_PER_PAGE = 12;
 
 // A generation only ever shows a handful of images (hero + featured service
 // cards + gallery), so cap the service slots the operator has to curate. The
-// planner is told to emit ~7 briefs, but a business with 50 services once made
-// it emit 54 — capping here means a runaway plan can never spawn dozens of
-// Pexels+vision gathers (which rate-limited and left slots empty).
-const MAX_SERVICE_SLOTS = 8;
+// planner is told to emit ~6 briefs; capping at 6 (was 8) keeps the image step
+// light — fewer slots = fewer Pexels+vision round-trips — and a runaway plan
+// can never spawn dozens of gathers (which rate-limited and left slots empty).
+const MAX_SERVICE_SLOTS = 6;
 
 /**
  * Pure: keep every non-service brief (hero/about/gallery) plus the first
