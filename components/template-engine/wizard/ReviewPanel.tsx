@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Download, ExternalLink, Globe, Loader2, Rocket, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Download, ExternalLink, Globe, Loader2, PencilLine, Rocket, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { isDeployableStatus } from "@/lib/template-engine/wizard";
 import type { GenerationDetail } from "./GenerationWizard";
@@ -27,6 +27,7 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
   const [page, setPage] = useState(entry);
   const [deploying, setDeploying] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [reopening, setReopening] = useState(false);
   const { toast } = useToast();
   const ready = isDeployableStatus(gen.status);
   const previewSrc = `/api/template-engine/preview/${gen.id}/${page}`;
@@ -47,6 +48,23 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
       toast({ kind: "error", title: "Deploy failed", body: "Network error — please try again." });
     } finally {
       setDeploying(false);
+    }
+  }
+
+  async function reopen() {
+    setReopening(true);
+    try {
+      const res = await fetch(`/api/template-engine/generations/${gen.id}/reopen`, { method: "POST" });
+      if (!res.ok) {
+        toast({ kind: "error", title: "Could not reopen", body: (await res.json().catch(() => ({}))).error ?? "Try again" });
+        return;
+      }
+      toast({ kind: "info", title: "Run reopened", body: "Edit content or images, then build again." });
+      onChanged(); // status is curating now — the shell's rail follows to step 3
+    } catch {
+      toast({ kind: "error", title: "Could not reopen", body: "Network error — please try again." });
+    } finally {
+      setReopening(false);
     }
   }
 
@@ -73,6 +91,13 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
             className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text">
             <Download className="h-4 w-4" /> Download zip
           </a>
+          {gen.status === "review" ? (
+            <button type="button" disabled={reopening} onClick={reopen}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text disabled:opacity-50">
+              {reopening ? <Loader2 className="h-4 w-4 animate-spin" /> : <PencilLine className="h-4 w-4" />}
+              Reopen for edits
+            </button>
+          ) : null}
           {canDeploy ? (
             <button type="button" onClick={() => setConfirming(true)} disabled={deploying}
               className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">

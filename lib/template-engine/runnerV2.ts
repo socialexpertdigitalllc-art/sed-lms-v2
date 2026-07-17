@@ -74,6 +74,26 @@ function genStepArray(v: unknown): GenStep[] {
   );
 }
 
+// Build/deploy-phase step keys — everything from `prepare` onward, including
+// the per-file `build:<file>` steps and any prior `deploy:*` attempt. Plan-phase
+// keys (`plan`, `images`, `curate`) are NOT build/deploy-phase and survive.
+const BUILD_PHASE_KEYS = new Set(["prepare", "verify", "finalize"]);
+
+/**
+ * Strip prior build/deploy-phase entries from a generation's step timeline
+ * before a rebuild runs. Reopening a `review` run back to `curating` (the
+ * spec's edit-and-rebuild loop) and hitting Build again resumes the SAME
+ * `steps` array the plan phase started — without this, `runBuildPipeline`
+ * appends a second round of `prepare`/`build:<file>`/`verify`/`finalize`
+ * entries, and the per-file updater's `steps.find(s => s.key === ...)` always
+ * matches the FIRST (stale, already-`done`) entry, leaving the new duplicates
+ * stuck at `running` forever. Mirrors the deploy route's own `deploy:*` prune
+ * (app/api/template-engine/generations/[id]/deploy/route.ts). Pure — no I/O.
+ */
+export function pruneBuildPhaseSteps(steps: GenStep[]): GenStep[] {
+  return steps.filter((s) => !BUILD_PHASE_KEYS.has(s.key) && !s.key.startsWith("build:") && !s.key.startsWith("deploy:"));
+}
+
 /** `template_generations.options` — defaults to excluding people unless explicitly set to false. */
 function excludePeopleOf(options: unknown): boolean {
   const v = options && typeof options === "object" ? (options as { exclude_people?: unknown }).exclude_people : undefined;
@@ -619,7 +639,9 @@ export async function buildFromSelection(generationId: string): Promise<void> {
     if (!gen.content_model) {
       throw new Error("Generation has no content model — the plan phase must complete before building");
     }
-    steps = genStepArray(gen.steps);
+    // Prune any prior build/deploy-phase steps before continuing the timeline —
+    // this run may be a rebuild after Reopen (review -> curating -> build again).
+    steps = pruneBuildPhaseSteps(genStepArray(gen.steps));
     currentKey = gen.current_step ?? null;
 
     const { data: template } = await admin

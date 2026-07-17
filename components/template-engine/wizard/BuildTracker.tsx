@@ -32,7 +32,7 @@ export function BuildTracker({ gen }: { gen: GenerationDetail }) {
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-[10px] font-semibold uppercase tracking-wider text-text-faint">Pipeline</h2>
           {running && gen.estimate_ms ? (
-            <span className="text-xs text-text-faint">Typically ~{Math.round(gen.estimate_ms / 60000)} min</span>
+            <span className="text-xs text-text-faint">Typically ~{Math.max(1, Math.round(gen.estimate_ms / 60000))} min</span>
           ) : null}
         </div>
         {steps.length === 0 ? (
