@@ -29,5 +29,5 @@ export default async function GenerationWizardPage({
     .maybeSingle();
   if (!gen) notFound();
 
-  return <GenerationWizard genId={genId} canDeploy={perms.has("templates.deploy")} />;
+  return <GenerationWizard key={genId} genId={genId} canDeploy={perms.has("templates.deploy")} />;
 }

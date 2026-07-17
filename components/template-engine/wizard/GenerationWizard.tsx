@@ -57,13 +57,18 @@ export function GenerationWizard({ genId, canDeploy }: { genId: string; canDeplo
   const [rtTick, setRtTick] = useState(0);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/template-engine/generations/${genId}`);
-    if (!res.ok) {
-      setLoadErr((await res.json().catch(() => ({}))).error ?? "Failed to load generation");
-      return;
+    try {
+      const res = await fetch(`/api/template-engine/generations/${genId}`);
+      if (!res.ok) {
+        setLoadErr((await res.json().catch(() => ({}))).error ?? "Failed to load generation");
+        return;
+      }
+      const { generation } = await res.json();
+      setGen(generation);
+      setLoadErr(null);
+    } catch {
+      setLoadErr("Failed to load generation");
     }
-    const { generation } = await res.json();
-    setGen(generation);
   }, [genId]);
 
   useEffect(() => { load(); }, [load, rtTick]);
@@ -79,7 +84,7 @@ export function GenerationWizard({ genId, canDeploy }: { genId: string; canDeplo
       if (cancelled) return;
       if (data.session) supabase.realtime.setAuth(data.session.access_token);
       channel
-        .on("postgres_changes", { event: "*", schema: "public", table: "template_generations" }, () => {
+        .on("postgres_changes", { event: "*", schema: "public", table: "template_generations", filter: `id=eq.${genId}` }, () => {
           if (t) clearTimeout(t);
           t = setTimeout(() => setRtTick((n) => n + 1), 400);
         })
@@ -95,7 +100,7 @@ export function GenerationWizard({ genId, canDeploy }: { genId: string; canDeplo
   // →review), drop any manual back-navigation and follow it forward again.
   useEffect(() => { setStep(null); }, [gen?.status]);
 
-  if (loadErr) return <EmptyState icon={Hammer} title="Generation unavailable" hint={loadErr} />;
+  if (loadErr && !gen) return <EmptyState icon={Hammer} title="Generation unavailable" hint={loadErr} />;
   if (!gen) {
     return (
       <div className="space-y-4">
