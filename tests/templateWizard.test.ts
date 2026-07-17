@@ -71,3 +71,23 @@ describe("slotProgress", () => {
     expect(slotProgress([])).toEqual({ chosen: 0, total: 0 });
   });
 });
+
+import { applyToggle } from "@/lib/template-engine/wizard";
+
+describe("applyToggle", () => {
+  it("adds a url when under pick_max", () => {
+    expect(applyToggle(["a"], "b", 3)).toEqual({ selected: ["a", "b"], full: false });
+  });
+  it("removes a url that is already selected", () => {
+    expect(applyToggle(["a", "b"], "a", 3)).toEqual({ selected: ["b"], full: false });
+  });
+  it("swaps on a single-pick slot (pick_max 1)", () => {
+    expect(applyToggle(["a"], "b", 1)).toEqual({ selected: ["b"], full: false });
+  });
+  it("reports full when a multi-pick slot is at pick_max", () => {
+    expect(applyToggle(["a", "b", "c"], "d", 3)).toEqual({ selected: ["a", "b", "c"], full: true });
+  });
+  it("deselect still works even when full", () => {
+    expect(applyToggle(["a", "b", "c"], "b", 3)).toEqual({ selected: ["a", "c"], full: false });
+  });
+});

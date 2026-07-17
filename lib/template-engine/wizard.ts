@@ -71,3 +71,23 @@ export function slotProgress(slots: ImageSlot[]): { chosen: number; total: numbe
     total: slots.length,
   };
 }
+
+/**
+ * Pure next-state for one click on an image candidate. Lets the curation UI
+ * update the selection instantly (optimistically) and derive the exact array
+ * to sync to the server, without a round-trip per click.
+ * - already selected  -> removed
+ * - room under pick_max -> added
+ * - single-pick slot   -> the clicked url replaces the current pick
+ * - multi-pick slot at pick_max -> unchanged, `full: true` (caller warns)
+ */
+export function applyToggle(
+  selected: string[],
+  url: string,
+  pickMax: number,
+): { selected: string[]; full: boolean } {
+  if (selected.includes(url)) return { selected: selected.filter((u) => u !== url), full: false };
+  if (selected.length < pickMax) return { selected: [...selected, url], full: false };
+  if (pickMax === 1) return { selected: [url], full: false };
+  return { selected, full: true };
+}
