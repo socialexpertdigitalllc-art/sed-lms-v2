@@ -3,12 +3,13 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ExternalLink, Globe, Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { ExternalLink, Globe, Loader2, RotateCcw, Send, Trash2 } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { EmptyState } from "@/components/common/EmptyState";
 import { STATUS_PILL } from "@/lib/leads/types";
 import { cn } from "@/lib/utils";
+import { TransferToDomainModal } from "./TransferToDomainModal";
 
 export type DeployedRow = {
   id: string;
@@ -24,6 +25,8 @@ export function DeploymentsBoard({ deployed, canDeploy }: { deployed: DeployedRo
   const { toast } = useToast();
   const [busy, setBusy] = useState<string | null>(null); // generation id with an action in flight
   const [confirming, setConfirming] = useState<DeployedRow | null>(null);
+  const [transferRow, setTransferRow] = useState<DeployedRow | null>(null);
+  const onStaging = (url: string | null) => !!url && /\.dmviral\.com/i.test(url);
 
   async function redeploy(row: DeployedRow) {
     setBusy(row.id);
@@ -113,6 +116,13 @@ export function DeploymentsBoard({ deployed, canDeploy }: { deployed: DeployedRo
               <td className="px-4 py-2.5">
                 {canDeploy ? (
                   <div className="flex items-center justify-end gap-2">
+                    {onStaging(row.deployed_url) ? (
+                      <button type="button" disabled={busy !== null} onClick={() => setTransferRow(row)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 px-2.5 py-1.5 text-xs text-accent-ink hover:bg-accent-soft disabled:opacity-50">
+                        <Send className="h-3.5 w-3.5" />
+                        To custom domain
+                      </button>
+                    ) : null}
                     <button type="button" disabled={busy !== null} onClick={() => redeploy(row)}
                       className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted hover:text-text disabled:opacity-50">
                       {busy === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
@@ -130,6 +140,15 @@ export function DeploymentsBoard({ deployed, canDeploy }: { deployed: DeployedRo
           ))}
         </tbody>
       </table>
+
+      {transferRow ? (
+        <TransferToDomainModal
+          generationId={transferRow.id}
+          businessName={transferRow.business_name}
+          onClose={() => setTransferRow(null)}
+          onDone={() => router.refresh()}
+        />
+      ) : null}
 
       {/* Take-down confirm — closes only via its buttons (house rule) */}
       {confirming ? (
