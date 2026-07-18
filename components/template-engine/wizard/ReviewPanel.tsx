@@ -41,8 +41,14 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
         toast({ kind: "error", title: "Deploy failed", body: (await res.json().catch(() => ({}))).error ?? "DirectAdmin deploy failed" });
         return;
       }
-      const { url } = await res.json();
-      toast({ kind: "success", title: "Site deployed", body: `${url} — saved to the lead's website link.` });
+      const { url, provisioning } = await res.json();
+      toast({
+        kind: "success",
+        title: "Site deployed",
+        body: provisioning
+          ? `${url} — provisioning, usually live within a minute or two.`
+          : `${url} — saved to the lead's website link.`,
+      });
       onChanged();
     } catch {
       toast({ kind: "error", title: "Deploy failed", body: "Network error — please try again." });

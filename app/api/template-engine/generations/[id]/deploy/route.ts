@@ -105,53 +105,48 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   // deploy:subdomain -----------------------------------------------------------
   // One live site per lead: when the lead's website_link already points at one
   // of our subdomains, redeploy IN PLACE on that same subdomain (the client's
-  // URL never changes). Otherwise pick the business slug, suffixing only when
-  // a different lead already owns it.
+  // URL never changes). Otherwise the business slug, suffixed only when a
+  // different lead already owns it. Kept to at most one DirectAdmin call so the
+  // request stays short (a subdomain LIST of ~700 entries was seconds wasted).
   await begin("deploy:subdomain", "Preparing subdomain");
   const linkSub = subFromWebsiteLink(typeof lead.website_link === "string" ? lead.website_link : null, domain);
+  const existsErr = (r: { text: string; details: string }) => /exist/.test(`${r.text} ${r.details}`.toLowerCase());
   let sub: string;
-  let inPlace = false;
+  let existed: boolean;
   if (linkSub && (await subdomainExists(linkSub))) {
     sub = linkSub;
-    inPlace = true;
+    existed = true;
   } else {
     sub = base;
-    if (await subdomainExists(sub)) sub = `${base}-${idPart}`;
-    if (await subdomainExists(sub)) inPlace = true; // prior partial attempt left it — reuse
-  }
-
-  if (inPlace) {
-    // Empty the docroot first so pages removed by a regeneration never linger.
-    const cleared = await clearDocroot(sub);
-    if (!cleared.ok) {
-      await failStep(cleared.message ?? "could not clear the existing site");
-      return NextResponse.json(
-        { error: `Could not clear the existing site for redeploy: ${cleared.message ?? "unknown"}` },
-        { status: 502 }
-      );
-    }
-  } else {
     const created = await createSubdomain(sub);
-    if (created.error) {
-      const text = `${created.text} ${created.details}`.toLowerCase();
-      if (text.includes("exist")) {
-        // creation race — it exists now; clear and continue in place
-        const cleared = await clearDocroot(sub);
-        if (!cleared.ok) {
-          await failStep(cleared.message ?? "could not clear the existing site");
-          return NextResponse.json(
-            { error: `Could not clear the existing site for redeploy: ${cleared.message ?? "unknown"}` },
-            { status: 502 }
-          );
-        }
-      } else {
-        const message = created.text || created.details || "subdomain creation failed";
+    if (!created.error) {
+      existed = false; // freshly created
+    } else if (existsErr(created)) {
+      // the business slug is owned by another lead — use a unique suffixed one
+      sub = `${base}-${idPart}`;
+      const c2 = await createSubdomain(sub);
+      if (c2.error && !existsErr(c2)) {
+        const message = c2.text || c2.details || "subdomain creation failed";
         await failStep(message);
         return NextResponse.json({ error: `Could not create subdomain: ${message}` }, { status: 502 });
       }
+      existed = c2.error; // "exists" (rare random collision) → redeploy in place
+    } else {
+      const message = created.text || created.details || "subdomain creation failed";
+      await failStep(message);
+      return NextResponse.json({ error: `Could not create subdomain: ${message}` }, { status: 502 });
     }
   }
-  await end("done", `${sub}.${domain}${inPlace ? " (redeployed in place)" : ""}`);
+
+  // On a redeploy, clear stale files first so pages dropped by a regeneration
+  // don't linger — but BEST-EFFORT: extract overwrites same-named files anyway,
+  // so a clear hiccup must never fail the whole deploy.
+  let clearNote = "";
+  if (existed) {
+    const cleared = await clearDocroot(sub);
+    if (!cleared.ok) clearNote = ` (stale files kept: ${cleared.message ?? "clear failed"})`;
+  }
+  await end("done", `${sub}.${domain}${existed ? " (redeploy" + clearNote + ")" : " (new)"}`);
 
   // deploy:upload --------------------------------------------------------------
   await begin("deploy:upload", "Uploading site");
@@ -174,29 +169,28 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   );
 
   // deploy:verify ----------------------------------------------------------------
-  // A fresh subdomain serves http within seconds; the automatic cert lands
-  // ~30-60s later (after which http 301s to https). Poll patiently and prefer
-  // the https URL — that is the durable address for the lead's website_link.
-  await begin("deploy:verify", "Verifying site (waiting for HTTPS)");
+  // A SINGLE quick reachability check — never a long poll. The files are already
+  // deployed; whether DirectAdmin has finished provisioning the vhost + cert
+  // (which can take a minute+ on a fresh subdomain) is its OWN async job. The
+  // old 90s poll blocked the response so long the hosting proxy cut the browser
+  // off — a false "error" on a deploy that actually succeeded. So we report
+  // reachability but never gate on it; the durable URL is always the https one.
+  await begin("deploy:verify", "Checking the site");
   const host = `${sub}.${domain}`;
-  const url = `https://${host}`; // the durable address (http 301s here once the cert lands)
-  let verified = false;
-  const verifyDeadline = Date.now() + 90000;
-  while (Date.now() < verifyDeadline && !verified) {
-    for (const scheme of ["https", "http"] as const) {
-      try {
-        const res = await fetch(`${scheme}://${host}/`, { signal: AbortSignal.timeout(8000) });
-        if (res.ok || res.status === 301 || res.status === 308) {
-          verified = true;
-          break;
-        }
-      } catch {
-        // not up yet on this scheme
+  const url = `https://${host}`;
+  let reachable = false;
+  for (const scheme of ["https", "http"] as const) {
+    try {
+      const res = await fetch(`${scheme}://${host}/`, { signal: AbortSignal.timeout(4000) });
+      if (res.ok || res.status === 301 || res.status === 308) {
+        reachable = true;
+        break;
       }
+    } catch {
+      // still provisioning — expected on a brand-new subdomain
     }
-    if (!verified) await new Promise((r) => setTimeout(r, 10000));
   }
-  await end(verified ? "done" : "partial", verified ? url : `site did not respond within 90s — using ${url}`);
+  await end("done", reachable ? url : `${url} — provisioning, usually live within a minute or two`);
 
   // deploy:link --------------------------------------------------------------------
   await begin("deploy:link", "Saving website link");
@@ -252,5 +246,5 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   state.currentKey = null;
   await end("done", url); // status/deployed_url were already CAS-flipped above
 
-  return NextResponse.json({ url });
+  return NextResponse.json({ url, provisioning: !reachable });
 }

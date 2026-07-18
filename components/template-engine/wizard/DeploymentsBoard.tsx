@@ -33,8 +33,12 @@ export function DeploymentsBoard({ deployed, canDeploy }: { deployed: DeployedRo
         toast({ kind: "error", title: "Redeploy failed", body: (await res.json().catch(() => ({}))).error ?? "Try again" });
         return;
       }
-      const { url } = await res.json();
-      toast({ kind: "success", title: "Redeployed", body: url });
+      const { url, provisioning } = await res.json();
+      toast({
+        kind: "success",
+        title: "Redeployed",
+        body: provisioning ? `${url} — provisioning, live shortly.` : url,
+      });
       router.refresh();
     } catch {
       toast({ kind: "error", title: "Redeploy failed", body: "Network error — try again" });
