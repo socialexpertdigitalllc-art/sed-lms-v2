@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  Check, CircleUserRound, Hammer, ImagePlus, Link2, Loader2, RefreshCw, ShieldCheck,
+  Check, CircleUserRound, Hammer, ImagePlus, Link2, Loader2, RefreshCw, ShieldCheck, X, ZoomIn,
 } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
@@ -43,6 +43,7 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
 
   const [busySlot, setBusySlot] = useState<Record<string, "more" | "custom" | undefined>>({});
   const [building, setBuilding] = useState(false);
+  const [zoomUrl, setZoomUrl] = useState<string | null>(null); // full-size lightbox
 
   const patchSlot = (id: string, next: Partial<ImageSlot>) =>
     setLocalSlots((prev) => prev.map((s) => (s.id === id ? { ...s, ...next } : s)));
@@ -178,19 +179,48 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
           onToggle={(url) => toggle(slot, url)}
           onMore={() => fetchMore(slot)}
           onCustom={(url) => addCustom(slot, url)}
+          onZoom={(url) => setZoomUrl(url)}
         />
       ))}
+
+      <Lightbox url={zoomUrl} onClose={() => setZoomUrl(null)} />
     </div>
   );
 }
 
-function SlotGrid({ slot, editable, busy, onToggle, onMore, onCustom }: {
+/** Full-size image overlay. Closes on backdrop click, the Escape key, or the
+ *  close button; clicking the image itself does not dismiss it. */
+function Lightbox({ url, onClose }: { url: string | null; onClose: () => void }) {
+  useEffect(() => {
+    if (!url) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [url, onClose]);
+
+  if (!url) return null;
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4"
+      role="dialog" aria-modal="true" aria-label="Image preview" onClick={onClose}>
+      <button type="button" onClick={onClose} aria-label="Close preview"
+        className="absolute right-4 top-4 grid h-9 w-9 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20">
+        <X className="h-5 w-5" />
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt="" onClick={(e) => e.stopPropagation()}
+        className="max-h-[90vh] max-w-[90vw] rounded-md object-contain shadow-2xl" />
+    </div>
+  );
+}
+
+function SlotGrid({ slot, editable, busy, onToggle, onMore, onCustom, onZoom }: {
   slot: ImageSlot;
   editable: boolean;
   busy: "more" | "custom" | undefined;
   onToggle: (url: string) => void;
   onMore: () => void;
   onCustom: (url: string) => void | Promise<unknown>;
+  onZoom: (url: string) => void;
 }) {
   const [customUrl, setCustomUrl] = useState("");
 
@@ -222,26 +252,35 @@ function SlotGrid({ slot, editable, busy, onToggle, onMore, onCustom }: {
         {slot.candidates.map((c) => {
           const selected = slot.selected.includes(c.url);
           return (
-            <button key={c.url} type="button" onClick={() => onToggle(c.url)} disabled={!editable}
-              aria-pressed={selected}
-              className={cn(
-                "group relative aspect-[4/3] overflow-hidden rounded-md border-2 transition-colors",
-                selected ? "border-accent" : "border-transparent hover:border-border",
-              )}>
-              {/* Stock thumbs come from Pexels CDN; plain img keeps it simple */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={c.thumb || c.url} alt="" loading="lazy" className="h-full w-full object-cover" />
-              {selected ? (
-                <span className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-accent text-white">
-                  <Check className="h-4 w-4" />
+            <div key={c.url} className="group relative aspect-[4/3] overflow-hidden rounded-md">
+              <button type="button" onClick={() => onToggle(c.url)} disabled={!editable}
+                aria-pressed={selected}
+                className={cn(
+                  "absolute inset-0 h-full w-full rounded-md border-2 transition-colors",
+                  selected ? "border-accent" : "border-transparent hover:border-border",
+                )}>
+                {/* Stock thumbs come from Pexels CDN; plain img keeps it simple */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={c.thumb || c.url} alt="" loading="lazy" className="h-full w-full object-cover" />
+                {selected ? (
+                  <span className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-accent text-white">
+                    <Check className="h-4 w-4" />
+                  </span>
+                ) : null}
+                <span className="absolute inset-x-0 bottom-0 flex items-center gap-1 bg-gradient-to-t from-black/60 to-transparent p-1.5 text-[10px] text-white">
+                  {c.source === "client" ? "Client photo" : c.source === "custom" ? "Custom" : c.photographer ?? "Pexels"}
+                  {c.vision && !c.vision.people ? <ShieldCheck className="h-3 w-3" aria-label="No people detected" /> : null}
+                  {c.vision?.people ? <CircleUserRound className="h-3 w-3 text-notready-bg" aria-label="People detected" /> : null}
                 </span>
-              ) : null}
-              <span className="absolute inset-x-0 bottom-0 flex items-center gap-1 bg-gradient-to-t from-black/60 to-transparent p-1.5 text-[10px] text-white">
-                {c.source === "client" ? "Client photo" : c.source === "custom" ? "Custom" : c.photographer ?? "Pexels"}
-                {c.vision && !c.vision.people ? <ShieldCheck className="h-3 w-3" aria-label="No people detected" /> : null}
-                {c.vision?.people ? <CircleUserRound className="h-3 w-3 text-notready-bg" aria-label="People detected" /> : null}
-              </span>
-            </button>
+              </button>
+              {/* Sibling (not nested in the select button) so it stays clickable
+                  even when the tile is disabled in review mode, and never hijacks
+                  the select click. */}
+              <button type="button" onClick={() => onZoom(c.url)} aria-label="View full size" title="View full size"
+                className="absolute left-1.5 top-1.5 hidden h-6 w-6 place-items-center rounded-full bg-black/55 text-white transition-colors hover:bg-black/80 group-hover:grid">
+                <ZoomIn className="h-3.5 w-3.5" />
+              </button>
+            </div>
           );
         })}
         {slot.candidates.length === 0 ? (

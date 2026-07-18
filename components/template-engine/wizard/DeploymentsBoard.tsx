@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ExternalLink, Globe, Loader2, RotateCcw, Send, Trash2 } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
+import { CopyButton } from "@/components/common/CopyButton";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { EmptyState } from "@/components/common/EmptyState";
 import { STATUS_PILL } from "@/lib/leads/types";
@@ -103,11 +104,14 @@ export function DeploymentsBoard({ deployed, canDeploy }: { deployed: DeployedRo
               </td>
               <td className="px-4 py-2.5">
                 {row.deployed_url ? (
-                  <a href={row.deployed_url} target="_blank" rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-accent-ink hover:underline">
-                    {row.deployed_url.replace(/^https?:\/\//, "")}
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </a>
+                  <span className="inline-flex items-center gap-1">
+                    <a href={row.deployed_url} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-accent-ink hover:underline">
+                      {row.deployed_url.replace(/^https?:\/\//, "")}
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                    <CopyButton value={row.deployed_url} title="Copy live URL" />
+                  </span>
                 ) : (
                   <span className="text-text-faint">—</span>
                 )}

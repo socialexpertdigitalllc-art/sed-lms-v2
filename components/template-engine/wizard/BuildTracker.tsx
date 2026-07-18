@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Circle, Loader2, MinusCircle } from "lucide-react";
 import type { GenStep } from "@/lib/template-engine/types";
+import { buildEtaLabel } from "@/lib/template-engine/wizard";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +21,15 @@ export function BuildTracker({ gen }: { gen: GenerationDetail }) {
   const steps = Array.isArray(gen.steps) ? gen.steps : [];
   const running = ACTIVE_STATUSES.has(gen.status);
 
+  // Re-tick every 30s so the countdown stays honest between realtime pokes.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, [running]);
+  const eta = running ? buildEtaLabel(steps, gen.estimate_ms, now) : null;
+
   return (
     <div className="space-y-4">
       {gen.status === "failed" ? (
@@ -31,9 +42,7 @@ export function BuildTracker({ gen }: { gen: GenerationDetail }) {
       <div className="rounded-lg border border-border bg-surface p-5">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-[10px] font-semibold uppercase tracking-wider text-text-faint">Pipeline</h2>
-          {running && gen.estimate_ms ? (
-            <span className="text-xs text-text-faint">Typically ~{Math.max(1, Math.round(gen.estimate_ms / 60000))} min</span>
-          ) : null}
+          {eta ? <span className="text-xs text-text-faint">{eta}</span> : null}
         </div>
         {steps.length === 0 ? (
           <p className="text-sm text-text-muted">Waiting for the processor to pick this run up…</p>

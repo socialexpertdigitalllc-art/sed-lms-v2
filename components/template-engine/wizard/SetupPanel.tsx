@@ -4,13 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Building2, Check, ChevronDown, FileText, Image as ImageIcon, Layers, Loader2,
-  Mail, MapPin, Palette, Phone, Rocket, Search, Link2, Award,
+  Mail, MapPin, Minus, Palette, Phone, Rocket, Search, Link2, Award,
 } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
 import { cn } from "@/lib/utils";
 import type { TemplateManifest } from "@/lib/template-engine/types";
 import { resolveLeadPages } from "@/lib/template-engine/leadPages";
+import { dossierCompleteness } from "@/lib/template-engine/dossier";
 
 export type LeadOption = {
   id: string;
@@ -246,6 +247,7 @@ function LeadDossier({ lead, derivedPages }: { lead: LeadOption | null; derivedP
   const areas = list(lead.service_areas);
   const photos = list(lead.image_links);
   const colors = lead.color_same_as_logo ? "Match the logo" : lead.color_scheme || null;
+  const { fields, filled, total } = dossierCompleteness(lead);
 
   return (
     <div className="rounded-md border border-border-subtle bg-surface-2 p-4 space-y-3">
@@ -259,6 +261,24 @@ function LeadDossier({ lead, derivedPages }: { lead: LeadOption | null; derivedP
           <p className="truncate text-sm font-semibold text-text">{lead.business_name}</p>
           <p className="text-xs text-text-faint">{lead.site_type ?? "Website"} · from lead details</p>
         </div>
+      </div>
+
+      {/* Completeness meter — flags the key inputs the operator can still fill
+          before generating. */}
+      <div className="flex flex-wrap items-center gap-1.5 rounded border border-border-subtle bg-surface p-2">
+        <span className={cn("text-[11px] font-semibold", filled === total ? "text-ready-fg" : "text-text-muted")}>
+          Dossier {filled}/{total}
+        </span>
+        {fields.map((f) => (
+          <span key={f.key} title={`${f.label}: ${f.present ? "present" : "missing"}`}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px]",
+              f.present ? "bg-ready-bg text-ready-fg" : "bg-dropped-bg text-dropped-fg",
+            )}>
+            {f.present ? <Check className="h-2.5 w-2.5" /> : <Minus className="h-2.5 w-2.5" />}
+            {f.label}
+          </span>
+        ))}
       </div>
 
       <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-2">
