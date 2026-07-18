@@ -31,6 +31,7 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
   const [reopening, setReopening] = useState(false);
   const { toast } = useToast();
   const ready = isDeployableStatus(gen.status);
+  const gatesFailed = gen.gate_results?.ok === false;
   const previewSrc = `/api/template-engine/preview/${gen.id}/${page}`;
 
   async function deploy() {
@@ -106,11 +107,19 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
             </button>
           ) : null}
           {canDeploy ? (
-            <button type="button" onClick={() => setConfirming(true)} disabled={deploying || reopening}
-              className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
-              {deploying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-              {gen.status === "deployed" ? "Redeploy" : "Deploy"}
-            </button>
+            <div className="flex items-center gap-2">
+              {gatesFailed ? (
+                <span className="inline-flex items-center gap-1 text-xs text-dropped-fg">
+                  <TriangleAlert className="h-3.5 w-3.5" /> Rebuild — verification gates failed
+                </span>
+              ) : null}
+              <button type="button" onClick={() => setConfirming(true)} disabled={deploying || reopening || gatesFailed}
+                title={gatesFailed ? "Verification gates failed — rebuild before deploying" : undefined}
+                className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+                {deploying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                {gen.status === "deployed" ? "Redeploy" : "Deploy"}
+              </button>
+            </div>
           ) : null}
         </div>
       </div>
