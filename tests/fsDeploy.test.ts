@@ -32,6 +32,21 @@ describe("deployZipToDir", () => {
     expect(entries).toEqual(["index.html"]); // everything else cleared
   });
 
+  it("strips the DirectAdmin archive's public_html/ wrapper (files land at the docroot root)", async () => {
+    // download-archive nests every entry under the docroot folder name; a
+    // transferred site is broken if public_html/ survives into the target.
+    const target = await temp();
+    const zip = zipFromMap({
+      "public_html/index.html": enc("home"),
+      "public_html/style.css": enc("a{}"),
+      "public_html/assets/app.js": enc("x=1"),
+    });
+    const res = await deployZipToDir(zip, target);
+    expect(res.files).toBe(3);
+    expect(await readFile(join(target, "index.html"), "utf8")).toBe("home");
+    expect(await readFile(join(target, "assets/app.js"), "utf8")).toBe("x=1");
+  });
+
   it("returns the created directory even when the target did not exist yet", async () => {
     const base = await temp();
     const target = join(base, "domains", "acme.com", "public_html"); // not created
