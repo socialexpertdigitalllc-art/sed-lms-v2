@@ -41,6 +41,7 @@ import { buildQuery } from "@/lib/url/buildQuery";
 import { MonthFilter } from "@/components/common/MonthFilter";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 import { serialColumn } from "@/components/common/tableSerial";
+import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { CopyButton } from "@/components/common/CopyButton";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { Select } from "@/components/common/Select";
@@ -65,6 +66,7 @@ export function LeadsTable({
   canManageTags,
   canShareTags,
   currentUserId,
+  contractSentLeadIds = [],
 }: {
   leads: Lead[];
   agentNameById: Record<string, string>;
@@ -74,11 +76,13 @@ export function LeadsTable({
   canManageTags: boolean;
   canShareTags: boolean;
   currentUserId: string;
+  contractSentLeadIds?: string[];
 }) {
   const { has, all } = usePermissions();
   const tagById = useMemo(() => Object.fromEntries(tags.map((t) => [t.id, t])), [tags]);
   // Only the caller's OWN tags are appliable via bulk (user-scoped tags).
   const ownTagList = useMemo(() => ownTags(tags, currentUserId), [tags, currentUserId]);
+  const sentContractSet = useMemo(() => new Set(contractSentLeadIds), [contractSentLeadIds]);
   const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   const visible = useMemo(() => visibleStatuses(all), [all]);
   useRealtimeRefresh("leads");
@@ -253,6 +257,9 @@ export function LeadsTable({
                 </Link>
               </div>
               <div className="text-xs text-text-faint truncate">{c.row.original.business_email ?? ""}</div>
+              {sentContractSet.has(c.row.original.id) && (
+                <div className="mt-1"><ContractSentBadge /></div>
+              )}
               {canViewTags && tagIds.length > 0 && (
                 <div className="mt-1 hidden sm:flex flex-wrap gap-1">
                   {tagIds.map((tid) => {
@@ -373,7 +380,7 @@ export function LeadsTable({
         ),
       },
     ],
-    [agentNameById, canChangeStatus, canFollowUp, canBulk, canViewTags, tagById]
+    [agentNameById, canChangeStatus, canFollowUp, canBulk, canViewTags, tagById, sentContractSet]
   );
 
   const table = useReactTable({
