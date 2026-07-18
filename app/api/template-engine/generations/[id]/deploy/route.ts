@@ -3,7 +3,14 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
-import { daConfigured, createSubdomain, subdomainExists, uploadZipAndExtract } from "@/lib/template-engine/directadmin";
+import {
+  daConfigured,
+  createSubdomain,
+  subdomainExists,
+  uploadZipAndExtract,
+  subFromWebsiteLink,
+  clearDocroot,
+} from "@/lib/template-engine/directadmin";
 import { businessSlug, websiteId } from "@/lib/template-engine/slug";
 import { DEPLOYABLE_STATUSES, isDeployableStatus } from "@/lib/template-engine/wizard";
 import type { GenStep } from "@/lib/template-engine/types";
@@ -96,33 +103,55 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const idPart = siteSlug.includes("-") ? siteSlug.slice(siteSlug.lastIndexOf("-") + 1) : websiteId();
 
   // deploy:subdomain -----------------------------------------------------------
-  await begin("deploy:subdomain", "Creating subdomain");
-  let sub = base;
-  if (await subdomainExists(sub)) sub = `${base}-${idPart}`;
-  const created = await createSubdomain(sub);
-  if (created.error) {
-    const text = `${created.text} ${created.details}`.toLowerCase();
-    if (!text.includes("exist")) {
-      if (sub === base) {
-        // one suffix fallback attempt before giving up
-        const fallback = `${base}-${idPart}`;
-        const retry = await createSubdomain(fallback);
-        const retryText = `${retry.text} ${retry.details}`.toLowerCase();
-        if (retry.error && !retryText.includes("exist")) {
-          const message = retry.text || retry.details || "subdomain creation failed";
-          await failStep(message);
-          return NextResponse.json({ error: `Could not create subdomain: ${message}` }, { status: 502 });
+  // One live site per lead: when the lead's website_link already points at one
+  // of our subdomains, redeploy IN PLACE on that same subdomain (the client's
+  // URL never changes). Otherwise pick the business slug, suffixing only when
+  // a different lead already owns it.
+  await begin("deploy:subdomain", "Preparing subdomain");
+  const linkSub = subFromWebsiteLink(typeof lead.website_link === "string" ? lead.website_link : null, domain);
+  let sub: string;
+  let inPlace = false;
+  if (linkSub && (await subdomainExists(linkSub))) {
+    sub = linkSub;
+    inPlace = true;
+  } else {
+    sub = base;
+    if (await subdomainExists(sub)) sub = `${base}-${idPart}`;
+    if (await subdomainExists(sub)) inPlace = true; // prior partial attempt left it — reuse
+  }
+
+  if (inPlace) {
+    // Empty the docroot first so pages removed by a regeneration never linger.
+    const cleared = await clearDocroot(sub);
+    if (!cleared.ok) {
+      await failStep(cleared.message ?? "could not clear the existing site");
+      return NextResponse.json(
+        { error: `Could not clear the existing site for redeploy: ${cleared.message ?? "unknown"}` },
+        { status: 502 }
+      );
+    }
+  } else {
+    const created = await createSubdomain(sub);
+    if (created.error) {
+      const text = `${created.text} ${created.details}`.toLowerCase();
+      if (text.includes("exist")) {
+        // creation race — it exists now; clear and continue in place
+        const cleared = await clearDocroot(sub);
+        if (!cleared.ok) {
+          await failStep(cleared.message ?? "could not clear the existing site");
+          return NextResponse.json(
+            { error: `Could not clear the existing site for redeploy: ${cleared.message ?? "unknown"}` },
+            { status: 502 }
+          );
         }
-        sub = fallback;
       } else {
         const message = created.text || created.details || "subdomain creation failed";
         await failStep(message);
         return NextResponse.json({ error: `Could not create subdomain: ${message}` }, { status: 502 });
       }
     }
-    // "already exists" → continue and overwrite its files
   }
-  await end("done", `${sub}.${domain}`);
+  await end("done", `${sub}.${domain}${inPlace ? " (redeployed in place)" : ""}`);
 
   // deploy:upload --------------------------------------------------------------
   await begin("deploy:upload", "Uploading site");
@@ -145,24 +174,29 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   );
 
   // deploy:verify ----------------------------------------------------------------
-  await begin("deploy:verify", "Verifying site");
+  // A fresh subdomain serves http within seconds; the automatic cert lands
+  // ~30-60s later (after which http 301s to https). Poll patiently and prefer
+  // the https URL — that is the durable address for the lead's website_link.
+  await begin("deploy:verify", "Verifying site (waiting for HTTPS)");
   const host = `${sub}.${domain}`;
-  let url = "";
+  const url = `https://${host}`; // the durable address (http 301s here once the cert lands)
   let verified = false;
-  for (const scheme of ["https", "http"] as const) {
-    try {
-      const res = await fetch(`${scheme}://${host}/`, { signal: AbortSignal.timeout(5000) });
-      if (res.ok) {
-        url = `${scheme}://${host}`;
-        verified = true;
-        break;
+  const verifyDeadline = Date.now() + 90000;
+  while (Date.now() < verifyDeadline && !verified) {
+    for (const scheme of ["https", "http"] as const) {
+      try {
+        const res = await fetch(`${scheme}://${host}/`, { signal: AbortSignal.timeout(8000) });
+        if (res.ok || res.status === 301 || res.status === 308) {
+          verified = true;
+          break;
+        }
+      } catch {
+        // not up yet on this scheme
       }
-    } catch {
-      // try the next scheme
     }
+    if (!verified) await new Promise((r) => setTimeout(r, 10000));
   }
-  if (!verified) url = `http://${host}`;
-  await end(verified ? "done" : "partial", verified ? url : `site did not respond yet — defaulting to ${url}`);
+  await end(verified ? "done" : "partial", verified ? url : `site did not respond within 90s — using ${url}`);
 
   // deploy:link --------------------------------------------------------------------
   await begin("deploy:link", "Saving website link");

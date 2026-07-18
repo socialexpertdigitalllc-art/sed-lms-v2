@@ -1,4 +1,6 @@
 import { Suspense } from "react";
+import Link from "next/link";
+import { Globe } from "lucide-react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -46,11 +48,21 @@ export default async function TemplateEnginePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-text">Template Engine</h1>
-        <p className="text-sm text-text-muted mt-0.5">
-          Build a full website from a template for a lead, track it live, then review and deploy.
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-text">Template Engine</h1>
+          <p className="text-sm text-text-muted mt-0.5">
+            Build a full website from a template for a lead, track it live, then review and deploy.
+          </p>
+        </div>
+        {perms.has("templates.deploy") ? (
+          <Link
+            href="/ai-tools/template-engine/deployments"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text"
+          >
+            <Globe className="h-4 w-4" /> Deployed sites
+          </Link>
+        ) : null}
       </div>
       <Suspense fallback={null}>
         <SetupPanel
