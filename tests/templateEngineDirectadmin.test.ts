@@ -4,7 +4,11 @@ import {
   parseDaResponse,
   daCall,
   createSubdomain,
+  deleteSubdomain,
   subdomainExists,
+  docrootFor,
+  subFromWebsiteLink,
+  clearDocroot,
   uploadZipAndExtract,
 } from "@/lib/template-engine/directadmin";
 
@@ -76,6 +80,29 @@ describe("parseDaResponse", () => {
   });
 });
 
+describe("docrootFor / subFromWebsiteLink", () => {
+  it("docrootFor uses the per-subdomain layout verified on the live server", () => {
+    setEnv();
+    // NOT /domains/dmviral.com/public_html/acme — each subdomain owns its tree.
+    expect(docrootFor("acme")).toBe("/domains/acme.dmviral.com/public_html");
+  });
+
+  it("subFromWebsiteLink recovers the subdomain from a lead's website_link", () => {
+    expect(subFromWebsiteLink("https://warrior-contracting.dmviral.com", "dmviral.com")).toBe("warrior-contracting");
+    expect(subFromWebsiteLink("http://acme.dmviral.com/index.html", "dmviral.com")).toBe("acme");
+    expect(subFromWebsiteLink("https://acme.dmviral.com/", "dmviral.com")).toBe("acme");
+  });
+
+  it("returns null for links outside our domain, bare domains, or garbage", () => {
+    expect(subFromWebsiteLink("https://clientsite.com", "dmviral.com")).toBeNull();
+    expect(subFromWebsiteLink("https://dmviral.com", "dmviral.com")).toBeNull();
+    expect(subFromWebsiteLink("https://a.b.dmviral.com", "dmviral.com")).toBeNull(); // nested — not ours
+    expect(subFromWebsiteLink("", "dmviral.com")).toBeNull();
+    expect(subFromWebsiteLink(null, "dmviral.com")).toBeNull();
+    expect(subFromWebsiteLink("not a url", "dmviral.com")).toBeNull();
+  });
+});
+
 type FetchCall = { url: string; init?: RequestInit };
 const stubFetch = (responder: (url: string, init?: RequestInit) => { ok: boolean; status: number; text: string }) => {
   const calls: FetchCall[] = [];
@@ -90,21 +117,31 @@ const stubFetch = (responder: (url: string, init?: RequestInit) => { ok: boolean
   return calls;
 };
 
-describe("daCall / createSubdomain / subdomainExists", () => {
-  it("createSubdomain POSTs action=add with basic auth", async () => {
+describe("daCall / createSubdomain / deleteSubdomain / subdomainExists", () => {
+  it("createSubdomain uses action=create (this DA build rejects action=add) in the query string", async () => {
     setEnv();
     const calls = stubFetch(() => ({ ok: true, status: 200, text: "error=0&text=Subdomain+created&details=" }));
     const res = await createSubdomain("acme-x1y2z3");
     expect(res.error).toBe(false);
     expect(res.text).toBe("Subdomain created");
-    expect(res.raw).toContain("error=0");
-    expect(calls[0].url).toBe("https://server.example.com:2222/CMD_API_SUBDOMAINS");
-    const body = String(calls[0].init?.body);
-    expect(body).toContain("action=add");
-    expect(body).toContain("domain=dmviral.com");
-    expect(body).toContain("subdomain=acme-x1y2z3");
+    const url = calls[0].url;
+    expect(url).toContain("/CMD_API_SUBDOMAINS?");
+    expect(url).toContain("action=create");
+    expect(url).toContain("domain=dmviral.com");
+    expect(url).toContain("subdomain=acme-x1y2z3");
     const auth = (calls[0].init?.headers as Record<string, string>).Authorization;
     expect(auth).toMatch(/^Basic /);
+  });
+
+  it("deleteSubdomain removes the subdomain AND its directory contents", async () => {
+    setEnv();
+    const calls = stubFetch(() => ({ ok: true, status: 200, text: "error=0&text=Subdomains+deleted" }));
+    const res = await deleteSubdomain("acme");
+    expect(res.error).toBe(false);
+    const url = calls[0].url;
+    expect(url).toContain("action=delete");
+    expect(url).toContain("select0=acme");
+    expect(url).toContain("contents=yes");
   });
 
   it("subdomainExists checks the url-encoded list[] values", async () => {
@@ -135,45 +172,116 @@ describe("daCall / createSubdomain / subdomainExists", () => {
   });
 });
 
-describe("uploadZipAndExtract", () => {
-  it("uploads (multipart), extracts, then deletes the zip", async () => {
+describe("uploadZipAndExtract (modern filemanager-actions API)", () => {
+  it("uploads to the subdomain docroot, extracts, then removes the zip", async () => {
     setEnv();
-    const calls = stubFetch(() => ({ ok: true, status: 200, text: "error=0&text=done" }));
+    const calls = stubFetch(() => ({ ok: true, status: 204, text: "" }));
     const res = await uploadZipAndExtract("acme", new Uint8Array([80, 75, 3, 4]), "site.zip");
     expect(res).toEqual({ ok: true });
     expect(calls).toHaveLength(3);
 
-    const fd = calls[0].init?.body as FormData;
+    // 1. upload: dir/name/overwrite in the QUERY (this build ignores `path`), file as multipart
+    const up = calls[0];
+    expect(up.url).toContain("/api/filemanager-actions/upload?");
+    expect(up.url).toContain("dir=" + encodeURIComponent("/domains/acme.dmviral.com/public_html"));
+    expect(up.url).toContain("name=site.zip");
+    expect(up.url).toContain("overwrite=true");
+    const fd = up.init?.body as FormData;
     expect(fd).toBeInstanceOf(FormData);
-    expect(fd.get("action")).toBe("upload");
-    expect(fd.get("path")).toBe("/domains/dmviral.com/public_html/acme");
-    expect((fd.get("file1") as File).name).toBe("site.zip");
+    expect((fd.get("file") as File).name).toBe("site.zip");
 
-    const extractBody = String(calls[1].init?.body);
-    expect(extractBody).toContain("action=extract");
-    expect(extractBody).toContain(encodeURIComponent("/domains/dmviral.com/public_html/acme/site.zip"));
-    expect(extractBody).toContain("directory=" + encodeURIComponent("/domains/dmviral.com/public_html/acme"));
+    // 2. extract-archive: JSON body with the verified required fields
+    const ex = calls[1];
+    expect(ex.url).toContain("/api/filemanager-actions/extract-archive");
+    const exBody = JSON.parse(String(ex.init?.body));
+    expect(exBody).toEqual({
+      source: "/domains/acme.dmviral.com/public_html/site.zip",
+      destinationDir: "/domains/acme.dmviral.com/public_html",
+      members: [],
+      mergeAndOverwrite: true,
+    });
 
-    const delBody = String(calls[2].init?.body);
-    expect(delBody).toContain("action=multiple");
-    expect(delBody).toContain("button=delete");
-    expect(delBody).toContain("select0=" + encodeURIComponent("/domains/dmviral.com/public_html/acme/site.zip"));
+    // 3. remove: JSON paths
+    const rm = calls[2];
+    expect(rm.url).toContain("/api/filemanager-actions/remove");
+    expect(JSON.parse(String(rm.init?.body))).toEqual({
+      paths: ["/domains/acme.dmviral.com/public_html/site.zip"],
+    });
   });
 
-  it("reports the failing step and message", async () => {
+  it("reports the failing step and the server's JSON error message", async () => {
     setEnv();
     let n = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
         n++;
-        const text = n === 2 ? "error=1&text=Cannot+extract&details=bad+zip" : "error=0&text=ok";
-        return { ok: true, status: 200, text: async () => text };
+        if (n === 2) {
+          return {
+            ok: false,
+            status: 409,
+            text: async () => '{"errors":[{"path":"x","reason":"NOT_FOUND"}],"type":"FILEMANAGER_MULTI_OP_ERROR"}',
+          };
+        }
+        return { ok: true, status: 204, text: async () => "" };
       })
     );
     const res = await uploadZipAndExtract("acme", new Uint8Array([1]), "site.zip");
     expect(res.ok).toBe(false);
     expect(res.failedStep).toBe("extract");
-    expect(res.message).toMatch(/Cannot extract/);
+    expect(res.message).toMatch(/NOT_FOUND|409/);
+  });
+});
+
+describe("clearDocroot", () => {
+  it("removes every docroot entry except cgi-bin (in-place redeploy)", async () => {
+    setEnv();
+    const calls = stubFetch((url) => {
+      if (url.includes("/api/filemanager/list")) {
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            files: [
+              { name: "cgi-bin", type: "dir" },
+              { name: "index.html", type: "file" },
+              { name: "service-roofing.html", type: "file" },
+              { name: "assets", type: "dir" },
+            ],
+          }),
+        };
+      }
+      return { ok: true, status: 204, text: "" };
+    });
+    const res = await clearDocroot("acme");
+    expect(res.ok).toBe(true);
+    const rm = calls.find((c) => c.url.includes("/remove"));
+    expect(rm).toBeDefined();
+    const paths = JSON.parse(String(rm!.init?.body)).paths as string[];
+    expect(paths).toEqual([
+      "/domains/acme.dmviral.com/public_html/index.html",
+      "/domains/acme.dmviral.com/public_html/service-roofing.html",
+      "/domains/acme.dmviral.com/public_html/assets",
+    ]);
+  });
+
+  it("is ok on an already-empty docroot without calling remove", async () => {
+    setEnv();
+    const calls = stubFetch((url) => {
+      if (url.includes("/api/filemanager/list")) {
+        return { ok: true, status: 200, text: JSON.stringify({ files: [{ name: "cgi-bin", type: "dir" }] }) };
+      }
+      return { ok: true, status: 204, text: "" };
+    });
+    const res = await clearDocroot("acme");
+    expect(res.ok).toBe(true);
+    expect(calls.some((c) => c.url.includes("/remove"))).toBe(false);
+  });
+
+  it("fails loudly when the listing fails (never blind-deploys onto unknown contents)", async () => {
+    setEnv();
+    stubFetch(() => ({ ok: false, status: 500, text: "boom" }));
+    const res = await clearDocroot("acme");
+    expect(res.ok).toBe(false);
   });
 });

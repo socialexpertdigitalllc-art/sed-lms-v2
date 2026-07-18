@@ -45,6 +45,7 @@ const AI_TOOLS: NavItemAny[] = [
   { href: "/ai-tools/analytics", label: "Analytics", icon: LineChart, perms: ["analytics.view_webcraft", "analytics.view_deepseek", "analytics.view_all_agents"] },
   { href: "/ai-tools/wge", label: "Engine (WGE)", icon: Cog, perms: ["wge.manage"] },
   { href: "/ai-tools/template-engine", label: "Template Engine", icon: LayoutTemplate, perms: ["templates.generate"] },
+  { href: "/ai-tools/template-engine/deployments", label: "Deployed Sites", icon: Globe, perms: ["templates.deploy"] },
   { href: "/ai-tools/templates", label: "Templates", icon: Library, perms: ["templates.manage"] },
 ];
 
