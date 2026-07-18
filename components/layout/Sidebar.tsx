@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Building2, PhoneCall, Ticket, BarChart3, MessageSquare,
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
-  Settings, LayoutTemplate, Library,
+  Settings, LayoutTemplate, Library, Mail, FileText,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -28,6 +28,7 @@ const MAIN: NavItem[] = [
   { href: "/by-agent", label: "By Agent", icon: BarChart3, perm: "analytics.by_agent" },
   { href: "/feedback", label: "Feedback", icon: MessageSquare, perm: "feedback.submit" },
   { href: "/payments", label: "Payments", icon: CreditCard, perm: "payments.view" },
+  { href: "/contracts", label: "Contracts", icon: FileText, perm: "contracts.view" },
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
@@ -57,6 +58,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/logs", label: "Activity Log", icon: ScrollText, perm: "admin.logs.view" },
   { href: "/admin/import", label: "Import", icon: Upload, perm: "admin.import" },
   { href: "/admin/add-ons", label: "Add-ons", icon: Puzzle, perm: "admin.settings.manage" },
+  { href: "/admin/mail", label: "Company Mail", icon: Mail, perm: "mail.manage" },
   { href: "/admin/notifications", label: "Notifications", icon: BellRing, perm: "admin.notifications.manage" },
 ];
 
