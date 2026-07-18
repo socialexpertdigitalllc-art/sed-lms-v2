@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { DeploymentsBoard, type DeployedRow } from "@/components/template-engine/wizard/DeploymentsBoard";
+import { UploadSitePanel } from "@/components/template-engine/wizard/UploadSitePanel";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,7 @@ export default async function DeploymentsPage() {
           and frees the link.
         </p>
       </div>
+      {canDeploy ? <UploadSitePanel daDomain={process.env.DA_DOMAIN ?? "dmviral.com"} /> : null}
       <DeploymentsBoard deployed={deployed} canDeploy={canDeploy} />
     </div>
   );

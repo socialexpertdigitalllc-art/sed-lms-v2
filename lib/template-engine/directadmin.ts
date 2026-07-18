@@ -195,6 +195,35 @@ function jsonErrorMessage(r: JsonCallResult): string {
   return r.body ? r.body.slice(0, 200) : `HTTP ${r.status}`;
 }
 
+/**
+ * Download a subdomain's docroot as a zip, STRAIGHT FROM the live DirectAdmin
+ * files — the source of truth for a transfer, so any manual edits the operator
+ * uploaded to the subdomain after generation are captured (not the stale
+ * generator zip). Returns the zip bytes, or null on failure. Never throws.
+ */
+export async function archiveDocroot(sub: string): Promise<Uint8Array | null> {
+  const q = new URLSearchParams({ path: docrootFor(sub), type: "zip" }).toString();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${host()}/api/filemanager/download-archive?${q}`, {
+      method: "GET",
+      headers: { Authorization: authHeader() },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const buf = new Uint8Array(await res.arrayBuffer());
+    // A DA error can come back 200 with a tiny HTML/text body instead of a zip;
+    // a real site archive is never a few bytes. Guard against shipping that.
+    if (buf.length < 100 || buf[0] !== 0x50 || buf[1] !== 0x4b) return null; // "PK" zip magic
+    return buf;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** List a directory via the modern API. Returns null when the listing fails. */
 export async function listDir(path: string): Promise<{ name: string; type: string }[] | null> {
   const q = new URLSearchParams({ path, limit: "1000" }).toString();
