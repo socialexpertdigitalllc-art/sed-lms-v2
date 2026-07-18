@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { sentContractLeadIds } from "@/lib/contracts/badge";
 import { LeadsTable } from "@/components/leads/LeadsTable";
 import type { Lead, LeadTag } from "@/lib/leads/types";
 
@@ -53,6 +55,10 @@ export default async function LeadsPage() {
   const canViewTags = canManageTags || perms.has("leads.tags.view");
   const canShareTags = perms.has("leads.tags.share");
 
+  const admin = createAdminClient();
+  const { data: sentRows } = await admin.from("contracts").select("lead_id, status").eq("status", "sent");
+  const contractSentLeadIds = Array.from(sentContractLeadIds(sentRows ?? []));
+
   return (
     <LeadsTable
       leads={leads}
@@ -63,6 +69,7 @@ export default async function LeadsPage() {
       canManageTags={canManageTags}
       canShareTags={canShareTags}
       currentUserId={user?.id ?? ""}
+      contractSentLeadIds={contractSentLeadIds}
     />
   );
 }
