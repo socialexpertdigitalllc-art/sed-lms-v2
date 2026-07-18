@@ -72,6 +72,36 @@ describe("slotProgress", () => {
   });
 });
 
+import { buildEtaLabel } from "@/lib/template-engine/wizard";
+import type { GenStep } from "@/lib/template-engine/types";
+
+describe("buildEtaLabel", () => {
+  const step = (over: Partial<GenStep>): GenStep => ({ key: "k", label: "l", status: "pending", ...over });
+  const t0 = Date.parse("2026-07-18T12:00:00.000Z");
+
+  it("returns null without an estimate", () => {
+    expect(buildEtaLabel([], null, t0)).toBeNull();
+    expect(buildEtaLabel([], 0, t0)).toBeNull();
+  });
+  it("counts down from the earliest running step's started_at + estimate", () => {
+    const steps = [
+      step({ key: "a", status: "done" }),
+      step({ key: "b", status: "running", started_at: "2026-07-18T12:00:00.000Z" }),
+      step({ key: "c", status: "running", started_at: "2026-07-18T12:01:00.000Z" }),
+    ];
+    // 5 min estimate, 1 min elapsed → ~4 min remaining
+    expect(buildEtaLabel(steps, 5 * 60000, t0 + 60000)).toBe("~4 min remaining");
+  });
+  it("floors remaining at 1 min (never ~0 or negative)", () => {
+    const steps = [step({ key: "b", status: "running", started_at: "2026-07-18T12:00:00.000Z" })];
+    expect(buildEtaLabel(steps, 60000, t0 + 5 * 60000)).toBe("~1 min remaining");
+  });
+  it("falls back to the typical estimate when no running step has a timestamp", () => {
+    const steps = [step({ key: "a", status: "done" }), step({ key: "b", status: "pending" })];
+    expect(buildEtaLabel(steps, 3 * 60000, t0)).toBe("~3 min");
+  });
+});
+
 import { applyToggle } from "@/lib/template-engine/wizard";
 
 describe("applyToggle", () => {

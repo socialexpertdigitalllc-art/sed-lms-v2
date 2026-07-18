@@ -5,6 +5,7 @@
  */
 
 import type { ImageSlot } from "./imageSlots";
+import type { GenStep } from "./types";
 
 /** Statuses with a finished, downloadable/deployable site zip. "review" is the
  *  v2 terminal build status; "ready_for_review" is v1-legacy (old rows only). */
@@ -70,6 +71,31 @@ export function slotProgress(slots: ImageSlot[]): { chosen: number; total: numbe
     chosen: slots.filter((s) => s.selected.length > 0).length,
     total: slots.length,
   };
+}
+
+/**
+ * Live build ETA label for the pipeline tracker. While a run is in flight and
+ * we have an `estimate_ms`, count down from the EARLIEST running step's
+ * `started_at` + estimate → "~N min remaining". If no running step has a
+ * timestamp yet (e.g. still queued), fall back to the typical "~N min".
+ * Minutes are floored at 1 so we never show "~0 min". Returns null when there
+ * is nothing meaningful to show (no estimate).
+ */
+export function buildEtaLabel(
+  steps: GenStep[],
+  estimateMs: number | null | undefined,
+  now: number,
+): string | null {
+  if (!estimateMs || estimateMs <= 0) return null;
+  const startedAts = steps
+    .filter((s) => s.status === "running" && s.started_at)
+    .map((s) => Date.parse(s.started_at as string))
+    .filter((t) => Number.isFinite(t));
+  if (startedAts.length > 0) {
+    const remainingMs = Math.min(...startedAts) + estimateMs - now;
+    return `~${Math.max(1, Math.round(remainingMs / 60000))} min remaining`;
+  }
+  return `~${Math.max(1, Math.round(estimateMs / 60000))} min`;
 }
 
 /**
