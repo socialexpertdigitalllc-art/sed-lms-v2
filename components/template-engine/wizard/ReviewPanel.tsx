@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Download, ExternalLink, Globe, Loader2, PencilLine, Rocket, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
+import { CopyButton } from "@/components/common/CopyButton";
 import { isDeployableStatus } from "@/lib/template-engine/wizard";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
@@ -116,7 +117,8 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
 
       {gen.deployed_url ? (
         <p className="inline-flex items-center gap-2 rounded-md border border-ready-fg/20 bg-ready-bg px-3 py-2 text-sm text-ready-fg">
-          <Globe className="h-4 w-4" /> Live at <a className="underline" href={gen.deployed_url} target="_blank" rel="noreferrer">{gen.deployed_url}</a> — written to the lead's website link.
+          <Globe className="h-4 w-4" /> Live at <a className="underline" href={gen.deployed_url} target="_blank" rel="noreferrer">{gen.deployed_url}</a>
+          <CopyButton value={gen.deployed_url} title="Copy live URL" />— written to the lead's website link.
         </p>
       ) : null}
 
