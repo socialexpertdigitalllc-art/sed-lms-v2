@@ -44,7 +44,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       agent_name: contract.agent_name,
       contract_date: contract.contract_date,
     },
-    sig
+    sig,
+    contract.template_key
   );
   return new Response(new Uint8Array(buffer), {
     headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="contract-${id}.pdf"` },

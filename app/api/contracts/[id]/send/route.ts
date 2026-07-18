@@ -43,7 +43,8 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       business_email: contract.business_email, one_time_price: contract.one_time_price,
       yearly_price: contract.yearly_price, agent_name: contract.agent_name, contract_date: contract.contract_date,
     },
-    sig
+    sig,
+    contract.template_key
   );
 
   // Send via SMTP. Any failure leaves the contract a draft (never a false "sent").
