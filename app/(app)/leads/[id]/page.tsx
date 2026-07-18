@@ -151,6 +151,23 @@ export default async function LeadDetailPage({
   }
   const canEditClosedBy = perms.has("leads.edit") || isSalesMember;
 
+  const canSendContracts = perms.has("contracts.send");
+  const canViewContracts = canSendContracts || perms.has("contracts.view");
+
+  const { data: contractsRaw } = await admin
+    .from("contracts")
+    .select("*")
+    .eq("lead_id", id)
+    .order("created_at", { ascending: false });
+  const leadContracts = (contractsRaw ?? []) as import("@/lib/contracts/types").ContractRow[];
+  const hasContractSent = leadContracts.some((c) => c.status === "sent");
+
+  const { data: verifiedMailboxes } = await admin
+    .from("company_mailboxes")
+    .select("id, email_address, display_name")
+    .eq("status", "verified")
+    .order("email_address");
+
   return (
     <LeadDetail
       lead={lead}
@@ -166,6 +183,11 @@ export default async function LeadDetailPage({
       canViewTags={canViewTags}
       canManageTags={canManageTags}
       currentUserId={user?.id ?? ""}
+      canViewContracts={canViewContracts}
+      canSendContracts={canSendContracts}
+      contracts={leadContracts}
+      hasContractSent={hasContractSent}
+      verifiedMailboxes={verifiedMailboxes ?? []}
     />
   );
 }

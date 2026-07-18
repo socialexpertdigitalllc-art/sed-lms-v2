@@ -22,6 +22,9 @@ import { TicketsCard } from "@/components/tickets/TicketsCard";
 import { SectionCard } from "@/components/forms/formShell";
 import { FieldRow, type SelectOption } from "@/components/detail/FieldRow";
 import { RatingStars } from "@/components/common/RatingStars";
+import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
+import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
+import type { ContractRow } from "@/lib/contracts/types";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -45,6 +48,11 @@ export function LeadDetail({
   canViewTags,
   canManageTags,
   currentUserId,
+  canViewContracts,
+  canSendContracts,
+  contracts,
+  hasContractSent,
+  verifiedMailboxes,
 }: {
   lead: Lead;
   agents: Agent[];
@@ -59,6 +67,11 @@ export function LeadDetail({
   canViewTags: boolean;
   canManageTags: boolean;
   currentUserId: string;
+  canViewContracts: boolean;
+  canSendContracts: boolean;
+  contracts: ContractRow[];
+  hasContractSent: boolean;
+  verifiedMailboxes: { id: string; email_address: string; display_name: string }[];
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
@@ -172,6 +185,7 @@ export function LeadDetail({
             <h1 className="font-display text-2xl font-semibold leading-tight text-text">{lead.business_name}</h1>
             <div className="mt-1.5 flex items-center gap-2">
               <StatusPill status={lead.status} />
+              {hasContractSent && <ContractSentBadge />}
               <span className="font-mono text-xs text-text-faint">#{lead.id.slice(0, 8)}</span>
             </div>
           </div>
@@ -381,6 +395,14 @@ export function LeadDetail({
 
         <aside className="hidden lg:block">
           <div className="sticky top-6 space-y-6">
+            {canViewContracts && (
+              <LeadContractsCard
+                leadId={lead.id}
+                contracts={contracts}
+                mailboxes={verifiedMailboxes}
+                canSend={canSendContracts}
+              />
+            )}
             <RecentFollowUps leadId={lead.id} businessName={lead.business_name} leadStatus={lead.status} followUps={followUps} />
             <TicketsCard leadId={lead.id} leadStatus={lead.status} tickets={tickets} sla={sla} />
           </div>
