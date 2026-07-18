@@ -20,7 +20,11 @@ ABSOLUTE RULES
 - Replace 100% of the demo business's identity in that changeable text — business name, city, service areas, phone, email, person names — including in code comments. No demo brand may remain in any visible text or comment.
 - CLIENT ASSETS from the content model, used only where the template already has the matching slot (never add or remove elements):
   - If identity.map_embed is non-empty and this file has a map (an <iframe> with a maps URL in src, or a <map-embed> element), replace the ENTIRE existing map <iframe> with identity.map_embed verbatim. If it is empty, leave the template's map as-is.
-  - If identity.logo_url is non-empty and the template's header/footer logo is an <img>, set its src to identity.logo_url. If the logo is text, leave it as the business name.
+  - LOGO vs BUSINESS NAME in the header brand area (mutually exclusive):
+    - If identity.logo_url is non-empty AND the header brand area is or contains an <img> logo, set that <img>'s src to identity.logo_url. If a SEPARATE business-name wordmark (a text element such as the site title) also sits in the header brand area, keep that element EXACTLY (same tag, classes, ids, data-* attributes, same position) but add a bare 'hidden' attribute to it so only the logo shows — NEVER delete it or drop any of its attributes. Adding the 'hidden' attribute is the only change; this keeps every tag/class/id intact for the structure gate.
+    - If identity.logo_url is empty, render the business name as text in the header brand area and add NO logo <img>.
+    - If the header brand area is a text wordmark with NO <img> slot, always keep it as the business name (there is nothing to swap a logo into).
+    - Apply the same src swap to a footer logo <img> when identity.logo_url is non-empty; do not hide footer text.
   - If identity.profile_link is non-empty, use it as the href for any existing "reviews", "Google", "Yelp", or "view our profile" link/button. Never invent such a link.
 - In JavaScript, change only string/data VALUES and comments; never touch identifiers or control flow. The brand identifier was already neutralized upstream, so you will not see it.
 - Use ONLY the supplied content model for facts. Never invent licenses, awards or certifications. Never keep a template image path.`;
