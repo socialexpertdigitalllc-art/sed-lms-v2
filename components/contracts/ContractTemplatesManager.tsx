@@ -23,7 +23,7 @@ import { Panel, EmptyPanel } from "@/components/common/Panel";
 import { btnPrimary, btnSecondary, btnSecondarySm, iconBtn, iconBtnDanger } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
 import { formatDateTime } from "@/lib/leads/format";
-import { SUPPORTED_PLACEHOLDERS } from "@/lib/contracts/placeholders";
+import { unmappedPlaceholders } from "@/lib/contracts/placeholders";
 
 export type RegisteredTemplate = { id: string; google_doc_id: string; name: string; placeholders: string[]; synced_at: string | null };
 export type AvailableDoc = {
@@ -37,11 +37,6 @@ export type AvailableDoc = {
 };
 type GoogleStatus = { connected: boolean; account_email: string | null };
 
-function unmapped(placeholders: string[]): string[] {
-  const supported = new Set<string>(SUPPORTED_PLACEHOLDERS);
-  return placeholders.filter((p) => !supported.has(p));
-}
-
 export function ContractTemplatesManager({
   status,
   folderId,
@@ -50,6 +45,7 @@ export function ContractTemplatesManager({
   folderNotAccessible = false,
   loadError = null,
   registered,
+  customTokens = [],
 }: {
   status: GoogleStatus;
   folderId: string;
@@ -60,6 +56,8 @@ export function ContractTemplatesManager({
   /** A real Drive/API error, surfaced instead of showing a blank list. */
   loadError?: string | null;
   registered: RegisteredTemplate[];
+  /** Registered custom `{{tokens}}` — counted as mapped, not amber warnings. */
+  customTokens?: string[];
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -300,7 +298,7 @@ export function ContractTemplatesManager({
           ) : (
             <ul className="divide-y divide-border-subtle">
               {rows.map((r) => {
-                const bad = new Set(unmapped(r.placeholders));
+                const bad = new Set(unmappedPlaceholders(r.placeholders, customTokens));
                 const busy = busyId === r.id;
                 return (
                   <li key={r.id} className="space-y-2 px-4 py-3 transition-colors duration-150 hover:bg-surface-2">

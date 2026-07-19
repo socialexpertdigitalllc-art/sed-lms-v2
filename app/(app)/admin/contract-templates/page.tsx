@@ -9,6 +9,8 @@ import { getAppSettings } from "@/lib/settings/appSettings";
 import { getGoogleStatus } from "@/lib/google/connection";
 import { getFolderMeta, listFolderFiles, GOOGLE_DOC_MIME } from "@/lib/google/drive";
 import { ContractTemplatesManager, type AvailableDoc, type RegisteredTemplate } from "@/components/contracts/ContractTemplatesManager";
+import { PlaceholderCatalog } from "@/components/contracts/PlaceholderCatalog";
+import type { ContractPlaceholderRow } from "@/lib/contracts/placeholders";
 
 export default async function ContractTemplatesPage() {
   const supabase = await createClient();
@@ -28,6 +30,12 @@ export default async function ContractTemplatesPage() {
     .order("name", { ascending: true });
   const registered = (registeredRaw ?? []) as RegisteredTemplate[];
   const registeredIds = new Set(registered.map((r) => r.google_doc_id));
+
+  const { data: customRaw } = await admin
+    .from("contract_placeholders")
+    .select("id, token, lead_field, label, created_at")
+    .order("token", { ascending: true });
+  const customPlaceholders = (customRaw ?? []) as ContractPlaceholderRow[];
 
   // Diagnose rather than swallow: an empty list can mean "folder not visible to
   // the connected account", "folder has no Google Docs", or an outright Drive
@@ -89,7 +97,9 @@ export default async function ContractTemplatesPage() {
         folderNotAccessible={folderNotAccessible}
         loadError={loadError}
         registered={registered}
+        customTokens={customPlaceholders.map((p) => p.token)}
       />
+      <PlaceholderCatalog custom={customPlaceholders} />
     </div>
   );
 }

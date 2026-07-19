@@ -5,7 +5,8 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { createContractSchema } from "@/lib/contracts/schema";
 import { buildContractSnapshot, validateMergeFields } from "@/lib/contracts/merge";
 import { isContractTemplateKey } from "@/lib/contracts/templates";
-import { buildReplacements } from "@/lib/contracts/placeholders";
+import { buildReplacements, formatLeadField, type ContractPlaceholderRow } from "@/lib/contracts/placeholders";
+import { getAppSettings } from "@/lib/settings/appSettings";
 import { copyDoc, exportPdf, docUrl } from "@/lib/google/drive";
 import { replaceAllText } from "@/lib/google/docs";
 import type { Lead } from "@/lib/leads/types";
@@ -88,15 +89,37 @@ export async function POST(req: Request) {
   // delete the just-created draft so we don't leave a broken record.
   if (googleDocId) {
     try {
+      // Custom placeholders: operator-defined tokens bound to whitelisted lead
+      // columns. Resolved from the already-loaded lead and snapshotted onto the
+      // contract so it stays explainable if the definitions change later.
+      const { data: customDefs } = await admin
+        .from("contract_placeholders")
+        .select("id, token, lead_field, label");
+      const customFields: Record<string, string> = {};
+      for (const def of (customDefs ?? []) as ContractPlaceholderRow[]) {
+        customFields[def.token] = formatLeadField(lead, def.lead_field);
+      }
+
+      const timeZone = (await getAppSettings()).work_timezone;
+      const replacements = [
+        ...buildReplacements(snapshot, { timeZone }),
+        ...Object.entries(customFields).map(([token, value]) => ({ token, value })),
+      ];
+
       const name = `Contract — ${snapshot.business_name || "Client"} — ${contractDate}`;
       const newDocId = await copyDoc(googleDocId, name);
-      await replaceAllText(newDocId, buildReplacements(snapshot));
+      await replaceAllText(newDocId, replacements);
       const pdf = await exportPdf(newDocId);
       const pdfPath = `${contract.id}.pdf`;
       await admin.storage.from("contracts").upload(pdfPath, pdf, { contentType: "application/pdf", upsert: true });
       await admin
         .from("contracts")
-        .update({ pdf_path: pdfPath, generated_doc_id: newDocId, generated_doc_url: docUrl(newDocId) })
+        .update({
+          pdf_path: pdfPath,
+          generated_doc_id: newDocId,
+          generated_doc_url: docUrl(newDocId),
+          custom_fields: customFields,
+        })
         .eq("id", contract.id);
       contract.pdf_path = pdfPath;
       contract.generated_doc_id = newDocId;
