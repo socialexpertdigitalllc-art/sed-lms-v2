@@ -10,6 +10,7 @@ import { ActivityTracker } from "@/providers/ActivityTracker";
 import { ToastProvider } from "@/components/common/Toast";
 import { NotificationToaster } from "@/components/layout/NotificationToaster";
 import { TabBadge } from "@/components/layout/TabBadge";
+import { VersionBadge } from "@/components/layout/VersionBadge";
 
 export default async function AppLayout({
   children,
@@ -54,6 +55,7 @@ export default async function AppLayout({
           </UiPrefsProvider>
           <NotificationToaster />
           <TabBadge />
+          <VersionBadge />
         </ToastProvider>
       </ViewScopeProvider>
     </PermissionProvider>
