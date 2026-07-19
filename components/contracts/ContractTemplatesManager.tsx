@@ -40,6 +40,7 @@ type GoogleStatus = { connected: boolean; account_email: string | null };
 export function ContractTemplatesManager({
   status,
   folderId,
+  generatedFolderId = "",
   available,
   folderMissing,
   folderNotAccessible = false,
@@ -49,6 +50,8 @@ export function ContractTemplatesManager({
 }: {
   status: GoogleStatus;
   folderId: string;
+  /** Where generated contract copies land. Empty = they land in the templates folder. */
+  generatedFolderId?: string;
   available: AvailableDoc[];
   folderMissing: boolean;
   /** Drive could not see the folder at all (wrong account / not shared). */
@@ -64,6 +67,7 @@ export function ContractTemplatesManager({
   const [rows, setRows] = useState<RegisteredTemplate[]>(registered);
   const [docs, setDocs] = useState<AvailableDoc[]>(available);
   const [folder, setFolder] = useState(folderId);
+  const [generatedFolder, setGeneratedFolder] = useState(generatedFolderId);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [savingFolder, setSavingFolder] = useState(false);
 
@@ -80,11 +84,13 @@ export function ContractTemplatesManager({
     setSavingFolder(true);
     try {
       const res = await fetch("/api/admin/contract-templates/folder", {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder_id: folder }),
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder_id: folder, generated_folder_id: generatedFolder }),
       });
       const data = await res.json();
       if (!res.ok) { toast({ kind: "error", title: "Save failed", body: data.error }); return; }
-      toast({ kind: "success", title: "Folder saved" });
+      toast({ kind: "success", title: "Folders saved" });
       router.refresh();
     } finally { setSavingFolder(false); }
   }
@@ -171,18 +177,46 @@ export function ContractTemplatesManager({
           footer={
             <button type="submit" disabled={savingFolder} className={btnPrimary}>
               {savingFolder ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {savingFolder ? "Saving…" : "Save folder"}
+              {savingFolder ? "Saving…" : "Save folders"}
             </button>
           }
         >
-          <Field label="Google Drive folder ID" hint="From the folder URL: drive.google.com/drive/folders/<THIS_ID>">
-            <input
-              className={cn(inputCls, "font-mono transition-colors duration-150")}
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-              placeholder="1AbC…"
-            />
-          </Field>
+          <div className="space-y-4">
+            <Field label="Google Drive folder ID" hint="From the folder URL: drive.google.com/drive/folders/<THIS_ID>">
+              <input
+                className={cn(inputCls, "font-mono transition-colors duration-150")}
+                value={folder}
+                onChange={(e) => setFolder(e.target.value)}
+                placeholder="1AbC…"
+              />
+            </Field>
+
+            <Field
+              label="Generated contracts folder"
+              hint="Where each generated contract copy is created. Keeping it separate stops finished contracts from piling up in the templates folder."
+            >
+              <input
+                className={cn(inputCls, "font-mono transition-colors duration-150")}
+                value={generatedFolder}
+                onChange={(e) => setGeneratedFolder(e.target.value)}
+                placeholder="1AbC…"
+              />
+            </Field>
+
+            {!generatedFolder.trim() && (
+              <div className="flex gap-3 rounded-md border border-notready-fg/25 bg-notready-bg/60 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-notready-fg" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-notready-fg">No generated contracts folder set</p>
+                  <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                    Generated contracts will be created inside the templates folder, so they will show up in the
+                    Available in Drive list below and can be registered as templates by mistake. Set a separate folder
+                    to avoid it.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
         </Panel>
       </form>
 

@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
 import type { Lead } from "@/lib/leads/types";
-import { parsePrice, buildContractSnapshot, validateMergeFields, contractLines, formatUsd } from "@/lib/contracts/merge";
+import type { ContractSnapshot } from "@/lib/contracts/types";
+import {
+  parsePrice,
+  buildContractSnapshot,
+  validateMergeFields,
+  validateSnapshotFields,
+  applyPriceOverrides,
+  contractLines,
+  formatUsd,
+} from "@/lib/contracts/merge";
 
 function lead(overrides: Partial<Lead> = {}): Lead {
   return {
@@ -72,5 +81,57 @@ describe("contractLines / formatUsd", () => {
     expect(lines.find((l) => l.label === "One-time price")?.value).toBe("$1,200.00");
     expect(lines.find((l) => l.label === "Yearly price")?.value).toBe("$300.00");
     expect(lines.find((l) => l.label === "Prepared by")?.value).toBe("Jordan");
+  });
+});
+
+describe("applyPriceOverrides", () => {
+  const base = () => buildContractSnapshot(lead(), { agentName: "Jordan", contractDate: "2026-07-18" });
+
+  it("keeps the lead's values when no override is given", () => {
+    const s = applyPriceOverrides(base(), {});
+    expect(s.one_time_price).toBe(1200);
+    expect(s.yearly_price).toBe(300);
+  });
+  it("keeps a value when only the other field is overridden", () => {
+    const s = applyPriceOverrides(base(), { one_time_price: 900 });
+    expect(s.one_time_price).toBe(900);
+    expect(s.yearly_price).toBe(300);
+  });
+  it("honours an explicit null as 'no price'", () => {
+    const s = applyPriceOverrides(base(), { yearly_price: null });
+    expect(s.yearly_price).toBeNull();
+  });
+  it("treats a zero override as cleared, not as $0.00", () => {
+    expect(applyPriceOverrides(base(), { yearly_price: 0 }).yearly_price).toBeNull();
+  });
+  it("leaves every non-price field untouched", () => {
+    const s = applyPriceOverrides(base(), { one_time_price: 750 });
+    expect(s.business_name).toBe("Acme Plumbing");
+    expect(s.agent_name).toBe("Jordan");
+    expect(s.contract_date).toBe("2026-07-18");
+  });
+});
+
+describe("validateSnapshotFields", () => {
+  const snap = (over: Partial<ContractSnapshot> = {}): ContractSnapshot => ({
+    ...buildContractSnapshot(lead(), { agentName: "Jordan", contractDate: "2026-07-18" }),
+    ...over,
+  });
+
+  it("passes a complete snapshot", () => expect(validateSnapshotFields(snap())).toEqual({ ok: true, missing: [] }));
+  it("lets an override satisfy a lead with no quoted price", () => {
+    const s = applyPriceOverrides(
+      buildContractSnapshot(lead({ price_quoted: null }), { agentName: "Jordan", contractDate: "2026-07-18" }),
+      { one_time_price: 500 }
+    );
+    expect(validateSnapshotFields(s)).toEqual({ ok: true, missing: [] });
+  });
+  it("still rejects when the final one-time price is missing", () => {
+    const s = applyPriceOverrides(snap(), { one_time_price: null });
+    expect(validateSnapshotFields(s).missing).toContain("One-time price");
+  });
+  it("flags a blank name or missing email", () => {
+    expect(validateSnapshotFields(snap({ business_name: "  " })).missing).toContain("Business name");
+    expect(validateSnapshotFields(snap({ business_email: null })).missing).toContain("Business email");
   });
 });

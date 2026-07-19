@@ -401,6 +401,8 @@ export function LeadDetail({
                 contracts={contracts}
                 mailboxes={verifiedMailboxes}
                 canSend={canSendContracts}
+                leadOneTimePrice={lead.price_quoted}
+                leadYearlyPrice={lead.yearly_price}
               />
             )}
             <RecentFollowUps leadId={lead.id} businessName={lead.business_name} leadStatus={lead.status} followUps={followUps} />

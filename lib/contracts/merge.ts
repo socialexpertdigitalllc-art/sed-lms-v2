@@ -24,12 +24,42 @@ export function buildContractSnapshot(
   };
 }
 
+/**
+ * Agent-entered price overrides (discounts). A field left `undefined` keeps the
+ * lead-derived value; an explicit value replaces it, and anything that isn't a
+ * positive amount (null, 0, garbage) clears it — same rule as `parsePrice`.
+ * Pure — unit tested.
+ */
+export function applyPriceOverrides(
+  snapshot: ContractSnapshot,
+  overrides: { one_time_price?: number | null; yearly_price?: number | null } = {}
+): ContractSnapshot {
+  return {
+    ...snapshot,
+    one_time_price:
+      overrides.one_time_price !== undefined ? parsePrice(overrides.one_time_price) : snapshot.one_time_price,
+    yearly_price: overrides.yearly_price !== undefined ? parsePrice(overrides.yearly_price) : snapshot.yearly_price,
+  };
+}
+
 /** Gate before preview: every required merge field must be present. */
 export function validateMergeFields(lead: Lead): { ok: boolean; missing: string[] } {
   const missing: string[] = [];
   if (!lead.business_name?.trim()) missing.push("Business name");
   if (!lead.business_email?.trim()) missing.push("Business email");
   if (parsePrice(lead.price_quoted) === null) missing.push("One-time price");
+  return { ok: missing.length === 0, missing };
+}
+
+/**
+ * Same gate, but against the FINAL snapshot — so an agent's price override can
+ * satisfy a lead that never had a price quoted. Pure — unit tested.
+ */
+export function validateSnapshotFields(s: ContractSnapshot): { ok: boolean; missing: string[] } {
+  const missing: string[] = [];
+  if (!s.business_name?.trim()) missing.push("Business name");
+  if (!s.business_email?.trim()) missing.push("Business email");
+  if (s.one_time_price === null) missing.push("One-time price");
   return { ok: missing.length === 0, missing };
 }
 

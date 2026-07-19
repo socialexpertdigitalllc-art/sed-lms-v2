@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { createContractSchema } from "@/lib/contracts/schema";
-import { buildContractSnapshot, validateMergeFields } from "@/lib/contracts/merge";
+import { buildContractSnapshot, applyPriceOverrides, validateSnapshotFields } from "@/lib/contracts/merge";
 import { isContractTemplateKey } from "@/lib/contracts/templates";
 import { buildReplacements, formatLeadField, type ContractPlaceholderRow } from "@/lib/contracts/placeholders";
 import { getAppSettings } from "@/lib/settings/appSettings";
@@ -35,7 +35,17 @@ export async function POST(req: Request) {
   if (!leadRaw) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
   const lead = leadRaw as Lead;
 
-  const check = validateMergeFields(lead);
+  const { data: profile } = await admin.from("profiles").select("display_name").eq("id", user.id).maybeSingle();
+  const agentName = profile?.display_name ?? "";
+  const contractDate = new Date().toISOString().slice(0, 10);
+  // Agents may discount, so the request can override the lead's prices. Everything
+  // downstream (stored columns, placeholder merge, validation) uses this snapshot.
+  const snapshot = applyPriceOverrides(buildContractSnapshot(lead, { agentName, contractDate }), {
+    one_time_price: input.one_time_price,
+    yearly_price: input.yearly_price,
+  });
+
+  const check = validateSnapshotFields(snapshot);
   if (!check.ok) {
     return NextResponse.json({ error: "Missing required fields", missing: check.missing }, { status: 422 });
   }
@@ -43,11 +53,6 @@ export async function POST(req: Request) {
   const { data: mailbox } = await admin.from("company_mailboxes").select("id, status").eq("id", input.mailbox_id).maybeSingle();
   if (!mailbox) return NextResponse.json({ error: "Mailbox not found" }, { status: 404 });
   if (mailbox.status !== "verified") return NextResponse.json({ error: "Selected mailbox is not verified" }, { status: 409 });
-
-  const { data: profile } = await admin.from("profiles").select("display_name").eq("id", user.id).maybeSingle();
-  const agentName = profile?.display_name ?? "";
-  const contractDate = new Date().toISOString().slice(0, 10);
-  const snapshot = buildContractSnapshot(lead, { agentName, contractDate });
 
   // Resolve the Google template (if chosen).
   let googleDocId: string | null = null;
@@ -100,14 +105,17 @@ export async function POST(req: Request) {
         customFields[def.token] = formatLeadField(lead, def.lead_field);
       }
 
-      const timeZone = (await getAppSettings()).work_timezone;
+      const settings = await getAppSettings();
+      const timeZone = settings.work_timezone;
       const replacements = [
         ...buildReplacements(snapshot, { timeZone }),
         ...Object.entries(customFields).map(([token, value]) => ({ token, value })),
       ];
 
       const name = `Contract — ${snapshot.business_name || "Client"} — ${contractDate}`;
-      const newDocId = await copyDoc(googleDocId, name);
+      // Keep generated copies out of the templates folder (else they show up in
+      // the admin "Available in Drive" list). Unset = previous behaviour.
+      const newDocId = await copyDoc(googleDocId, name, settings.generated_contracts_folder_id ?? undefined);
       await replaceAllText(newDocId, replacements);
       const pdf = await exportPdf(newDocId);
       const pdfPath = `${contract.id}.pdf`;

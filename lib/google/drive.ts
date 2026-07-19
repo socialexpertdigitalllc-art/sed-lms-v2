@@ -72,13 +72,19 @@ export async function listDocsInFolder(folderId: string): Promise<DriveDoc[]> {
   return files.filter((f) => f.mimeType === GOOGLE_DOC_MIME).map(({ id, name, modifiedTime }) => ({ id, name, modifiedTime }));
 }
 
-/** Copy a doc, returning the new file id. */
-export async function copyDoc(fileId: string, name: string): Promise<string> {
+/**
+ * Copy a doc, returning the new file id. When `parentFolderId` is given the copy
+ * is created inside that folder; otherwise Drive defaults to the source file's
+ * folder (which for contracts would pollute the templates folder).
+ */
+export async function copyDoc(fileId: string, name: string, parentFolderId?: string): Promise<string> {
   const params = new URLSearchParams({ supportsAllDrives: "true" });
+  const body: { name: string; parents?: string[] } = { name };
+  if (typeof parentFolderId === "string" && parentFolderId.trim()) body.parents = [parentFolderId.trim()];
   const res = await fetch(`${DRIVE}/files/${fileId}/copy?${params.toString()}`, {
     method: "POST",
     headers: { ...(await authHeaders()), "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Drive copy failed: ${res.status} ${await res.text()}`);
   const data = (await res.json()) as { id: string };

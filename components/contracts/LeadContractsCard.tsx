@@ -17,11 +17,16 @@ export function LeadContractsCard({
   contracts,
   mailboxes,
   canSend,
+  leadOneTimePrice = null,
+  leadYearlyPrice = null,
 }: {
   leadId: string;
   contracts: ContractRow[];
   mailboxes: Mailbox[];
   canSend: boolean;
+  /** Lead's quoted prices — composer defaults the agent may discount. */
+  leadOneTimePrice?: number | string | null;
+  leadYearlyPrice?: number | string | null;
 }) {
   const [composing, setComposing] = useState(false);
   const anySent = contracts.some((c) => c.status === "sent");
@@ -103,7 +108,15 @@ export function LeadContractsCard({
         )}
       </Panel>
 
-      {composing && <ContractComposer leadId={leadId} mailboxes={mailboxes} onClose={() => setComposing(false)} />}
+      {composing && (
+        <ContractComposer
+          leadId={leadId}
+          mailboxes={mailboxes}
+          leadOneTimePrice={leadOneTimePrice}
+          leadYearlyPrice={leadYearlyPrice}
+          onClose={() => setComposing(false)}
+        />
+      )}
     </>
   );
 }

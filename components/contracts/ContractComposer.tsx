@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/common/Skeleton";
 import { btnPrimary, btnSecondary } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
 import { formatCurrency, formatDate } from "@/lib/leads/format";
+import { parsePrice, formatUsd } from "@/lib/contracts/merge";
 import type { ContractRow } from "@/lib/contracts/types";
 
 type Mailbox = { id: string; email_address: string; display_name: string };
@@ -26,14 +27,42 @@ function SummaryCell({ label, value, mono }: { label: string; value: string; mon
   );
 }
 
+/** Money as a plain editable string ("1200", "1200.5") — empty when unset. */
+function priceInputValue(v: number | string | null | undefined): string {
+  const n = parsePrice(v);
+  return n === null ? "" : String(n);
+}
+
+/** Muted note whenever the agent's typed price differs from the lead's own. */
+function PriceDelta({ original, current }: { original: number | string | null | undefined; current: string }) {
+  const was = parsePrice(original);
+  const now = parsePrice(current);
+  if (was === now) return null;
+  const text =
+    was === null
+      ? "Not quoted on the lead"
+      : now === null
+        ? `Removed — lead has ${formatUsd(was)}`
+        : now < was
+          ? `Discounted from ${formatUsd(was)}`
+          : `Increased from ${formatUsd(was)}`;
+  return <p className="tabular mt-1 text-[11px] text-text-faint">{text}</p>;
+}
+
 export function ContractComposer({
   leadId,
   mailboxes,
   onClose,
+  leadOneTimePrice = null,
+  leadYearlyPrice = null,
 }: {
   leadId: string;
   mailboxes: Mailbox[];
   onClose: () => void;
+  /** The lead's quoted one-time price — the default the agent may discount. */
+  leadOneTimePrice?: number | string | null;
+  /** The lead's yearly price — blank means none. */
+  leadYearlyPrice?: number | string | null;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -43,6 +72,8 @@ export function ContractComposer({
   const [selection, setSelection] = useState<string>(BUILTIN_VALUE);
   const [mailboxId, setMailboxId] = useState(mailboxes[0]?.id ?? "");
   const [message, setMessage] = useState("Hi,\n\nPlease find your website services agreement attached. Let me know if you have any questions.\n\nThank you.");
+  const [oneTime, setOneTime] = useState(() => priceInputValue(leadOneTimePrice));
+  const [yearly, setYearly] = useState(() => priceInputValue(leadYearlyPrice));
   const [contractId, setContractId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ContractRow | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,7 +96,16 @@ export function ContractComposer({
       const google_template_id = selection.startsWith("google:") ? selection.slice("google:".length) : null;
       const res = await fetch("/api/contracts", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_id: leadId, mailbox_id: mailboxId, template_key: "standard", google_template_id, message_body: message }),
+        body: JSON.stringify({
+          lead_id: leadId,
+          mailbox_id: mailboxId,
+          template_key: "standard",
+          google_template_id,
+          message_body: message,
+          // Sent every time so an agent's discount (or a cleared yearly) always wins.
+          one_time_price: parsePrice(oneTime),
+          yearly_price: parsePrice(yearly),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -204,6 +244,38 @@ export function ContractComposer({
               {mailboxes.map((m) => <option key={m.id} value={m.id}>{m.email_address}</option>)}
             </select>
           </Field>
+
+          {/* Pricing — editable before the draft exists, since the PDF is
+              generated at creation time. */}
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-text-muted">Pricing</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="One-time price" required>
+                <input
+                  className={cn(inputCls, "tabular font-mono")}
+                  value={oneTime}
+                  onChange={(e) => setOneTime(e.target.value)}
+                  disabled={locked}
+                  inputMode="decimal"
+                  placeholder="1200"
+                  aria-label="One-time price"
+                />
+                <PriceDelta original={leadOneTimePrice} current={oneTime} />
+              </Field>
+              <Field label="Yearly price">
+                <input
+                  className={cn(inputCls, "tabular font-mono")}
+                  value={yearly}
+                  onChange={(e) => setYearly(e.target.value)}
+                  disabled={locked}
+                  inputMode="decimal"
+                  placeholder="None"
+                  aria-label="Yearly price"
+                />
+                <PriceDelta original={leadYearlyPrice} current={yearly} />
+              </Field>
+            </div>
+          </div>
 
           {/* Merged-field summary — what the PDF was actually filled with. */}
           {draft && (

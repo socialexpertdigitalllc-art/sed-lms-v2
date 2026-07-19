@@ -23,6 +23,7 @@ export default async function ContractTemplatesPage() {
   const status = await getGoogleStatus();
   const settings = await getAppSettings();
   const folderId = settings.contract_templates_folder_id ?? "";
+  const generatedFolderId = settings.generated_contracts_folder_id ?? "";
 
   const { data: registeredRaw } = await admin
     .from("contract_templates")
@@ -92,6 +93,7 @@ export default async function ContractTemplatesPage() {
       <ContractTemplatesManager
         status={status}
         folderId={folderId}
+        generatedFolderId={generatedFolderId}
         available={available}
         folderMissing={folderMissing}
         folderNotAccessible={folderNotAccessible}

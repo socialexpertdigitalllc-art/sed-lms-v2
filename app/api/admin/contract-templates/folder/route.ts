@@ -7,7 +7,11 @@ import { normalizeFolderId } from "@/lib/google/drive";
 
 export const runtime = "nodejs";
 
-const schema = z.object({ folder_id: z.string().trim().max(500) });
+const schema = z.object({
+  folder_id: z.string().trim().max(500),
+  /** Optional — where generated contract copies are created. Omitted = unchanged. */
+  generated_folder_id: z.string().trim().max(500).optional(),
+});
 
 export async function PUT(req: Request) {
   const supabase = await createClient();
@@ -21,12 +25,23 @@ export async function PUT(req: Request) {
 
   // Accept a pasted Drive URL as well as a bare id.
   const folderId = normalizeFolderId(parsed.data.folder_id) || null;
+  const generatedFolderId =
+    parsed.data.generated_folder_id === undefined ? undefined : normalizeFolderId(parsed.data.generated_folder_id) || null;
 
   const admin = createAdminClient();
   const { error } = await admin.from("app_settings").upsert(
-    { singleton: true, contract_templates_folder_id: folderId, updated_at: new Date().toISOString(), updated_by: user.id },
+    {
+      singleton: true,
+      contract_templates_folder_id: folderId,
+      ...(generatedFolderId === undefined ? {} : { generated_contracts_folder_id: generatedFolderId }),
+      updated_at: new Date().toISOString(),
+      updated_by: user.id,
+    },
     { onConflict: "singleton" }
   );
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  return NextResponse.json({ contract_templates_folder_id: folderId });
+  return NextResponse.json({
+    contract_templates_folder_id: folderId,
+    ...(generatedFolderId === undefined ? {} : { generated_contracts_folder_id: generatedFolderId }),
+  });
 }
