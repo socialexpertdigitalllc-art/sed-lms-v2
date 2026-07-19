@@ -7,11 +7,12 @@ import {
   LayoutDashboard, Building2, PhoneCall, Ticket, BarChart3, MessageSquare,
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
-  Settings, LayoutTemplate, Library, Mail, FileText,
+  Settings, LayoutTemplate, Library, Mail, FileText, Inbox,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useNavCounts } from "@/hooks/useNavCounts";
+import { useHasMailbox } from "@/hooks/useHasMailbox";
 import { navCountKey, navCountTone } from "@/lib/nav/counts";
 import { cn } from "@/lib/utils";
 import { NavItemContent } from "@/components/layout/NavItemContent";
@@ -79,6 +80,7 @@ export function Sidebar({
   const { has, hasAny } = usePermissions();
   const path = usePathname();
   const counts = useNavCounts();
+  const hasMailbox = useHasMailbox();
 
   const [hovering, setHovering] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,6 +97,7 @@ export function Sidebar({
   }
 
   const mainVisible = MAIN.filter((n) => (n.perm ? has(n.perm) : true));
+  if (hasMailbox) mainVisible.push({ href: "/mailbox", label: "Mailbox", icon: Inbox });
   const preVisible = PRELEADS.filter((n) => (n.perm ? has(n.perm) : true));
   const hasAiTools = hasAny(["ai_tools.webcraft", "ai_tools.deepseek"]);
   const aiVisible: NavItem[] = AI_TOOLS
