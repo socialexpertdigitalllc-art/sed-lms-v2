@@ -1,4 +1,8 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
+import { Users } from "lucide-react";
+import { PageHeader } from "@/components/common/Panel";
+import { btnSecondary } from "@/components/common/buttons";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
@@ -24,11 +28,16 @@ export default async function ContractsPage() {
   }));
 
   return (
-    <div className="max-w-4xl space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold text-text">Contracts</h1>
-        <p className="text-sm text-text-muted mt-0.5">Every contract created or sent across your leads.</p>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-5">
+      <PageHeader
+        title="Contracts"
+        description="Every contract created or sent across your leads. New contracts start from a lead."
+        action={
+          <Link href="/leads" className={btnSecondary}>
+            <Users className="h-4 w-4" /> Go to leads
+          </Link>
+        }
+      />
       <ContractsList contracts={contracts} />
     </div>
   );

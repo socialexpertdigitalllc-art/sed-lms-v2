@@ -1,4 +1,7 @@
 import { redirect } from "next/navigation";
+import { MailPlus } from "lucide-react";
+import { PageHeader } from "@/components/common/Panel";
+import { btnSecondary } from "@/components/common/buttons";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
@@ -31,13 +34,16 @@ export default async function CompanyMailPage() {
   const items: MailboxListItem[] = (mailboxes ?? []).map((m) => ({ ...m, owner_name: ownerName[m.user_id] ?? "—" }));
 
   return (
-    <div className="max-w-4xl space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold text-text">Company Mail</h1>
-        <p className="text-sm text-text-muted mt-0.5">
-          Link a manually-created Hostinger mailbox to a user. The password is stored encrypted and used only to send/read mail server-side.
-        </p>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-5">
+      <PageHeader
+        title="Company Mail"
+        description="Link a manually-created Hostinger mailbox to a user. The password is stored encrypted and used only to send/read mail server-side."
+        action={
+          <a href="#link-mailbox" className={btnSecondary}>
+            <MailPlus className="h-4 w-4" /> Link a mailbox
+          </a>
+        }
+      />
       <CompanyMailManager initial={items} owners={owners} />
     </div>
   );

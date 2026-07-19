@@ -1,4 +1,7 @@
 import { redirect } from "next/navigation";
+import { ExternalLink } from "lucide-react";
+import { PageHeader } from "@/components/common/Panel";
+import { btnSecondary } from "@/components/common/buttons";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
@@ -38,14 +41,28 @@ export default async function ContractTemplatesPage() {
   }
 
   return (
-    <div className="max-w-3xl space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold text-text">Contract Templates</h1>
-        <p className="text-sm text-text-muted mt-0.5">
-          Connect Google, point at a Drive folder of template docs, and register the ones agents can use. Contracts copy the doc, fill{" "}
-          <span className="font-mono text-xs">{"{{placeholders}}"}</span>, and export a PDF.
-        </p>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-5">
+      <PageHeader
+        title="Contract Templates"
+        description={
+          <>
+            Connect Google, point at a Drive folder of template docs, and register the ones agents can use. Contracts copy the doc, fill{" "}
+            <span className="font-mono text-xs">{"{{placeholders}}"}</span>, and export a PDF.
+          </>
+        }
+        action={
+          folderId ? (
+            <a
+              href={`https://drive.google.com/drive/folders/${folderId}`}
+              target="_blank"
+              rel="noreferrer"
+              className={btnSecondary}
+            >
+              <ExternalLink className="h-4 w-4" /> Open Drive folder
+            </a>
+          ) : undefined
+        }
+      />
       <ContractTemplatesManager status={status} folderId={folderId} available={available} folderMissing={folderMissing} registered={registered} />
     </div>
   );

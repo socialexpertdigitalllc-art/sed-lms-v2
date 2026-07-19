@@ -2,10 +2,25 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Mail, RefreshCw, Trash2, ChevronDown, ChevronUp, ShieldCheck, ShieldAlert, ShieldQuestion } from "lucide-react";
+import {
+  Mail,
+  MailPlus,
+  RefreshCw,
+  Trash2,
+  ChevronDown,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldQuestion,
+  AlertTriangle,
+  Loader2,
+  Inbox,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Field, FormSection, inputCls } from "@/components/forms/Field";
+import { Field, inputCls } from "@/components/forms/Field";
+import { Panel, EmptyPanel, Pill, type PillTone } from "@/components/common/Panel";
+import { btnPrimary, iconBtn, iconBtnDanger } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
+import { formatDateTime } from "@/lib/leads/format";
 import { MAILBOX_DEFAULTS } from "@/lib/mail/types";
 
 export type MailboxListItem = {
@@ -16,10 +31,10 @@ export type MailboxListItem = {
 };
 type Owner = { id: string; name: string };
 
-const STATUS_PILL: Record<MailboxListItem["status"], string> = {
-  verified: "bg-ready-bg text-ready-fg",
-  error: "bg-dropped-bg text-dropped-fg",
-  unverified: "bg-notready-bg text-notready-fg",
+const STATUS_TONE: Record<MailboxListItem["status"], PillTone> = {
+  verified: "ready",
+  error: "dropped",
+  unverified: "notready",
 };
 const STATUS_ICON = { verified: ShieldCheck, error: ShieldAlert, unverified: ShieldQuestion };
 
@@ -88,11 +103,26 @@ export function CompanyMailManager({ initial, owners }: { initial: MailboxListIt
   }
 
   return (
-    <div className="space-y-6">
-      <form onSubmit={link} className="rounded-lg border border-border bg-surface p-4 space-y-4">
-        <div className="flex items-center gap-2 text-sm font-semibold text-text"><Mail className="w-4 h-4" /> Link a mailbox</div>
-        <FormSection title="Mailbox">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div className="space-y-5">
+      {/* ── Link form ────────────────────────────────────────────── */}
+      <form id="link-mailbox" onSubmit={link} className="scroll-mt-6">
+        <Panel
+          icon={MailPlus}
+          title="Link a mailbox"
+          description="Credentials are encrypted at rest and only ever used server-side."
+          footer={
+            <>
+              <p className="mr-auto hidden text-[11px] text-text-faint sm:block">
+                Linking runs an IMAP + SMTP check immediately.
+              </p>
+              <button type="submit" disabled={submitting || !address || !password} className={btnPrimary}>
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {submitting ? "Linking…" : "Link & verify"}
+              </button>
+            </>
+          }
+        >
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Owner" required>
               <select className={inputCls} value={userId} onChange={(e) => setUserId(e.target.value)}>
                 {owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -108,73 +138,107 @@ export function CompanyMailManager({ initial, owners }: { initial: MailboxListIt
               <input className={inputCls} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
             </Field>
           </div>
-        </FormSection>
 
-        <button type="button" onClick={() => setAdvanced((v) => !v)} className="inline-flex items-center gap-1 text-xs font-medium text-text-muted hover:text-text">
-          {advanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />} Advanced (host / port override)
-        </button>
-        {advanced && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Field label="IMAP host"><input className={inputCls} value={imapHost} onChange={(e) => setImapHost(e.target.value)} /></Field>
-            <Field label="IMAP port"><input className={inputCls} inputMode="numeric" value={imapPort} onChange={(e) => setImapPort(e.target.value)} /></Field>
-            <Field label="SMTP host"><input className={inputCls} value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} /></Field>
-            <Field label="SMTP port"><input className={inputCls} inputMode="numeric" value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)} /></Field>
+          {/* Advanced host / port override */}
+          <div className="mt-4 rounded-md border border-border-subtle bg-surface-2">
+            <button
+              type="button"
+              onClick={() => setAdvanced((v) => !v)}
+              aria-expanded={advanced}
+              className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-xs font-medium text-text-muted transition-colors duration-150 hover:text-text"
+            >
+              <span>Advanced — host / port override</span>
+              <span className="flex items-center gap-2">
+                {!advanced && <span className="tabular font-mono text-[11px] text-text-faint">defaults</span>}
+                <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-150", advanced && "rotate-180")} />
+              </span>
+            </button>
+            {advanced && (
+              <div className="grid grid-cols-2 gap-4 border-t border-border-subtle bg-surface p-3 sm:grid-cols-4">
+                <Field label="IMAP host"><input className={inputCls} value={imapHost} onChange={(e) => setImapHost(e.target.value)} /></Field>
+                <Field label="IMAP port"><input className={cn(inputCls, "font-mono")} inputMode="numeric" value={imapPort} onChange={(e) => setImapPort(e.target.value)} /></Field>
+                <Field label="SMTP host"><input className={inputCls} value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} /></Field>
+                <Field label="SMTP port"><input className={cn(inputCls, "font-mono")} inputMode="numeric" value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)} /></Field>
+              </div>
+            )}
           </div>
-        )}
-
-        <div className="flex justify-end">
-          <button type="submit" disabled={submitting || !address || !password} className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-ink disabled:opacity-60">
-            {submitting ? "Linking…" : "Link & verify"}
-          </button>
-        </div>
+        </Panel>
       </form>
 
-      <div className="rounded-lg border border-border bg-surface overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-surface-2 text-text-muted">
-            <tr>
-              <th className="text-left font-medium px-3 py-2">Address</th>
-              <th className="text-left font-medium px-3 py-2">Owner</th>
-              <th className="text-left font-medium px-3 py-2">Status</th>
-              <th className="text-left font-medium px-3 py-2">Last verified</th>
-              <th className="px-3 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr><td colSpan={5} className="px-3 py-6 text-center text-text-faint">No mailboxes linked yet.</td></tr>
-            )}
+      {/* ── Linked mailboxes ─────────────────────────────────────── */}
+      <Panel icon={Inbox} title="Linked mailboxes" description="One mailbox per agent." count={rows.length} flush>
+        {rows.length === 0 ? (
+          <EmptyPanel
+            icon={Mail}
+            title="No mailboxes linked"
+            hint="Create the mailbox in Hostinger first, then link it above so the agent can send and read mail here."
+          />
+        ) : (
+          <ul className="divide-y divide-border-subtle">
             {rows.map((r) => {
               const Icon = STATUS_ICON[r.status];
+              const busy = busyId === r.id;
               return (
-                <tr key={r.id} className="border-t border-border">
-                  <td className="px-3 py-2">
-                    <div className="font-medium text-text">{r.email_address}</div>
-                    {r.status === "error" && r.last_error && <div className="text-[11px] text-dropped-fg truncate max-w-xs">{r.last_error}</div>}
-                  </td>
-                  <td className="px-3 py-2 text-text-muted">{r.owner_name}</td>
-                  <td className="px-3 py-2">
-                    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", STATUS_PILL[r.status])}>
-                      <Icon className="w-3 h-3" /> {r.status}
+                <li key={r.id} className="px-4 py-3 transition-colors duration-150 hover:bg-surface-2">
+                  <div className="flex items-start gap-3">
+                    <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-md bg-accent-soft text-accent-ink">
+                      <Mail className="h-4 w-4" />
                     </span>
-                  </td>
-                  <td className="px-3 py-2 text-text-faint">{r.last_verified_at ? new Date(r.last_verified_at).toLocaleString() : "—"}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => reverify(r.id)} disabled={busyId === r.id} title="Re-verify" className="p-1.5 rounded text-text-muted hover:text-text hover:bg-surface-2 disabled:opacity-50">
-                        <RefreshCw className={cn("w-4 h-4", busyId === r.id && "animate-spin")} />
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <p className="truncate text-sm font-medium text-text" title={r.email_address}>{r.email_address}</p>
+                        <Pill tone={STATUS_TONE[r.status]} icon={Icon}>{r.status}</Pill>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-text-muted">
+                        {r.owner_name}
+                        {r.display_name ? <span className="text-text-faint"> · {r.display_name}</span> : null}
+                      </p>
+                    </div>
+
+                    <div className="hidden shrink-0 text-right sm:block">
+                      <p className="text-[10px] uppercase tracking-wide text-text-faint">Last verified</p>
+                      <p className="tabular font-mono text-xs text-text-muted">
+                        {r.last_verified_at ? formatDateTime(r.last_verified_at) : "—"}
+                      </p>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => reverify(r.id)}
+                        disabled={busy}
+                        title="Re-verify IMAP + SMTP"
+                        aria-label="Re-verify mailbox"
+                        className={iconBtn}
+                      >
+                        <RefreshCw className={cn("h-4 w-4", busy && "animate-spin")} />
                       </button>
-                      <button onClick={() => unlink(r.id)} disabled={busyId === r.id} title="Unlink" className="p-1.5 rounded text-text-muted hover:text-dropped-fg hover:bg-surface-2 disabled:opacity-50">
-                        <Trash2 className="w-4 h-4" />
+                      <button
+                        type="button"
+                        onClick={() => unlink(r.id)}
+                        disabled={busy}
+                        title="Unlink and delete the stored credential"
+                        aria-label="Unlink mailbox"
+                        className={iconBtnDanger}
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
-                  </td>
-                </tr>
+                  </div>
+
+                  {r.status === "error" && r.last_error && (
+                    <div className="mt-2 flex items-start gap-1.5 rounded-md bg-dropped-bg px-2.5 py-1.5 text-[11px] leading-relaxed text-dropped-fg sm:ml-12">
+                      <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                      <span className="line-clamp-2 min-w-0" title={r.last_error}>{r.last_error}</span>
+                    </div>
+                  )}
+                </li>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+          </ul>
+        )}
+      </Panel>
     </div>
   );
 }
