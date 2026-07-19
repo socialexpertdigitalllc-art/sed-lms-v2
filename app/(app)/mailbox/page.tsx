@@ -11,12 +11,14 @@ export default async function MailboxPage() {
   if (!mailbox) redirect("/dashboard");
 
   return (
-    <div className="max-w-6xl space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold text-text">Mailbox</h1>
-        <p className="text-sm text-text-muted mt-0.5">{mailbox.address}</p>
+    <div className="flex h-[calc(100vh-2rem)] flex-col gap-3 sm:h-[calc(100vh-3rem)]">
+      <div className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <h1 className="font-display text-xl font-semibold text-text">Mailbox</h1>
+        <p className="font-mono tabular text-xs text-text-muted">{mailbox.address}</p>
       </div>
-      <Mailbox address={mailbox.address} />
+      <div className="min-h-0 flex-1">
+        <Mailbox address={mailbox.address} />
+      </div>
     </div>
   );
 }
