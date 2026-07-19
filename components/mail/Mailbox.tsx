@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/common/Toast";
-import { ComposeDrawer, type Draft } from "@/components/mail/ComposeDrawer";
+import { ComposeDrawer, type Draft, type OutgoingAttachment } from "@/components/mail/ComposeDrawer";
 import {
   Avatar,
   EmptyState,
@@ -105,13 +105,13 @@ export function Mailbox({ address }: { address: string }) {
     setComposing({ to: "", subject: "", body: "" });
   }
 
-  async function send() {
+  async function send(attachments: OutgoingAttachment[]) {
     if (!composing) return;
     setSending(true);
     try {
       const res = await fetch("/api/mail/send", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: composing.to, subject: composing.subject, body: composing.body }),
+        body: JSON.stringify({ to: composing.to, subject: composing.subject, body: composing.body, attachments }),
       });
       const data = await res.json();
       if (!res.ok) { toast({ kind: "error", title: "Send failed", body: data.error }); return; }
