@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/branding/BrandMark";
 import type { Branding } from "@/lib/settings/appSettings";
+import { APP_VERSION, formatVersion } from "@/lib/version/changelog";
 
 export function MarketingFooter({ branding }: { branding: Branding }) {
   return (
@@ -10,8 +11,8 @@ export function MarketingFooter({ branding }: { branding: Branding }) {
           <div className="max-w-xs">
             <BrandMark companyName={branding.companyName} logoUrl={branding.logoUrl} size={32} />
             <p className="text-sm text-text-muted mt-3 leading-relaxed">
-              The lead-management console for Social Expert Digital — every lead, agent, and
-              department in one permission-aware system.
+              The lead-management console for Social Expert Digital — pipeline, client
+              websites, mail and contracts in one permission-aware system.
             </p>
           </div>
 
@@ -19,16 +20,18 @@ export function MarketingFooter({ branding }: { branding: Branding }) {
             <div>
               <div className="text-[11px] uppercase tracking-wider text-text-faint font-semibold mb-3">Product</div>
               <ul className="space-y-2 text-text-muted">
-                <li><a href="/#features" className="hover:text-text">Features</a></li>
-                <li><a href="/#permissions" className="hover:text-text">Permissions</a></li>
-                <li><a href="/#workflow" className="hover:text-text">How it works</a></li>
+                <li><a href="/#pipeline" className="hover:text-text">Lead pipeline</a></li>
+                <li><a href="/#websites" className="hover:text-text">Website generation</a></li>
+                <li><a href="/#deployment" className="hover:text-text">Deployment</a></li>
+                <li><a href="/#operations" className="hover:text-text">Operations</a></li>
               </ul>
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-wider text-text-faint font-semibold mb-3">Resources</div>
               <ul className="space-y-2 text-text-muted">
                 <li><Link href="/docs" className="hover:text-text">Documentation</Link></li>
-                <li><Link href="/docs#getting-started" className="hover:text-text">Getting started</Link></li>
+                <li><Link href="/changelog" className="hover:text-text">Changelog</Link></li>
+                <li><Link href="/docs#permissions" className="hover:text-text">Permissions</Link></li>
                 <li><Link href="/docs#faq" className="hover:text-text">FAQ</Link></li>
               </ul>
             </div>
@@ -46,7 +49,12 @@ export function MarketingFooter({ branding }: { branding: Branding }) {
           <p className="text-xs text-text-faint">
             © {2026} Social Expert Digital. All rights reserved.
           </p>
-          <p className="text-xs font-mono text-text-faint">v2 · built for scale</p>
+          <Link
+            href="/changelog"
+            className="text-xs font-mono tabular text-text-faint hover:text-accent-ink transition-colors"
+          >
+            {formatVersion(APP_VERSION)} · changelog
+          </Link>
         </div>
       </div>
     </footer>

@@ -11,11 +11,12 @@ export function MarketingHeader({ isAuthed, branding }: { isAuthed: boolean; bra
           <BrandMark companyName={branding.companyName} logoUrl={branding.logoUrl} size={32} />
         </Link>
 
-        <nav className="hidden md:flex items-center gap-8 text-sm text-text-muted">
-          <a href="/#features" className="hover:text-text transition-colors">Features</a>
-          <a href="/#permissions" className="hover:text-text transition-colors">Permissions</a>
-          <a href="/#workflow" className="hover:text-text transition-colors">How it works</a>
+        <nav className="hidden md:flex items-center gap-6 lg:gap-8 text-sm text-text-muted">
+          <a href="/#pipeline" className="hover:text-text transition-colors">Pipeline</a>
+          <a href="/#websites" className="hover:text-text transition-colors">Websites</a>
+          <a href="/#operations" className="hover:text-text transition-colors">Operations</a>
           <Link href="/docs" className="hover:text-text transition-colors">Docs</Link>
+          <Link href="/changelog" className="hover:text-text transition-colors">Changelog</Link>
         </nav>
 
         <div className="flex items-center gap-3">
