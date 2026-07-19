@@ -59,6 +59,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/import", label: "Import", icon: Upload, perm: "admin.import" },
   { href: "/admin/add-ons", label: "Add-ons", icon: Puzzle, perm: "admin.settings.manage" },
   { href: "/admin/mail", label: "Company Mail", icon: Mail, perm: "mail.manage" },
+  { href: "/admin/contract-templates", label: "Contract Templates", icon: LayoutTemplate, perm: "integrations.manage" },
   { href: "/admin/notifications", label: "Notifications", icon: BellRing, perm: "admin.notifications.manage" },
 ];
 
