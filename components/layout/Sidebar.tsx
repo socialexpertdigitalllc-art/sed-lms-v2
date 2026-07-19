@@ -13,6 +13,7 @@ import {
 import { usePermissions } from "@/hooks/usePermissions";
 import { useNavCounts } from "@/hooks/useNavCounts";
 import { useHasMailbox } from "@/hooks/useHasMailbox";
+import { useUnreadMail } from "@/hooks/useUnreadMail";
 import { navCountKey, navCountTone } from "@/lib/nav/counts";
 import { cn } from "@/lib/utils";
 import { NavItemContent } from "@/components/layout/NavItemContent";
@@ -20,6 +21,9 @@ import { BrandMark } from "@/components/branding/BrandMark";
 import type { Branding } from "@/lib/settings/appSettings";
 
 type NavItem = { href: string; label: string; icon: LucideIcon; perm?: string };
+
+/** Appended to MAIN only for users with a linked mailbox; badged with unread IMAP mail. */
+const MAILBOX_HREF = "/mailbox";
 
 const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, perm: "analytics.view" },
@@ -81,6 +85,8 @@ export function Sidebar({
   const path = usePathname();
   const counts = useNavCounts();
   const hasMailbox = useHasMailbox();
+  // Only polls once the user is known to have a mailbox — no mailbox, no badge.
+  const unreadMail = useUnreadMail(hasMailbox);
 
   const [hovering, setHovering] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -97,7 +103,7 @@ export function Sidebar({
   }
 
   const mainVisible = MAIN.filter((n) => (n.perm ? has(n.perm) : true));
-  if (hasMailbox) mainVisible.push({ href: "/mailbox", label: "Mailbox", icon: Inbox });
+  if (hasMailbox) mainVisible.push({ href: MAILBOX_HREF, label: "Mailbox", icon: Inbox });
   const preVisible = PRELEADS.filter((n) => (n.perm ? has(n.perm) : true));
   const hasAiTools = hasAny(["ai_tools.webcraft", "ai_tools.deepseek"]);
   const aiVisible: NavItem[] = AI_TOOLS
@@ -114,7 +120,7 @@ export function Sidebar({
   function renderItem(n: NavItem, showLabels: boolean) {
     const active = n.href === bestHref;
     const key = navCountKey(n.href);
-    const count = key ? counts[key] : undefined;
+    const count = n.href === MAILBOX_HREF ? unreadMail : key ? counts[key] : undefined;
     return (
       <Link
         key={n.href}

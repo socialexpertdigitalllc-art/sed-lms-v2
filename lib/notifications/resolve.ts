@@ -8,6 +8,8 @@ function roleValue(role: ContextualRole, ctx: NotifyContext): string | null {
     case "ticket_assignee": return ctx.ticket?.assigned_to ?? null;
     case "ticket_creator": return ctx.ticket?.created_by ?? null;
     case "feedback_submitter": return ctx.feedback?.user_id ?? null;
+    case "mailbox_owner": return ctx.mailbox?.user_id ?? null;
+    case "contract_creator": return ctx.contract?.created_by ?? null;
     default: return null;
   }
 }

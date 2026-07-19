@@ -3,6 +3,7 @@ import { Readable } from "stream";
 import { buildImapConfig } from "@/lib/mail/config";
 import type { ResolvedMailbox } from "@/lib/mail/types";
 import { formatAddressList, makePreview, hasAttachments, normalizeFolder } from "@/lib/mail/message";
+import type { PollMessage } from "@/lib/mail/poll";
 
 export interface MailListItem {
   uid: number;
@@ -188,6 +189,51 @@ export async function appendToSent(m: ResolvedMailbox, raw: Buffer): Promise<voi
   try {
     const path = await resolvePath(client, "Sent");
     await client.append(path, raw, ["\\Seen"]);
+  } finally {
+    await client.logout().catch(() => client.close());
+  }
+}
+
+/**
+ * Unread count of INBOX. Uses IMAP STATUS (one cheap round-trip, no message
+ * fetch) so the sidebar badge can poll it frequently.
+ */
+export async function getUnreadCount(m: ResolvedMailbox): Promise<number> {
+  const client = newClient(m);
+  await client.connect();
+  try {
+    const status = await client.status("INBOX", { unseen: true });
+    return status.unseen ?? 0;
+  } finally {
+    await client.logout().catch(() => client.close());
+  }
+}
+
+/**
+ * Cron-poller seam: envelopes of INBOX messages with UID > `lastUid`, plus the
+ * mailbox's current `uidNext` (the first-run watermark). When `lastUid` is null
+ * no messages are fetched at all — the caller only needs the watermark.
+ */
+export async function fetchInboxSince(
+  m: ResolvedMailbox,
+  lastUid: number | null
+): Promise<{ uidNext: number | null; messages: PollMessage[] }> {
+  const client = newClient(m);
+  await client.connect();
+  try {
+    const mailbox = await client.mailboxOpen("INBOX", { readOnly: true });
+    const uidNext = typeof mailbox.uidNext === "number" ? mailbox.uidNext : null;
+    if (lastUid === null || mailbox.exists === 0) return { uidNext, messages: [] };
+
+    const messages: PollMessage[] = [];
+    for await (const msg of client.fetch(`${lastUid + 1}:*`, { uid: true, envelope: true }, { uid: true })) {
+      messages.push({
+        uid: msg.uid,
+        from: formatAddressList(msg.envelope?.from),
+        subject: msg.envelope?.subject || "(no subject)",
+      });
+    }
+    return { uidNext, messages };
   } finally {
     await client.logout().catch(() => client.close());
   }

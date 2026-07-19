@@ -1,4 +1,11 @@
-export type ContextualRole = "lead_agent" | "lead_closer" | "ticket_assignee" | "ticket_creator" | "feedback_submitter";
+export type ContextualRole =
+  | "lead_agent"
+  | "lead_closer"
+  | "ticket_assignee"
+  | "ticket_creator"
+  | "feedback_submitter"
+  | "mailbox_owner"
+  | "contract_creator";
 export type NotifyBell = "website" | "general";
 
 export interface NotificationRule {
@@ -15,6 +22,8 @@ export interface NotifyContext {
   lead?: { agent_id: string | null; closed_by: string | null } | null;
   ticket?: { assigned_to: string | null; created_by: string | null } | null;
   feedback?: { user_id: string | null } | null;
+  mailbox?: { user_id: string | null } | null;
+  contract?: { created_by: string | null } | null;
   actorId?: string | null;
 }
 

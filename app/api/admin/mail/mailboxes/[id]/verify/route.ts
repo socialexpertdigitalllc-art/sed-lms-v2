@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { getMailboxById, verifyMailboxCredentials } from "@/lib/mail/mailbox";
+import { notify } from "@/lib/notifications/notify";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,23 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   const admin = createAdminClient();
   await admin.from("company_mailboxes").update(patch).eq("id", id);
+
+  if (!result.ok) {
+    // Owner-facing: their mailbox stopped working (expired password, host change).
+    try {
+      await notify(
+        "mailbox_verification_failed",
+        { mailbox: { user_id: mailbox.userId } },
+        {
+          title: "Company mailbox verification failed",
+          body: `${mailbox.address} — ${result.error}`,
+          dedupKey: `mailbox_verification_failed:${id}:${new Date().toISOString()}`,
+          targetUrl: "/admin/mail",
+        }
+      );
+    } catch { /* bell is best-effort */ }
+  }
+
   const { data: safe } = await admin.from("company_mailboxes").select(SAFE_COLS).eq("id", id).single();
   return NextResponse.json({ mailbox: safe });
 }

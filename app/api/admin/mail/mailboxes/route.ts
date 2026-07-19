@@ -6,6 +6,7 @@ import { linkMailboxSchema } from "@/lib/mail/schema";
 import { encryptSecret } from "@/lib/mail/crypto";
 import { resolveMailboxRow } from "@/lib/mail/config";
 import { verifyMailboxCredentials } from "@/lib/mail/mailbox";
+import { notify } from "@/lib/notifications/notify";
 import { MAILBOX_DEFAULTS, type CompanyMailboxRow } from "@/lib/mail/types";
 
 export const runtime = "nodejs";
@@ -79,6 +80,22 @@ export async function POST(req: Request) {
     ? { status: "verified" as const, last_verified_at: new Date().toISOString(), last_error: null }
     : { status: "error" as const, last_error: result.error };
   await admin.from("company_mailboxes").update(patch).eq("id", inserted.id);
+
+  if (!result.ok) {
+    // Owner-facing: their mailbox is linked but unusable. Never include the password.
+    try {
+      await notify(
+        "mailbox_verification_failed",
+        { mailbox: { user_id: input.user_id } },
+        {
+          title: "Company mailbox verification failed",
+          body: `${input.email_address} — ${result.error}`,
+          dedupKey: `mailbox_verification_failed:${inserted.id}:${new Date().toISOString()}`,
+          targetUrl: "/admin/mail",
+        }
+      );
+    } catch { /* bell is best-effort */ }
+  }
 
   await admin.from("activity_log").insert({
     user_id: auth.userId,

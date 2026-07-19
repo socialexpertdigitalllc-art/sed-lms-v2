@@ -7,6 +7,7 @@ import { getMailboxById } from "@/lib/mail/mailbox";
 import { buildSmtpConfig } from "@/lib/mail/config";
 import { renderContractPdf } from "@/lib/contracts/ContractDocument";
 import { signatureRenderArgs } from "@/lib/contracts/pdf";
+import { notify } from "@/lib/notifications/notify";
 import type { ContractRow } from "@/lib/contracts/types";
 
 export const runtime = "nodejs";
@@ -55,6 +56,19 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     );
   }
 
+  // The lead carries the agent/closer that the notification rules route to.
+  const { data: lead } = await admin
+    .from("leads")
+    .select("id, agent_id, closed_by")
+    .eq("id", contract.lead_id)
+    .maybeSingle();
+  const notifyCtx = {
+    leadId: contract.lead_id,
+    lead: lead ? { agent_id: lead.agent_id, closed_by: lead.closed_by } : null,
+    contract: { created_by: contract.created_by },
+  };
+  const leadUrl = lead ? `/leads/${lead.id}` : "/contracts";
+
   // Send via SMTP. Any failure leaves the contract a draft (never a false "sent").
   try {
     const transport = nodemailer.createTransport(buildSmtpConfig(mailbox));
@@ -67,7 +81,22 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       attachments: [{ filename: `contract-${contract.business_name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.pdf`, content: pdf, contentType: "application/pdf" }],
     });
   } catch (e) {
-    return NextResponse.json({ error: `Send failed: ${(e as Error).message}` }, { status: 502 });
+    const reason = (e as Error).message;
+    // Tell the contract's author it never went out. Notification failure must
+    // never mask the real send error.
+    try {
+      await notify(
+        "contract_send_failed",
+        notifyCtx,
+        {
+          title: "Contract failed to send",
+          body: `${contract.business_name} — ${reason}`,
+          dedupKey: `contract_send_failed:${contract.id}:${new Date().toISOString()}`,
+          targetUrl: "/contracts",
+        }
+      );
+    } catch { /* bell is best-effort */ }
+    return NextResponse.json({ error: `Send failed: ${reason}` }, { status: 502 });
   }
 
   // Persist the PDF and flip to sent only after a successful send.
@@ -88,6 +117,20 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     user_id: user.id, action: "contract.sent", entity_type: "contract", entity_id: contract.id,
     new_value: { recipient_email: contract.recipient_email, sent_at: sentAt },
   });
+
+  // actorId: the sender shouldn't get a bell about their own send.
+  try {
+    await notify(
+      "contract_sent",
+      { ...notifyCtx, actorId: user.id },
+      {
+        title: "Contract sent to client",
+        body: `${contract.business_name} — sent to ${contract.recipient_email}`,
+        dedupKey: `contract_sent:${contract.id}`,
+        targetUrl: leadUrl,
+      }
+    );
+  } catch { /* bell is best-effort — the contract really was sent */ }
 
   return NextResponse.json({ contract: updated });
 }
