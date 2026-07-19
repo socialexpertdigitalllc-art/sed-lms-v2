@@ -10,6 +10,27 @@ export const runtime = "nodejs";
 
 const DEST = "/admin/contract-templates";
 
+/**
+ * The app's PUBLIC origin. Behind the host's proxy, `new URL(req.url).origin`
+ * is the internal bind address (e.g. https://0.0.0.0:3000), which would send the
+ * operator to a dead URL after consent. GOOGLE_OAUTH_REDIRECT_URI is by
+ * definition the correct public URL (Google requires an exact match), so it is
+ * the most reliable source; forwarded headers are the fallback.
+ */
+function appOrigin(req: Request): string {
+  const configured = process.env.GOOGLE_OAUTH_REDIRECT_URI;
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      /* malformed env — fall through to headers */
+    }
+  }
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  if (host) return `${req.headers.get("x-forwarded-proto") ?? "https"}://${host}`;
+  return new URL(req.url).origin;
+}
+
 export async function GET(req: Request) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -24,7 +45,7 @@ export async function GET(req: Request) {
 
   const jar = await cookies();
   const expected = jar.get("g_oauth_state")?.value;
-  const origin = url.origin;
+  const origin = appOrigin(req);
 
   const fail = (reason: string) => {
     const r = NextResponse.redirect(`${origin}${DEST}?google_error=${encodeURIComponent(reason)}`);
