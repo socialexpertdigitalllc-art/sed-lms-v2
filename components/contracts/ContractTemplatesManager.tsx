@@ -26,7 +26,15 @@ import { formatDateTime } from "@/lib/leads/format";
 import { SUPPORTED_PLACEHOLDERS } from "@/lib/contracts/placeholders";
 
 export type RegisteredTemplate = { id: string; google_doc_id: string; name: string; placeholders: string[]; synced_at: string | null };
-export type AvailableDoc = { id: string; name: string; modifiedTime: string; registered: boolean };
+export type AvailableDoc = {
+  id: string;
+  name: string;
+  modifiedTime: string;
+  registered: boolean;
+  /** Drive mimeType — only native Google Docs can be copied + placeholder-filled. */
+  mimeType: string;
+  isDoc: boolean;
+};
 type GoogleStatus = { connected: boolean; account_email: string | null };
 
 function unmapped(placeholders: string[]): string[] {
@@ -39,12 +47,18 @@ export function ContractTemplatesManager({
   folderId,
   available,
   folderMissing,
+  folderNotAccessible = false,
+  loadError = null,
   registered,
 }: {
   status: GoogleStatus;
   folderId: string;
   available: AvailableDoc[];
   folderMissing: boolean;
+  /** Drive could not see the folder at all (wrong account / not shared). */
+  folderNotAccessible?: boolean;
+  /** A real Drive/API error, surfaced instead of showing a blank list. */
+  loadError?: string | null;
   registered: RegisteredTemplate[];
 }) {
   const router = useRouter();
@@ -198,13 +212,38 @@ export function ContractTemplatesManager({
             <EmptyPanel
               icon={FolderInput}
               title="No folder selected"
-              hint="Paste your Drive folder ID in the setting above, then save to list the docs inside it."
+              hint="Paste your Drive folder ID (or its URL) in the setting above, then save to list the docs inside it."
             />
+          ) : loadError ? (
+            <div className="px-4 py-6">
+              <div className="flex gap-3 rounded-md border border-dropped-fg/25 bg-dropped-bg/50 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-dropped-fg" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-dropped-fg">Drive could not list this folder</p>
+                  <p className="mt-1 break-words font-mono text-[11px] leading-relaxed text-text-muted">{loadError}</p>
+                </div>
+              </div>
+            </div>
+          ) : folderNotAccessible ? (
+            <div className="px-4 py-6">
+              <div className="flex gap-3 rounded-md border border-notready-fg/25 bg-notready-bg/60 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-notready-fg" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-notready-fg">That folder isn&apos;t visible to the connected account</p>
+                  <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                    Google is connected as{" "}
+                    <span className="font-mono text-[11px] text-text">{status.account_email ?? "this account"}</span>, which cannot open folder{" "}
+                    <span className="font-mono text-[11px] text-text">{folder || folderId}</span>. Either share the folder with that
+                    address (Viewer is enough to list; Editor to copy), or reconnect using the account that owns it.
+                  </p>
+                </div>
+              </div>
+            </div>
           ) : docs.length === 0 ? (
             <EmptyPanel
               icon={FileQuestion}
-              title="No documents found"
-              hint="That folder holds no Google Docs, or the connected account cannot see them."
+              title="Folder is empty"
+              hint="The connected account can see this folder, but it contains no files. Add your template docs to it, then refresh."
             />
           ) : (
             <ul className="divide-y divide-border-subtle">
@@ -217,7 +256,14 @@ export function ContractTemplatesManager({
                     <p className="truncate text-sm font-medium text-text" title={d.name}>{d.name}</p>
                     <p className="tabular truncate font-mono text-[11px] text-text-faint">Modified {formatDateTime(d.modifiedTime)}</p>
                   </div>
-                  {d.registered ? (
+                  {!d.isDoc ? (
+                    <span
+                      title={`${d.mimeType} — open it in Drive and use File → Save as Google Docs`}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-md bg-surface-2 px-2 py-1 text-xs font-medium text-text-faint"
+                    >
+                      <FileQuestion className="h-3.5 w-3.5" /> Not a Google Doc
+                    </span>
+                  ) : d.registered ? (
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-ready-bg px-2 py-1 text-xs font-medium text-ready-fg">
                       <Check className="h-3.5 w-3.5" /> Added
                     </span>

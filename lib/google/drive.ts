@@ -2,6 +2,12 @@ import { getAccessToken } from "@/lib/google/oauth";
 
 const DRIVE = "https://www.googleapis.com/drive/v3";
 
+/** Native Google Doc — the only type we can copy + placeholder-fill + export. */
+export const GOOGLE_DOC_MIME = "application/vnd.google-apps.document";
+
+/** Include files that live in (or are shared from) shared drives. */
+const ALL_DRIVES = { supportsAllDrives: "true", includeItemsFromAllDrives: "true" };
+
 async function authHeaders(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${await getAccessToken()}` };
 }
@@ -12,24 +18,64 @@ export interface DriveDoc {
   modifiedTime: string;
 }
 
-/** List Google Docs (not folders/other files) inside a Drive folder. */
-export async function listDocsInFolder(folderId: string): Promise<DriveDoc[]> {
-  const q = `'${folderId}' in parents and mimeType='application/vnd.google-apps.document' and trashed=false`;
+export interface DriveFile extends DriveDoc {
+  mimeType: string;
+}
+
+/**
+ * Accept either a bare folder id or a pasted Drive URL. Operators naturally
+ * copy the address bar (".../folders/<id>?usp=sharing"), which would otherwise
+ * be stored verbatim and match nothing. Pure — unit tested.
+ */
+export function normalizeFolderId(input: string): string {
+  const s = (input ?? "").trim();
+  if (!s) return "";
+  const folder = s.match(/\/folders\/([A-Za-z0-9_-]+)/);
+  if (folder) return folder[1];
+  const idParam = s.match(/[?&]id=([A-Za-z0-9_-]+)/);
+  if (idParam) return idParam[1];
+  return s.replace(/[?#].*$/, "").replace(/\/+$/, "");
+}
+
+/**
+ * Folder metadata, or null when the connected Google account cannot see it
+ * (404/403). This is what separates "folder is empty" from "wrong account /
+ * not shared" — the two failure modes look identical from a file list alone.
+ */
+export async function getFolderMeta(folderId: string): Promise<{ id: string; name: string } | null> {
+  const params = new URLSearchParams({ fields: "id,name,mimeType", supportsAllDrives: "true" });
+  const res = await fetch(`${DRIVE}/files/${folderId}?${params.toString()}`, { headers: await authHeaders() });
+  if (res.status === 404 || res.status === 403) return null;
+  if (!res.ok) throw new Error(`Drive folder lookup failed: ${res.status} ${await res.text()}`);
+  const d = (await res.json()) as { id: string; name: string };
+  return { id: d.id, name: d.name };
+}
+
+/** Every non-trashed file in the folder, ANY type, so the UI can explain what it found. */
+export async function listFolderFiles(folderId: string): Promise<DriveFile[]> {
   const params = new URLSearchParams({
-    q,
-    fields: "files(id,name,modifiedTime)",
+    q: `'${folderId}' in parents and trashed=false`,
+    fields: "files(id,name,mimeType,modifiedTime)",
     orderBy: "name",
-    pageSize: "100",
+    pageSize: "200",
+    ...ALL_DRIVES,
   });
   const res = await fetch(`${DRIVE}/files?${params.toString()}`, { headers: await authHeaders() });
   if (!res.ok) throw new Error(`Drive list failed: ${res.status} ${await res.text()}`);
-  const data = (await res.json()) as { files?: DriveDoc[] };
+  const data = (await res.json()) as { files?: DriveFile[] };
   return data.files ?? [];
+}
+
+/** List only the native Google Docs inside a folder. */
+export async function listDocsInFolder(folderId: string): Promise<DriveDoc[]> {
+  const files = await listFolderFiles(folderId);
+  return files.filter((f) => f.mimeType === GOOGLE_DOC_MIME).map(({ id, name, modifiedTime }) => ({ id, name, modifiedTime }));
 }
 
 /** Copy a doc, returning the new file id. */
 export async function copyDoc(fileId: string, name: string): Promise<string> {
-  const res = await fetch(`${DRIVE}/files/${fileId}/copy`, {
+  const params = new URLSearchParams({ supportsAllDrives: "true" });
+  const res = await fetch(`${DRIVE}/files/${fileId}/copy?${params.toString()}`, {
     method: "POST",
     headers: { ...(await authHeaders()), "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
@@ -40,7 +86,8 @@ export async function copyDoc(fileId: string, name: string): Promise<string> {
 }
 
 export async function renameFile(fileId: string, name: string): Promise<void> {
-  const res = await fetch(`${DRIVE}/files/${fileId}`, {
+  const params = new URLSearchParams({ supportsAllDrives: "true" });
+  const res = await fetch(`${DRIVE}/files/${fileId}?${params.toString()}`, {
     method: "PATCH",
     headers: { ...(await authHeaders()), "Content-Type": "application/json" },
     body: JSON.stringify({ name }),

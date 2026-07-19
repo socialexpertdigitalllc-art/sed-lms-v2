@@ -7,7 +7,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { getAppSettings } from "@/lib/settings/appSettings";
 import { getGoogleStatus } from "@/lib/google/connection";
-import { listDocsInFolder } from "@/lib/google/drive";
+import { getFolderMeta, listFolderFiles, GOOGLE_DOC_MIME } from "@/lib/google/drive";
 import { ContractTemplatesManager, type AvailableDoc, type RegisteredTemplate } from "@/components/contracts/ContractTemplatesManager";
 
 export default async function ContractTemplatesPage() {
@@ -29,14 +29,32 @@ export default async function ContractTemplatesPage() {
   const registered = (registeredRaw ?? []) as RegisteredTemplate[];
   const registeredIds = new Set(registered.map((r) => r.google_doc_id));
 
+  // Diagnose rather than swallow: an empty list can mean "folder not visible to
+  // the connected account", "folder has no Google Docs", or an outright Drive
+  // error — and an operator staring at a blank panel can't tell which.
   let available: AvailableDoc[] = [];
-  let folderMissing = !folderId;
+  const folderMissing = !folderId;
+  let folderNotAccessible = false;
+  let loadError: string | null = null;
+
   if (folderId && status.connected) {
     try {
-      const docs = await listDocsInFolder(folderId);
-      available = docs.map((d) => ({ ...d, registered: registeredIds.has(d.id) }));
-    } catch {
-      available = [];
+      const folder = await getFolderMeta(folderId);
+      if (!folder) {
+        folderNotAccessible = true;
+      } else {
+        const files = await listFolderFiles(folderId);
+        available = files.map((f) => ({
+          id: f.id,
+          name: f.name,
+          modifiedTime: f.modifiedTime,
+          mimeType: f.mimeType,
+          isDoc: f.mimeType === GOOGLE_DOC_MIME,
+          registered: registeredIds.has(f.id),
+        }));
+      }
+    } catch (e) {
+      loadError = (e as Error).message;
     }
   }
 
@@ -63,7 +81,15 @@ export default async function ContractTemplatesPage() {
           ) : undefined
         }
       />
-      <ContractTemplatesManager status={status} folderId={folderId} available={available} folderMissing={folderMissing} registered={registered} />
+      <ContractTemplatesManager
+        status={status}
+        folderId={folderId}
+        available={available}
+        folderMissing={folderMissing}
+        folderNotAccessible={folderNotAccessible}
+        loadError={loadError}
+        registered={registered}
+      />
     </div>
   );
 }
