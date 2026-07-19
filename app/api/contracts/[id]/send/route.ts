@@ -35,17 +35,25 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const mailbox = await getMailboxById(contract.mailbox_id);
   if (!mailbox) return NextResponse.json({ error: "Sending mailbox not found" }, { status: 409 });
 
-  // Render the final PDF from the immutable snapshot.
-  const sig = await signatureRenderArgs(contract.created_by ?? user.id);
-  const pdf = await renderContractPdf(
-    {
-      business_name: contract.business_name, business_phone: contract.business_phone,
-      business_email: contract.business_email, one_time_price: contract.one_time_price,
-      yearly_price: contract.yearly_price, agent_name: contract.agent_name, contract_date: contract.contract_date,
-    },
-    sig,
-    contract.template_key
-  );
+  // Prefer the already-stored PDF (Google-template path). Otherwise render
+  // react-pdf live from the immutable snapshot (fallback path).
+  let pdf: Buffer;
+  if (contract.pdf_path) {
+    const { data: blob } = await admin.storage.from("contracts").download(contract.pdf_path);
+    if (!blob) return NextResponse.json({ error: "Stored contract PDF is missing" }, { status: 409 });
+    pdf = Buffer.from(await blob.arrayBuffer());
+  } else {
+    const sig = await signatureRenderArgs(contract.created_by ?? user.id);
+    pdf = await renderContractPdf(
+      {
+        business_name: contract.business_name, business_phone: contract.business_phone,
+        business_email: contract.business_email, one_time_price: contract.one_time_price,
+        yearly_price: contract.yearly_price, agent_name: contract.agent_name, contract_date: contract.contract_date,
+      },
+      sig,
+      contract.template_key
+    );
+  }
 
   // Send via SMTP. Any failure leaves the contract a draft (never a false "sent").
   try {

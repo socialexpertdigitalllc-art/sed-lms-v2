@@ -24,6 +24,9 @@ export interface ContractRow {
   message_body: string;
   recipient_email: string | null;
   pdf_path: string | null;
+  google_template_id: string | null;
+  generated_doc_id: string | null;
+  generated_doc_url: string | null;
   status: "draft" | "sent";
   sent_at: string | null;
   created_at: string;

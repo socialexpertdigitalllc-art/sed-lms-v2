@@ -74,6 +74,7 @@ export const PERMISSIONS = [
   { key: "payments.view", name: "View Payment Links", category: "payments" },
   { key: "payments.manage", name: "Manage Payment Links", category: "payments", is_sensitive: true },
   { key: "mail.manage", name: "Manage Company Mailboxes", category: "mail", is_sensitive: true },
+  { key: "integrations.manage", name: "Manage Integrations (Google, Templates)", category: "integrations", is_sensitive: true },
   { key: "contracts.view", name: "View Contracts", category: "contracts" },
   { key: "contracts.send", name: "Create & Send Contracts", category: "contracts", is_sensitive: true },
   { key: "templates.manage", name: "Manage Website Templates", category: "templates", is_sensitive: true },
@@ -84,7 +85,7 @@ export const PERMISSIONS = [
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 
-export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard", "payments", "templates", "mail", "contracts"] as const;
+export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard", "payments", "templates", "mail", "contracts", "integrations"] as const;
 
 /**
  * Is this a grantable permission key? The static catalog plus the per-lead-

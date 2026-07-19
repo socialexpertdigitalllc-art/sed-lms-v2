@@ -4,6 +4,7 @@ export const createContractSchema = z.object({
   lead_id: z.string().uuid(),
   mailbox_id: z.string().uuid(),
   template_key: z.string().trim().min(1).max(60).default("standard"),
+  google_template_id: z.string().uuid().nullable().optional(),
   message_body: z.string().trim().max(5000).default(""),
 });
 export type CreateContractInput = z.infer<typeof createContractSchema>;

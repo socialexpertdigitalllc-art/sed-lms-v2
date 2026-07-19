@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { X, Send, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Field, inputCls } from "@/components/forms/Field";
 import { useToast } from "@/components/common/Toast";
-import { CONTRACT_TEMPLATES } from "@/lib/contracts/templates";
 
 type Mailbox = { id: string; email_address: string; display_name: string };
+type Template = { id: string; name: string; placeholders: string[] };
+
+const BUILTIN_VALUE = "builtin:standard";
 
 export function ContractComposer({
   leadId,
@@ -21,18 +23,32 @@ export function ContractComposer({
 }) {
   const router = useRouter();
   const { toast } = useToast();
-  const [templateKey, setTemplateKey] = useState<string>(CONTRACT_TEMPLATES[0].key);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [connected, setConnected] = useState(false);
+  const [selection, setSelection] = useState<string>(BUILTIN_VALUE);
   const [mailboxId, setMailboxId] = useState(mailboxes[0]?.id ?? "");
   const [message, setMessage] = useState("Hi,\n\nPlease find your website services agreement attached. Let me know if you have any questions.\n\nThank you.");
   const [contractId, setContractId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    fetch("/api/contract-templates")
+      .then((r) => r.json())
+      .then((d: { connected: boolean; templates: Template[] }) => {
+        setConnected(!!d.connected);
+        setTemplates(d.templates ?? []);
+        if ((d.templates ?? []).length > 0) setSelection(`google:${d.templates[0].id}`);
+      })
+      .catch(() => {});
+  }, []);
+
   async function createDraft() {
     setBusy(true);
     try {
+      const google_template_id = selection.startsWith("google:") ? selection.slice("google:".length) : null;
       const res = await fetch("/api/contracts", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_id: leadId, mailbox_id: mailboxId, template_key: templateKey, message_body: message }),
+        body: JSON.stringify({ lead_id: leadId, mailbox_id: mailboxId, template_key: "standard", google_template_id, message_body: message }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -68,8 +84,9 @@ export function ContractComposer({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Template">
-            <select className={inputCls} value={templateKey} onChange={(e) => setTemplateKey(e.target.value)} disabled={!!contractId}>
-              {CONTRACT_TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            <select className={inputCls} value={selection} onChange={(e) => setSelection(e.target.value)} disabled={!!contractId}>
+              {templates.map((t) => <option key={t.id} value={`google:${t.id}`}>{t.name}</option>)}
+              <option value={BUILTIN_VALUE}>Built-in — Website Development Agreement (no Google)</option>
             </select>
           </Field>
           <Field label="Send from" required>
@@ -79,6 +96,14 @@ export function ContractComposer({
             </select>
           </Field>
         </div>
+
+        {templates.length === 0 && (
+          <p className="text-xs text-text-faint">
+            {connected
+              ? "No Google templates registered yet. An admin can add them in Admin → Contract Templates. Using the built-in template."
+              : "Google is not connected. An admin can connect it in Admin → Contract Templates. Using the built-in template."}
+          </p>
+        )}
 
         <Field label="Cover message">
           <textarea className={cn(inputCls, "min-h-[120px]")} value={message} onChange={(e) => setMessage(e.target.value)} disabled={!!contractId} />

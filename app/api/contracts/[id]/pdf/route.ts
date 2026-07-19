@@ -23,8 +23,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!c) return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   const contract = c as ContractRow;
 
-  // Sent contracts serve their retained PDF; drafts render live from the snapshot.
-  if (contract.status === "sent" && contract.pdf_path) {
+  // Any contract with a stored PDF (Google-generated draft, or a sent contract)
+  // serves the retained file; react-pdf drafts render live from the snapshot.
+  if (contract.pdf_path) {
     const { data: blob } = await admin.storage.from("contracts").download(contract.pdf_path);
     if (blob) {
       return new Response(blob, {
