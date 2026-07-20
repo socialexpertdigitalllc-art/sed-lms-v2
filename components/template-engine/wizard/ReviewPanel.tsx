@@ -5,6 +5,7 @@ import { Download, ExternalLink, Globe, Loader2, PencilLine, Rocket, ShieldCheck
 import { useToast } from "@/components/common/Toast";
 import { CopyButton } from "@/components/common/CopyButton";
 import { isDeployableStatus } from "@/lib/template-engine/wizard";
+import { RedoButton, StaleNotice } from "./RedoControls";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +83,9 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
 
   return (
     <div className="space-y-4">
+      {/* The site below was built before the content or images last changed. */}
+      <StaleNotice gen={gen} step="build" onDone={onChanged} />
+
       {/* Gate summary + actions */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {gen.gate_results ? (
@@ -99,6 +103,7 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
             className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text">
             <Download className="h-4 w-4" /> Download zip
           </a>
+          <RedoButton gen={gen} step="build" onDone={onChanged} label="Rebuild site" />
           {gen.status === "review" ? (
             <button type="button" disabled={reopening || deploying} onClick={reopen}
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text disabled:opacity-50">

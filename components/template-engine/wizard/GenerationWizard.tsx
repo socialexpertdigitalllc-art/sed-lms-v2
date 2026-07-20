@@ -42,6 +42,10 @@ export type GenerationDetail = {
   // polls; `paused_at` is when it actually came to rest at a checkpoint.
   control?: string | null;
   paused_at?: string | null;
+  // Per-step redo (migration 0045): which of "content" | "images" | "build"
+  // have an output that predates a newer upstream redo. Absent on every row
+  // written before the migration, which reads as "nothing stale".
+  stale_steps?: string[] | null;
   created_at: string;
   brief: Record<string, unknown> | null;
   content_model: ContentModel | null;

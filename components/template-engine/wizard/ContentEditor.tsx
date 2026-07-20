@@ -6,6 +6,7 @@ import { useToast } from "@/components/common/Toast";
 import { Field, inputCls } from "@/components/forms/Field";
 import { DynamicList } from "@/components/forms/DynamicList";
 import type { ContentModel } from "@/lib/template-engine/contentModel";
+import { RedoButton } from "./RedoControls";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
 
@@ -21,8 +22,26 @@ export function ContentEditor({ gen, onSaved }: { gen: GenerationDetail; onSaved
   // only adopt the fresh model when the operator has no unsaved base yet.
   useEffect(() => { if (!model && gen.content_model) setModel(gen.content_model); }, [gen.content_model, model]);
 
+  // The Redo control lives outside the editable fieldset (it is never part of
+  // the form) and above the lock notice, so it is reachable in review too —
+  // "the copy is wrong" is exactly the thing an operator notices at review.
+  const redoBar = (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <p className="text-xs text-text-faint">
+        Redo re-plans this copy from the brief. Your image picks and the built site are left as they are — they are
+        marked out of date instead.
+      </p>
+      <RedoButton gen={gen} step="content" onDone={onSaved} />
+    </div>
+  );
+
   if (!model) {
-    return <div className="rounded-lg border border-border bg-surface p-5 text-sm text-text-muted">No content model yet — the planning step produces it.</div>;
+    return (
+      <div className="space-y-4">
+        {redoBar}
+        <div className="rounded-lg border border-border bg-surface p-5 text-sm text-text-muted">No content model yet — the planning step produces it.</div>
+      </div>
+    );
   }
 
   const set = (patch: Partial<ContentModel>) => setModel({ ...model, ...patch });
@@ -53,6 +72,7 @@ export function ContentEditor({ gen, onSaved }: { gen: GenerationDetail; onSaved
 
   return (
     <div className="space-y-5">
+      {redoBar}
       {!editable ? (
         <p className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-text-muted">
           <Lock className="h-3.5 w-3.5" /> Content is locked once the build starts — this is what the site was built from.

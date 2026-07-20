@@ -7,6 +7,7 @@ import {
 import type { GenStep } from "@/lib/template-engine/types";
 import { buildEtaLabel } from "@/lib/template-engine/wizard";
 import { useToast } from "@/components/common/Toast";
+import { RedoButton, StaleNotice } from "./RedoControls";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
 
@@ -130,6 +131,9 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
 
   return (
     <div className="space-y-4">
+      {/* Stale = the content or images changed after this site was built. */}
+      <StaleNotice gen={gen} step="build" onDone={() => onChanged?.()} />
+
       {gen.status === "failed" ? (
         <div className="rounded-md border border-dropped-fg/30 bg-dropped-bg p-4 text-sm text-dropped-fg">
           <p className="font-medium">Generation failed</p>
@@ -180,9 +184,15 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
       ) : null}
 
       <div className="rounded-lg border border-border bg-surface p-5">
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-[10px] font-semibold uppercase tracking-wider text-text-faint">Pipeline</h2>
-          {eta ? <span className="text-xs text-text-faint">{eta}</span> : null}
+          <div className="flex items-center gap-2">
+            {eta ? <span className="text-xs text-text-faint">{eta}</span> : null}
+            {/* Re-runs prepare -> build -> verify -> finalize. Reads the content
+                model and image picks; never writes them, so nothing the
+                operator typed or chose is at risk. */}
+            <RedoButton gen={gen} step="build" onDone={() => onChanged?.()} label="Redo build" />
+          </div>
         </div>
         {steps.length === 0 ? (
           <p className="text-sm text-text-muted">Waiting for the processor to pick this run up…</p>

@@ -8,6 +8,7 @@ import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
 import { describeGatherStats, type ImageSlot } from "@/lib/template-engine/imageSlots";
 import { applyToggle, slotProgress } from "@/lib/template-engine/wizard";
+import { RedoButton, StaleNotice } from "./RedoControls";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
 
@@ -175,25 +176,37 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
   }
 
   if (localSlots.length === 0) {
-    return <div className="rounded-lg border border-border bg-surface p-5 text-sm text-text-muted">No image slots yet — they appear when planning finishes.</div>;
+    return (
+      <div className="space-y-4">
+        <StaleNotice gen={gen} step="images" onDone={onChanged} />
+        <div className="rounded-lg border border-border bg-surface p-5 text-sm text-text-muted">No image slots yet — they appear when planning finishes.</div>
+        <div><RedoButton gen={gen} step="images" onDone={onChanged} label="Gather images again" /></div>
+      </div>
+    );
   }
 
   const { chosen, total } = slotProgress(localSlots);
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      {/* Stale = the copy was re-planned after these were gathered. */}
+      <StaleNotice gen={gen} step="images" onDone={onChanged} />
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-text-muted">
           <span className="font-medium text-text">{chosen}/{total}</span> slots chosen
           {editable ? " — every slot needs at least one image before the build" : ""}
         </p>
-        {editable ? (
-          <button type="button" onClick={startBuild} disabled={building || chosen < total}
-            className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-ink disabled:opacity-60">
-            {building ? <Loader2 className="h-4 w-4 animate-spin" /> : <Hammer className="h-4 w-4" />}
-            Build the site
-          </button>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          <RedoButton gen={gen} step="images" onDone={onChanged} label="Re-gather all images" />
+          {editable ? (
+            <button type="button" onClick={startBuild} disabled={building || chosen < total}
+              className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-ink disabled:opacity-60">
+              {building ? <Loader2 className="h-4 w-4 animate-spin" /> : <Hammer className="h-4 w-4" />}
+              Build the site
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {localSlots.map((slot) => (

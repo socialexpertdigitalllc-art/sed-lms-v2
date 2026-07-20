@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runTemplateGenerationV2, buildFromSelection } from "./runnerV2";
 import { shouldSkipClaimed } from "./control";
+import { queuePhaseFor } from "./redo";
 
 // Fire-and-forget kick of the template processor (does not await; ignores errors).
 // Reuses the WGE self-origin + shared secret env pair.
@@ -21,7 +22,9 @@ export function kickTemplateProcessor(): void {
 // `image_slots`, then stop at status='curating' for the operator); 'build'
 // (queued by the /build API — Task 5 — once the operator has picked images)
 // runs the BUILD phase (regenerate -> verify -> finalize -> status='review' /
-// 'failed'). tge_claim_next() itself is unchanged and returns
+// 'failed'). 'content' and 'images' (migration 0045, queued by the /redo API)
+// re-run ONE step of the plan phase and nothing else.
+// tge_claim_next() itself is unchanged and returns
 // {id, generation_id, enqueued_by} regardless of kind, so we do one cheap
 // follow-up select on the claimed row's own id to learn which phase to run —
 // simpler than teaching the RPC a new return column.
@@ -62,7 +65,7 @@ export async function processTemplateQueue(): Promise<{ processed: number }> {
         .select("kind")
         .eq("id", row.id)
         .maybeSingle();
-      const kind = queueRow?.kind === "build" ? "build" : "plan";
+      const phase = queuePhaseFor(queueRow?.kind);
 
       await admin
         .from("template_generations")
@@ -72,10 +75,14 @@ export async function processTemplateQueue(): Promise<{ processed: number }> {
       // pauses at 'curating' (or 'failed'), the build phase reaches 'review'
       // (or 'failed'). Nothing below this line touches template_generations
       // on the success path, so neither terminal status is ever clobbered.
-      if (kind === "build") {
+      if (phase === "build") {
         await buildFromSelection(row.generation_id);
-      } else {
+      } else if (phase === "full") {
         await runTemplateGenerationV2(row.generation_id);
+      } else {
+        // 'content' / 'images' — a per-step redo (migration 0045). Same plan
+        // phase, narrowed to the one step the operator asked to re-run.
+        await runTemplateGenerationV2(row.generation_id, phase);
       }
       await admin
         .from("template_gen_queue")

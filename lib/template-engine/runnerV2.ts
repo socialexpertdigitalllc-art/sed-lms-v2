@@ -38,6 +38,7 @@ import type { ImageCandidate, ImageSlot } from "./imageSlots";
 import { businessSlug, websiteId } from "./slug";
 import { contentTypeFor, listStorageFiles } from "./runner";
 import { readControl, type HaltMode } from "./control";
+import { clearStale, parseStaleSteps, resetStepsForRedo, sameStale, type RedoStepKey } from "./redo";
 import type { GenStep } from "./types";
 
 const TEMPLATES_BUCKET = "website-templates";
@@ -348,12 +349,45 @@ async function persistHalt(
     .eq("status", "processing");
 }
 
+/**
+ * The `stale_steps` update to fold into a phase's final write once that phase
+ * has re-run successfully — its own output is fresh again, so its mark goes.
+ *
+ * Deliberately BEST-EFFORT and self-suppressing: it reads the column in its own
+ * tiny query and returns `{}` both when nothing would change and when the read
+ * fails at all. Two consequences that matter:
+ *  - a normal full run (nothing was ever stale) writes no `stale_steps` key, so
+ *    the untouched happy path stays byte-for-byte the update it always was;
+ *  - on a database where migration 0045 has not been applied yet, the read
+ *    errors, `{}` comes back, and the runner never writes a column that does
+ *    not exist. Redo is unavailable until the migration lands; generation is
+ *    completely unaffected, which is the right way round.
+ */
+async function staleClearPatch(
+  admin: SupabaseClient,
+  generationId: string,
+  completed: RedoStepKey,
+): Promise<Record<string, unknown>> {
+  const { data, error } = await admin
+    .from("template_generations")
+    .select("stale_steps")
+    .eq("id", generationId)
+    .maybeSingle();
+  if (error || !data) return {};
+  const current = parseStaleSteps((data as { stale_steps?: unknown }).stale_steps);
+  const next = clearStale(current, completed);
+  return sameStale(current, next) ? {} : { stale_steps: next };
+}
+
 interface GenRow {
   id: string;
   lead_id: string;
   template_id: string;
   requested_pages: unknown;
   options: unknown;
+  brief: unknown;
+  content_model: unknown;
+  steps: unknown;
 }
 
 /** What the build phase reloads — the plan phase's frozen outputs. */
@@ -391,6 +425,13 @@ interface BuildCtx {
   setCurrentKey: (key: string | null) => void;
   /** Throws GenerationHalted if the operator asked to pause/stop. See checkpoint(). */
   checkpoint: (at: string) => Promise<void>;
+  /**
+   * Extra fields for the finalize write — currently the `stale_steps` clear for
+   * the build step, resolved at the LAST moment so a long build cannot write a
+   * stale set it read half an hour ago. Returns `{}` when there is nothing to
+   * change, which is the normal case (see staleClearPatch).
+   */
+  finalizeExtra?: () => Promise<Record<string, unknown>>;
 }
 
 /**
@@ -422,6 +463,7 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     writeThrough,
     setCurrentKey,
     checkpoint,
+    finalizeExtra,
   } = ctx;
 
   // CHECKPOINT — before the build phase touches anything at all.
@@ -630,6 +672,7 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   }
 
   setCurrentKey(null);
+  const staleCleared = finalizeExtra ? await finalizeExtra() : {};
   await endStep("done", `${siteEntries.length} files packaged`, {
     status: "review",
     zip_path: zipPath,
@@ -641,8 +684,28 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     cost_usd: 0,
     total_ms: Date.now() - runStart,
     error: null,
+    ...staleCleared,
   });
 }
+
+/**
+ * Which half (or halves) of the plan phase to execute.
+ *
+ *  - "full"    — the normal run: brief -> plan -> images -> curating. The ONLY
+ *                phase that freezes a fresh brief and mints a `site_slug`, and
+ *                the only one that starts the step timeline from empty. Its
+ *                behaviour is unchanged from before per-step redo existed.
+ *  - "content" — re-plan the content model ONLY. `image_slots` are not read and
+ *                not written; the built site is left alone. (Redo content.)
+ *  - "images"  — re-gather image candidates ONLY, from the content model
+ *                already on the row. `content_model` is not touched, so the
+ *                operator's content edits survive. (Redo images.)
+ *
+ * Both single-step phases CONTINUE the existing step timeline with only their
+ * own entries reset, and neither rewrites `site_slug` — a redo must never
+ * change the address a site is going to deploy to.
+ */
+export type PlanPhase = "full" | "content" | "images";
 
 /**
  * PLAN phase of a v2 template generation (Phase 2): freeze the brief, plan the
@@ -652,12 +715,18 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
  * itself (see buildFromSelection for that half). Terminal status on any error
  * is `failed`. Step progress is written through to
  * `template_generations.steps`/`current_step` for the realtime tracker.
+ *
+ * `phase` narrows the run to a single step for per-step redo (see PlanPhase).
+ * It defaults to "full", and every branch it adds is skipped on that default,
+ * so the normal generation path executes exactly the statements it always did,
+ * in the same order, with the same checkpoints.
  */
-export async function runTemplateGenerationV2(generationId: string): Promise<void> {
+export async function runTemplateGenerationV2(generationId: string, phase: PlanPhase = "full"): Promise<void> {
   const admin = createAdminClient();
   const runStart = Date.now();
+  const full = phase === "full";
 
-  const steps: GenStep[] = [];
+  let steps: GenStep[] = [];
   let currentKey: string | null = null;
   let stepStart = 0;
 
@@ -694,11 +763,16 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
     // 1. load generation + lead + template; freeze the brief --------------------
     const { data: genRow, error: genErr } = await admin
       .from("template_generations")
-      .select("id, lead_id, template_id, requested_pages, options")
+      .select("id, lead_id, template_id, requested_pages, options, brief, content_model, steps")
       .eq("id", generationId)
       .single();
     if (genErr || !genRow) throw new Error(`Generation ${generationId} not found`);
     const gen = genRow as GenRow;
+
+    // A single-step redo continues the run's existing timeline; only the entries
+    // belonging to the step being redone are cleared, so the steps it is
+    // deliberately leaving alone keep their history.
+    if (!full) steps = resetStepsForRedo(genStepArray(gen.steps), phase);
 
     const { data: lead } = await admin.from("leads").select("*").eq("id", gen.lead_id).single();
     if (!lead) throw new Error("Lead not found");
@@ -711,9 +785,19 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
       .single();
     if (!template) throw new Error("Template not found");
 
-    const brief = buildBrief(lead as Parameters<typeof buildBrief>[0]);
-    const siteSlug = `${businessSlug(brief.business_name)}-${websiteId()}`;
-    await writeThrough({ brief, site_slug: siteSlug });
+    // A full run freezes a fresh brief and mints the site slug. A redo reuses
+    // the brief the run was already frozen against (falling back to a fresh
+    // derivation only if the row somehow has none) and never re-mints the slug:
+    // `websiteId()` is random, so re-minting would silently move where the site
+    // deploys to, which is not something "redo the copy" should ever do.
+    let brief: GenerationBrief;
+    if (full) {
+      brief = buildBrief(lead as Parameters<typeof buildBrief>[0]);
+      const siteSlug = `${businessSlug(brief.business_name)}-${websiteId()}`;
+      await writeThrough({ brief, site_slug: siteSlug });
+    } else {
+      brief = (gen.brief as GenerationBrief | null) ?? buildBrief(lead as Parameters<typeof buildBrief>[0]);
+    }
     const requestedPages = stringArray(gen.requested_pages);
 
     // CHECKPOINT — before the first paid AI call.
@@ -725,52 +809,68 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
     await checkpoint("brief");
 
     // 2. plan the content model (Gemini Pro) ------------------------------------
-    await beginStep("plan", "Planning content", { status: "planning" });
-    const { model: planned } = await planContent(brief, requestedPages);
-    // Inject the lead's verbatim assets deterministically — a map <iframe>, a
-    // logo URL and a profile link must never be routed through the model, which
-    // could mangle them. The regenerator wires these into the template's slots.
-    const contentModel: ContentModel = {
-      ...planned,
-      identity: {
-        ...planned.identity,
-        logo_url: brief.logo_link ?? "",
-        map_embed: brief.map_embed ?? "",
-        profile_link: brief.profile_link ?? "",
-      },
-    };
-    await endStep(
-      "done",
-      `${contentModel.services.length} services, ${contentModel.image_briefs.length} image briefs`,
-      { content_model: contentModel },
-    );
+    // Skipped by the "images" redo, which reuses the content model already on
+    // the row — that is the whole point of a surgical image redo.
+    let contentModel: ContentModel | null = full || phase === "content" ? null : (gen.content_model as ContentModel | null);
+    if (phase !== "images") {
+      await beginStep("plan", "Planning content", { status: "planning" });
+      const { model: planned } = await planContent(brief, requestedPages);
+      // Inject the lead's verbatim assets deterministically — a map <iframe>, a
+      // logo URL and a profile link must never be routed through the model, which
+      // could mangle them. The regenerator wires these into the template's slots.
+      contentModel = {
+        ...planned,
+        identity: {
+          ...planned.identity,
+          logo_url: brief.logo_link ?? "",
+          map_embed: brief.map_embed ?? "",
+          profile_link: brief.profile_link ?? "",
+        },
+      };
+      await endStep(
+        "done",
+        `${contentModel.services.length} services, ${contentModel.image_briefs.length} image briefs`,
+        { content_model: contentModel },
+      );
 
-    // CHECKPOINT — between `plan` and `images`.
-    // SAFE: the content model is fully written and its step is `done`; image
-    // gathering has not started, so no `image_slots` are half-populated.
-    await checkpoint("plan");
+      // CHECKPOINT — between `plan` and `images`.
+      // SAFE: the content model is fully written and its step is `done`; image
+      // gathering has not started, so no `image_slots` are half-populated.
+      await checkpoint("plan");
+    }
 
     // 3. gather + vision-rank image candidates into slots (Phase 2 curation) ----
-    await beginStep("images", "Gathering + ranking images");
-    const excludePeople = excludePeopleOf(gen.options);
-    const imageSlots = await buildInitialSlots(contentModel.image_briefs, { brief, admin, excludePeople });
-    const candidateCount = imageSlots.reduce((n, s) => n + s.candidates.length, 0);
-    await endStep(
-      imageSlots.length ? "done" : "partial",
-      `${imageSlots.length} slot(s), ${candidateCount} candidate(s) gathered`,
-      { image_slots: imageSlots },
-    );
+    // Skipped by the "content" redo: re-gathering would throw away the
+    // operator's picks, which a copy rewrite has no business doing. The images
+    // are marked STALE by the redo route instead.
+    if (phase !== "content") {
+      if (!contentModel) {
+        throw new Error("Generation has no content model — the content step must run before images can be gathered");
+      }
+      await beginStep("images", "Gathering + ranking images");
+      const excludePeople = excludePeopleOf(gen.options);
+      const imageSlots = await buildInitialSlots(contentModel.image_briefs, { brief, admin, excludePeople });
+      const candidateCount = imageSlots.reduce((n, s) => n + s.candidates.length, 0);
+      await endStep(
+        imageSlots.length ? "done" : "partial",
+        `${imageSlots.length} slot(s), ${candidateCount} candidate(s) gathered`,
+        { image_slots: imageSlots },
+      );
 
-    // CHECKPOINT — between `images` and the hand-off to the operator.
-    // SAFE: `image_slots` is written in full and its step is closed; the only
-    // thing left is flipping the status to `curating`. Resuming from here lands
-    // on `curating` directly (see resumeTarget) — no AI work is repeated.
-    await checkpoint("images");
+      // CHECKPOINT — between `images` and the hand-off to the operator.
+      // SAFE: `image_slots` is written in full and its step is closed; the only
+      // thing left is flipping the status to `curating`. Resuming from here lands
+      // on `curating` directly (see resumeTarget) — no AI work is repeated.
+      await checkpoint("images");
+    }
 
     // 4. pause here for the operator to curate images (Phase 2) -----------------
+    // A redo lands here too: whichever single step re-ran, the run comes back to
+    // rest at `curating`, which is where the operator reviews it and rebuilds.
+    const staleCleared = full ? {} : await staleClearPatch(admin, generationId, phase);
     await beginStep("curate", "Awaiting image curation");
     currentKey = null;
-    await endStep("done", "ready for operator review", { status: "curating", error: null });
+    await endStep("done", "ready for operator review", { status: "curating", error: null, ...staleCleared });
   } catch (e) {
     // A pause/stop is not a failure: bring the run to rest and return cleanly so
     // the caller marks the queue row done rather than failed.
@@ -910,6 +1010,8 @@ export async function buildFromSelection(generationId: string): Promise<void> {
         currentKey = key;
       },
       checkpoint,
+      // A finished build is, by definition, no longer out of date.
+      finalizeExtra: () => staleClearPatch(admin, generationId, "build"),
     });
   } catch (e) {
     // A pause/stop is not a failure — same clean landing as the plan phase.
