@@ -39,6 +39,11 @@ export async function updateSession(request: NextRequest) {
     path === "/" ||
     path === "/login" ||
     path.startsWith("/docs") ||
+    // PWA plumbing for the /verify mini-app. Both are static, contain nothing
+    // user-specific, and must resolve as JS / JSON rather than an HTML redirect
+    // or Chrome will neither register the worker nor offer "Install".
+    path === "/sw.js" ||
+    path === "/manifest.webmanifest" ||
     path === "/api/ai-tools/wge/process" ||
     path === "/api/template-engine/process" ||
     path === "/api/notifications/generate" ||

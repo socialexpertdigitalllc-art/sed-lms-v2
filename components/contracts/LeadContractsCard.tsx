@@ -17,6 +17,7 @@ export function LeadContractsCard({
   contracts,
   mailboxes,
   canSend,
+  recipientEmail = null,
   leadOneTimePrice = null,
   leadYearlyPrice = null,
 }: {
@@ -24,6 +25,8 @@ export function LeadContractsCard({
   contracts: ContractRow[];
   mailboxes: Mailbox[];
   canSend: boolean;
+  /** The lead's email — the composer verifies it before allowing a send. */
+  recipientEmail?: string | null;
   /** Lead's quoted prices — composer defaults the agent may discount. */
   leadOneTimePrice?: number | string | null;
   leadYearlyPrice?: number | string | null;
@@ -112,6 +115,7 @@ export function LeadContractsCard({
         <ContractComposer
           leadId={leadId}
           mailboxes={mailboxes}
+          recipientEmail={recipientEmail}
           leadOneTimePrice={leadOneTimePrice}
           leadYearlyPrice={leadYearlyPrice}
           onClose={() => setComposing(false)}

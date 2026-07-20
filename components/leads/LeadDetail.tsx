@@ -24,6 +24,7 @@ import { FieldRow, type SelectOption } from "@/components/detail/FieldRow";
 import { RatingStars } from "@/components/common/RatingStars";
 import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
 import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
+import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 import type { ContractRow } from "@/lib/contracts/types";
 
 type Agent = { id: string; display_name: string | null };
@@ -219,7 +220,14 @@ export function LeadDetail({
               {lead.no_email ? (
                 <FieldRow label="Email" value="" display={muted("No email")} />
               ) : (
-                <FieldRow label="Email" value={lead.business_email ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_email: nz(v) })} />
+                <FieldRow
+                  label="Email"
+                  value={lead.business_email ?? ""}
+                  canEdit={canEdit}
+                  onSave={(v) => patch({ business_email: nz(v) })}
+                  // Advisory only — checks the draft while editing, never gates the save.
+                  editExtra={(draft, setDraft) => <EmailFieldVerify email={draft} onAccept={setDraft} />}
+                />
               )}
               <FieldRow label="Profile link" value={lead.business_profile_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ business_profile_link: nz(v) })} />
               <FieldRow label="Website link" value={lead.website_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ website_link: nz(v) })} />
@@ -401,6 +409,7 @@ export function LeadDetail({
                 contracts={contracts}
                 mailboxes={verifiedMailboxes}
                 canSend={canSendContracts}
+                recipientEmail={lead.no_email ? null : lead.business_email}
                 leadOneTimePrice={lead.price_quoted}
                 leadYearlyPrice={lead.yearly_price}
               />

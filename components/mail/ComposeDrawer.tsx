@@ -5,6 +5,8 @@ import { AlertTriangle, Loader2, Paperclip, Send as SendIcon, X } from "lucide-r
 import { cn } from "@/lib/utils";
 import { Field, inputCls } from "@/components/forms/Field";
 import { formatBytes } from "@/components/mail/MailParts";
+import { RecipientGuardStrip, useRecipientGuard } from "@/components/email-verify/RecipientGuard";
+import { SuggestionChip } from "@/components/email-verify/VerifyParts";
 
 export type Draft = { to: string; subject: string; body: string };
 
@@ -59,6 +61,10 @@ export function ComposeDrawer({
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
+
+  // Free local checks on the recipient, debounced. WARN is advisory; BLOCK
+  // disables Send until the user explicitly overrides it.
+  const guard = useRecipientGuard(draft.to);
 
   useEffect(() => {
     toRef.current?.focus();
@@ -127,7 +133,7 @@ export function ComposeDrawer({
   }
 
   async function handleSend() {
-    if (busy || draft.to.trim().length === 0) return;
+    if (busy || draft.to.trim().length === 0 || guard.blocked) return;
     if (files.length > MAX_FILES) {
       setFileError(`You can attach up to ${MAX_FILES} files per message — remove one first.`);
       return;
@@ -161,7 +167,10 @@ export function ComposeDrawer({
     await onSend(attachments);
   }
 
-  const canSend = !busy && draft.to.trim().length > 0 && totalBytes <= MAX_TOTAL_BYTES;
+  // `guard.blocked` only ever reflects a deterministic failure (bad syntax,
+  // NXDOMAIN, null MX, no MX + no A/AAAA) and clears the moment the user clicks
+  // "Send anyway" in the strip above.
+  const canSend = !busy && draft.to.trim().length > 0 && totalBytes <= MAX_TOTAL_BYTES && !guard.blocked;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -206,7 +215,17 @@ export function ComposeDrawer({
               placeholder="recipient@example.com"
               autoComplete="off"
               spellCheck={false}
+              aria-describedby="compose-recipient-check"
             />
+            <div id="compose-recipient-check" className="mt-1.5 space-y-1.5">
+              <RecipientGuardStrip guard={guard} />
+              {guard.result?.suggestion ? (
+                <SuggestionChip
+                  suggestion={guard.result.suggestion}
+                  onAccept={(v) => onChange({ ...draft, to: v })}
+                />
+              ) : null}
+            </div>
           </Field>
           <Field label="Subject">
             <input
@@ -313,6 +332,7 @@ export function ComposeDrawer({
             type="button"
             onClick={handleSend}
             disabled={!canSend}
+            title={guard.blocked ? "This address cannot receive mail — use “Send anyway” to override." : undefined}
             className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-accent-ink disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendIcon className="h-4 w-4" />}

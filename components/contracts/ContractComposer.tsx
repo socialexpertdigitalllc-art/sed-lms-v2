@@ -8,6 +8,7 @@ import { Field, inputCls } from "@/components/forms/Field";
 import { Skeleton } from "@/components/common/Skeleton";
 import { btnPrimary, btnSecondary } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
+import { RecipientGuardStrip, useRecipientGuard } from "@/components/email-verify/RecipientGuard";
 import { formatCurrency, formatDate } from "@/lib/leads/format";
 import { parsePrice, formatUsd } from "@/lib/contracts/merge";
 import type { ContractRow } from "@/lib/contracts/types";
@@ -53,12 +54,15 @@ export function ContractComposer({
   leadId,
   mailboxes,
   onClose,
+  recipientEmail = null,
   leadOneTimePrice = null,
   leadYearlyPrice = null,
 }: {
   leadId: string;
   mailboxes: Mailbox[];
   onClose: () => void;
+  /** The lead's email — checked as soon as the composer opens. */
+  recipientEmail?: string | null;
   /** The lead's quoted one-time price — the default the agent may discount. */
   leadOneTimePrice?: number | string | null;
   /** The lead's yearly price — blank means none. */
@@ -77,6 +81,11 @@ export function ContractComposer({
   const [contractId, setContractId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ContractRow | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Checked as soon as the composer opens (from the lead's address), then against
+  // the address the generated contract is actually addressed to.
+  const recipient = draft?.recipient_email || draft?.business_email || recipientEmail || "";
+  const guard = useRecipientGuard(recipient);
 
   useEffect(() => {
     fetch("/api/contract-templates")
@@ -303,6 +312,9 @@ export function ContractComposer({
             />
           </Field>
 
+          {/* Recipient check. WARN is advisory; BLOCK disables Send until overridden. */}
+          <RecipientGuardStrip guard={guard} />
+
           {/* PDF preview */}
           {locked && (
             <div>
@@ -327,7 +339,13 @@ export function ContractComposer({
                 {busy ? "Preparing…" : "Create & preview"}
               </button>
             ) : (
-              <button type="button" onClick={send} disabled={busy} className={btnPrimary}>
+              <button
+                type="button"
+                onClick={send}
+                disabled={busy || guard.blocked}
+                title={guard.blocked ? "This recipient address cannot receive mail — use “Send anyway” to override." : undefined}
+                className={btnPrimary}
+              >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 {busy ? "Sending…" : "Send contract"}
               </button>

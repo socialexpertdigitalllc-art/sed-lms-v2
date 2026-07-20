@@ -21,6 +21,7 @@ export function FieldRow({
   options,
   canEdit = false,
   onSave,
+  editExtra,
   className = "",
 }: {
   label: string;
@@ -34,6 +35,12 @@ export function FieldRow({
   options?: readonly SelectOption[];
   canEdit?: boolean;
   onSave?: (next: string) => Promise<void> | void;
+  /**
+   * Extra advisory UI rendered under the control while editing, given the live
+   * draft and a setter (so it can offer a one-click correction). Purely
+   * additive — it can never prevent a save.
+   */
+  editExtra?: (draft: string, setDraft: (next: string) => void) => React.ReactNode;
   className?: string;
 }) {
   const [editing, setEditing] = useState(false);
@@ -120,6 +127,7 @@ export function FieldRow({
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {error}
               </p>
             )}
+            {editExtra?.(draft, setDraft)}
           </div>
           <button
             type="button"

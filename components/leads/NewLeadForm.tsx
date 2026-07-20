@@ -40,6 +40,7 @@ import { DynamicList } from "@/components/forms/DynamicList";
 import { ConditionalBlock } from "@/components/forms/ConditionalBlock";
 import { RatingGroup } from "@/components/forms/RatingGroup";
 import { SectionCard, FieldBlock as F, FieldError, SummaryRow } from "@/components/forms/formShell";
+import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -386,6 +387,12 @@ export function NewLeadForm({
                   placeholder="example@email.com"
                   disabled={f.no_email}
                   className={inputCls + (f.no_email ? " opacity-50" : "")}
+                />
+                {/* Advisory only — never gates submission. */}
+                <EmailFieldVerify
+                  email={f.business_email}
+                  disabled={f.no_email}
+                  onAccept={(v) => set("business_email", v)}
                 />
                 <label className="mt-1.5 flex items-center gap-1.5 text-xs text-text-muted">
                   <input
