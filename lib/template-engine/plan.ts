@@ -1,5 +1,4 @@
-import { callProvider } from "@/lib/ai-tools/run";
-import { GEMINI_PRO_MODEL } from "@/lib/ai-tools/config";
+import { callForTask } from "@/lib/ai-tools/providers/run";
 import { parseJsonLoose } from "@/lib/ai/json";
 import { contentModelSchema, type ContentModel } from "./contentModel";
 import type { GenerationBrief } from "./brief";
@@ -63,19 +62,19 @@ ${emailRule}
 }
 
 /**
- * Plan the content model with Gemini Pro. Fails loud on unparseable or
- * schema-invalid output — it NEVER falls back to a default model, because
- * "treated an empty/no-op result as success" is the exact v1 bug v2 exists to
- * kill. `model` is the model id (default the verified Pro tier); the returned
- * `model` is the validated ContentModel, `raw` the original completion (kept for
- * auditing / a later repair pass).
+ * Plan the content model with whichever model is routed to the `content_plan`
+ * task (Gemini Pro unless an operator reassigned it — see
+ * lib/ai-tools/providers). Fails loud on unparseable or schema-invalid output —
+ * it NEVER falls back to a default content model, because "treated an empty/
+ * no-op result as success" is the exact v1 bug v2 exists to kill. The returned
+ * `model` is the validated ContentModel, `raw` the original completion (kept
+ * for auditing / a later repair pass).
  */
 export async function planContent(
   brief: GenerationBrief,
   pages: string[],
-  model = GEMINI_PRO_MODEL,
 ): Promise<{ model: ContentModel; raw: string }> {
-  const { text: raw } = await callProvider("gemini", model, PLAN_SYSTEM, planPrompt(brief, pages), {
+  const { text: raw } = await callForTask("content_plan", PLAN_SYSTEM, planPrompt(brief, pages), {
     maxTokens: 32000,
     temperature: 0.6,
   });

@@ -1,0 +1,141 @@
+import {
+  AI_PROVIDER_REGISTRY,
+  AI_TASK_REGISTRY,
+  capableModelsForTask,
+  getProvider,
+  type AiCredentialField,
+  type AiModelDescriptor,
+} from "./registry";
+import { getAiProviderStatuses, getAiTaskAssignments } from "./config";
+
+/**
+ * The one client-safe projection of the AI routing settings.
+ *
+ * SERVER ONLY. The admin page renders from this, so the page and the API can
+ * never drift — and neither can leak a credential, because this shape has no
+ * field that could carry one. `configured` + `hint` is all the client ever
+ * learns about what is stored.
+ */
+
+export interface AiProviderSetting {
+  key: string;
+  label: string;
+  endpoint: string;
+  docsUrl: string;
+  credentialFields: AiCredentialField[];
+  models: AiModelDescriptor[];
+  capabilities: { vision: boolean; longOutput: boolean; maxOutputTokens: number };
+  enabled: boolean;
+  configured: boolean;
+  /** The last 4 of an API key. Never the secret. */
+  hint: string | null;
+  updatedAt: string | null;
+}
+
+export interface AiTaskSetting {
+  key: string;
+  label: string;
+  description: string;
+  where: string;
+  requires: { vision: boolean; minOutputTokens: number };
+  routable: boolean;
+  defaultProvider: string;
+  defaultModel: string;
+  defaultLabel: string;
+  /** The stored assignment, or null when the task runs its default. */
+  assignedProvider: string | null;
+  assignedModel: string | null;
+  /** What will actually serve the task on the next run. */
+  effectiveProvider: string;
+  effectiveModel: string;
+  effectiveLabel: string;
+  /** Why the effective pick is not the assigned one (unconfigured/disabled). */
+  effectiveNote: string | null;
+  /** Only pairings this task may legally use — the UI offers nothing else. */
+  options: { providerKey: string; providerLabel: string; model: string; note?: string; usable: boolean }[];
+  updatedAt: string | null;
+}
+
+export interface AiRoutingSettings {
+  providers: AiProviderSetting[];
+  tasks: AiTaskSetting[];
+}
+
+function providerLabel(key: string): string {
+  return getProvider(key)?.label ?? key;
+}
+
+/** Every provider and task with its stored state, ready to render. */
+export async function listAiRoutingSettings(): Promise<AiRoutingSettings> {
+  const [statuses, assignments] = await Promise.all([
+    getAiProviderStatuses().catch(() => []),
+    getAiTaskAssignments().catch(() => []),
+  ]);
+  const statusByKey = new Map(statuses.map((s) => [s.key, s]));
+
+  const providers: AiProviderSetting[] = AI_PROVIDER_REGISTRY.map((d) => {
+    const s = statusByKey.get(d.key);
+    return {
+      key: d.key,
+      label: d.label,
+      endpoint: d.endpoint,
+      docsUrl: d.docsUrl,
+      credentialFields: d.credentialFields,
+      models: d.models,
+      capabilities: d.capabilities,
+      enabled: s?.enabled ?? false,
+      configured: s?.configured ?? false,
+      hint: s?.hint ?? null,
+      updatedAt: s?.updatedAt ?? null,
+    };
+  });
+
+  /** Usable = enabled AND credentials stored. Mirrors resolveTaskModel exactly. */
+  const usable = (key: string) => {
+    const s = statusByKey.get(key);
+    return Boolean(s?.enabled && s?.configured);
+  };
+
+  const tasks: AiTaskSetting[] = AI_TASK_REGISTRY.map((t) => {
+    const assignment = t.routable ? assignments.find((a) => a.taskKey === t.key) : undefined;
+    const assignedUsable = assignment !== undefined && usable(assignment.providerKey);
+
+    const effectiveProvider = assignedUsable ? assignment!.providerKey : t.defaultProvider;
+    const effectiveModel = assignedUsable ? assignment!.model : t.defaultModel;
+    const effectiveNote = !assignment
+      ? null
+      : assignedUsable
+        ? null
+        : `${providerLabel(assignment.providerKey)} is disabled or has no stored key, so this task is running the default.`;
+
+    return {
+      key: t.key,
+      label: t.label,
+      description: t.description,
+      where: t.where,
+      requires: t.requires,
+      routable: t.routable,
+      defaultProvider: t.defaultProvider,
+      defaultModel: t.defaultModel,
+      defaultLabel: `${providerLabel(t.defaultProvider)} · ${t.defaultModel}`,
+      assignedProvider: assignment?.providerKey ?? null,
+      assignedModel: assignment?.model ?? null,
+      effectiveProvider,
+      effectiveModel,
+      effectiveLabel: `${providerLabel(effectiveProvider)} · ${effectiveModel}`,
+      effectiveNote,
+      // Capability-filtered at the source: an impossible pairing is never
+      // offered, so the 422 the API would return is a backstop, not the UX.
+      options: capableModelsForTask(t.key).map(({ provider, model }) => ({
+        providerKey: provider.key,
+        providerLabel: provider.label,
+        model: model.id,
+        note: model.note,
+        usable: usable(provider.key),
+      })),
+      updatedAt: assignment?.updatedAt ?? null,
+    };
+  });
+
+  return { providers, tasks };
+}

@@ -6,8 +6,7 @@
 // treat "the model handed the source back" as success — that refusal is the
 // single most important line in this file.
 
-import { callProvider } from "@/lib/ai-tools/run";
-import { GEMINI_PRO_MODEL } from "@/lib/ai-tools/config";
+import { callForTask } from "@/lib/ai-tools/providers/run";
 
 export const REGEN_SYSTEM = `You are a precise COPY-EDITOR for website templates. You are given ONE file of an existing template plus a business's content model, and you return the SAME file with only its human-visible text and image URLs swapped to that business.
 
@@ -37,7 +36,6 @@ export interface RegenerateArgs {
   imagesForFile: unknown;
   /** The template's demo identity — must not survive into the output. */
   demoTokens: string[];
-  model?: string;
   /** On a verification-repair pass, the exact leak/structure problems to fix. */
   repairNote?: string;
 }
@@ -92,7 +90,8 @@ function stripFence(raw: string): string {
 }
 
 /**
- * Regenerate one content file with Gemini Pro. Throws on empty output or output
+ * Regenerate one content file with whichever model is routed to the
+ * `file_regen` task. Throws on empty output or output
  * byte-identical to the source: v1's defining bug was accepting "no change" as a
  * finished step, and this function exists so that can never happen silently. The
  * leak/structure gates (runGates) validate the content itself afterwards.
@@ -107,14 +106,16 @@ export async function regenerateFile(args: RegenerateArgs): Promise<string> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
     try {
-      const { text } = await callProvider(
-        "gemini",
-        args.model ?? GEMINI_PRO_MODEL,
+      const { text } = await callForTask(
+        "file_regen",
         REGEN_SYSTEM,
         regenPrompt(args),
         // Low temperature for maximum fidelity (this is a copy-edit, not creative
-        // writing), and a high token budget so a large page is never shortened to fit.
-        { maxTokens: 64000, temperature: 0.15 },
+        // writing), and EVERY output token the routed model can emit so a large
+        // page is never shortened to fit. The ceiling comes from the model
+        // descriptor, not a constant — a smaller model gets its own honest cap,
+        // and the registry refuses to route this task to one below 32k anyway.
+        { maxTokens: "model-max", temperature: 0.15 },
       );
       const out = stripFence(text);
       if (!out) throw new Error(`Regeneration of ${args.file} returned empty output`);

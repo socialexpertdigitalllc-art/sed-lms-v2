@@ -1,0 +1,155 @@
+// @vitest-environment node
+import { describe, it, expect } from "vitest";
+import {
+  AI_PROVIDER_REGISTRY,
+  AI_TASK_REGISTRY,
+  LONG_OUTPUT_TOKENS,
+  apiKeyFrom,
+  assignmentError,
+  capableModelsForTask,
+  getModel,
+  getProvider,
+  getTask,
+  hasCompleteCredentials,
+  isAiTaskKey,
+  isValidAssignment,
+  maskCredentialHint,
+} from "@/lib/ai-tools/providers/registry";
+
+describe("AI provider registry", () => {
+  it("describes exactly the providers we can call", () => {
+    expect(AI_PROVIDER_REGISTRY.map((p) => p.key)).toEqual(["gemini", "deepseek", "webcraft", "minimax"]);
+  });
+
+  it("only lists OpenAI-compatible chat/completions endpoints", () => {
+    // The single call path in lib/ai-tools/run.ts assumes this — a provider
+    // with a different wire format needs an adapter, not just a descriptor.
+    for (const p of AI_PROVIDER_REGISTRY) {
+      expect(p.endpoint).toMatch(/^https:\/\/.+\/chat\/completions$/);
+      expect(p.models.length).toBeGreaterThan(0);
+      expect(p.credentialFields.length).toBeGreaterThan(0);
+      expect(p.envKey).toMatch(/^[A-Z0-9_]+$/);
+    }
+  });
+
+  it("keeps the provider capability rollup honest against its models", () => {
+    for (const p of AI_PROVIDER_REGISTRY) {
+      expect(p.capabilities.vision).toBe(p.models.some((m) => m.vision));
+      expect(p.capabilities.maxOutputTokens).toBe(Math.max(...p.models.map((m) => m.maxOutputTokens)));
+      expect(p.capabilities.longOutput).toBe(p.capabilities.maxOutputTokens >= LONG_OUTPUT_TOKENS);
+    }
+  });
+
+  it("marks only the models documented to accept image input as vision", () => {
+    // MiniMax publishes image input for MiniMax-M3 alone; DeepSeek and Moonshot
+    // publish none for the ids we list. Flagging one wrongly is exactly the
+    // silent failure this registry exists to prevent.
+    expect(getModel("minimax", "MiniMax-M3")?.vision).toBe(true);
+    expect(getModel("minimax", "MiniMax-M2")?.vision).toBe(false);
+    expect(AI_PROVIDER_REGISTRY.find((p) => p.key === "deepseek")!.models.every((m) => !m.vision)).toBe(true);
+    expect(AI_PROVIDER_REGISTRY.find((p) => p.key === "webcraft")!.models.every((m) => !m.vision)).toBe(true);
+  });
+
+  it("resolves providers and models, and rejects unknown ones", () => {
+    expect(getProvider("gemini")?.label).toBe("Google Gemini");
+    expect(getProvider("nope")).toBeUndefined();
+    expect(getModel("gemini", "gemini-3.5-flash")?.vision).toBe(true);
+    expect(getModel("gemini", "not-a-model")).toBeUndefined();
+  });
+});
+
+describe("AI task registry", () => {
+  it("describes exactly the four AI tasks", () => {
+    expect(AI_TASK_REGISTRY.map((t) => t.key)).toEqual(["content_plan", "file_regen", "image_vision", "legacy_v1"]);
+    expect(isAiTaskKey("file_regen")).toBe(true);
+    expect(isAiTaskKey("nope")).toBe(false);
+  });
+
+  it("keeps every task's own default a legal assignment", () => {
+    for (const t of AI_TASK_REGISTRY) {
+      expect(assignmentError(t.key, t.defaultProvider, t.defaultModel)).toBeNull();
+    }
+  });
+
+  it("states the capability each task actually demands", () => {
+    expect(getTask("image_vision")!.requires.vision).toBe(true);
+    expect(getTask("file_regen")!.requires.minOutputTokens).toBe(LONG_OUTPUT_TOKENS);
+    expect(getTask("content_plan")!.requires.vision).toBe(false);
+    // The legacy generator reads its model off the generation row.
+    expect(getTask("legacy_v1")!.routable).toBe(false);
+  });
+});
+
+describe("capability constraints", () => {
+  it("refuses a text-only model for image vetting, with a reason", () => {
+    // THE constraint. A text-only model here does not error — it answers about
+    // photos it never saw, which is indistinguishable from a broken image step.
+    const reason = assignmentError("image_vision", "deepseek", "deepseek-chat");
+    expect(reason).toBeTruthy();
+    expect(reason).toMatch(/cannot read them/);
+    expect(isValidAssignment("image_vision", "deepseek", "deepseek-chat")).toBe(false);
+    expect(isValidAssignment("image_vision", "minimax", "MiniMax-M2")).toBe(false);
+    expect(isValidAssignment("image_vision", "minimax", "MiniMax-M3")).toBe(true);
+  });
+
+  it("refuses a model that cannot emit a whole page for the file rewrite", () => {
+    const reason = assignmentError("file_regen", "deepseek", "deepseek-chat");
+    expect(reason).toBeTruthy();
+    expect(reason).toMatch(/truncated/);
+    // Moonshot's 32k models clear the bar exactly.
+    expect(isValidAssignment("file_regen", "webcraft", "moonshot-v1-128k")).toBe(true);
+  });
+
+  it("allows a small text model for planning, which only needs 8k", () => {
+    expect(isValidAssignment("content_plan", "deepseek", "deepseek-chat")).toBe(true);
+  });
+
+  it("names unknown tasks, providers and models rather than silently passing", () => {
+    expect(assignmentError("nope", "gemini", "gemini-2.5-pro")).toMatch(/Unknown task/);
+    expect(assignmentError("content_plan", "nope", "x")).toMatch(/Unknown provider/);
+    expect(assignmentError("content_plan", "gemini", "gemini-9")).toMatch(/does not offer/);
+  });
+
+  it("offers only capable pairings per task", () => {
+    const vision = capableModelsForTask("image_vision");
+    expect(vision.length).toBeGreaterThan(0);
+    expect(vision.every(({ model }) => model.vision)).toBe(true);
+    expect(vision.some(({ provider, model }) => provider.key === "minimax" && model.id === "MiniMax-M3")).toBe(true);
+
+    const regen = capableModelsForTask("file_regen");
+    expect(regen.every(({ model }) => model.maxOutputTokens >= LONG_OUTPUT_TOKENS)).toBe(true);
+    expect(regen.some(({ provider }) => provider.key === "deepseek")).toBe(false);
+
+    // Every offered pairing is, by definition, one the API would accept.
+    for (const task of AI_TASK_REGISTRY) {
+      for (const { provider, model } of capableModelsForTask(task.key)) {
+        expect(assignmentError(task.key, provider.key, model.id)).toBeNull();
+      }
+    }
+  });
+});
+
+describe("credential handling", () => {
+  const gemini = getProvider("gemini")!;
+
+  it("requires every declared field", () => {
+    expect(hasCompleteCredentials(gemini, null)).toBe(false);
+    expect(hasCompleteCredentials(gemini, {})).toBe(false);
+    expect(hasCompleteCredentials(gemini, { api_key: "  " })).toBe(false);
+    expect(hasCompleteCredentials(gemini, { api_key: "sk-abc" })).toBe(true);
+  });
+
+  it("masks a stored key down to its last 4 and never more", () => {
+    expect(maskCredentialHint(gemini, { api_key: "sk-live-9F2xQ7ab" })).toBe("••••Q7ab");
+    expect(maskCredentialHint(gemini, { api_key: "abc" })).toBe("••••");
+    expect(maskCredentialHint(gemini, null)).toBeNull();
+    // The hint must never contain the whole secret.
+    expect(maskCredentialHint(gemini, { api_key: "sk-live-9F2xQ7ab" })).not.toContain("sk-live");
+  });
+
+  it("extracts the bearer key, or null when incomplete", () => {
+    expect(apiKeyFrom(gemini, { api_key: " sk-abc " })).toBe("sk-abc");
+    expect(apiKeyFrom(gemini, { api_key: "" })).toBeNull();
+    expect(apiKeyFrom(gemini, null)).toBeNull();
+  });
+});

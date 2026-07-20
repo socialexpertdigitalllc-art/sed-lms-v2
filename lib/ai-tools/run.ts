@@ -100,7 +100,43 @@ export async function callProvider(
   const cfg = TOOLS[tool];
   const apiKey = process.env[cfg.envKey];
   if (!apiKey) throw new Error(`${cfg.label} is not configured (missing ${cfg.envKey}).`);
+  return callWithProvider(
+    { label: cfg.label, endpoint: cfg.endpoint, apiKey, maxOutputTokens: cfg.maxOutputTokens },
+    model,
+    systemPrompt,
+    userPrompt,
+    opts
+  );
+}
 
+/**
+ * The provider spec `callWithProvider` needs: everything about WHERE to send a
+ * completion and WITH WHAT, resolved by the caller. Env-configured tools get
+ * one built from TOOLS above; per-task routing (lib/ai-tools/providers) builds
+ * one from the registry descriptor plus the operator's stored credentials.
+ *
+ * `apiKey` is a live secret — never log this object.
+ */
+export interface ProviderSpec {
+  label: string;
+  endpoint: string;
+  apiKey: string;
+  /** Hard ceiling for this model; the request sends min(maxTokens, this). */
+  maxOutputTokens: number;
+}
+
+/**
+ * The actual OpenAI-compatible call. Identical wire format for every provider
+ * we support (Gemini's compat surface, DeepSeek, Moonshot, MiniMax), which is
+ * why adding a provider is a descriptor and nothing else.
+ */
+export async function callWithProvider(
+  cfg: ProviderSpec,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  opts: { maxTokens: number; temperature: number; images?: string[]; timeoutMs?: number }
+): Promise<{ text: string; tokens: number }> {
   const userContent =
     opts.images && opts.images.length > 0
       ? [{ type: "text", text: userPrompt }, ...opts.images.map((url) => ({ type: "image_url", image_url: { url } }))]
@@ -113,7 +149,7 @@ export async function callProvider(
   try {
     res = await fetch(cfg.endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
       signal: controller.signal,
       body: JSON.stringify({
         model,

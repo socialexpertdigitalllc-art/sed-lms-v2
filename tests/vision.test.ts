@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { VISION_SYSTEM, visionPrompt, parseVisionVerdicts, rankImages } from "@/lib/template-engine/vision";
-import { callProvider } from "@/lib/ai-tools/run";
+import { callForTask } from "@/lib/ai-tools/providers/run";
 
-vi.mock("@/lib/ai-tools/run", () => ({
-  callProvider: vi.fn(),
+// The vision step routes through the per-task model router now; the network
+// call itself is what we stub, exactly as before.
+vi.mock("@/lib/ai-tools/providers/run", () => ({
+  callForTask: vi.fn(),
 }));
 
 describe("visionPrompt", () => {
@@ -111,7 +113,7 @@ describe("parseVisionVerdicts — truncation salvage", () => {
 
 describe("rankImages", () => {
   const brief = { query: "new roof", kind: "service", businessType: "General Contractor" };
-  const mockCall = vi.mocked(callProvider);
+  const mockCall = vi.mocked(callForTask);
   const goodVerdicts = (n: number) =>
     JSON.stringify(
       Array.from({ length: n }, (_, i) => ({
@@ -121,6 +123,7 @@ describe("rankImages", () => {
         reason: `photo ${i} fine`,
       })),
     );
+  const answer = (text: string) => ({ text, tokens: 100, providerKey: "gemini", model: "gemini-3.5-flash" });
   let errSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -132,10 +135,10 @@ describe("rankImages", () => {
   });
 
   it("gives the vision call enough output budget for thinking tokens (>= 8000)", async () => {
-    mockCall.mockResolvedValue({ text: goodVerdicts(2), tokens: 100 });
+    mockCall.mockResolvedValue(answer(goodVerdicts(2)));
     await rankImages([{ url: "a" }, { url: "b" }], brief);
     expect(mockCall).toHaveBeenCalledTimes(1);
-    const opts = mockCall.mock.calls[0][4];
+    const opts = mockCall.mock.calls[0][3];
     // 2000 was eaten almost entirely by gemini-3.5-flash's hidden thinking
     // tokens (~1600-1800/call), truncating the verdicts JSON.
     expect(opts.maxTokens).toBeGreaterThanOrEqual(8000);
@@ -143,8 +146,8 @@ describe("rankImages", () => {
 
   it("retries a chunk whose response was fully unreadable and uses the retry's verdicts", async () => {
     mockCall
-      .mockResolvedValueOnce({ text: "totally not json", tokens: 10 })
-      .mockResolvedValueOnce({ text: goodVerdicts(2), tokens: 100 });
+      .mockResolvedValueOnce(answer("totally not json"))
+      .mockResolvedValueOnce(answer(goodVerdicts(2)));
     const out = await rankImages([{ url: "a" }, { url: "b" }], brief);
     expect(mockCall).toHaveBeenCalledTimes(2);
     expect(out).toEqual([
@@ -156,7 +159,7 @@ describe("rankImages", () => {
   it("retries when the provider throws, then succeeds", async () => {
     mockCall
       .mockRejectedValueOnce(new Error("HTTP 429"))
-      .mockResolvedValueOnce({ text: goodVerdicts(1), tokens: 50 });
+      .mockResolvedValueOnce(answer(goodVerdicts(1)));
     const out = await rankImages([{ url: "a" }], brief);
     expect(mockCall).toHaveBeenCalledTimes(2);
     expect(out).toEqual([{ people: false, relevance: 0.9, quality: 0.8, reason: "photo 0 fine" }]);
@@ -166,7 +169,7 @@ describe("rankImages", () => {
     // Partial salvage means the call fundamentally worked; a retry would just
     // burn quota. The missing tail stays conservative (dropped upstream).
     const truncated = '[{"people":false,"relevance":0.9,"quality":0.8,"reason":"ok"},{"people":fa';
-    mockCall.mockResolvedValue({ text: truncated, tokens: 100 });
+    mockCall.mockResolvedValue(answer(truncated));
     const out = await rankImages([{ url: "a" }, { url: "b" }], brief);
     expect(mockCall).toHaveBeenCalledTimes(1);
     expect(out[0]).toEqual({ people: false, relevance: 0.9, quality: 0.8, reason: "ok" });
@@ -174,7 +177,7 @@ describe("rankImages", () => {
   });
 
   it("settles on all-conservative verdicts and logs loudly after every attempt fails", async () => {
-    mockCall.mockResolvedValue({ text: "garbage every time", tokens: 10 });
+    mockCall.mockResolvedValue(answer("garbage every time"));
     const out = await rankImages([{ url: "a" }, { url: "b" }], brief);
     expect(mockCall.mock.calls.length).toBeGreaterThanOrEqual(2); // must have retried
     expect(out).toEqual([

@@ -8,8 +8,7 @@
  * cannot deliver either judgment — this is genuinely a vision task.
  */
 
-import { callProvider } from "@/lib/ai-tools/run";
-import { GEMINI_FLASH_MODEL } from "@/lib/ai-tools/config";
+import { callForTask } from "@/lib/ai-tools/providers/run";
 import { parseJsonArrayPrefix, parseJsonLoose } from "@/lib/ai/json";
 import type { VisionVerdict } from "./imageSlots";
 
@@ -126,8 +125,11 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * Rank candidate images with one (or more, chunked) Gemini Flash vision
- * call(s): a text part (visionPrompt) plus one `image_url` part per
+ * Rank candidate images with one (or more, chunked) vision call(s) to whichever
+ * model is routed to the `image_vision` task — a task the registry will only
+ * ever point at a model documented to accept image input, because a text-only
+ * model here answers confidently about photos it never saw. Each call is a text
+ * part (visionPrompt) plus one `image_url` part per
  * candidate. Never throws — a vision-provider outage must not fail the whole
  * generation, it should just yield no vetted picks for that batch, so any
  * call failure resolves to all-conservative verdicts for the images in it.
@@ -136,7 +138,6 @@ function chunk<T>(items: T[], size: number): T[][] {
 export async function rankImages(
   candidates: { url: string }[],
   brief: VisionBrief,
-  model: string = GEMINI_FLASH_MODEL,
 ): Promise<VisionVerdict[]> {
   if (candidates.length === 0) return [];
 
@@ -146,7 +147,7 @@ export async function rankImages(
     let lastNote = "";
     for (let attempt = 1; attempt <= RANK_ATTEMPTS; attempt++) {
       try {
-        const { text } = await callProvider("gemini", model, VISION_SYSTEM, visionPrompt(brief), {
+        const { text } = await callForTask("image_vision", VISION_SYSTEM, visionPrompt(brief), {
           maxTokens: VISION_MAX_TOKENS,
           temperature: 0,
           images: batch.map((c) => c.url),
