@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from "vitest";
-import { runProviderChain } from "@/lib/email-verify/providers/chain";
+import { orderProviders, runProviderChain, type ChainProviderConfig } from "@/lib/email-verify/providers/chain";
 import { isProviderAvailable, periodEnd, periodKey, PROVIDER_LIMITS } from "@/lib/email-verify/providers/quota";
 import type { ProviderAdapter, ProviderStateStore } from "@/lib/email-verify/providers/types";
 import type { ProviderName, RemoteResult } from "@/lib/email-verify/types";
@@ -140,5 +140,99 @@ describe("provider chain", () => {
   it("returns local-only when no providers are supplied at all", async () => {
     const out = await runProviderChain("a@b.com", { providers: [], state: fakeState() });
     expect(out).toEqual({ provider: null, signal: null, raw: null, attempts: [] });
+  });
+});
+
+/* ---------------------------------------------- config-driven chain (0042) */
+
+const cfg = (key: string, priority: number, extra: Partial<ChainProviderConfig> = {}): ChainProviderConfig => ({
+  key,
+  priority,
+  enabled: true,
+  credentials: { api_key: "k", username: "u", password: "p" },
+  ...extra,
+});
+
+describe("orderProviders", () => {
+  const v = fakeProvider("verifalia", good);
+  const r = fakeProvider("reoon", good);
+
+  it("leaves the adapters untouched when there is no config", () => {
+    expect(orderProviders([v, r]).map((x) => x.adapter.name)).toEqual(["verifalia", "reoon"]);
+    expect(orderProviders([v, r], null)[0].config).toBeNull();
+  });
+
+  it("orders by configured priority ascending", () => {
+    const out = orderProviders([v, r], [cfg("reoon", 0), cfg("verifalia", 1)]);
+    expect(out.map((x) => x.adapter.name)).toEqual(["reoon", "verifalia"]);
+  });
+
+  it("drops config rows with no adapter behind them", () => {
+    const out = orderProviders([v, r], [cfg("neverbounce", 0), cfg("verifalia", 1)]);
+    expect(out.map((x) => x.adapter.name)).toEqual(["verifalia"]);
+  });
+});
+
+describe("chain driven by user configuration", () => {
+  it("uses the configured order, not the array order", async () => {
+    const v = fakeProvider("verifalia", good);
+    const r = fakeProvider("reoon", { ...good, status: "safe" });
+    const out = await runProviderChain("a@b.com", {
+      providers: [v, r],
+      configs: [cfg("reoon", 0), cfg("verifalia", 1)],
+      state: fakeState(),
+    });
+    expect(out.provider).toBe("reoon");
+    expect(v.verify).not.toHaveBeenCalled();
+  });
+
+  it("skips a disabled provider without calling it", async () => {
+    const v = fakeProvider("verifalia", good);
+    const r = fakeProvider("reoon", good);
+    const out = await runProviderChain("a@b.com", {
+      providers: [v, r],
+      configs: [cfg("verifalia", 0, { enabled: false }), cfg("reoon", 1)],
+      state: fakeState(),
+    });
+    expect(v.verify).not.toHaveBeenCalled();
+    expect(out.attempts[0]).toEqual({ provider: "verifalia", outcome: "disabled" });
+    expect(out.provider).toBe("reoon");
+  });
+
+  it("skips a provider with no stored credentials", async () => {
+    const v = fakeProvider("verifalia", good);
+    const r = fakeProvider("reoon", good);
+    // isConfigured is asked about the credentials it was HANDED, not the env
+    v.isConfigured = (creds) => Boolean(creds && creds.username);
+    const out = await runProviderChain("a@b.com", {
+      providers: [v, r],
+      configs: [cfg("verifalia", 0, { credentials: null }), cfg("reoon", 1)],
+      state: fakeState(),
+    });
+    expect(out.attempts[0]).toEqual({ provider: "verifalia", outcome: "not_configured" });
+    expect(out.provider).toBe("reoon");
+  });
+
+  it("hands the stored credentials to the adapter", async () => {
+    const v = fakeProvider("verifalia", good);
+    await runProviderChain("a@b.com", {
+      providers: [v],
+      configs: [cfg("verifalia", 0, { credentials: { username: "u1", password: "p1" } })],
+      state: fakeState(),
+    });
+    expect(v.verify).toHaveBeenCalledWith("a@b.com", expect.objectContaining({ credentials: { username: "u1", password: "p1" } }));
+  });
+
+  it("still falls through to local-only when everything is off", async () => {
+    const v = fakeProvider("verifalia", good);
+    const r = fakeProvider("reoon", good);
+    const out = await runProviderChain("a@b.com", {
+      providers: [v, r],
+      configs: [cfg("verifalia", 0, { enabled: false }), cfg("reoon", 1, { enabled: false })],
+      state: fakeState(),
+    });
+    expect(out.provider).toBeNull();
+    expect(out.signal).toBeNull();
+    expect(out.attempts.map((a) => a.outcome)).toEqual(["disabled", "disabled"]);
   });
 });

@@ -1,5 +1,5 @@
 import type { ProviderClassification, ProviderDetail, RemoteResult } from "../types";
-import type { ProviderAdapter } from "./types";
+import type { ProviderAdapter, ProviderCredentials } from "./types";
 
 /**
  * Verifalia adapter — REST API v2.7, HTTP Basic auth.
@@ -18,7 +18,7 @@ import type { ProviderAdapter } from "./types";
  * `waitTime` is 0..30000 ms and the server may honour less, so we still poll.
  */
 
-const BASE_URL = process.env.VERIFALIA_BASE_URL || "https://api.verifalia.com/v2.7";
+export const BASE_URL = process.env.VERIFALIA_BASE_URL || "https://api.verifalia.com/v2.7";
 /** Per-request server-side wait. Kept short so a slow job does not hold a request handler. */
 const WAIT_MS = 8000;
 /** Hard ceiling across submit + all polls. */
@@ -35,12 +35,19 @@ export type VerifaliaEntry = {
   suggestions?: string[];
 };
 
-/** Credentials, or null when either half is missing/blank (never throws). */
-export function getVerifaliaCredentials(): { username: string; password: string } | null {
-  const username = (process.env.VERIFALIA_USERNAME ?? "").trim();
-  const password = (process.env.VERIFALIA_PASSWORD ?? "").trim();
-  if (!username || !password) return null;
-  return { username, password };
+/**
+ * Credentials, or null when either half is missing/blank (never throws).
+ *
+ * `source` is the user-managed configuration; when it is absent we fall back to
+ * the environment, which is only ever the pre-config-store deployment path.
+ */
+export function getVerifaliaCredentials(
+  source?: ProviderCredentials | null
+): { username: string; password: string } | null {
+  const username = (source ? source.username : process.env.VERIFALIA_USERNAME) ?? "";
+  const password = (source ? source.password : process.env.VERIFALIA_PASSWORD) ?? "";
+  if (!username.trim() || !password.trim()) return null;
+  return { username: username.trim(), password: password.trim() };
 }
 
 /** Map an HTTP status to our failure reason, or null when it is not a failure. */
@@ -103,6 +110,10 @@ function isCompleted(snapshot: unknown): boolean {
   return status.toLowerCase() === "completed";
 }
 
+export function verifaliaAuthHeader(c: { username: string; password: string }): string {
+  return authHeader(c);
+}
+
 function authHeader(c: { username: string; password: string }): string {
   return `Basic ${Buffer.from(`${c.username}:${c.password}`).toString("base64")}`;
 }
@@ -118,12 +129,12 @@ async function readJson(res: Response): Promise<unknown> {
 export const verifalia: ProviderAdapter = {
   name: "verifalia",
 
-  isConfigured() {
-    return getVerifaliaCredentials() !== null;
+  isConfigured(credentials) {
+    return getVerifaliaCredentials(credentials) !== null;
   },
 
   async verify(email, opts = {}) {
-    const creds = getVerifaliaCredentials();
+    const creds = getVerifaliaCredentials(opts.credentials);
     // A blank credential SKIPS the provider — it must never throw.
     if (!creds) return { ok: false, reason: "auth", message: "Verifalia credentials not configured" };
 

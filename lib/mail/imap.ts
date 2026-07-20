@@ -4,6 +4,7 @@ import { buildImapConfig } from "@/lib/mail/config";
 import type { ResolvedMailbox } from "@/lib/mail/types";
 import { formatAddressList, makePreview, hasAttachments, normalizeFolder } from "@/lib/mail/message";
 import type { PollMessage } from "@/lib/mail/poll";
+import { looksLikeBounce } from "@/lib/mail/bounce";
 
 export interface MailListItem {
   uid: number;
@@ -209,10 +210,19 @@ export async function getUnreadCount(m: ResolvedMailbox): Promise<number> {
   }
 }
 
+/** Cap on how much of a bounce we read — a DSN's useful part is at the top. */
+const BOUNCE_SOURCE_MAX_BYTES = 64 * 1024;
+
 /**
  * Cron-poller seam: envelopes of INBOX messages with UID > `lastUid`, plus the
  * mailbox's current `uidNext` (the first-run watermark). When `lastUid` is null
  * no messages are fetched at all — the caller only needs the watermark.
+ *
+ * Messages whose sender/subject already look like a bounce additionally get
+ * their (truncated) source downloaded on the SAME connection, so the poller can
+ * pull the failed recipient out of the DSN. Everything else stays
+ * envelope-only, and a failed download degrades to a source-less message rather
+ * than aborting the poll.
  */
 export async function fetchInboxSince(
   m: ResolvedMailbox,
@@ -233,6 +243,18 @@ export async function fetchInboxSince(
         subject: msg.envelope?.subject || "(no subject)",
       });
     }
+
+    for (const msg of messages) {
+      if (!looksLikeBounce(msg)) continue;
+      try {
+        const full = await client.fetchOne(String(msg.uid), { uid: true, source: true }, { uid: true });
+        const src = full && typeof full !== "boolean" ? full.source : null;
+        if (src) msg.source = src.subarray(0, BOUNCE_SOURCE_MAX_BYTES).toString("utf8");
+      } catch {
+        /* no source → the bounce is still recognised, just without a recipient */
+      }
+    }
+
     return { uidNext, messages };
   } finally {
     await client.logout().catch(() => client.close());

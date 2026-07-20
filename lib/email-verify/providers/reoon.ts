@@ -1,5 +1,5 @@
 import type { ProviderClassification, ProviderDetail, RemoteResult } from "../types";
-import type { ProviderAdapter } from "./types";
+import type { ProviderAdapter, ProviderCredentials } from "./types";
 
 /**
  * Reoon Email Verifier adapter — key-based single verification.
@@ -22,7 +22,7 @@ import type { ProviderAdapter } from "./types";
  * Documented error shape: {"status":"error","reason":"<description>"}.
  */
 
-const BASE_URL = process.env.REOON_BASE_URL || "https://emailverifier.reoon.com/api/v1/verify";
+export const BASE_URL = process.env.REOON_BASE_URL || "https://emailverifier.reoon.com/api/v1/verify";
 const DEFAULT_TIMEOUT_MS = 20000;
 /** "power" does the SMTP-level probe; "quick" is syntax + MX only. */
 const MODE = (process.env.REOON_MODE || "power").toLowerCase();
@@ -38,9 +38,12 @@ export type ReoonResponse = {
   [k: string]: unknown;
 };
 
-/** API key, or null when missing/blank (never throws). */
-export function getReoonKey(): string | null {
-  const key = (process.env.REOON_API_KEY ?? "").trim();
+/**
+ * API key, or null when missing/blank (never throws). `source` is the
+ * user-managed configuration; the environment is only the fallback seed path.
+ */
+export function getReoonKey(source?: ProviderCredentials | null): string | null {
+  const key = ((source ? source.api_key : process.env.REOON_API_KEY) ?? "").trim();
   return key || null;
 }
 
@@ -90,12 +93,12 @@ export function classifyReoonHttp(status: number): "auth" | "quota" | "error" | 
 export const reoon: ProviderAdapter = {
   name: "reoon",
 
-  isConfigured() {
-    return getReoonKey() !== null;
+  isConfigured(credentials) {
+    return getReoonKey(credentials) !== null;
   },
 
   async verify(email, opts = {}) {
-    const key = getReoonKey();
+    const key = getReoonKey(opts.credentials);
     // A blank credential SKIPS the provider — it must never throw.
     if (!key) return { ok: false, reason: "auth", message: "Reoon API key not configured" };
 

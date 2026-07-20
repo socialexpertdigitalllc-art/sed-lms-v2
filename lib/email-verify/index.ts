@@ -1,8 +1,12 @@
+import { maybeNotifyQuotaLow } from "./alerts";
+import { getProviderConfigs } from "./config";
 import { resolveDomainDns } from "./dns";
 import { isDisposable, isFreeProvider, isPrivacyRelay, isRoleAccount } from "./lists";
 import { runProviderChain, type ChainOutcome } from "./providers/chain";
+import { PROVIDER_LIMITS, periodKey } from "./providers/quota";
 import { reoon } from "./providers/reoon";
 import { verifalia } from "./providers/verifalia";
+import { getDescriptor } from "./registry";
 import { createProviderStateStore, getCachedDomainDns, getCachedVerification, saveDomainDns, saveVerification } from "./store";
 import { parseEmail } from "./syntax";
 import { suggestEmail } from "./typo";
@@ -14,8 +18,20 @@ export { suggestDomain, suggestEmail } from "./typo";
 export { isDisposable, isRoleAccount, isPrivacyRelay, isFreeProvider, isRequiredMailbox } from "./lists";
 export { computeVerdict } from "./verdict";
 export { resolveDomainDns, classifyMxRecords, deriveDnsStatus } from "./dns";
-export { runProviderChain } from "./providers/chain";
+export { runProviderChain, orderProviders } from "./providers/chain";
 export { PROVIDER_LIMITS, periodKey, periodEnd, isProviderAvailable } from "./providers/quota";
+export {
+  PROVIDER_REGISTRY,
+  RECOMMENDED_ORDER,
+  getDescriptor,
+  isKnownProvider,
+  hasCompleteCredentials,
+  maskCredentialHint,
+} from "./registry";
+export { getProviderConfigStatuses, saveProviderConfig } from "./config";
+export { getProviderQuota, getAllProviderQuotas } from "./balance";
+export { buildScorecard, buildUsageStats, SCORECARD_MIN_SAMPLE } from "./scorecard";
+export { recordSendOutcome } from "./outcomes";
 export type * from "./types";
 
 /**
@@ -47,6 +63,36 @@ export async function getDomainDns(domain: string): Promise<DnsResult> {
   const result = await resolveDomainDns(domain);
   await saveDomainDns(result);
   return result;
+}
+
+/**
+ * Bell the admins when a provider is nearly spent or is failing hard. Entirely
+ * best-effort: it runs after the answer is already in hand and swallows
+ * everything, so a notification problem can never fail a verification.
+ */
+async function raiseQuotaAlerts(chain: ChainOutcome, state: ReturnType<typeof createProviderStateStore>): Promise<void> {
+  try {
+    for (const attempt of chain.attempts) {
+      const descriptor = getDescriptor(attempt.provider);
+      if (!descriptor) continue;
+
+      if (attempt.outcome === "auth" || attempt.outcome === "quota") {
+        await maybeNotifyQuotaLow(
+          attempt.provider,
+          { used: descriptor.freeLimit, limit: descriptor.freeLimit, remaining: 0 },
+          { reason: attempt.outcome === "auth" ? "errors" : "quota" }
+        );
+        continue;
+      }
+      if (attempt.outcome !== "ok") continue;
+
+      const row = await state.get(attempt.provider);
+      const used = row.periodKey === periodKey(attempt.provider) ? row.callsUsed : 0;
+      await maybeNotifyQuotaLow(attempt.provider, { used, limit: PROVIDER_LIMITS[attempt.provider].limit });
+    }
+  } catch {
+    /* bells are never load-bearing */
+  }
 }
 
 export type VerifyOptions = {
@@ -120,10 +166,17 @@ export async function verifyEmail(opts: VerifyOptions): Promise<VerificationResu
   // 4. Provider chain — only when asked, and never for an address we already know is dead.
   let chain: ChainOutcome = { provider: null, signal: null, raw: null, attempts: [] };
   if (remote && !deterministicallyDead) {
+    // Order, enablement and credentials all come from the user-managed config.
+    // A DB hiccup degrades to the adapters' own env fallback rather than
+    // knocking the provider chain out entirely.
+    const configs = await getProviderConfigs().catch(() => null);
+    const state = createProviderStateStore();
     chain = await runProviderChain(normalized, {
       providers: [verifalia, reoon],
-      state: createProviderStateStore(),
+      configs: configs && configs.length ? configs : null,
+      state,
     });
+    await raiseQuotaAlerts(chain, state);
   }
 
   const { verdict, reasons } = computeVerdict({

@@ -169,6 +169,16 @@ export const NOTIFICATION_EVENTS = [
     availableRoles: ["mailbox_owner"],
     timingMode: "delay",
   },
+  {
+    key: "email_verify_quota_low",
+    label: "Email verification quota low",
+    description: "A verification provider passed 80% of its free allowance, or is failing repeatedly.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "general",
+    availableRoles: [],
+    timingMode: "delay",
+  },
 ] as const;
 
 export type NotificationEventKey = (typeof NOTIFICATION_EVENTS)[number]["key"];

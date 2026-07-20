@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { resolveMailboxRow } from "@/lib/mail/config";
 import { fetchInboxSince } from "@/lib/mail/imap";
 import { planMailPoll, mailDedupKey, mailNotificationText } from "@/lib/mail/poll";
+import { detectBounce } from "@/lib/mail/bounce";
+import { recordSendOutcome } from "@/lib/email-verify/outcomes";
 import { notify } from "@/lib/notifications/notify";
 import type { CompanyMailboxRow } from "@/lib/mail/types";
 
@@ -34,6 +36,7 @@ async function poll(req: Request) {
 
   let checked = 0;
   let notified = 0;
+  let bounces = 0;
 
   for (const row of (rows ?? []) as (CompanyMailboxRow & { last_notified_uid: number | null })[]) {
     // One mailbox must never abort the run — an expired password or a dead
@@ -50,6 +53,24 @@ async function poll(req: Request) {
       checked += 1;
 
       for (const msg of plan.toNotify) {
+        // Bounce capture is the accuracy scorecard's ground truth. It lives
+        // inside its own try/catch: a malformed NDR must never cost us the
+        // mail notification that follows, nor abort the batch.
+        try {
+          const bounce = detectBounce({ from: msg.from, subject: msg.subject, body: msg.source });
+          if (bounce.isBounce && bounce.failedRecipient && bounce.kind) {
+            const ok = await recordSendOutcome({
+              email: bounce.failedRecipient,
+              outcome: bounce.kind === "hard" ? "hard_bounce" : "soft_bounce",
+              mailboxId: row.id,
+              source: "mail_poll",
+            });
+            if (ok) bounces += 1;
+          }
+        } catch {
+          /* bounce parsing is never load-bearing */
+        }
+
         const { title, body } = mailNotificationText(msg, mailbox.address);
         try {
           // No actorId: an inbound email has no actor in this system, and
@@ -73,7 +94,7 @@ async function poll(req: Request) {
     }
   }
 
-  return NextResponse.json({ checked, notified });
+  return NextResponse.json({ checked, notified, bounces });
 }
 
 export async function GET(req: Request) {

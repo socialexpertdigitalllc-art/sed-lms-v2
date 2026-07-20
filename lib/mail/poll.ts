@@ -8,6 +8,12 @@ export interface PollMessage {
   uid: number;
   from: string;
   subject: string;
+  /**
+   * Raw source, populated ONLY for messages whose headers already look like a
+   * bounce. Downloading every message just in case would turn a cheap envelope
+   * poll into a full mailbox sync.
+   */
+  source?: string | null;
 }
 
 export interface PollPlan {

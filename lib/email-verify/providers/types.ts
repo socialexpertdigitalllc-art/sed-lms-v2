@@ -1,10 +1,22 @@
 import type { ProviderName, RemoteResult } from "../types";
 
-/** Every adapter implements this. `isConfigured()` is false when the credential is missing/blank. */
+/** Field-keyed credentials for one provider, as described by the registry. */
+export type ProviderCredentials = Record<string, string>;
+
+export type VerifyOpts = { timeoutMs?: number; credentials?: ProviderCredentials | null };
+
+/**
+ * Every adapter implements this. Credentials are passed IN (from the config
+ * store) rather than read from the environment; when they are omitted the
+ * adapter falls back to its env vars, which is what keeps a bare `verifyEmail`
+ * call and the existing tests working.
+ *
+ * `isConfigured()` is false when the credential is missing/blank.
+ */
 export type ProviderAdapter = {
   name: ProviderName;
-  isConfigured(): boolean;
-  verify(email: string, opts?: { timeoutMs?: number }): Promise<RemoteResult>;
+  isConfigured(credentials?: ProviderCredentials | null): boolean;
+  verify(email: string, opts?: VerifyOpts): Promise<RemoteResult>;
 };
 
 /** Free-tier allowances, used for the PROACTIVE counter only. */
