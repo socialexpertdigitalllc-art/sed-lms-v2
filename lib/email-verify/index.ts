@@ -5,6 +5,7 @@ import { isDisposable, isFreeProvider, isPrivacyRelay, isRoleAccount } from "./l
 import { runProviderChain, type ChainOutcome } from "./providers/chain";
 import { PROVIDER_LIMITS, periodKey } from "./providers/quota";
 import { checkMail } from "./providers/check_mail";
+import { inboxtrue } from "./providers/inboxtrue";
 import { mailrook } from "./providers/mailrook";
 import { reoon } from "./providers/reoon";
 import { verifalia } from "./providers/verifalia";
@@ -176,7 +177,7 @@ export async function verifyEmail(opts: VerifyOptions): Promise<VerificationResu
     chain = await runProviderChain(normalized, {
       // Registry order is the DEFAULT; `configs` (when present) decides the
       // real order, so a new adapter only has to be listed here once.
-      providers: [verifalia, reoon, mailrook, checkMail],
+      providers: [verifalia, reoon, mailrook, inboxtrue, checkMail],
       configs: configs && configs.length ? configs : null,
       state,
     });

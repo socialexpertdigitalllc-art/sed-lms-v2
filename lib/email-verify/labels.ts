@@ -89,6 +89,7 @@ export const PROVIDER_LABEL: Record<ProviderName, string> = {
   verifalia: "Verifalia",
   reoon: "Reoon",
   mailrook: "MailRook",
+  inboxtrue: "InboxTrue",
   check_mail: "Check-Mail.org",
 };
 

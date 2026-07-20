@@ -15,9 +15,16 @@ import type { ProviderName } from "@/lib/email-verify/types";
 
 describe("provider registry", () => {
   it("describes exactly the providers we have adapters for", () => {
-    expect(PROVIDER_REGISTRY.map((p) => p.key)).toEqual(["verifalia", "reoon", "mailrook", "check_mail"]);
-    // The two SMTP-accurate vendors stay first; new adapters append.
-    expect(RECOMMENDED_ORDER).toEqual(["verifalia", "reoon", "mailrook", "check_mail"]);
+    expect(PROVIDER_REGISTRY.map((p) => p.key)).toEqual([
+      "verifalia",
+      "reoon",
+      "mailrook",
+      "inboxtrue",
+      "check_mail",
+    ]);
+    // The two SMTP-accurate vendors stay first; domain-level Check-Mail stays
+    // last, and mailbox-level newcomers slot in ahead of it.
+    expect(RECOMMENDED_ORDER).toEqual(["verifalia", "reoon", "mailrook", "inboxtrue", "check_mail"]);
   });
 
   it("agrees with the chain's free-tier limits", () => {
@@ -34,14 +41,17 @@ describe("provider registry", () => {
     ]);
     expect(getDescriptor("reoon")?.fields.map((f) => [f.key, f.type])).toEqual([["api_key", "password"]]);
     expect(getDescriptor("mailrook")?.fields.map((f) => [f.key, f.type])).toEqual([["api_key", "password"]]);
+    expect(getDescriptor("inboxtrue")?.fields.map((f) => [f.key, f.type])).toEqual([["api_key", "password"]]);
     expect(getDescriptor("check_mail")?.fields.map((f) => [f.key, f.type])).toEqual([["api_key", "password"]]);
   });
 
   it("only claims balance support where a real endpoint is documented", () => {
     expect(getDescriptor("verifalia")?.supportsBalance).toBe(true);
     expect(getDescriptor("reoon")?.supportsBalance).toBe(true);
-    // Neither vendor documents a credits endpoint — these fall back to our counter.
+    // None of these documents a credits endpoint — they fall back to our counter.
+    // (InboxTrue publishes rate-limit headers only, which are request pacing.)
     expect(getDescriptor("mailrook")?.supportsBalance).toBe(false);
+    expect(getDescriptor("inboxtrue")?.supportsBalance).toBe(false);
     expect(getDescriptor("check_mail")?.supportsBalance).toBe(false);
   });
 
@@ -69,7 +79,8 @@ describe("provider registry", () => {
     expect(recommendedPriority("verifalia")).toBe(0);
     expect(recommendedPriority("reoon")).toBe(1);
     expect(recommendedPriority("mailrook")).toBe(2);
-    expect(recommendedPriority("check_mail")).toBe(3);
+    expect(recommendedPriority("inboxtrue")).toBe(3);
+    expect(recommendedPriority("check_mail")).toBe(4);
     expect(recommendedPriority("nope")).toBe(RECOMMENDED_ORDER.length);
   });
 });

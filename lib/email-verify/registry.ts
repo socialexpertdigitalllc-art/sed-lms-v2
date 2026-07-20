@@ -79,6 +79,25 @@ const mailrook: ProviderDescriptor = {
   envKeys: { api_key: "MAILROOK_API_KEY" },
 };
 
+const inboxtrue: ProviderDescriptor = {
+  key: "inboxtrue",
+  label: "InboxTrue",
+  fields: [{ key: "api_key", label: "API key", type: "password" }],
+  // NOT documented. The published pricing page states no free allowance, and
+  // the API reference is silent; 1000/month is the account holder's stated
+  // expectation. Treat it as an assumption — if it is wrong we simply meet a
+  // 402 and park the provider, which is exactly what the reactive path is for.
+  freeLimit: 1000,
+  period: "month",
+  docsUrl: "https://inboxtrue.com/docs",
+  // Only rate-limit headers are published (request pacing, not credits) — there
+  // is no credit-balance endpoint, so we fall back to our counter.
+  supportsBalance: false,
+  privacyNote:
+    "Data-processing terms not reviewed — check before sending client data. Addresses are sent over HTTPS for mailbox-level validation.",
+  envKeys: { api_key: "INBOXTRUE_API_KEY" },
+};
+
 const checkMail: ProviderDescriptor = {
   key: "check_mail",
   label: "Check-Mail.org",
@@ -95,15 +114,16 @@ const checkMail: ProviderDescriptor = {
   envKeys: { api_key: "CHECK_MAIL_API_KEY" },
 };
 
-export const PROVIDER_REGISTRY: ProviderDescriptor[] = [verifalia, reoon, mailrook, checkMail];
+export const PROVIDER_REGISTRY: ProviderDescriptor[] = [verifalia, reoon, mailrook, inboxtrue, checkMail];
 
 /**
  * Default order when nothing has been configured: most accurate first.
  * Verifalia and Reoon both confirm an individual mailbox over SMTP; MailRook
- * does too but on a much smaller free tier; Check-Mail is domain-level only,
- * so it answers last. The user can reorder in the settings UI.
+ * does too but on a much smaller free tier; InboxTrue also validates at mailbox
+ * level, on an assumed-larger allowance; Check-Mail is domain-level only, so it
+ * answers last. The user can reorder in the settings UI.
  */
-export const RECOMMENDED_ORDER: string[] = ["verifalia", "reoon", "mailrook", "check_mail"];
+export const RECOMMENDED_ORDER: string[] = ["verifalia", "reoon", "mailrook", "inboxtrue", "check_mail"];
 
 export function getDescriptor(key: string): ProviderDescriptor | undefined {
   return PROVIDER_REGISTRY.find((p) => p.key === key);

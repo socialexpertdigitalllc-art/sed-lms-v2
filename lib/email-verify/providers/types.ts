@@ -24,6 +24,7 @@ export const PROVIDER_LIMITS: Record<ProviderName, { limit: number; period: "day
   verifalia: { limit: 25, period: "day" },
   reoon: { limit: 600, period: "month" },
   mailrook: { limit: 5, period: "day" },
+  inboxtrue: { limit: 1000, period: "month" },
   check_mail: { limit: 1000, period: "month" },
 };
 
