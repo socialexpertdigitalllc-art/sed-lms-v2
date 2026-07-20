@@ -106,6 +106,8 @@ export async function gatherSlotCandidates(args: {
   /** Search text override — the broad businessType fallback (see gatherMoreCandidates). Defaults to the brief's own query. */
   queryOverride?: string;
   broadened?: boolean;
+  /** The run's stop signal — aborts the vision calls this gather makes. */
+  signal?: AbortSignal;
 }): Promise<GatherResult> {
   const page = args.page ?? 1;
   const query = args.queryOverride?.trim() || args.brief.query;
@@ -138,6 +140,7 @@ export async function gatherSlotCandidates(args: {
   const verdicts = await rankImages(
     fresh.map((c) => ({ url: c.thumb || c.url })),
     { query, kind: args.brief.kind, businessType: args.businessType },
+    { signal: args.signal },
   );
   const vetted: ImageCandidate[] = fresh.map((c, i) => ({ ...c, vision: verdicts[i] }));
   const rejectedByVision = args.excludePeople
@@ -224,6 +227,8 @@ export async function gatherMoreCandidates(args: {
   startPage: number;
   limits?: PagingLimits;
   now?: () => number;
+  /** The run's stop signal — passed down to every gather this paging loop makes. */
+  signal?: AbortSignal;
 }): Promise<{ candidates: ImageCandidate[]; fetchedIds: number[]; stats: GatherStats; nextPage: number }> {
   const limits = args.limits ?? DEFAULT_PAGING_LIMITS;
   const now = args.now ?? Date.now;
@@ -250,6 +255,7 @@ export async function gatherMoreCandidates(args: {
       page,
       queryOverride,
       broadened,
+      signal: args.signal,
     });
     for (const id of res.fetchedIds) seen.add(id);
     kept.push(...res.candidates);
@@ -318,7 +324,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item
  */
 export async function buildInitialSlots(
   briefs: ImageBrief[],
-  args: { brief: GenerationBrief; admin: SupabaseClient; excludePeople: boolean },
+  args: { brief: GenerationBrief; admin: SupabaseClient; excludePeople: boolean; signal?: AbortSignal },
 ): Promise<ImageSlot[]> {
   const businessType = deriveBusinessType(args.brief);
   // Bound the slot count before doing any I/O — a plan that emitted one brief per
@@ -349,6 +355,7 @@ export async function buildInitialSlots(
       excludeIds: [],
       presentMax: Math.max(0, present_max - reservedSeats),
       page: 1,
+      signal: args.signal,
     });
 
     const candidates = clientCandidate ? [clientCandidate, ...gathered.candidates] : gathered.candidates;

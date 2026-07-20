@@ -73,10 +73,13 @@ ${emailRule}
 export async function planContent(
   brief: GenerationBrief,
   pages: string[],
+  /** The run's stop signal. Aborting it rejects the planning call immediately. */
+  opts?: { signal?: AbortSignal },
 ): Promise<{ model: ContentModel; raw: string }> {
   const { text: raw } = await callForTask("content_plan", PLAN_SYSTEM, planPrompt(brief, pages), {
     maxTokens: 32000,
     temperature: 0.6,
+    signal: opts?.signal,
   });
   const json = parseJsonLoose(raw);
   if (!json) throw new Error("Planner returned no parseable JSON");

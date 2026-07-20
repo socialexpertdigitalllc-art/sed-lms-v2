@@ -5,6 +5,8 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import {
   isCancellableStatus, isAtRestStatus, releasePendingQueue, CANCELLABLE_STATUSES,
 } from "@/lib/template-engine/control";
+import { abortGeneration } from "@/lib/template-engine/abortRegistry";
+import { removeGenerationArtifacts } from "@/lib/template-engine/cleanup";
 
 interface GenRow {
   id: string;
@@ -13,12 +15,18 @@ interface GenRow {
 }
 
 // POST /api/template-engine/generations/[id]/cancel — stop a generation for
-// good. Same cooperative mechanism as /pause (write
-// `template_generations.control`, let the runner unwind at a checkpoint where
-// the persisted state is coherent), but the run comes to rest at `cancelled`
-// instead of `paused` and is not resumable. Artefacts are left exactly as they
-// are — nothing is deleted — and /retry still accepts a cancelled run, so this
-// is recoverable, just not by pressing Resume.
+// good, IMMEDIATELY. Same two-step mechanism as /pause (write
+// `template_generations.control`, then abort the runner's controller in
+// process), but the run comes to rest at `cancelled` instead of `paused` and is
+// not resumable.
+//
+// The difference that matters: a cancel DELETES the run's partial build
+// artefacts. Aborting mid-flight can interrupt `finalize` between the zip and
+// the per-file explode, and a half-uploaded site under
+// `template-sites/<id>/` must never be downloaded or deployed — so the objects
+// go and `zip_path` is nulled. Best-effort: a bucket that refuses to delete
+// does not stop the cancel from being recorded. /retry still accepts a
+// cancelled run, so this is recoverable, just not by pressing Resume.
 //
 // The case that needs its own handling: a generation that is still `queued`, or
 // resting at `curating`/`paused`. No runner is executing it, so nobody would
@@ -70,6 +78,10 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   if (!flagged) return NextResponse.json({ error: "This run has already finished" }, { status: 409 });
 
+  // Kill the live run now. The runner's own catch does the artefact cleanup for
+  // this path, because only it knows when the aborted upload actually stopped.
+  const abortedInProcess = abortGeneration(id, "cancel");
+
   if (isAtRestStatus(flagged.status as string)) {
     const { runnerInFlight } = await releasePendingQueue(admin, id);
     if (!runnerInFlight) {
@@ -84,15 +96,22 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
           control: null,
           paused_at: null,
           error: null,
+          // Nothing may point at build output this cancel is about to delete.
+          zip_path: null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", id)
         .eq("status", flagged.status as string)
         .select("id")
         .maybeSingle();
-      if (rested) return NextResponse.json({ ok: true, status: "cancelled" }, { status: 200 });
+      if (rested) {
+        // No runner will ever unwind for this one, so the route owns the
+        // cleanup. Never throws; a failed delete leaves the run cancelled.
+        await removeGenerationArtifacts(admin, id);
+        return NextResponse.json({ ok: true, status: "cancelled" }, { status: 200 });
+      }
     }
   }
 
-  return NextResponse.json({ ok: true, status: "cancelling" }, { status: 202 });
+  return NextResponse.json({ ok: true, status: "cancelling", aborted: abortedInProcess }, { status: 202 });
 }

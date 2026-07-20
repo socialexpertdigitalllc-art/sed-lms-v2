@@ -35,9 +35,10 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
   const running = ACTIVE_STATUSES.has(gen.status);
   const paused = gen.status === "paused";
   const cancelled = gen.status === "cancelled";
-  // The flag is written by the API; the runner only reads it at its next safe
-  // checkpoint, so there is a real window where the operator has clicked but the
-  // status has not moved yet. Say so rather than looking unresponsive.
+  // The API aborts the run's in-flight AI call in process, so the stop itself
+  // is instant — but the runner still has to unwind and write its final row, so
+  // there is a brief window where the operator has clicked and the status has
+  // not moved yet. Say so rather than looking unresponsive.
   const stopping = running && (gen.control === "pause" || gen.control === "cancel");
   const [busy, setBusy] = useState<Action | null>(null);
   const { toast } = useToast();
@@ -46,7 +47,7 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
     pause: {
       fail: "Could not pause",
       title: "Pausing",
-      body: (s) => (s === "paused" ? "Stopped before it started." : "It will stop at the next safe checkpoint."),
+      body: (s) => (s === "paused" ? "Stopped before it started." : "Stopping now — the current step is being cut short."),
     },
     resume: {
       fail: "Could not resume",
@@ -56,7 +57,7 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
     cancel: {
       fail: "Could not stop",
       title: "Stopping",
-      body: (s) => (s === "cancelled" ? "Run stopped." : "It will stop at the next safe checkpoint."),
+      body: (s) => (s === "cancelled" ? "Run stopped." : "Stopping now — partial build output is being discarded."),
     },
     retry: {
       fail: "Could not retry",
@@ -66,13 +67,14 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
   };
 
   // One call shape for all four controls: POST, surface the server's message on
-  // failure, then let the wizard re-fetch. /pause and /cancel are cooperative —
-  // a 202 means "flag written", not "already stopped" (see the runner's
-  // checkpoints); /resume and /retry re-enqueue.
+  // failure, then let the wizard re-fetch. A 202 from /pause or /cancel means
+  // "the run has been aborted", not "the row already says stopped" — the runner
+  // still needs a moment to unwind; /resume and /retry re-enqueue.
   async function run(action: Action) {
     if (action === "cancel") {
       const ok = window.confirm(
-        "Stop this generation for good? It cannot be resumed — you would have to retry the run from the start.",
+        "Stop this generation now? It stops immediately, so any partial build output is discarded. " +
+          "It cannot be resumed — you would have to retry the run from the start.",
       );
       if (!ok) return;
     }
@@ -148,8 +150,8 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
         <div className="rounded-md border border-dropped-fg/30 bg-dropped-bg p-4 text-sm text-dropped-fg">
           <p className="font-medium">Run stopped</p>
           <p className="mt-1">
-            Everything this run had already produced was kept, but it will not finish on its own. Retry starts it again
-            from the last point its work survives.
+            It was stopped immediately, so any partial build output was discarded. The brief, content model and image
+            picks were kept — retry starts it again from the last point its work survives.
           </p>
           <div className="mt-3">
             <ControlButton action="retry" icon={RotateCcw} label="Retry run" />
@@ -161,8 +163,8 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
         <div className="rounded-md border border-notready-fg/30 bg-notready-bg p-4 text-sm text-notready-fg">
           <p className="font-medium">Paused at {pausedAtLabel(gen, steps)}</p>
           <p className="mt-1">
-            Nothing was discarded — the brief, content model and image picks are all intact. Resume puts it back in the
-            pipeline.
+            The brief, content model and image picks are all intact. Only the step that was running was cut short, so
+            Resume puts it back in the pipeline and re-runs that step.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <ControlButton action="resume" icon={Play} label="Resume" />
@@ -177,8 +179,8 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
           <ControlButton action="cancel" icon={Square} label="Stop" tone="danger" />
           <p className="text-xs text-text-muted">
             {stopping
-              ? "Stop requested — finishing the current step so nothing is left half-written."
-              : "Stops cleanly at the next safe checkpoint; work already finished is kept."}
+              ? "Stopping now — cutting the current step short and tidying up."
+              : "Stops immediately: the current step is cut short and its work discarded. Completed steps are kept."}
           </p>
         </div>
       ) : null}

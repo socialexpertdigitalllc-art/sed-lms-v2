@@ -1,11 +1,18 @@
-// Cooperative run control for template generations (pause / resume / stop).
+// Run control for template generations (pause / resume / stop).
 //
-// A generation runs inside one long server task. It cannot be killed safely
-// mid-flight — a half-written zip, a partially exploded storage folder or a row
-// whose `steps` disagree with its `status` are all worse than letting the run
-// finish. So control is cooperative: an API route writes
-// `template_generations.control`, and the runner polls it at checkpoints where
-// the persisted state is already coherent, then stops cleanly there.
+// Stop means stop: an in-flight AI call is ABORTED, not waited out. Three paths
+// deliver that, strongest first:
+//   1. the in-process abort registry (abortRegistry.ts) — the pause/cancel route
+//      aborts the runner's controller directly, in milliseconds;
+//   2. `startControlWatcher` below — a ~1.5s poll of `template_generations.
+//      control`, for when the request and the runner are not in one process;
+//   3. the runner's `readControl` checkpoints — the original cooperative net,
+//      kept because it costs nothing and catches a halt between operations.
+// All three converge on one AbortController per generation.
+//
+// The price of aborting mid-flight is that a cancel can leave a partial zip or
+// partially uploaded site objects, so /cancel deletes them (see cleanup.ts).
+// A pause deletes nothing: it must stay resumable.
 //
 // Everything in this file except `readControl` is pure, so the decision logic
 // (which is the part that must never be wrong) is unit-tested without a DB.
@@ -47,6 +54,61 @@ export async function readControl(admin: SupabaseClient, generationId: string): 
     .maybeSingle();
   if (error || !data) return "continue";
   return interpretControl((data as { control?: unknown }).control);
+}
+
+/**
+ * How often the DB watcher re-reads the `control` column. It is a one-column,
+ * one-row read, so the cost is negligible next to the AI calls it is racing;
+ * 1.5s is the worst-case delay for a stop that could NOT be delivered in
+ * process (a restarted server, or an API request that landed on another
+ * instance). The in-process registry covers the normal case instantly.
+ */
+export const CONTROL_WATCH_INTERVAL_MS = 1500;
+
+/**
+ * Watch a running generation's `control` column and fire `onHalt` the moment it
+ * turns into pause/cancel. This is the FALLBACK signalling path — see
+ * abortRegistry.ts for the instant one.
+ *
+ * Returns a stop function that MUST be called in a `finally`. A leaked interval
+ * on a long-lived Next.js server polls a finished generation forever, and one
+ * per run compounds; that is a real bug, not a tidiness point.
+ *
+ * `onHalt` fires at most once (the interval clears itself first), read errors
+ * are swallowed as "continue" by readControl, and overlapping reads are
+ * prevented by an in-flight guard so a slow DB cannot queue up polls.
+ */
+export function startControlWatcher(
+  admin: SupabaseClient,
+  generationId: string,
+  onHalt: (mode: HaltMode) => void,
+  intervalMs: number = CONTROL_WATCH_INTERVAL_MS,
+): () => void {
+  let stopped = false;
+  let inFlight = false;
+  const timer = setInterval(() => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    void readControl(admin, generationId)
+      .then((decision) => {
+        if (stopped || decision === "continue") return;
+        stopped = true;
+        clearInterval(timer);
+        onHalt(decision);
+      })
+      .catch(() => {
+        /* a blip must not halt a paid run — readControl already fails open */
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  }, intervalMs);
+  // Never hold the process open just to watch a generation.
+  (timer as unknown as { unref?: () => void }).unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 /** Statuses a running-ish generation can be paused from. */

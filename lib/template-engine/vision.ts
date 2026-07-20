@@ -9,6 +9,7 @@
  */
 
 import { callForTask } from "@/lib/ai-tools/providers/run";
+import { AiCallAborted, isAbortedError } from "@/lib/ai-tools/abort";
 import { parseJsonArrayPrefix, parseJsonLoose } from "@/lib/ai/json";
 import type { VisionVerdict } from "./imageSlots";
 
@@ -130,19 +131,25 @@ function chunk<T>(items: T[], size: number): T[][] {
  * ever point at a model documented to accept image input, because a text-only
  * model here answers confidently about photos it never saw. Each call is a text
  * part (visionPrompt) plus one `image_url` part per
- * candidate. Never throws — a vision-provider outage must not fail the whole
- * generation, it should just yield no vetted picks for that batch, so any
- * call failure resolves to all-conservative verdicts for the images in it.
+ * candidate. Never throws for a PROVIDER failure — a vision outage must not
+ * fail the whole generation, it should just yield no vetted picks for that
+ * batch, so any call failure resolves to all-conservative verdicts for the
+ * images in it. It DOES throw when `opts.signal` aborts: the operator stopping
+ * the run is not a failure to absorb, it is an order to stop making calls.
  * Verdicts are returned in the same order as `candidates`.
  */
 export async function rankImages(
   candidates: { url: string }[],
   brief: VisionBrief,
+  opts?: { signal?: AbortSignal },
 ): Promise<VisionVerdict[]> {
   if (candidates.length === 0) return [];
 
   const out: VisionVerdict[] = [];
   for (const batch of chunk(candidates, MAX_IMAGES_PER_CALL)) {
+    // Between chunks: a stop that arrived while the previous chunk was in
+    // flight must not buy another batch of vision calls.
+    if (opts?.signal?.aborted) throw new AiCallAborted("Image ranking", opts.signal.reason);
     let settled: VisionVerdict[] | null = null;
     let lastNote = "";
     for (let attempt = 1; attempt <= RANK_ATTEMPTS; attempt++) {
@@ -152,6 +159,7 @@ export async function rankImages(
           temperature: 0,
           images: batch.map((c) => c.url),
           timeoutMs: VISION_TIMEOUT_MS,
+          signal: opts?.signal,
         });
         const verdicts = parseVisionVerdicts(text, batch.length);
         // At least one readable verdict = the call fundamentally worked (a
@@ -163,6 +171,10 @@ export async function rankImages(
         }
         lastNote = `unreadable response (${text.length} chars)`;
       } catch (e) {
+        // A stop is not an unreadable response: do NOT fall through to the
+        // second attempt, and do NOT degrade to conservative verdicts (which
+        // would let the image step finish as if it had run). Unwind.
+        if (isAbortedError(e) || opts?.signal?.aborted) throw e;
         lastNote = e instanceof Error ? e.message : String(e);
       }
       if (attempt < RANK_ATTEMPTS) {

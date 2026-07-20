@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { isPausableStatus, isAtRestStatus, releasePendingQueue, PAUSABLE_STATUSES } from "@/lib/template-engine/control";
+import { abortGeneration } from "@/lib/template-engine/abortRegistry";
 
 interface GenRow {
   id: string;
@@ -10,14 +11,17 @@ interface GenRow {
   status: string;
 }
 
-// POST /api/template-engine/generations/[id]/pause — ask a running generation to
-// stop at its next safe checkpoint, keeping everything it has produced.
+// POST /api/template-engine/generations/[id]/pause — stop a running generation
+// IMMEDIATELY, keeping everything it has produced.
 //
-// The route never touches the running task; it writes
-// `template_generations.control = 'pause'` and the runner polls that flag
-// between pipeline steps, between per-file regenerations and between repair
-// rounds (see lib/template-engine/runnerV2.ts). Killing the task outright would
-// risk a half-written zip or an orphaned storage folder.
+// Two things happen, in this order. First the route writes
+// `template_generations.control = 'pause'` — the durable record, which the
+// runner's DB watcher (~1.5s) and its checkpoints both read, and which survives
+// a process restart. Then it aborts the runner's AbortController through the
+// in-process registry, which on this deployment is the same Node process: the
+// in-flight AI call rejects in milliseconds rather than running its remaining
+// 30-90s. Nothing is deleted — a paused run must stay resumable — so the
+// in-flight step's work is simply discarded and re-run on /resume.
 //
 // One case has no runner to poll: a generation still `queued`. Its row is
 // sitting in `template_gen_queue` waiting to be claimed, so this route deletes
@@ -68,6 +72,12 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   if (!flagged) return NextResponse.json({ error: "Only a running generation can be paused" }, { status: 409 });
 
+  // The flag is now durable, so abort the live run. Done AFTER the write so a
+  // runner that unwinds instantly still finds `control` set if it re-reads it.
+  // False just means no runner for this generation lives in this process; the
+  // DB watcher in whichever process owns it picks the flag up within ~1.5s.
+  const abortedInProcess = abortGeneration(id, "pause");
+
   if (isAtRestStatus(flagged.status as string)) {
     const { runnerInFlight } = await releasePendingQueue(admin, id);
     if (!runnerInFlight) {
@@ -92,5 +102,5 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     }
   }
 
-  return NextResponse.json({ ok: true, status: "pausing" }, { status: 202 });
+  return NextResponse.json({ ok: true, status: "pausing", aborted: abortedInProcess }, { status: 202 });
 }

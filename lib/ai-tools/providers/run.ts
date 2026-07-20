@@ -1,4 +1,5 @@
-import { callWithProvider } from "@/lib/ai-tools/run";
+import { callWithProvider, type ProviderCallOptions } from "@/lib/ai-tools/run";
+import { isAbortedError } from "@/lib/ai-tools/abort";
 import { defaultSpecForTask, resolveTaskModel, type ResolvedTaskModel } from "./config";
 import type { AiTaskKey } from "./registry";
 
@@ -47,9 +48,15 @@ export interface TaskCallOptions {
   temperature: number;
   images?: string[];
   timeoutMs?: number;
+  /**
+   * Per-generation stop signal. Passed straight through to the provider call,
+   * which combines it with its own timeout; an abort surfaces as
+   * `AiCallAborted` and is never retried here or by the caller's own loop.
+   */
+  signal?: AbortSignal;
 }
 
-function budget(opts: TaskCallOptions, resolved: ResolvedTaskModel): { maxTokens: number; temperature: number; images?: string[]; timeoutMs?: number } {
+function budget(opts: TaskCallOptions, resolved: ResolvedTaskModel): ProviderCallOptions {
   return { ...opts, maxTokens: opts.maxTokens === "model-max" ? resolved.spec.maxOutputTokens : opts.maxTokens };
 }
 
@@ -72,6 +79,10 @@ export async function callForTask(
     const out = await callWithProvider(resolved.spec, resolved.model, systemPrompt, userPrompt, budget(opts, resolved));
     return { ...out, providerKey: resolved.providerKey, model: resolved.model };
   } catch (e) {
+    // The operator pressed Stop. There is no "safer provider" for that — a
+    // fallback call here would be a second paid request against a run that is
+    // already over. Rethrow before any retry reasoning runs.
+    if (isAbortedError(e)) throw e;
     // Already on the default? Nothing safer to try — let the caller's retry
     // loop and error handling do their job exactly as before.
     if (!resolved.usedFallback) {

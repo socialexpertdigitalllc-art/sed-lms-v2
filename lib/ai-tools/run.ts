@@ -4,6 +4,7 @@ import { countImages, countWords, parseFiles, type GeneratedFile } from "./parse
 import { getWgeConfig } from "./wge";
 import { mapLeadToInput } from "./leadPrefill";
 import { buildPrompt, EMPTY_INPUT, type GenInput } from "./prompt";
+import { AiCallAborted, combineAbortSignals } from "./abort";
 
 const BUCKET = "ai-generations";
 
@@ -90,12 +91,30 @@ export async function persistGeneration(input: PersistInput): Promise<{ id: stri
 // `timeoutMs` (vision does); big whole-file regens keep the generous default.
 const DEFAULT_CALL_TIMEOUT_MS = 300000; // 5 min
 
+/**
+ * Everything a single completion needs beyond the prompts.
+ *
+ * `signal` is the EXTERNAL cancellation channel (the runner's per-generation
+ * stop controller). It is combined with this call's own timeout controller and
+ * whichever fires first wins, so a Stop rejects the in-flight fetch within
+ * milliseconds instead of waiting out a 5-minute ceiling. An abort that came
+ * from `signal` throws `AiCallAborted`, never the "timed out" error, so the
+ * caller's retry loop can tell a stop apart from a blip.
+ */
+export interface ProviderCallOptions {
+  maxTokens: number;
+  temperature: number;
+  images?: string[];
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
 export async function callProvider(
   tool: ToolId,
   model: string,
   systemPrompt: string,
   userPrompt: string,
-  opts: { maxTokens: number; temperature: number; images?: string[]; timeoutMs?: number }
+  opts: ProviderCallOptions
 ): Promise<{ text: string; tokens: number }> {
   const cfg = TOOLS[tool];
   const apiKey = process.env[cfg.envKey];
@@ -135,8 +154,11 @@ export async function callWithProvider(
   model: string,
   systemPrompt: string,
   userPrompt: string,
-  opts: { maxTokens: number; temperature: number; images?: string[]; timeoutMs?: number }
+  opts: ProviderCallOptions
 ): Promise<{ text: string; tokens: number }> {
+  // Already stopped before we even dialled — do not spend the call.
+  if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
+
   const userContent =
     opts.images && opts.images.length > 0
       ? [{ type: "text", text: userPrompt }, ...opts.images.map((url) => ({ type: "image_url", image_url: { url } }))]
@@ -145,12 +167,14 @@ export async function callWithProvider(
   const controller = new AbortController();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Timeout OR external stop, whichever comes first.
+  const combined = combineAbortSignals([controller.signal, opts.signal]);
   let res: Response;
   try {
     res = await fetch(cfg.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-      signal: controller.signal,
+      signal: combined.signal,
       body: JSON.stringify({
         model,
         max_tokens: Math.min(opts.maxTokens, cfg.maxOutputTokens),
@@ -163,12 +187,17 @@ export async function callWithProvider(
       }),
     });
   } catch (e) {
+    // Order matters: an external stop is checked FIRST, so a Stop that lands
+    // inside the timeout window is reported as an abort (never retried) rather
+    // than as a timeout (which callers do retry).
+    if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
     if (e instanceof Error && e.name === "AbortError") {
       throw new Error(`${cfg.label} call timed out after ${Math.round(timeoutMs / 1000)}s`);
     }
     throw e;
   } finally {
     clearTimeout(timer);
+    combined.cleanup();
   }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;

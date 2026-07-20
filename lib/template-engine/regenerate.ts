@@ -7,6 +7,7 @@
 // single most important line in this file.
 
 import { callForTask } from "@/lib/ai-tools/providers/run";
+import { isAbortedError } from "@/lib/ai-tools/abort";
 
 export const REGEN_SYSTEM = `You are a precise COPY-EDITOR for website templates. You are given ONE file of an existing template plus a business's content model, and you return the SAME file with only its human-visible text and image URLs swapped to that business.
 
@@ -38,6 +39,12 @@ export interface RegenerateArgs {
   demoTokens: string[];
   /** On a verification-repair pass, the exact leak/structure problems to fix. */
   repairNote?: string;
+  /**
+   * The run's stop signal. When it aborts, the in-flight call rejects at once
+   * and the retry loop below rethrows instead of trying again — an aborted call
+   * is a stop, not a transient failure.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -115,7 +122,7 @@ export async function regenerateFile(args: RegenerateArgs): Promise<string> {
         // page is never shortened to fit. The ceiling comes from the model
         // descriptor, not a constant — a smaller model gets its own honest cap,
         // and the registry refuses to route this task to one below 32k anyway.
-        { maxTokens: "model-max", temperature: 0.15 },
+        { maxTokens: "model-max", temperature: 0.15, signal: args.signal },
       );
       const out = stripFence(text);
       if (!out) throw new Error(`Regeneration of ${args.file} returned empty output`);
@@ -124,6 +131,10 @@ export async function regenerateFile(args: RegenerateArgs): Promise<string> {
       }
       return out;
     } catch (e) {
+      // The operator stopped the run. Retrying would spend another whole-file
+      // call — and two more seconds of backoff — on work that is already
+      // abandoned, and would make Stop feel like it did nothing. Out, now.
+      if (isAbortedError(e) || args.signal?.aborted) throw e;
       lastErr = e;
       if (attempt < REGEN_ATTEMPTS) {
         await new Promise((r) => setTimeout(r, 2000 * attempt)); // linear backoff
