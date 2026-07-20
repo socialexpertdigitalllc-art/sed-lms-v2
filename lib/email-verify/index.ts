@@ -4,6 +4,8 @@ import { resolveDomainDns } from "./dns";
 import { isDisposable, isFreeProvider, isPrivacyRelay, isRoleAccount } from "./lists";
 import { runProviderChain, type ChainOutcome } from "./providers/chain";
 import { PROVIDER_LIMITS, periodKey } from "./providers/quota";
+import { checkMail } from "./providers/check_mail";
+import { mailrook } from "./providers/mailrook";
 import { reoon } from "./providers/reoon";
 import { verifalia } from "./providers/verifalia";
 import { getDescriptor } from "./registry";
@@ -172,7 +174,9 @@ export async function verifyEmail(opts: VerifyOptions): Promise<VerificationResu
     const configs = await getProviderConfigs().catch(() => null);
     const state = createProviderStateStore();
     chain = await runProviderChain(normalized, {
-      providers: [verifalia, reoon],
+      // Registry order is the DEFAULT; `configs` (when present) decides the
+      // real order, so a new adapter only has to be listed here once.
+      providers: [verifalia, reoon, mailrook, checkMail],
       configs: configs && configs.length ? configs : null,
       state,
     });

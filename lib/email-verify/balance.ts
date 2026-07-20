@@ -10,8 +10,13 @@ import type { ProviderName } from "./types";
 /**
  * Live remaining quota per provider.
  *
- * Both vendors publish an authoritative balance endpoint (verified against the
- * live APIs on 2026-07-20):
+ * Only SOME vendors publish an authoritative balance endpoint. MailRook and
+ * Check-Mail.org do not document one (Check-Mail exposes the remaining count
+ * only as an `x-ratelimit-requests-remaining` header on a real lookup, which
+ * would cost a request), so their registry entries set `supportsBalance:
+ * false` and they fall through to our own counter below.
+ *
+ * The two that do (verified against the live APIs on 2026-07-20):
  *
  *   Verifalia  GET {BASE}/credits/balance
  *              → {"creditPacks":0,"freeCredits":22,"freeCreditsResetIn":"13:20:05"}

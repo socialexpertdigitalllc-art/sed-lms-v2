@@ -56,7 +56,7 @@ export type ProviderClassification = "deliverable" | "undeliverable" | "risky" |
 /** Extra detail a provider may add on top of the classification. */
 export type ProviderDetail = "catch_all" | "mailbox_not_found" | "disposable" | "role" | null;
 
-export type ProviderName = "verifalia" | "reoon";
+export type ProviderName = "verifalia" | "reoon" | "mailrook" | "check_mail";
 
 /** Result of the syntax parse. `normalized` lowercases the DOMAIN ONLY. */
 export type SyntaxResult = {

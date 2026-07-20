@@ -23,6 +23,8 @@ export type ProviderAdapter = {
 export const PROVIDER_LIMITS: Record<ProviderName, { limit: number; period: "day" | "month" }> = {
   verifalia: { limit: 25, period: "day" },
   reoon: { limit: 600, period: "month" },
+  mailrook: { limit: 5, period: "day" },
+  check_mail: { limit: 1000, period: "month" },
 };
 
 /** Persistence the chain needs. Injected so the chain is unit-testable. */

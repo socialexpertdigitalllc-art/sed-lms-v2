@@ -11,16 +11,18 @@ import {
 } from "@/lib/email-verify/registry";
 import { PROVIDER_LIMITS } from "@/lib/email-verify/providers/quota";
 import { credentialsFromEnv } from "@/lib/email-verify/config";
+import type { ProviderName } from "@/lib/email-verify/types";
 
 describe("provider registry", () => {
-  it("describes exactly the two providers we have adapters for", () => {
-    expect(PROVIDER_REGISTRY.map((p) => p.key)).toEqual(["verifalia", "reoon"]);
-    expect(RECOMMENDED_ORDER).toEqual(["verifalia", "reoon"]);
+  it("describes exactly the providers we have adapters for", () => {
+    expect(PROVIDER_REGISTRY.map((p) => p.key)).toEqual(["verifalia", "reoon", "mailrook", "check_mail"]);
+    // The two SMTP-accurate vendors stay first; new adapters append.
+    expect(RECOMMENDED_ORDER).toEqual(["verifalia", "reoon", "mailrook", "check_mail"]);
   });
 
   it("agrees with the chain's free-tier limits", () => {
     for (const d of PROVIDER_REGISTRY) {
-      const limits = PROVIDER_LIMITS[d.key as "verifalia" | "reoon"];
+      const limits = PROVIDER_LIMITS[d.key as ProviderName];
       expect({ limit: d.freeLimit, period: d.period }).toEqual(limits);
     }
   });
@@ -31,6 +33,22 @@ describe("provider registry", () => {
       ["password", "password"],
     ]);
     expect(getDescriptor("reoon")?.fields.map((f) => [f.key, f.type])).toEqual([["api_key", "password"]]);
+    expect(getDescriptor("mailrook")?.fields.map((f) => [f.key, f.type])).toEqual([["api_key", "password"]]);
+    expect(getDescriptor("check_mail")?.fields.map((f) => [f.key, f.type])).toEqual([["api_key", "password"]]);
+  });
+
+  it("only claims balance support where a real endpoint is documented", () => {
+    expect(getDescriptor("verifalia")?.supportsBalance).toBe(true);
+    expect(getDescriptor("reoon")?.supportsBalance).toBe(true);
+    // Neither vendor documents a credits endpoint — these fall back to our counter.
+    expect(getDescriptor("mailrook")?.supportsBalance).toBe(false);
+    expect(getDescriptor("check_mail")?.supportsBalance).toBe(false);
+  });
+
+  it("declares a seed env var for every credential field", () => {
+    for (const d of PROVIDER_REGISTRY) {
+      for (const f of d.fields) expect(d.envKeys[f.key]).toMatch(/^[A-Z0-9_]+$/);
+    }
   });
 
   it("gives every provider a docs url and a factual privacy note", () => {
@@ -50,7 +68,9 @@ describe("provider registry", () => {
   it("prioritises by the recommended order, unknowns last", () => {
     expect(recommendedPriority("verifalia")).toBe(0);
     expect(recommendedPriority("reoon")).toBe(1);
-    expect(recommendedPriority("nope")).toBe(2);
+    expect(recommendedPriority("mailrook")).toBe(2);
+    expect(recommendedPriority("check_mail")).toBe(3);
+    expect(recommendedPriority("nope")).toBe(RECOMMENDED_ORDER.length);
   });
 });
 

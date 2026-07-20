@@ -88,6 +88,8 @@ export const VERDICT_TONE: Record<Verdict, "ready" | "notready" | "dropped"> = {
 export const PROVIDER_LABEL: Record<ProviderName, string> = {
   verifalia: "Verifalia",
   reoon: "Reoon",
+  mailrook: "MailRook",
+  check_mail: "Check-Mail.org",
 };
 
 /** Footnote describing who actually answered. */

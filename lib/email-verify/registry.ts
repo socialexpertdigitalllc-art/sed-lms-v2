@@ -62,10 +62,48 @@ const reoon: ProviderDescriptor = {
   envKeys: { api_key: "REOON_API_KEY" },
 };
 
-export const PROVIDER_REGISTRY: ProviderDescriptor[] = [verifalia, reoon];
+const mailrook: ProviderDescriptor = {
+  key: "mailrook",
+  label: "MailRook",
+  fields: [{ key: "api_key", label: "API key", type: "password" }],
+  // Their own API docs footer states "5 Free Checks/Day" — the marketing page
+  // headline of 100/day is NOT what the developer documentation says, so the
+  // documented (pessimistic) number is what the proactive counter uses.
+  freeLimit: 5,
+  period: "day",
+  docsUrl: "https://mailrook.com/docs/api",
+  // No credits/balance endpoint is documented — we fall back to our counter.
+  supportsBalance: false,
+  privacyNote:
+    "Data-processing terms not reviewed — check before sending client data. Addresses are sent over HTTPS for SMTP-level probing.",
+  envKeys: { api_key: "MAILROOK_API_KEY" },
+};
 
-/** Default order when nothing has been configured: most accurate first. */
-export const RECOMMENDED_ORDER: string[] = ["verifalia", "reoon"];
+const checkMail: ProviderDescriptor = {
+  key: "check_mail",
+  label: "Check-Mail.org",
+  fields: [{ key: "api_key", label: "API key", type: "password" }],
+  // Documented free plan: "up to 1000 requests per month, free forever".
+  freeLimit: 1000,
+  period: "month",
+  docsUrl: "https://docs.check-mail.org/api-and-authentication/",
+  // Remaining quota is only exposed as a response HEADER on a real lookup, so
+  // reading it would burn a request. No standalone balance endpoint exists.
+  supportsBalance: false,
+  privacyNote:
+    "Data-processing terms not reviewed — check before sending client data. Domain-level checks only; their API also accepts a bare domain instead of a full address.",
+  envKeys: { api_key: "CHECK_MAIL_API_KEY" },
+};
+
+export const PROVIDER_REGISTRY: ProviderDescriptor[] = [verifalia, reoon, mailrook, checkMail];
+
+/**
+ * Default order when nothing has been configured: most accurate first.
+ * Verifalia and Reoon both confirm an individual mailbox over SMTP; MailRook
+ * does too but on a much smaller free tier; Check-Mail is domain-level only,
+ * so it answers last. The user can reorder in the settings UI.
+ */
+export const RECOMMENDED_ORDER: string[] = ["verifalia", "reoon", "mailrook", "check_mail"];
 
 export function getDescriptor(key: string): ProviderDescriptor | undefined {
   return PROVIDER_REGISTRY.find((p) => p.key === key);
