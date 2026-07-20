@@ -166,7 +166,7 @@ export function GenerationWizard({ genId, canDeploy }: { genId: string; canDeplo
       {active === 1 && <SetupSummary gen={gen} />}
       {active === 2 && <ContentEditor gen={gen} onSaved={load} />}
       {active === 3 && <ImageCuration gen={gen} onChanged={load} />}
-      {active === 4 && <BuildTracker gen={gen} />}
+      {active === 4 && <BuildTracker gen={gen} onChanged={load} />}
       {active === 5 && <ReviewPanel gen={gen} canDeploy={canDeploy} onChanged={load} />}
     </div>
   );

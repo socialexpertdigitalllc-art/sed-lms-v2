@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Circle, Loader2, MinusCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Circle, Loader2, MinusCircle, RotateCcw } from "lucide-react";
 import type { GenStep } from "@/lib/template-engine/types";
 import { buildEtaLabel } from "@/lib/template-engine/wizard";
+import { useToast } from "@/components/common/Toast";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
 
@@ -17,9 +18,36 @@ function StepIcon({ status }: { status: GenStep["status"] }) {
 
 const ACTIVE_STATUSES = new Set(["queued", "running", "planning", "building"]);
 
-export function BuildTracker({ gen }: { gen: GenerationDetail }) {
+export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChanged?: () => void }) {
   const steps = Array.isArray(gen.steps) ? gen.steps : [];
   const running = ACTIVE_STATUSES.has(gen.status);
+  const [retrying, setRetrying] = useState(false);
+  const { toast } = useToast();
+
+  // A failed run used to be terminal in the UI — the only way back into the
+  // pipeline was editing the row by hand. /retry resets it (to curation when the
+  // plan phase's work survives, otherwise back to the queue).
+  async function retry() {
+    setRetrying(true);
+    try {
+      const res = await fetch(`/api/template-engine/generations/${gen.id}/retry`, { method: "POST" });
+      if (!res.ok) {
+        toast({ kind: "error", title: "Could not retry", body: (await res.json().catch(() => ({}))).error ?? "Try again" });
+        return;
+      }
+      const { status } = await res.json().catch(() => ({ status: "queued" }));
+      toast({
+        kind: "info",
+        title: "Run reset",
+        body: status === "curating" ? "Check the images, then build again." : "Queued — the processor will pick it up.",
+      });
+      onChanged?.();
+    } catch {
+      toast({ kind: "error", title: "Could not retry", body: "Network error — please try again." });
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   // Re-tick every 30s so the countdown stays honest between realtime pokes.
   const [now, setNow] = useState(() => Date.now());
@@ -36,6 +64,15 @@ export function BuildTracker({ gen }: { gen: GenerationDetail }) {
         <div className="rounded-md border border-dropped-fg/30 bg-dropped-bg p-4 text-sm text-dropped-fg">
           <p className="font-medium">Generation failed</p>
           <p className="mt-1">{gen.error ?? "Unknown error"}</p>
+          <button
+            type="button"
+            onClick={retry}
+            disabled={retrying}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text hover:bg-surface-2 disabled:opacity-60"
+          >
+            {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+            Retry run
+          </button>
         </div>
       ) : null}
 

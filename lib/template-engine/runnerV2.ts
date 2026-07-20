@@ -220,13 +220,56 @@ function repairNoteFor(file: string, gate: GateResult): string {
   return lines.join("\n");
 }
 
-/** One-line human summary of a failing gate, for the generation's `error`. */
-function describeGateFailure(gate: GateResult): string {
+/**
+ * How many times the pipeline may re-regenerate the offending files before it
+ * gives up. Every round is a full AI call per offender — real money and real
+ * wall-clock on a run an operator is watching — so the cap is deliberately
+ * small; three is enough for the failures that ARE model noise (a stray demo
+ * word, a dropped section) and stops us burning credits on the ones that are
+ * not. The no-progress break below usually stops sooner than the cap.
+ */
+export const MAX_REPAIR_ROUNDS = 3;
+
+/**
+ * The identity of a gate FAILURE: the sorted `file:token` leaks plus the sorted
+ * files whose structure broke. Pure, so the repair loop's stop condition is
+ * unit-testable without an AI call.
+ */
+export function gateFingerprint(gate: GateResult): string {
+  const leaks = [...new Set(gate.leaks.map((l) => `${l.file}:${l.token}`))].sort();
+  const structure = gate.structure.filter((s) => !s.ok).map((s) => s.file).sort();
+  return JSON.stringify({ leaks, structure });
+}
+
+/**
+ * Did a repair round accomplish nothing? A round that regenerated the offenders
+ * and came back with the exact same leaks in the exact same files did not fail
+ * by chance — the condition is one the model cannot write its way out of (a
+ * token like "King" that every paragraph legitimately contains, an identifier
+ * it is required to keep). Repeating it only burns tokens and the operator's
+ * time, so the loop breaks immediately and says so.
+ */
+export function repairStalled(before: GateResult, after: GateResult): boolean {
+  return !after.ok && gateFingerprint(before) === gateFingerprint(after);
+}
+
+/**
+ * One-line human summary of a failing gate, for the generation's `error`.
+ * `ctx` distinguishes the two very different endings — "we tried N times and it
+ * never moved" (stop editing copy, look at the demo tokens) from "we tried N
+ * times and ran out of rounds" (a retry may well succeed).
+ */
+export function describeGateFailure(gate: GateResult, ctx?: { rounds: number; stalled: boolean }): string {
   const parts: string[] = [];
   if (gate.leaks.length) parts.push("leaks — " + [...new Set(gate.leaks.map((l) => `${l.file}:${l.token}`))].join("; "));
   const badStruct = gate.structure.filter((s) => !s.ok);
   if (badStruct.length) parts.push("structure — " + badStruct.map((s) => `${s.file}: ${s.detail ?? "changed"}`).join("; "));
-  return parts.join(" | ") || "unknown gate failure";
+  const body = parts.join(" | ") || "unknown gate failure";
+  if (!ctx || ctx.rounds === 0) return body;
+  const lead = ctx.stalled
+    ? `no progress after ${ctx.rounds} repair round(s) — the same problems came back unchanged, so this needs a human (check the template's demo tokens)`
+    : `still failing after ${ctx.rounds} repair round(s)`;
+  return `${lead} | ${body}`;
 }
 
 interface GenRow {
@@ -278,7 +321,7 @@ interface BuildCtx {
  * them verbatim. Downloads the template, neutralizes the demo app identifier,
  * classifies content vs passthrough files, selects which content files this
  * request actually needs, whole-file regenerates each at bounded concurrency,
- * runs the leak/structure gates with one targeted repair pass, then zips +
+ * runs the leak/structure gates with a bounded repair loop, then zips +
  * uploads to `template-sites`. Writes the generation's terminal `review`
  * status itself on success; a failing gate writes `failed` itself too (as
  * Phase 1 did) and then throws so the caller's catch also runs its own
@@ -378,34 +421,58 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     }
   });
 
-  // 6. verify: leak + structure gates, with one targeted repair pass ----------
+  // 6. verify: leak + structure gates, with a bounded repair loop -------------
+  // Up to MAX_REPAIR_ROUNDS rounds; each regenerates ONLY the offending files
+  // (concurrently — verification is already the slow leg and rounds multiply
+  // it) and re-runs the gates. A round that changes nothing the gates care
+  // about breaks out immediately: the condition is not AI-fixable and further
+  // rounds only cost money. The step's label carries the round so the operator
+  // sees work happening instead of a stalled "Verifying".
   await beginStep("verify", "Verifying");
+  const verifyStep = steps[steps.length - 1];
   let gate = runGates({ template: contentSources, output: rebuilt, demoTokens });
-  if (!gate.ok) {
-    for (const file of offenderFiles(gate)) {
-      if (contentSources[file] === undefined) continue;
-      try {
-        rebuilt[file] = await regenerateFile({
+  let rounds = 0;
+  let stalled = false;
+  while (!gate.ok && rounds < MAX_REPAIR_ROUNDS) {
+    const targets = offenderFiles(gate).filter((f) => contentSources[f] !== undefined);
+    if (targets.length === 0) break; // nothing regenerable — repairing cannot help
+    rounds++;
+    verifyStep.label = `Repairing (round ${rounds} of ${MAX_REPAIR_ROUNDS})`;
+    verifyStep.detail = describeGateFailure(gate);
+    await writeThrough();
+
+    const notes = targets.map((file) => repairNoteFor(file, gate));
+    const settled = await Promise.allSettled(
+      targets.map((file, i) =>
+        regenerateFile({
           file,
           source: contentSources[file],
           contentModel,
           imagesForFile,
           demoTokens,
-          repairNote: repairNoteFor(file, gate),
-        });
-      } catch {
-        // keep the prior output; the re-run gate below still fails and reports it
-      }
-    }
-    gate = runGates({ template: contentSources, output: rebuilt, demoTokens });
+          repairNote: notes[i],
+        }),
+      ),
+    );
+    // A failed repair keeps the prior output; the re-run gate still reports it.
+    settled.forEach((r, i) => {
+      if (r.status === "fulfilled") rebuilt[targets[i]] = r.value;
+    });
+
+    const next = runGates({ template: contentSources, output: rebuilt, demoTokens });
+    stalled = repairStalled(gate, next);
+    gate = next;
+    if (stalled) break;
   }
+  verifyStep.label = "Verifying";
+  verifyStep.detail = undefined;
   await writeThrough({ gate_results: gate });
   if (!gate.ok) {
-    const detail = describeGateFailure(gate);
+    const detail = describeGateFailure(gate, { rounds, stalled });
     await endStep("failed", detail, { status: "failed", error: `Verification gate failed: ${detail}` });
     throw new Error(`Verification gate failed: ${detail}`);
   }
-  await endStep("done", "leak + structure gates passed");
+  await endStep("done", rounds ? `leak + structure gates passed after ${rounds} repair round(s)` : "leak + structure gates passed");
 
   // 7. finalize: package the zip + explode to template-sites (as v1) ----------
   await beginStep("finalize", "Packaging site");
