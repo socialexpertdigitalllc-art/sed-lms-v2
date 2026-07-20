@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { PROVIDER_REGISTRY, getDescriptor } from "@/lib/email-verify/registry";
-import { getProviderConfigStatuses, saveProviderConfig } from "@/lib/email-verify/config";
-import { getAllProviderQuotas } from "@/lib/email-verify/balance";
+import { getDescriptor } from "@/lib/email-verify/registry";
+import { saveProviderConfig } from "@/lib/email-verify/config";
+import { listProviderSettings } from "@/lib/email-verify/adminView";
 
 export const runtime = "nodejs";
 
@@ -35,52 +35,7 @@ export async function GET() {
   const auth = await guard();
   if ("error" in auth) return guardError(auth.error);
 
-  const [statuses, quotas] = await Promise.all([getProviderConfigStatuses(), getAllProviderQuotas()]);
-  const statusByKey = new Map(statuses.map((s) => [s.key, s]));
-  const quotaByKey = new Map(quotas.map((q) => [q.key, q]));
-
-  const providers = statuses.map((s) => {
-    const d = getDescriptor(s.key);
-    return {
-      key: s.key,
-      label: d?.label ?? s.key,
-      fields: d?.fields ?? [],
-      freeLimit: d?.freeLimit ?? 0,
-      period: d?.period ?? "day",
-      docsUrl: d?.docsUrl ?? "",
-      supportsBalance: d?.supportsBalance ?? false,
-      privacyNote: d?.privacyNote ?? "",
-      enabled: s.enabled,
-      priority: s.priority,
-      configured: s.configured,
-      hint: s.hint,
-      updatedAt: s.updatedAt,
-      quota: quotaByKey.get(s.key) ?? null,
-    };
-  });
-
-  // Registry entries with no status row should be impossible, but never hide a
-  // provider from the settings page just because the config read came up empty.
-  for (const d of PROVIDER_REGISTRY) {
-    if (statusByKey.has(d.key)) continue;
-    providers.push({
-      key: d.key,
-      label: d.label,
-      fields: d.fields,
-      freeLimit: d.freeLimit,
-      period: d.period,
-      docsUrl: d.docsUrl,
-      supportsBalance: d.supportsBalance,
-      privacyNote: d.privacyNote,
-      enabled: false,
-      priority: PROVIDER_REGISTRY.indexOf(d),
-      configured: false,
-      hint: null,
-      updatedAt: null,
-      quota: quotaByKey.get(d.key) ?? null,
-    });
-  }
-
+  const providers = await listProviderSettings();
   return NextResponse.json({ providers });
 }
 
