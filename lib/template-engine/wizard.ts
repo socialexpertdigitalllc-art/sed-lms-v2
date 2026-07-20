@@ -34,6 +34,9 @@ export type WizardStepN = 1 | 2 | 3 | 4 | 5;
 export function activeWizardStep(status: string): WizardStepN {
   if (status === "curating") return 3;
   if (status === "review" || status === "ready_for_review" || status === "deployed") return 5;
+  // `paused` and `cancelled` fall through to 4 on purpose: the tracker is where
+  // the run stopped, where the "Paused at <step>" state lives, and where the
+  // Resume / Stop / Retry controls are.
   return 4;
 }
 
@@ -45,6 +48,8 @@ export function activeWizardStep(status: string): WizardStepN {
 export function maxReachedStep(status: string): WizardStepN {
   if (status === "curating") return 3;
   if (status === "review" || status === "ready_for_review" || status === "deployed") return 5;
+  // Same for `paused`/`cancelled`: step 4 (the tracker) is the furthest the run
+  // got, and step 5 stays locked because no site zip was ever produced.
   return 4;
 }
 
@@ -59,6 +64,11 @@ export const V2_STATUS_PILL: Record<string, { label: string; cls: string }> = {
   ready_for_review: { label: "Ready for review", cls: "bg-notready-bg text-notready-fg" },
   deployed: { label: "Deployed", cls: "bg-ready-bg text-ready-fg" },
   failed: { label: "Failed", cls: "bg-dropped-bg text-dropped-fg" },
+  // Cooperative run controls (migration 0044). `paused` is a waiting-on-a-human
+  // state like `curating`, so it borrows the notready tone; `cancelled` is a
+  // run that will not produce a site, so it reads like `failed`.
+  paused: { label: "Paused", cls: "bg-notready-bg text-notready-fg" },
+  cancelled: { label: "Cancelled", cls: "bg-dropped-bg text-dropped-fg" },
 };
 
 export function statusPill(status: string): { label: string; cls: string } {

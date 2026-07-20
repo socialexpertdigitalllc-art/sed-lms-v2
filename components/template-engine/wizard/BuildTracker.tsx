@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Circle, Loader2, MinusCircle, RotateCcw } from "lucide-react";
+import {
+  AlertTriangle, CheckCircle2, Circle, Loader2, MinusCircle, Pause, Play, RotateCcw, Square,
+} from "lucide-react";
 import type { GenStep } from "@/lib/template-engine/types";
 import { buildEtaLabel } from "@/lib/template-engine/wizard";
 import { useToast } from "@/components/common/Toast";
@@ -18,35 +20,103 @@ function StepIcon({ status }: { status: GenStep["status"] }) {
 
 const ACTIVE_STATUSES = new Set(["queued", "running", "planning", "building"]);
 
+/** Human name for the step a paused run came to rest on. */
+function pausedAtLabel(gen: GenerationDetail, steps: GenStep[]): string {
+  const key = gen.current_step;
+  if (!key) return "the start of the run";
+  return steps.find((s) => s.key === key)?.label ?? key;
+}
+
+type Action = "pause" | "resume" | "cancel" | "retry";
+
 export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChanged?: () => void }) {
   const steps = Array.isArray(gen.steps) ? gen.steps : [];
   const running = ACTIVE_STATUSES.has(gen.status);
-  const [retrying, setRetrying] = useState(false);
+  const paused = gen.status === "paused";
+  const cancelled = gen.status === "cancelled";
+  // The flag is written by the API; the runner only reads it at its next safe
+  // checkpoint, so there is a real window where the operator has clicked but the
+  // status has not moved yet. Say so rather than looking unresponsive.
+  const stopping = running && (gen.control === "pause" || gen.control === "cancel");
+  const [busy, setBusy] = useState<Action | null>(null);
   const { toast } = useToast();
 
-  // A failed run used to be terminal in the UI — the only way back into the
-  // pipeline was editing the row by hand. /retry resets it (to curation when the
-  // plan phase's work survives, otherwise back to the queue).
-  async function retry() {
-    setRetrying(true);
+  const MESSAGES: Record<Action, { fail: string; title: string; body: (status: string) => string }> = {
+    pause: {
+      fail: "Could not pause",
+      title: "Pausing",
+      body: (s) => (s === "paused" ? "Stopped before it started." : "It will stop at the next safe checkpoint."),
+    },
+    resume: {
+      fail: "Could not resume",
+      title: "Resumed",
+      body: (s) => (s === "curating" ? "Check the images, then build again." : "Back in the pipeline."),
+    },
+    cancel: {
+      fail: "Could not stop",
+      title: "Stopping",
+      body: (s) => (s === "cancelled" ? "Run stopped." : "It will stop at the next safe checkpoint."),
+    },
+    retry: {
+      fail: "Could not retry",
+      title: "Run reset",
+      body: (s) => (s === "curating" ? "Check the images, then build again." : "Queued — the processor will pick it up."),
+    },
+  };
+
+  // One call shape for all four controls: POST, surface the server's message on
+  // failure, then let the wizard re-fetch. /pause and /cancel are cooperative —
+  // a 202 means "flag written", not "already stopped" (see the runner's
+  // checkpoints); /resume and /retry re-enqueue.
+  async function run(action: Action) {
+    if (action === "cancel") {
+      const ok = window.confirm(
+        "Stop this generation for good? It cannot be resumed — you would have to retry the run from the start.",
+      );
+      if (!ok) return;
+    }
+    setBusy(action);
     try {
-      const res = await fetch(`/api/template-engine/generations/${gen.id}/retry`, { method: "POST" });
+      const res = await fetch(`/api/template-engine/generations/${gen.id}/${action}`, { method: "POST" });
       if (!res.ok) {
-        toast({ kind: "error", title: "Could not retry", body: (await res.json().catch(() => ({}))).error ?? "Try again" });
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        toast({ kind: "error", title: MESSAGES[action].fail, body: body.error ?? "Try again" });
         return;
       }
-      const { status } = await res.json().catch(() => ({ status: "queued" }));
-      toast({
-        kind: "info",
-        title: "Run reset",
-        body: status === "curating" ? "Check the images, then build again." : "Queued — the processor will pick it up.",
-      });
+      const { status } = (await res.json().catch(() => ({}))) as { status?: string };
+      toast({ kind: "info", title: MESSAGES[action].title, body: MESSAGES[action].body(status ?? "") });
       onChanged?.();
     } catch {
-      toast({ kind: "error", title: "Could not retry", body: "Network error — please try again." });
+      toast({ kind: "error", title: MESSAGES[action].fail, body: "Network error — please try again." });
     } finally {
-      setRetrying(false);
+      setBusy(null);
     }
+  }
+
+  function ControlButton({
+    action, icon: Icon, label, tone = "default",
+  }: {
+    action: Action;
+    icon: typeof Pause;
+    label: string;
+    tone?: "default" | "danger";
+  }) {
+    return (
+      <button
+        type="button"
+        onClick={() => run(action)}
+        disabled={busy !== null}
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium disabled:opacity-60",
+          tone === "danger"
+            ? "border-dropped-fg/30 bg-surface text-dropped-fg hover:bg-dropped-bg"
+            : "border-border bg-surface text-text hover:bg-surface-2",
+        )}
+      >
+        {busy === action ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+        {label}
+      </button>
+    );
   }
 
   // Re-tick every 30s so the countdown stays honest between realtime pokes.
@@ -64,15 +134,48 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
         <div className="rounded-md border border-dropped-fg/30 bg-dropped-bg p-4 text-sm text-dropped-fg">
           <p className="font-medium">Generation failed</p>
           <p className="mt-1">{gen.error ?? "Unknown error"}</p>
-          <button
-            type="button"
-            onClick={retry}
-            disabled={retrying}
-            className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text hover:bg-surface-2 disabled:opacity-60"
-          >
-            {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-            Retry run
-          </button>
+          <div className="mt-3">
+            <ControlButton action="retry" icon={RotateCcw} label="Retry run" />
+          </div>
+        </div>
+      ) : null}
+
+      {cancelled ? (
+        <div className="rounded-md border border-dropped-fg/30 bg-dropped-bg p-4 text-sm text-dropped-fg">
+          <p className="font-medium">Run stopped</p>
+          <p className="mt-1">
+            Everything this run had already produced was kept, but it will not finish on its own. Retry starts it again
+            from the last point its work survives.
+          </p>
+          <div className="mt-3">
+            <ControlButton action="retry" icon={RotateCcw} label="Retry run" />
+          </div>
+        </div>
+      ) : null}
+
+      {paused ? (
+        <div className="rounded-md border border-notready-fg/30 bg-notready-bg p-4 text-sm text-notready-fg">
+          <p className="font-medium">Paused at {pausedAtLabel(gen, steps)}</p>
+          <p className="mt-1">
+            Nothing was discarded — the brief, content model and image picks are all intact. Resume puts it back in the
+            pipeline.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <ControlButton action="resume" icon={Play} label="Resume" />
+            <ControlButton action="cancel" icon={Square} label="Stop" tone="danger" />
+          </div>
+        </div>
+      ) : null}
+
+      {running ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-2 p-3">
+          <ControlButton action="pause" icon={Pause} label="Pause" />
+          <ControlButton action="cancel" icon={Square} label="Stop" tone="danger" />
+          <p className="text-xs text-text-muted">
+            {stopping
+              ? "Stop requested — finishing the current step so nothing is left half-written."
+              : "Stops cleanly at the next safe checkpoint; work already finished is kept."}
+          </p>
         </div>
       ) : null}
 

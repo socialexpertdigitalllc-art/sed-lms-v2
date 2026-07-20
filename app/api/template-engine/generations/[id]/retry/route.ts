@@ -23,6 +23,10 @@ interface GenRow {
 //     reusing the plan phase's expensive Gemini + vision work.
 //   - the PLAN phase failed (no content model) — reset to `queued` and enqueue a
 //     fresh `plan` row so the processor runs the whole thing again.
+//
+// A `cancelled` run (the operator pressed Stop) takes the same two paths: Stop
+// leaves every artefact in place and is deliberately not resumable, but it must
+// not be a dead end either, so Retry accepts it alongside `failed`.
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
@@ -53,24 +57,35 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     .maybeSingle();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
-  if (gen.status !== "failed") {
-    return NextResponse.json({ error: "Only a failed run can be retried" }, { status: 409 });
+  if (gen.status !== "failed" && gen.status !== "cancelled") {
+    return NextResponse.json({ error: "Only a failed or cancelled run can be retried" }, { status: 409 });
   }
 
   const canResume = !!gen.brief && !!gen.content_model;
   const nextStatus = canResume ? "curating" : "queued";
 
-  // CAS on `failed` so a double-click resets (and re-queues) exactly once.
-  // The stale gate verdict and error belong to the attempt being discarded.
+  // CAS on the status we read so a double-click resets (and re-queues) exactly
+  // once. The stale gate verdict and error belong to the attempt being
+  // discarded; `control`/`paused_at` are cleared so no leftover stop flag can
+  // halt the fresh attempt at its first checkpoint.
   const { data: updated, error } = await admin
     .from("template_generations")
-    .update({ status: nextStatus, gate_results: null, error: null, updated_at: new Date().toISOString() })
+    .update({
+      status: nextStatus,
+      gate_results: null,
+      error: null,
+      control: null,
+      paused_at: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", id)
-    .eq("status", "failed")
+    .eq("status", gen.status)
     .select("id")
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  if (!updated) return NextResponse.json({ error: "Only a failed run can be retried" }, { status: 409 });
+  if (!updated) {
+    return NextResponse.json({ error: "Only a failed or cancelled run can be retried" }, { status: 409 });
+  }
 
   if (!canResume) {
     const { error: qErr } = await admin

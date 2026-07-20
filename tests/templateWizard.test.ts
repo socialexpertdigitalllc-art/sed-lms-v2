@@ -20,6 +20,10 @@ describe("isDeployableStatus", () => {
       expect(isDeployableStatus(s)).toBe(false);
     }
   });
+  it("rejects the cooperative-control statuses — neither produced a site zip", () => {
+    expect(isDeployableStatus("paused")).toBe(false);
+    expect(isDeployableStatus("cancelled")).toBe(false);
+  });
 });
 
 describe("activeWizardStep", () => {
@@ -34,6 +38,10 @@ describe("activeWizardStep", () => {
     expect(activeWizardStep("deployed")).toBe(5);
     expect(activeWizardStep("failed")).toBe(4); // tracker shows the failure
   });
+  it("shows a paused or stopped run on the tracker, where its controls live", () => {
+    expect(activeWizardStep("paused")).toBe(4);
+    expect(activeWizardStep("cancelled")).toBe(4);
+  });
 });
 
 describe("maxReachedStep", () => {
@@ -44,6 +52,10 @@ describe("maxReachedStep", () => {
     expect(maxReachedStep("review")).toBe(5);
     expect(maxReachedStep("deployed")).toBe(5);
   });
+  it("never unlocks review for a paused or stopped run", () => {
+    expect(maxReachedStep("paused")).toBe(4);
+    expect(maxReachedStep("cancelled")).toBe(4);
+  });
 });
 
 describe("statusPill", () => {
@@ -52,6 +64,12 @@ describe("statusPill", () => {
       expect(V2_STATUS_PILL[s]).toBeDefined();
       expect(statusPill(s).label.length).toBeGreaterThan(0);
     }
+  });
+  it("knows the cooperative-control statuses (otherwise they show as Queued)", () => {
+    expect(statusPill("paused").label).toBe("Paused");
+    expect(statusPill("paused").cls).toContain("notready");
+    expect(statusPill("cancelled").label).toBe("Cancelled");
+    expect(statusPill("cancelled").cls).toContain("dropped");
   });
   it("falls back to Queued for unknown strings", () => {
     expect(statusPill("garbage").label).toBe("Queued");

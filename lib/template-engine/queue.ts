@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runTemplateGenerationV2, buildFromSelection } from "./runnerV2";
+import { shouldSkipClaimed } from "./control";
 
 // Fire-and-forget kick of the template processor (does not await; ignores errors).
 // Reuses the WGE self-origin + shared secret env pair.
@@ -37,6 +38,25 @@ export async function processTemplateQueue(): Promise<{ processed: number }> {
     if (!row) break; // queue empty OR another generation is in flight
 
     try {
+      // Never start (or restart) a run the operator has stopped. A pause/stop
+      // can land while the queue row is still `pending` — nobody is polling the
+      // control flag at that point — and /cancel only deletes the pending rows
+      // it wins the race for. Without this guard the claim below would flip a
+      // paused generation straight back to `running`.
+      const { data: controlRow } = await admin
+        .from("template_generations")
+        .select("status, control")
+        .eq("id", row.generation_id)
+        .maybeSingle();
+      if (controlRow && shouldSkipClaimed(controlRow.status, controlRow.control)) {
+        await admin
+          .from("template_gen_queue")
+          .update({ status: "done", finished_at: new Date().toISOString() })
+          .eq("id", row.id);
+        processed++;
+        continue;
+      }
+
       const { data: queueRow } = await admin
         .from("template_gen_queue")
         .select("kind")

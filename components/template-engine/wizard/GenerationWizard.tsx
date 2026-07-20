@@ -38,6 +38,10 @@ export type GenerationDetail = {
   zip_path: string | null;
   deployed_url: string | null;
   error: string | null;
+  // Cooperative run controls (migration 0044). `control` is the flag the runner
+  // polls; `paused_at` is when it actually came to rest at a checkpoint.
+  control?: string | null;
+  paused_at?: string | null;
   created_at: string;
   brief: Record<string, unknown> | null;
   content_model: ContentModel | null;

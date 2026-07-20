@@ -37,6 +37,7 @@ import { buildInitialSlots } from "./gatherImages";
 import type { ImageCandidate, ImageSlot } from "./imageSlots";
 import { businessSlug, websiteId } from "./slug";
 import { contentTypeFor, listStorageFiles } from "./runner";
+import { readControl, type HaltMode } from "./control";
 import type { GenStep } from "./types";
 
 const TEMPLATES_BUCKET = "website-templates";
@@ -44,6 +45,25 @@ const SITES_BUCKET = "template-sites";
 const TEXT_FILE_RE = /\.(html?|css|js|mjs)$/i;
 const UPLOAD_BATCH = 8;
 const REGEN_CONCURRENCY = 3; // keep wall-clock sane without hammering the provider
+
+/**
+ * Thrown by a checkpoint to unwind out of the pipeline when the operator asked
+ * for a pause or a stop. It is NOT a failure: both phase-level catch blocks
+ * recognise it, persist the halt and return cleanly, so nothing writes
+ * `status: 'failed'` or an `error` string. It is an exception purely because
+ * that is the only way to abandon work from inside the per-file regeneration
+ * pool and the repair loop without threading a return code through every layer.
+ */
+export class GenerationHalted extends Error {
+  constructor(
+    readonly mode: HaltMode,
+    /** The checkpoint name, for the "Paused at …" UI and the step detail. */
+    readonly at: string,
+  ) {
+    super(`Generation ${mode === "pause" ? "paused" : "cancelled"} at ${at}`);
+    this.name = "GenerationHalted";
+  }
+}
 
 function stringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string" && s.trim().length > 0) : [];
@@ -274,6 +294,60 @@ export function describeGateFailure(gate: GateResult, ctx?: { rounds: number; st
   return `${lead} | ${body}`;
 }
 
+/**
+ * Bring a halted run to rest. Called from either phase's catch block once it
+ * recognises a GenerationHalted, and NEVER writes `failed` or an `error` —
+ * asking a run to stop is not a way for it to fail.
+ *
+ * pause  -> status 'paused' + `paused_at`, `control` cleared. Every artefact
+ *           the run produced so far (brief, content_model, image_slots,
+ *           site_slug, and any zip from an earlier attempt) is left untouched
+ *           because it simply is not named in the update, so /resume can pick
+ *           the run back up exactly where the checkpoint left it.
+ * cancel -> status 'cancelled', `control` cleared, artefacts likewise left as
+ *           they are. Terminal, but /retry still accepts it.
+ *
+ * Steps still marked `running` are rolled back to `pending`: those are the
+ * per-file build entries the concurrency pool never got to. Leaving them
+ * `running` would show a paused run with spinners forever, and they carry no
+ * output, so `pending` is the truthful state.
+ */
+async function persistHalt(
+  admin: SupabaseClient,
+  generationId: string,
+  halt: GenerationHalted,
+  steps: GenStep[],
+  currentKey: string | null,
+): Promise<void> {
+  for (const s of steps) {
+    if (s.status === "running") {
+      s.status = "pending";
+      s.started_at = undefined;
+    }
+  }
+  const paused = halt.mode === "pause";
+  await admin
+    .from("template_generations")
+    .update({
+      steps,
+      current_step: currentKey,
+      status: paused ? "paused" : "cancelled",
+      control: null,
+      paused_at: paused ? new Date().toISOString() : null,
+      error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", generationId);
+  // Resolve the in-flight queue row so the processor cannot re-claim it. The
+  // processor also does this on a clean return; doing it here too keeps direct
+  // callers of the runner honest.
+  await admin
+    .from("template_gen_queue")
+    .update({ status: "done", finished_at: new Date().toISOString() })
+    .eq("generation_id", generationId)
+    .eq("status", "processing");
+}
+
 interface GenRow {
   id: string;
   lead_id: string;
@@ -315,6 +389,8 @@ interface BuildCtx {
   endStep: (status: "done" | "partial" | "failed", detail?: string, extra?: Record<string, unknown>) => Promise<void>;
   writeThrough: (extra?: Record<string, unknown>) => Promise<void>;
   setCurrentKey: (key: string | null) => void;
+  /** Throws GenerationHalted if the operator asked to pause/stop. See checkpoint(). */
+  checkpoint: (at: string) => Promise<void>;
 }
 
 /**
@@ -345,7 +421,14 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     endStep,
     writeThrough,
     setCurrentKey,
+    checkpoint,
   } = ctx;
+
+  // CHECKPOINT — before the build phase touches anything at all.
+  // SAFE: the row still holds exactly what the plan phase left (brief, content
+  // model, image slots); no template has been downloaded, nothing is uploaded.
+  // Resuming from here re-enters this function from the top.
+  await checkpoint("build start");
 
   // 4. prepare: download the template + classify content vs passthrough -------
   await beginStep("prepare", "Preparing template", { status: "building" });
@@ -386,6 +469,12 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
 
   const demoTokens = stringArray(template.demo_tokens);
 
+  // CHECKPOINT — between `prepare` and the (long, expensive) regeneration loop.
+  // SAFE: `prepare` only downloaded and classified files into memory. It wrote
+  // no storage object and changed no generation field beyond its own step entry,
+  // which is already marked `done`.
+  await checkpoint("prepare");
+
   // 5. regenerate every content file whole (concurrency-capped) ---------------
   // Pre-register one step per file so concurrent workers each update only their
   // own step by key — the shared "last step" endStep pattern is not safe here.
@@ -397,6 +486,16 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
 
   const rebuilt: Record<string, string> = {};
   await runWithConcurrency(contentFiles, REGEN_CONCURRENCY, async (file) => {
+    // CHECKPOINT — before each individual file's regeneration. This is the one
+    // that makes Pause feel responsive: the build loop is minutes of AI calls,
+    // so a pause that only landed between pipeline steps would look broken.
+    // SAFE: it sits OUTSIDE the try/catch below, so a halt is never mistaken
+    // for a regeneration failure and never marks this file's step `failed`.
+    // Nothing is written to storage during regeneration — the outputs live in
+    // `rebuilt` (memory) until finalize — so abandoning here loses only work,
+    // never consistency. runWithConcurrency stops handing out new files but
+    // lets the ≤2 in-flight ones finish, so no file is left half-regenerated.
+    await checkpoint(`build ${file}`);
     const step = steps.find((s) => s.key === `build:${file}`)!;
     const t0 = Date.now();
     try {
@@ -438,6 +537,11 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   while (!gate.ok && rounds < MAX_REPAIR_ROUNDS) {
     const targets = offenderFiles(gate).filter((f) => contentSources[f] !== undefined);
     if (targets.length === 0) break; // nothing regenerable — repairing cannot help
+    // CHECKPOINT — between repair rounds. Each round is another full AI call per
+    // offending file, so this is the second-longest stretch after the build loop.
+    // SAFE: the gate verdict for the round that just finished has been written
+    // through, `rebuilt` is only in memory, and nothing is packaged yet.
+    await checkpoint(`repair round ${rounds + 1}`);
     rounds++;
     verifyStep.label = `Repairing (round ${rounds} of ${MAX_REPAIR_ROUNDS})`;
     verifyStep.detail = describeGateFailure(gate);
@@ -475,6 +579,15 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     throw new Error(`Verification gate failed: ${detail}`);
   }
   await endStep("done", rounds ? `leak + structure gates passed after ${rounds} repair round(s)` : "leak + structure gates passed");
+
+  // CHECKPOINT — after the gates passed, before packaging begins. This is the
+  // LAST safe point: everything past it writes to the `template-sites` bucket
+  // (a zip plus one object per file), and a halt part-way through that upload
+  // would leave a generation pointing at an incomplete site. So finalize runs
+  // to completion once entered, and a pause requested during it takes effect
+  // only if a later run reaches a checkpoint again.
+  // SAFE HERE: no storage object has been written yet for this attempt.
+  await checkpoint("verify");
 
   // 7. finalize: package the zip + explode to template-sites (as v1) ----------
   await beginStep("finalize", "Packaging site");
@@ -571,6 +684,11 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
     if (detail) step.detail = detail;
     await writeThrough(extra);
   }
+  /** Poll the control flag; unwind out of the phase if the operator asked to stop. */
+  async function checkpoint(at: string): Promise<void> {
+    const decision = await readControl(admin, generationId);
+    if (decision !== "continue") throw new GenerationHalted(decision, at);
+  }
 
   try {
     // 1. load generation + lead + template; freeze the brief --------------------
@@ -598,6 +716,14 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
     await writeThrough({ brief, site_slug: siteSlug });
     const requestedPages = stringArray(gen.requested_pages);
 
+    // CHECKPOINT — before the first paid AI call.
+    // SAFE: only the frozen brief and the site slug have been written, and both
+    // are deterministic re-derivations of data that already existed. A pause
+    // caught here has cost nothing; a re-run recomputes them identically.
+    // This is also the checkpoint that catches a run paused while still
+    // `queued`, since the flag is set before the processor ever claims it.
+    await checkpoint("brief");
+
     // 2. plan the content model (Gemini Pro) ------------------------------------
     await beginStep("plan", "Planning content", { status: "planning" });
     const { model: planned } = await planContent(brief, requestedPages);
@@ -619,6 +745,11 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
       { content_model: contentModel },
     );
 
+    // CHECKPOINT — between `plan` and `images`.
+    // SAFE: the content model is fully written and its step is `done`; image
+    // gathering has not started, so no `image_slots` are half-populated.
+    await checkpoint("plan");
+
     // 3. gather + vision-rank image candidates into slots (Phase 2 curation) ----
     await beginStep("images", "Gathering + ranking images");
     const excludePeople = excludePeopleOf(gen.options);
@@ -630,11 +761,23 @@ export async function runTemplateGenerationV2(generationId: string): Promise<voi
       { image_slots: imageSlots },
     );
 
+    // CHECKPOINT — between `images` and the hand-off to the operator.
+    // SAFE: `image_slots` is written in full and its step is closed; the only
+    // thing left is flipping the status to `curating`. Resuming from here lands
+    // on `curating` directly (see resumeTarget) — no AI work is repeated.
+    await checkpoint("images");
+
     // 4. pause here for the operator to curate images (Phase 2) -----------------
     await beginStep("curate", "Awaiting image curation");
     currentKey = null;
     await endStep("done", "ready for operator review", { status: "curating", error: null });
   } catch (e) {
+    // A pause/stop is not a failure: bring the run to rest and return cleanly so
+    // the caller marks the queue row done rather than failed.
+    if (e instanceof GenerationHalted) {
+      await persistHalt(admin, generationId, e, steps, currentKey);
+      return;
+    }
     const msg = e instanceof Error ? e.message : String(e);
     const last = steps[steps.length - 1];
     if (last && last.status === "running") {
@@ -711,6 +854,11 @@ export async function buildFromSelection(generationId: string): Promise<void> {
     if (detail) step.detail = detail;
     await writeThrough(extra);
   }
+  /** Poll the control flag; unwind out of the pipeline if the operator asked to stop. */
+  async function checkpoint(at: string): Promise<void> {
+    const decision = await readControl(admin, generationId);
+    if (decision !== "continue") throw new GenerationHalted(decision, at);
+  }
 
   try {
     // Load the generation — has the frozen brief/content_model/image_slots the
@@ -761,8 +909,16 @@ export async function buildFromSelection(generationId: string): Promise<void> {
       setCurrentKey: (key) => {
         currentKey = key;
       },
+      checkpoint,
     });
   } catch (e) {
+    // A pause/stop is not a failure — same clean landing as the plan phase.
+    // Note pages_built is deliberately NOT written: a halted build ships no
+    // pages, and /resume re-runs the build phase from `prepare`.
+    if (e instanceof GenerationHalted) {
+      await persistHalt(admin, generationId, e, steps, currentKey);
+      return;
+    }
     const msg = e instanceof Error ? e.message : String(e);
     const last = steps[steps.length - 1];
     if (last && last.status === "running") {
