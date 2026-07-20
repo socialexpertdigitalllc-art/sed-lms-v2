@@ -231,11 +231,21 @@ export function LeadDetail({
               )}
               <FieldRow label="Profile link" value={lead.business_profile_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ business_profile_link: nz(v) })} />
               <FieldRow label="Website link" value={lead.website_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ website_link: nz(v) })} />
-              {lead.logo_via_sms ? (
-                <FieldRow label="Logo link" value="" display={muted("Sent via SMS")} />
-              ) : (
-                <FieldRow label="Logo link" value={lead.logo_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ logo_link: nz(v) })} />
-              )}
+              {/* A logo sent by SMS is uploaded to an image host afterwards, so the
+                  link arrives LATER — the field must stay editable rather than being
+                  replaced by static text. The note only shows until a link exists. */}
+              <FieldRow
+                label="Logo link"
+                value={lead.logo_link ?? ""}
+                type="url"
+                canEdit={canEdit}
+                onSave={(v) => patch({ logo_link: nz(v) })}
+                display={
+                  lead.logo_via_sms && !lead.logo_link
+                    ? muted("Sent via SMS — add the link once uploaded")
+                    : undefined
+                }
+              />
               <FieldRow label="Map embed link" value={lead.map_embed_link ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ map_embed_link: nz(v) })} />
               <FieldRow label="Reference link" value={lead.reference_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ reference_link: nz(v) })} />
               {designRefs.length > 0 ? (
