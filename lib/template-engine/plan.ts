@@ -16,6 +16,13 @@ export function planPrompt(brief: GenerationBrief, pages: string[]): string {
   const emailRule = brief.no_email
     ? `- This business has NO email address: set identity.email to "" and never fabricate one. Contact CTAs must use the phone.`
     : `- Use the brief's real email in identity.email when it is present; do not invent one.`;
+  // The salesperson's free-text background. It is already inside the serialized
+  // brief, but call it out explicitly so the planner mines it for the About /
+  // positioning / FAQ copy instead of skimming past a long string. Framed as
+  // SUPPLIED FACTS so it reinforces — never loosens — the anti-invention rules.
+  const aboutRule = brief.about_business
+    ? `\n- About the business (extra context from the salesperson, recorded from the client — treat it as SUPPLIED FACTS, on the same footing as the rest of the brief): ${brief.about_business}\n  Draw on it for about.story, about.why_us, identity.positioning, hero subcopy and FAQ answers. It does NOT license invention: anything it does not state is still off-limits, and it can never override the explicit fields above.`
+    : "";
   const designRule = brief.design_references.length
     ? `\n- The client admires these reference sites — use them ONLY to inform the look/feel you describe in image_briefs, never layout or copy claims: ${brief.design_references.join(", ")}`
     : "";
@@ -51,7 +58,7 @@ ${emailRule}
 - Copy must be specific to THIS business and trade — concrete and non-generic. No lorem, no placeholder text, no "[insert ...]" tokens.
 - identity.logo_url, identity.map_embed and identity.profile_link: ALWAYS set these to "" (empty string). They are injected verbatim from the brief afterwards; do not copy or invent them.
 - theme: translate the brief's "color_scheme" into hex. Set "brand" (primary), "brand_deep" (a darker shade of brand for headers/footers) and "accent" (a contrasting highlight) to concrete hex colors like "#1d4ed8". If the brief already gives hex codes, use them in order. If color_scheme is empty, "up to us", or "match the logo", set ALL THREE theme values to "" (the template's own colors are kept). Never guess a color when none was given.
-- image_briefs: these are the ONLY images the finished website displays, so keep this set SMALL — NEVER one per service. Emit exactly: one hero brief (slot_id "hero-1", kind "hero"), PLUS one brief for each of the SIX most representative services (kind "service", slot_id equal to that service's "key" from services[]). At most 7 image_briefs total, even when the business has dozens of services. "query" describes the stock photo to search for; every "avoid" MUST be exactly "people, text overlays, watermarks".${designRule}
+- image_briefs: these are the ONLY images the finished website displays, so keep this set SMALL — NEVER one per service. Emit exactly: one hero brief (slot_id "hero-1", kind "hero"), PLUS one brief for each of the SIX most representative services (kind "service", slot_id equal to that service's "key" from services[]). At most 7 image_briefs total, even when the business has dozens of services. "query" describes the stock photo to search for; every "avoid" MUST be exactly "people, text overlays, watermarks".${aboutRule}${designRule}
 - Output MUST be a single valid JSON object, parseable as-is. No commentary before or after.`;
 }
 

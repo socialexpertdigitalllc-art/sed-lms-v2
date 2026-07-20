@@ -174,6 +174,24 @@ describe("buildLeadPayload", () => {
     expect(p.specify_pages).toContain("FAQ");
     expect(p.reference_link).toBeNull();
   });
+
+  it("round-trips about_business, trimmed", () => {
+    const p = buildLeadPayload({
+      ...validState(),
+      about_business: "  Family run since 1998, historic-home specialists.  ",
+    });
+    expect(p.about_business).toBe("Family run since 1998, historic-home specialists.");
+  });
+
+  it("nulls about_business when blank or whitespace-only", () => {
+    expect(buildLeadPayload({ ...validState(), about_business: "" }).about_business).toBeNull();
+    expect(buildLeadPayload({ ...validState(), about_business: "   " }).about_business).toBeNull();
+  });
+
+  it("does not require about_business", () => {
+    // Optional by design: an otherwise-valid state with it empty must still pass.
+    expect(validateNewLead({ ...validState(), about_business: "" }, NOW)).toEqual({});
+  });
 });
 
 describe("polish-3: email / no_email", () => {

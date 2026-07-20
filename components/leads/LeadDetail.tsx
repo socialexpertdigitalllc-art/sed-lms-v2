@@ -343,6 +343,8 @@ export function LeadDetail({
               <FieldRow label="Direct line saved" value={lead.direct_line_saved == null ? "" : lead.direct_line_saved ? "Yes" : "No"} type="select" options={YES_NO} canEdit={canEdit} onSave={(v) => patch({ direct_line_saved: triBool(v) })} />
               <FieldRow label="Yearly price" value={lead.yearly_price ?? ""} canEdit={canEdit} onSave={(v) => patch({ yearly_price: nz(v) })} />
               <FieldRow className="sm:col-span-2" label="Comments" value={lead.comments ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ comments: nz(v) })} />
+              {/* Free-text background the website generator reads as supplied fact. */}
+              <FieldRow className="sm:col-span-2" label="About business" value={lead.about_business ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ about_business: nz(v) })} />
             </div>
           </SectionCard>
 

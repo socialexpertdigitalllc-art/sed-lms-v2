@@ -464,6 +464,13 @@ export function NewLeadForm({
             <F error={errors.services} label="Services" required>
               <DynamicList values={f.services} onChange={(v) => set("services", v)} placeholder="Enter service" addLabel="Add Service" />
             </F>
+            <F
+              error={errors.about_business}
+              label="About Business (optional)"
+              hint="Extra background for the website generator — history, specialities, what makes them different, service-area notes. Anything you write here is treated as fact by the AI, so only put down what the client actually told you."
+            >
+              <textarea value={f.about_business} onChange={(e) => set("about_business", e.target.value)} placeholder="e.g., Family run since 1998, specialises in historic-home restoration, only takes jobs within 30 miles of Islip..." rows={6} maxLength={4000} className={inputCls} />
+            </F>
           </SectionCard>
 
           <SectionCard n={3} icon={Globe} title="Website Details" subtitle="Scope of the build" done={sectionDone("website")} delay={showAssignment ? 180 : 120}>

@@ -38,6 +38,7 @@ export const LEAD_CSV_COLUMNS: CsvColumn[] = [
   { key: "logo_via_sms", label: "Logo via SMS" },
   { key: "color_same_as_logo", label: "Color Same as Logo" },
   { key: "closed_by", label: "Closed By" },
+  { key: "about_business", label: "About Business" },
 ];
 
 /**

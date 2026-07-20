@@ -21,7 +21,7 @@ function lead(overrides: Partial<Lead> = {}): Lead {
     color_scheme: null, color_same_as_logo: null, add_ons: null, price_quoted: 1200,
     yearly_price: "300", follow_up_time: null, last_followup_status: null, no_pickup_streak: 0,
     direct_line_saved: null, fresh_or_followup: null, reference_link: null, design_reference_links: null,
-    image_links: null, rating: null, comments: null, created_by: null, closed_by: null,
+    image_links: null, rating: null, comments: null, about_business: null, created_by: null, closed_by: null,
     created_at: "2026-07-18T00:00:00Z", updated_at: "2026-07-18T00:00:00Z", deleted_at: null,
     ...overrides,
   };

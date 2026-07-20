@@ -61,6 +61,8 @@ export interface Lead {
   image_links: string[] | null;
   rating: number | null;
   comments: string | null;
+  /** Free-text background on the business, fed to the website generator's brief. */
+  about_business: string | null;
   created_by: string | null;
   closed_by: string | null;
   created_at: string;

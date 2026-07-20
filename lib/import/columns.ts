@@ -13,6 +13,7 @@ export const IMPORT_TARGETS = [
   "num_webpages", "specify_pages", "color_scheme", "image_links", "logo_link",
   "follow_up_time", "price_quoted", "direct_line_saved", "reference_link",
   "comments", "rating", "fresh_or_followup", "yearly_price", "map_embed_link",
+  "about_business",
 ] as const;
 
 export const DEFAULT_MAPPING: Record<string, string> = {

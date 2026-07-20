@@ -48,6 +48,8 @@ export interface NewLeadFormState {
   yearly_custom: string;
   direct_line_saved: "" | "Yes" | "No";
   reference_link: string;
+  /** Optional free-text background on the business (feeds the website generator). */
+  about_business: string;
   comments: string;
   rating: number;
   fresh_or_followup: string;
@@ -87,6 +89,7 @@ export function emptyNewLead(status: string): NewLeadFormState {
     yearly_custom: "",
     direct_line_saved: "",
     reference_link: "",
+    about_business: "",
     comments: "",
     rating: 0,
     fresh_or_followup: "",
@@ -234,6 +237,7 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     reference_link: f.site_type === "Redesign" ? f.reference_link.trim() || null : null,
     rating: f.rating || null,
     fresh_or_followup: f.fresh_or_followup || null,
+    about_business: f.about_business.trim() || null,
     comments: f.comments.trim() || null,
     closed_by: f.closed_by === "self" ? (opts?.userId ?? null) : f.closed_by || null,
   };

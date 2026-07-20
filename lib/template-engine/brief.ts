@@ -16,6 +16,13 @@ export interface GenerationBrief {
   service_areas: string[];
   years_experience?: number;
   notes?: string;             // lead.comments — the sales team's real context
+  /**
+   * lead.about_business — background the salesperson took down from the client
+   * (history, specialities, differentiators, service-area notes). Supplied
+   * facts, exactly like every other brief field: it widens what the planner
+   * knows, it never licenses invention.
+   */
+  about_business?: string;
   color_scheme?: string;
   logo_link?: string;
   client_photos: string[];    // lead.image_links — real photos of THIS business
@@ -63,6 +70,7 @@ export function buildBrief(lead: Lead): GenerationBrief {
     years_experience:
       typeof lead.client_experience === "number" ? lead.client_experience : undefined,
     notes: str(lead.comments),
+    about_business: str(lead.about_business),
     // An explicit palette always wins. `sameAsLogo` is a legacy flag we no
     // longer let anyone set, so it only speaks for leads that never recorded
     // colours — it must not override colours added since.

@@ -74,6 +74,20 @@ describe("buildBrief", () => {
     const b = buildBrief({ ...(lead as object), color_same_as_logo: true } as never);
     expect(b.color_scheme).toBe("navy and white");
   });
+  it("carries about_business when the salesperson filled it in", () => {
+    const b = buildBrief({
+      ...(lead as object),
+      about_business: "  Founded 1998; specialises in historic-home restoration.  ",
+    } as never);
+    expect(b.about_business).toBe("Founded 1998; specialises in historic-home restoration.");
+  });
+  it("omits about_business when blank or absent", () => {
+    expect(buildBrief({ ...(lead as object), about_business: "   " } as never).about_business)
+      .toBeUndefined();
+    expect(buildBrief({ ...(lead as object), about_business: null } as never).about_business)
+      .toBeUndefined();
+    expect(buildBrief(lead).about_business).toBeUndefined();
+  });
   it("is JSON-serialisable and stable", () => {
     expect(() => JSON.stringify(buildBrief(lead))).not.toThrow();
   });

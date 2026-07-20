@@ -47,6 +47,7 @@ function lead(p: Partial<Lead>): Lead {
     image_links: null,
     rating: null,
     comments: null,
+    about_business: null,
     created_by: null,
     closed_by: null,
     created_at: "2026-06-01T00:00:00Z",
