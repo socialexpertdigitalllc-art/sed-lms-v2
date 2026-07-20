@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { gatherSlotCandidates, deriveBusinessType } from "@/lib/template-engine/gatherImages";
-import { mergeCandidates, parseImageSlots, type ImageSlot } from "@/lib/template-engine/imageSlots";
+import { gatherMoreCandidates, deriveBusinessType } from "@/lib/template-engine/gatherImages";
+import { fetchCuratedCandidates } from "@/lib/template-engine/curatedImages";
+import { mergeCandidates, parseImageSlots, slotExcludesPeople, type ImageSlot } from "@/lib/template-engine/imageSlots";
 import type { ContentModel } from "@/lib/template-engine/contentModel";
 import type { GenerationBrief } from "@/lib/template-engine/brief";
 
@@ -22,8 +23,10 @@ interface GenRow {
 }
 
 /**
- * "Show different ones": gather a fresh page of Pexels+vision candidates for
- * one slot and merge them onto what's already there. The slot itself doesn't
+ * "Show different ones": gather fresh Pexels+vision candidates for one slot and
+ * merge them onto what's already there — walking up to MAX_PAGES_PER_CLICK
+ * pages (with a broader-query retry, then a curated-library fallback) so a
+ * single click actually produces something. The slot itself doesn't
  * store the Pexels query it was built from, so the query is recovered from
  * the frozen content model's `image_briefs` (matched by slot id) rather than
  * reconstructed — that's the ONE place the real query lives.
@@ -83,25 +86,38 @@ export async function POST(
 
   const businessType = deriveBusinessType(gen.brief as GenerationBrief);
   const options = gen.options as { exclude_people?: unknown } | null;
-  const excludePeople = options?.exclude_people !== false;
+  const excludePeople = slotExcludesPeople(slot, options?.exclude_people !== false);
   const page = slot.next_page ?? 2;
 
-  const fresh = await gatherSlotCandidates({
+  // One click walks several pages (and falls back to a broader query) rather
+  // than fetching a single page that the vision gate can empty completely.
+  const fresh = await gatherMoreCandidates({
     brief,
     businessType,
     admin,
     excludePeople,
     excludeIds: slot.seen_pexels_ids,
     presentMax: slot.present_max,
-    page,
+    startPage: page,
   });
 
-  const newPexelsIds = fresh.map((c) => c.pexelsId).filter((n): n is number => typeof n === "number");
+  // Last resort: human-approved images from the curated library. Only when the
+  // whole paged+broadened gather came back with nothing new.
+  const curated =
+    fresh.candidates.length === 0
+      ? await fetchCuratedCandidates(admin, {
+          serviceKey: slot.id,
+          businessType,
+          excludeUrls: slot.candidates.map((c) => c.url),
+        })
+      : [];
+
   const updatedSlot: ImageSlot = {
     ...slot,
-    candidates: mergeCandidates(slot.candidates, fresh),
-    seen_pexels_ids: [...slot.seen_pexels_ids, ...newPexelsIds],
-    next_page: page + 1,
+    candidates: mergeCandidates(slot.candidates, [...fresh.candidates, ...curated]),
+    seen_pexels_ids: [...slot.seen_pexels_ids, ...fresh.fetchedIds],
+    next_page: fresh.nextPage,
+    last_gather: fresh.stats,
   };
   const updatedSlots = slots.map((s) => (s.id === slotId ? updatedSlot : s));
 

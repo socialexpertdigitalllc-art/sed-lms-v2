@@ -26,12 +26,44 @@ export interface VisionVerdict {
 export interface ImageCandidate {
   url: string;
   thumb: string;
-  source: "pexels" | "custom" | "client";
+  source: "pexels" | "custom" | "client" | "curated";
   photographer?: string;
   width?: number;
   height?: number;
   vision?: VisionVerdict;
   pexelsId?: number;
+  /**
+   * The search query that actually produced this candidate. Optional and
+   * absent on every pre-existing slot: a gather may fall back from the brief's
+   * specific query to the broad businessType one (gatherImages.ts), and the
+   * operator deserves to know which of the two a photo came from.
+   */
+  query?: string;
+}
+
+/**
+ * What ONE Pexels page + vision pass actually did. The whole point is that
+ * "no candidates" and "twelve found, eleven of them had people in" are wildly
+ * different situations that used to look identical in the UI.
+ */
+export interface GatherAttempt {
+  query: string; // the query this attempt actually searched
+  broadened: boolean; // true when it was the businessType fallback, not the brief's query
+  page: number;
+  fetched: number; // photos Pexels returned
+  alreadySeen: number; // dropped because this slot has already shown them
+  rejectedByVision: number; // dropped by the people gate (or an unreadable verdict)
+  trimmed: number; // survived vision but didn't fit the slot's present_max
+  kept: number; // actually handed to the operator
+}
+
+/** Sum of every attempt in one gather (one click = possibly several pages/queries). */
+export interface GatherStats extends Omit<GatherAttempt, "query" | "broadened" | "page"> {
+  pages: number; // Pexels pages consumed
+  queries: string[]; // every distinct query tried, in order
+  broadened: boolean; // true when the broad businessType fallback was used at all
+  timedOut: boolean; // true when the time budget, not the page budget, ended the loop
+  attempts: GatherAttempt[];
 }
 
 export interface ImageSlot {
@@ -44,6 +76,90 @@ export interface ImageSlot {
   selected: string[]; // chosen urls (<= pick_max)
   seen_pexels_ids: number[]; // powers "show different ones" (belt-and-suspenders with paging)
   next_page?: number; // next Pexels page to fetch on "show more" (Task 5's /more increments it)
+  /**
+   * Per-slot override of the generation-wide `exclude_people` option. Absent on
+   * every slot written before this field existed, so it MUST be read through
+   * `slotExcludesPeople()` (undefined = inherit the generation), never assumed
+   * present. `true` lets one slot (a team/about shot, a niche trade with no
+   * people-free stock at all) keep people without changing the generation.
+   */
+  allow_people?: boolean;
+  /** Stats from the most recent gather for this slot — powers the honest empty state. Absent on legacy slots. */
+  last_gather?: GatherStats;
+}
+
+/**
+ * Whether this slot's gather should drop people-showing photos: the
+ * generation-wide option unless the operator flipped the per-slot override on.
+ * Backward compatible by construction — a legacy slot with no `allow_people`
+ * key simply inherits the generation, exactly as before.
+ */
+export function slotExcludesPeople(
+  slot: Pick<ImageSlot, "allow_people">,
+  generationExcludesPeople: boolean,
+): boolean {
+  return slot.allow_people === true ? false : generationExcludesPeople;
+}
+
+/** An all-zero gather stat block — the identity for `aggregateGatherStats`. */
+export function emptyGatherStats(): GatherStats {
+  return {
+    fetched: 0,
+    alreadySeen: 0,
+    rejectedByVision: 0,
+    trimmed: 0,
+    kept: 0,
+    pages: 0,
+    queries: [],
+    broadened: false,
+    timedOut: false,
+    attempts: [],
+  };
+}
+
+/**
+ * Pure: fold a click's per-page attempts into one summary. `pages` counts
+ * DISTINCT Pexels pages (a broadened retry re-searches the SAME page number
+ * with a different query, so it must not double-count the page budget).
+ */
+export function aggregateGatherStats(attempts: GatherAttempt[], opts: { timedOut?: boolean } = {}): GatherStats {
+  const out = emptyGatherStats();
+  const pages = new Set<number>();
+  for (const a of attempts) {
+    out.fetched += a.fetched;
+    out.alreadySeen += a.alreadySeen;
+    out.rejectedByVision += a.rejectedByVision;
+    out.trimmed += a.trimmed;
+    out.kept += a.kept;
+    pages.add(a.page);
+    if (!out.queries.includes(a.query)) out.queries.push(a.query);
+    if (a.broadened) out.broadened = true;
+  }
+  out.pages = pages.size;
+  out.attempts = attempts;
+  out.timedOut = opts.timedOut === true;
+  return out;
+}
+
+/**
+ * Pure: the sentence the operator reads instead of a bare "No candidates".
+ * Empty string when there is nothing to report (no gather has run), so the UI
+ * can simply not render a line.
+ */
+export function describeGatherStats(stats: GatherStats | undefined): string {
+  if (!stats || stats.pages === 0) return "";
+  const pages = `${stats.pages} page${stats.pages === 1 ? "" : "s"}`;
+  if (stats.fetched === 0) {
+    return `Searched ${pages} — Pexels had no more photos for this search.`;
+  }
+  const bits = [`found ${stats.fetched}`];
+  if (stats.rejectedByVision > 0) bits.push(`${stats.rejectedByVision} filtered out (people)`);
+  if (stats.alreadySeen > 0) bits.push(`${stats.alreadySeen} already shown`);
+  if (stats.trimmed > 0) bits.push(`${stats.trimmed} over this slot's limit`);
+  bits.push(`${stats.kept} new`);
+  const broad = stats.broadened ? " Also tried a broader search." : "";
+  const slow = stats.timedOut ? " Stopped early on the time budget — click again to keep looking." : "";
+  return `Searched ${pages}: ${bits.join(", ")}.${broad}${slow}`;
 }
 
 /** Hero slots get a bigger gallery + multi-pick; every other kind is single-pick. */

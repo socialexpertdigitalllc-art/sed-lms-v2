@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { parseImageSlots, type ImageSlot } from "@/lib/template-engine/imageSlots";
 import { validateSelection } from "@/lib/template-engine/curation";
+import { bumpCuratedUsage } from "@/lib/template-engine/curatedImages";
 
 interface GenRow {
   id: string;
@@ -75,6 +76,13 @@ export async function POST(
     .update({ image_slots: updatedSlots, updated_at: new Date().toISOString() })
     .eq("id", id);
   if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 400 });
+
+  // Usage telemetry for the curated library: count only urls newly selected in
+  // THIS request, and only ones that came from `curated_images`. Best-effort.
+  const newlyCurated = parsed.data.urls.filter(
+    (u) => !slot.selected.includes(u) && slot.candidates.some((c) => c.url === u && c.source === "curated"),
+  );
+  await bumpCuratedUsage(admin, newlyCurated);
 
   return NextResponse.json({ slot: updatedSlot });
 }

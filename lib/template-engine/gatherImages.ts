@@ -10,7 +10,15 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { searchPexels, type PexelsPhoto } from "./pexels";
-import { rankAndTrim, slotDefaults, type ImageCandidate, type ImageSlot } from "./imageSlots";
+import {
+  aggregateGatherStats,
+  rankAndTrim,
+  slotDefaults,
+  type GatherAttempt,
+  type GatherStats,
+  type ImageCandidate,
+  type ImageSlot,
+} from "./imageSlots";
 import { rankImages } from "./vision";
 import type { ImageBrief } from "./contentModel";
 import type { GenerationBrief } from "./brief";
@@ -80,6 +88,13 @@ export function pexelsToCandidate(photo: PexelsPhoto): ImageCandidate {
  * already return new photos, but filtering seen ids guarantees no repeat even
  * if Pexels overlaps pages.
  */
+export interface GatherResult {
+  candidates: ImageCandidate[];
+  /** EVERY Pexels id this attempt looked at — kept, rejected, or trimmed. Recorded as "seen" so a later page never pays the vision cost for a photo this slot already judged. */
+  fetchedIds: number[];
+  attempt: GatherAttempt;
+}
+
 export async function gatherSlotCandidates(args: {
   brief: ImageBrief;
   businessType: string;
@@ -88,23 +103,178 @@ export async function gatherSlotCandidates(args: {
   excludeIds: number[];
   presentMax: number;
   page?: number;
-}): Promise<ImageCandidate[]> {
-  if (args.presentMax <= 0) return [];
+  /** Search text override — the broad businessType fallback (see gatherMoreCandidates). Defaults to the brief's own query. */
+  queryOverride?: string;
+  broadened?: boolean;
+}): Promise<GatherResult> {
+  const page = args.page ?? 1;
+  const query = args.queryOverride?.trim() || args.brief.query;
+  const broadened = args.broadened === true;
+  const empty = (over: Partial<GatherAttempt> = {}): GatherResult => ({
+    candidates: [],
+    fetchedIds: [],
+    attempt: {
+      query, broadened, page,
+      fetched: 0, alreadySeen: 0, rejectedByVision: 0, trimmed: 0, kept: 0,
+      ...over,
+    },
+  });
+  if (args.presentMax <= 0) return empty();
 
   const excludeSet = new Set(args.excludeIds);
-  const photos = await searchPexels(args.brief.query, "landscape", args.admin, fetch, {
-    page: args.page ?? 1,
+  const photos = await searchPexels(query, "landscape", args.admin, fetch, {
+    page,
     perPage: WIDE_NET_PER_PAGE,
   });
-  const fresh = photos.filter((p) => !excludeSet.has(p.id)).map(pexelsToCandidate);
-  if (fresh.length === 0) return [];
+  const fetchedIds = photos.map((p) => p.id);
+  const fresh = photos
+    .filter((p) => !excludeSet.has(p.id))
+    .map((p) => ({ ...pexelsToCandidate(p), query }));
+  const alreadySeen = photos.length - fresh.length;
+  if (fresh.length === 0) {
+    return { ...empty({ fetched: photos.length, alreadySeen }), fetchedIds };
+  }
 
   const verdicts = await rankImages(
     fresh.map((c) => ({ url: c.thumb || c.url })),
-    { query: args.brief.query, kind: args.brief.kind, businessType: args.businessType },
+    { query, kind: args.brief.kind, businessType: args.businessType },
   );
   const vetted: ImageCandidate[] = fresh.map((c, i) => ({ ...c, vision: verdicts[i] }));
-  return rankAndTrim(vetted, { excludePeople: args.excludePeople, presentMax: args.presentMax });
+  const rejectedByVision = args.excludePeople
+    ? vetted.filter((c) => c.vision?.people === true).length
+    : 0;
+  const candidates = rankAndTrim(vetted, { excludePeople: args.excludePeople, presentMax: args.presentMax });
+
+  return {
+    candidates,
+    fetchedIds,
+    attempt: {
+      query,
+      broadened,
+      page,
+      fetched: photos.length,
+      alreadySeen,
+      rejectedByVision,
+      trimmed: Math.max(0, fresh.length - rejectedByVision - candidates.length),
+      kept: candidates.length,
+    },
+  };
+}
+
+// --- "Show different ones": one click, several pages -------------------------
+//
+// The old behaviour was one click = one Pexels page. With exclude_people on,
+// the vision gate rejects well over half of a trade's stock photos, so a single
+// 12-photo page routinely yielded ZERO new candidates and the operator saw "No
+// candidates" for a slot where images HAD been found. One click now keeps
+// paging until it has something worth showing.
+
+/** Stop paging once a click has produced this many genuinely new candidates — enough to be worth a look without burning pages/quota chasing a full grid. */
+export const MIN_NEW_CANDIDATES = 4;
+
+/** Hard ceiling on Pexels pages (and therefore vision calls) per click. 3 pages = up to 36 photos and 3 Gemini calls: enough to beat a ~60% rejection rate, bounded enough to keep cost and latency sane. */
+export const MAX_PAGES_PER_CLICK = 3;
+
+/** Wall-clock budget per click. A vision call is ~20s worst case, so this is checked BEFORE starting another page: the request finishes with whatever it has rather than hanging past the operator's patience (and any platform request timeout). */
+export const GATHER_TIME_BUDGET_MS = 25_000;
+
+export interface PagingLimits {
+  minNew: number;
+  maxPages: number;
+  timeBudgetMs: number;
+}
+
+export const DEFAULT_PAGING_LIMITS: PagingLimits = {
+  minNew: MIN_NEW_CANDIDATES,
+  maxPages: MAX_PAGES_PER_CLICK,
+  timeBudgetMs: GATHER_TIME_BUDGET_MS,
+};
+
+/**
+ * Pure stop condition for the page loop — the single decision worth unit
+ * testing. Keep going only while ALL of these hold: we still want candidates,
+ * the page budget has room, and the time budget has room.
+ */
+export function shouldContinuePaging(
+  state: { kept: number; pagesConsumed: number; elapsedMs: number },
+  limits: PagingLimits = DEFAULT_PAGING_LIMITS,
+): boolean {
+  if (state.kept >= limits.minNew) return false;
+  if (state.pagesConsumed >= limits.maxPages) return false;
+  if (state.elapsedMs >= limits.timeBudgetMs) return false;
+  return true;
+}
+
+/**
+ * One "show different ones" click: page forward from `startPage` until the
+ * slot has `minNew` fresh candidates or the page/time budget runs out.
+ *
+ * When a page yields nothing new for the brief's SPECIFIC query, the same page
+ * is retried with the BROAD query (the generation's businessType — no invented
+ * text, no extra AI call). A niche brief ("bespoke soffit repair") can be
+ * effectively empty on Pexels while the trade term is not.
+ */
+export async function gatherMoreCandidates(args: {
+  brief: ImageBrief;
+  businessType: string;
+  admin: SupabaseClient;
+  excludePeople: boolean;
+  excludeIds: number[];
+  presentMax: number;
+  startPage: number;
+  limits?: PagingLimits;
+  now?: () => number;
+}): Promise<{ candidates: ImageCandidate[]; fetchedIds: number[]; stats: GatherStats; nextPage: number }> {
+  const limits = args.limits ?? DEFAULT_PAGING_LIMITS;
+  const now = args.now ?? Date.now;
+  const started = now();
+  const broadQuery = args.businessType.trim();
+  const canBroaden = broadQuery.length > 0 && broadQuery.toLowerCase() !== args.brief.query.trim().toLowerCase();
+
+  const seen = new Set(args.excludeIds);
+  const kept: ImageCandidate[] = [];
+  const attempts: GatherAttempt[] = [];
+  let page = Math.max(1, Math.floor(args.startPage));
+  let pagesConsumed = 0;
+  let timedOut = false;
+
+  const runAttempt = async (queryOverride: string | undefined, broadened: boolean) => {
+    const res = await gatherSlotCandidates({
+      brief: args.brief,
+      businessType: args.businessType,
+      admin: args.admin,
+      excludePeople: args.excludePeople,
+      excludeIds: [...seen],
+      // Never ask for 0 (that short-circuits the gather); ask for what's left.
+      presentMax: Math.max(1, args.presentMax - kept.length),
+      page,
+      queryOverride,
+      broadened,
+    });
+    for (const id of res.fetchedIds) seen.add(id);
+    kept.push(...res.candidates);
+    attempts.push(res.attempt);
+    return res;
+  };
+
+  while (shouldContinuePaging({ kept: kept.length, pagesConsumed, elapsedMs: now() - started }, limits)) {
+    const specific = await runAttempt(undefined, false);
+    if (specific.candidates.length === 0 && canBroaden) {
+      await runAttempt(broadQuery, true);
+    }
+    pagesConsumed++;
+    page++;
+    if (kept.length < limits.minNew && pagesConsumed < limits.maxPages && now() - started >= limits.timeBudgetMs) {
+      timedOut = true;
+    }
+  }
+
+  return {
+    candidates: kept,
+    fetchedIds: [...seen].filter((id) => !args.excludeIds.includes(id)),
+    stats: aggregateGatherStats(attempts, { timedOut }),
+    nextPage: page,
+  };
 }
 
 /** "kitchen-remodel" -> "Kitchen Remodel", "hero-1" -> "Hero 1" — a readable label with no extra data needed. */
@@ -181,10 +351,7 @@ export async function buildInitialSlots(
       page: 1,
     });
 
-    const candidates = clientCandidate ? [clientCandidate, ...gathered] : gathered;
-    const seenPexelsIds = gathered
-      .map((c) => c.pexelsId)
-      .filter((id): id is number => typeof id === "number");
+    const candidates = clientCandidate ? [clientCandidate, ...gathered.candidates] : gathered.candidates;
 
     return {
       id: b.slot_id,
@@ -194,8 +361,11 @@ export async function buildInitialSlots(
       present_max,
       candidates,
       selected: clientCandidate ? [clientCandidate.url] : [],
-      seen_pexels_ids: seenPexelsIds,
+      // Every id this page LOOKED at, not just the kept ones — a rejected photo
+      // must not be re-fetched and re-vision-ranked by "show different ones".
+      seen_pexels_ids: gathered.fetchedIds,
       next_page: 2, // page 1 was just gathered; "show different ones" starts at 2
+      last_gather: aggregateGatherStats([gathered.attempt]),
     };
   });
 }

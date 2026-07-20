@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  Check, CircleUserRound, Hammer, ImagePlus, Link2, Loader2, RefreshCw, ShieldCheck, X, ZoomIn,
+  Check, CircleUserRound, Hammer, ImagePlus, Link2, Loader2, RefreshCw, ShieldCheck, Star, Users, X, ZoomIn,
 } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
-import type { ImageSlot } from "@/lib/template-engine/imageSlots";
+import { describeGatherStats, type ImageSlot } from "@/lib/template-engine/imageSlots";
 import { applyToggle, slotProgress } from "@/lib/template-engine/wizard";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
@@ -41,7 +41,7 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
     return chain.current;
   };
 
-  const [busySlot, setBusySlot] = useState<Record<string, "more" | "custom" | undefined>>({});
+  const [busySlot, setBusySlot] = useState<Record<string, "more" | "custom" | "people" | undefined>>({});
   const [building, setBuilding] = useState(false);
   const [zoomUrl, setZoomUrl] = useState<string | null>(null); // full-size lightbox
 
@@ -91,6 +91,32 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
         }
       } catch {
         toast({ kind: "error", title: "Could not load more", body: "Network error — try again" });
+      } finally {
+        setBusySlot((b) => ({ ...b, [slot.id]: undefined }));
+      }
+    });
+  }
+
+  /** Per-slot people override. Turning it ON re-gathers with the gate down, so it can take as long as "show different ones". */
+  function toggleAllowPeople(slot: ImageSlot) {
+    if (!editable || busySlot[slot.id]) return;
+    const allow = !(slot.allow_people === true);
+    setBusySlot((b) => ({ ...b, [slot.id]: "people" }));
+    enqueue(async () => {
+      try {
+        const res = await fetch(`/api/template-engine/generations/${gen.id}/images/${slot.id}/allow-people`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ allow }),
+        });
+        if (!res.ok) {
+          toast({ kind: "error", title: "Could not change the people filter", body: (await res.json().catch(() => ({}))).error ?? "Try again" });
+          return;
+        }
+        const { slot: fresh } = await res.json();
+        if (fresh) replaceSlot(fresh);
+      } catch {
+        toast({ kind: "error", title: "Could not change the people filter", body: "Network error — try again" });
       } finally {
         setBusySlot((b) => ({ ...b, [slot.id]: undefined }));
       }
@@ -178,6 +204,7 @@ export function ImageCuration({ gen, onChanged }: { gen: GenerationDetail; onCha
           busy={busySlot[slot.id]}
           onToggle={(url) => toggle(slot, url)}
           onMore={() => fetchMore(slot)}
+          onAllowPeople={() => toggleAllowPeople(slot)}
           onCustom={(url) => addCustom(slot, url)}
           onZoom={(url) => setZoomUrl(url)}
         />
@@ -213,16 +240,20 @@ function Lightbox({ url, onClose }: { url: string | null; onClose: () => void })
   );
 }
 
-function SlotGrid({ slot, editable, busy, onToggle, onMore, onCustom, onZoom }: {
+function SlotGrid({ slot, editable, busy, onToggle, onMore, onAllowPeople, onCustom, onZoom }: {
   slot: ImageSlot;
   editable: boolean;
-  busy: "more" | "custom" | undefined;
+  busy: "more" | "custom" | "people" | undefined;
   onToggle: (url: string) => void;
   onMore: () => void;
+  onAllowPeople: () => void;
   onCustom: (url: string) => void | Promise<unknown>;
   onZoom: (url: string) => void;
 }) {
   const [customUrl, setCustomUrl] = useState("");
+  // The honest version of "No candidates": what the last gather actually did.
+  const gatherLine = describeGatherStats(slot.last_gather);
+  const allowPeople = slot.allow_people === true;
 
   async function submitCustom() {
     if (!customUrl.trim()) return;
@@ -240,11 +271,25 @@ function SlotGrid({ slot, editable, busy, onToggle, onMore, onCustom, onZoom }: 
           </span>
         </h2>
         {editable ? (
-          <button type="button" onClick={onMore} disabled={busy !== undefined}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:text-text disabled:opacity-50">
-            {busy === "more" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            Show different ones
-          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onAllowPeople} disabled={busy !== undefined}
+              aria-pressed={allowPeople}
+              title={allowPeople
+                ? "People are allowed for this slot — click to filter them out again"
+                : "Allow photos with people for this slot only (does not change the generation)"}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs disabled:opacity-50",
+                allowPeople ? "border-accent text-accent" : "border-border text-text-muted hover:text-text",
+              )}>
+              {busy === "people" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Users className="h-3.5 w-3.5" />}
+              {allowPeople ? "People allowed" : "Allow people"}
+            </button>
+            <button type="button" onClick={onMore} disabled={busy !== undefined}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:text-text disabled:opacity-50">
+              {busy === "more" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Show different ones
+            </button>
+          </div>
         ) : null}
       </div>
 
@@ -268,7 +313,10 @@ function SlotGrid({ slot, editable, busy, onToggle, onMore, onCustom, onZoom }: 
                   </span>
                 ) : null}
                 <span className="absolute inset-x-0 bottom-0 flex items-center gap-1 bg-gradient-to-t from-black/60 to-transparent p-1.5 text-[10px] text-white">
-                  {c.source === "client" ? "Client photo" : c.source === "custom" ? "Custom" : c.photographer ?? "Pexels"}
+                  {c.source === "client" ? "Client photo"
+                    : c.source === "custom" ? "Custom"
+                    : c.source === "curated" ? "Curated" : c.photographer ?? "Pexels"}
+                  {c.source === "curated" ? <Star className="h-3 w-3" aria-label="Human-approved curated image" /> : null}
                   {c.vision && !c.vision.people ? <ShieldCheck className="h-3 w-3" aria-label="No people detected" /> : null}
                   {c.vision?.people ? <CircleUserRound className="h-3 w-3 text-notready-bg" aria-label="People detected" /> : null}
                 </span>
@@ -284,9 +332,21 @@ function SlotGrid({ slot, editable, busy, onToggle, onMore, onCustom, onZoom }: 
           );
         })}
         {slot.candidates.length === 0 ? (
-          <p className="col-span-full text-sm text-text-faint">No candidates — use &quot;Show different ones&quot; or add a custom URL.</p>
+          <div className="col-span-full space-y-1 text-sm text-text-faint">
+            {/* "No candidates" alone is misleading — images usually WERE found
+                and then filtered out. Say which, so the operator can act. */}
+            {gatherLine ? <p>{gatherLine}</p> : null}
+            <p>
+              No candidates — use &quot;Show different ones&quot;
+              {allowPeople ? "" : ", allow people for this slot,"} or add a custom URL.
+            </p>
+          </div>
         ) : null}
       </div>
+
+      {gatherLine && slot.candidates.length > 0 ? (
+        <p className="mt-2 text-xs text-text-faint">{gatherLine}</p>
+      ) : null}
 
       {editable ? (
         <div className="mt-3 flex items-center gap-2">

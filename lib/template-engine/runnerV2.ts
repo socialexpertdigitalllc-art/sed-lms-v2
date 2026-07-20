@@ -34,7 +34,7 @@ import { regenerateFile } from "./regenerate";
 import { runGates, type GateResult } from "./gates";
 import { zipFromMap } from "./zip";
 import { buildInitialSlots } from "./gatherImages";
-import type { ImageSlot } from "./imageSlots";
+import type { ImageCandidate, ImageSlot } from "./imageSlots";
 import { businessSlug, websiteId } from "./slug";
 import { contentTypeFor, listStorageFiles } from "./runner";
 import type { GenStep } from "./types";
@@ -121,7 +121,9 @@ interface SelectedImage {
   slot_id: string;
   kind: string;
   url: string;
-  source: "pexels" | "custom" | "client";
+  // Mirrors ImageCandidate["source"] — "curated" joined it when the curation
+  // screen started offering human-approved library images as a fallback.
+  source: ImageCandidate["source"];
 }
 
 /**
