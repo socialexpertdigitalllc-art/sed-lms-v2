@@ -36,7 +36,6 @@ export interface NewLeadFormState {
   specify_pages: string[];
   other_page: string;
   color_scheme: string;
-  color_same_as_logo: boolean;
   logo_link: string;
   logo_via_sms: boolean;
   image_links: string[];
@@ -76,7 +75,6 @@ export function emptyNewLead(status: string): NewLeadFormState {
     specify_pages: ["Home"],
     other_page: "",
     color_scheme: "",
-    color_same_as_logo: false,
     logo_link: "",
     logo_via_sms: false,
     image_links: [""],
@@ -153,13 +151,10 @@ export function validateNewLead(
   );
   if (total < 1) e.specify_pages = "Select at least one page.";
 
-  const logoProvided =
-    (!!f.logo_link && /^https?:\/\/.+/.test(f.logo_link.trim())) || f.logo_via_sms;
-  if (f.color_same_as_logo) {
-    if (!logoProvided) e.color_scheme = "Add a logo to use 'Same as Logo'.";
-  } else if (!f.color_scheme.trim()) {
-    e.color_scheme = "Color scheme is required.";
-  }
+  // "Same as Logo" is no longer offered: a website needs an explicit palette,
+  // and a logo we may never receive is not one. The column still exists for
+  // historical leads (see buildLeadPayload / brief.ts) — we just stop writing it.
+  if (!f.color_scheme.trim()) e.color_scheme = "Color scheme is required.";
 
   for (const u of f.design_reference_links) {
     const t = u.trim();
@@ -214,8 +209,9 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     client_experience: f.client_experience === "" ? null : parseInt(f.client_experience, 10),
     num_webpages: total || null,
     specify_pages: pages.length ? pages : null,
-    color_same_as_logo: f.color_same_as_logo,
-    color_scheme: f.color_same_as_logo ? null : f.color_scheme.trim() || null,
+    // Always explicit now — new leads never claim "same as logo".
+    color_same_as_logo: false,
+    color_scheme: f.color_scheme.trim() || null,
     logo_via_sms: f.logo_via_sms,
     logo_link: f.logo_via_sms ? null : f.logo_link.trim() || null,
     design_reference_links: designRefs.length ? designRefs : null,

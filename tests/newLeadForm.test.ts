@@ -188,54 +188,31 @@ describe("polish-3: email / no_email", () => {
   });
 });
 
-describe("polish-3: color scheme / logo dependency", () => {
-  it("requires color_scheme when not same-as-logo", () => {
+describe("color scheme is mandatory", () => {
+  it("requires a colour scheme", () => {
+    const e = validateNewLead({ ...validState(), color_scheme: "" }, NOW);
+    expect(e.color_scheme).toBeTruthy();
+  });
+
+  it("still requires one when a logo was supplied", () => {
     const e = validateNewLead(
-      { ...validState(), color_scheme: "", color_same_as_logo: false },
+      { ...validState(), color_scheme: "", logo_link: "https://x.com/l.png" },
       NOW
     );
     expect(e.color_scheme).toBeTruthy();
   });
 
-  it("does not require color_scheme when same-as-logo with a logo link", () => {
+  it("still requires one when the logo is coming via SMS", () => {
     const e = validateNewLead(
-      {
-        ...validState(),
-        color_scheme: "",
-        color_same_as_logo: true,
-        logo_link: "https://x.com/l.png",
-      },
-      NOW
-    );
-    expect(e.color_scheme).toBeFalsy();
-  });
-
-  it("does not require color_scheme when same-as-logo with logo via sms", () => {
-    const e = validateNewLead(
-      {
-        ...validState(),
-        color_scheme: "",
-        color_same_as_logo: true,
-        logo_link: "",
-        logo_via_sms: true,
-      },
-      NOW
-    );
-    expect(e.color_scheme).toBeFalsy();
-  });
-
-  it("rejects same-as-logo when no logo was provided at all", () => {
-    const e = validateNewLead(
-      {
-        ...validState(),
-        color_scheme: "",
-        color_same_as_logo: true,
-        logo_link: "",
-        logo_via_sms: false,
-      },
+      { ...validState(), color_scheme: "", logo_link: "", logo_via_sms: true },
       NOW
     );
     expect(e.color_scheme).toBeTruthy();
+  });
+
+  it("accepts an explicit scheme", () => {
+    const e = validateNewLead({ ...validState(), color_scheme: "navy, gold" }, NOW);
+    expect(e.color_scheme).toBeFalsy();
   });
 });
 
@@ -364,15 +341,14 @@ describe("polish-3: buildLeadPayload flags", () => {
     expect(p.logo_link).toBe("https://x.com/l.png");
   });
 
-  it("nulls color_scheme when color_same_as_logo is true", () => {
+  it("always sends color_scheme with color_same_as_logo false", () => {
     const p = buildLeadPayload({
       ...validState(),
       color_scheme: "#fff",
-      color_same_as_logo: true,
       logo_link: "https://x.com/l.png",
     });
-    expect(p.color_scheme).toBeNull();
-    expect(p.color_same_as_logo).toBe(true);
+    expect(p.color_scheme).toBe("#fff");
+    expect(p.color_same_as_logo).toBe(false);
   });
 
   it("carries design_reference_links and add_ons through", () => {

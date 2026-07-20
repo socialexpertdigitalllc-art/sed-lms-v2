@@ -25,6 +25,7 @@ import { RatingStars } from "@/components/common/RatingStars";
 import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
 import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
+import { ColorSchemeAdvice } from "@/components/leads/ColorSchemeField";
 import type { ContractRow } from "@/lib/contracts/types";
 
 type Agent = { id: string; display_name: string | null };
@@ -306,11 +307,32 @@ export function LeadDetail({
               <FieldRow label="Has service areas" value={lead.has_service_areas == null ? "" : lead.has_service_areas ? "Yes" : "No"} type="select" options={YES_NO} canEdit={canEdit} onSave={(v) => patch({ has_service_areas: triBool(v) })} />
               <FieldRow label="No. of webpages" value={lead.num_webpages?.toString() ?? ""} type="number" canEdit={canEdit} onSave={(v) => patch({ num_webpages: num(v) })} />
               <FieldRow label="Specify pages" value={(lead.specify_pages ?? []).join(", ")} canEdit={canEdit} onSave={(v) => patch({ specify_pages: commas(v) })} />
-              {lead.color_same_as_logo ? (
-                <FieldRow label="Color scheme" value="" display={muted("Same as logo")} />
-              ) : (
-                <FieldRow label="Color scheme" value={lead.color_scheme ?? ""} canEdit={canEdit} onSave={(v) => patch({ color_scheme: nz(v) })} />
-              )}
+              {/* Always editable. Legacy "same as logo" leads used to render read-only,
+                  which meant the one field that needed fixing was the one field nobody
+                  could fix. The old intent survives as a display hint only. */}
+              <FieldRow
+                label="Color scheme"
+                value={lead.color_scheme ?? ""}
+                display={
+                  lead.color_same_as_logo && !lead.color_scheme
+                    ? muted("Was: same as logo — set explicit colours")
+                    : undefined
+                }
+                canEdit={canEdit}
+                onSave={(v) => patch({ color_scheme: nz(v) })}
+                editExtra={(draft, setDraft) => (
+                  <ColorSchemeAdvice
+                    draft={draft}
+                    onApply={setDraft}
+                    context={{
+                      business_name: lead.business_name ?? undefined,
+                      services: lead.services ?? undefined,
+                      site_type: lead.site_type ?? undefined,
+                    }}
+                  />
+                )}
+              />
+
               <FieldRow label="Client experience (years)" value={lead.client_experience?.toString() ?? ""} type="number" canEdit={canEdit} onSave={(v) => patch({ client_experience: num(v) })} />
             </div>
           </SectionCard>

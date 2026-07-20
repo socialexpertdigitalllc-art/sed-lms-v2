@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -41,6 +41,9 @@ import { ConditionalBlock } from "@/components/forms/ConditionalBlock";
 import { RatingGroup } from "@/components/forms/RatingGroup";
 import { SectionCard, FieldBlock as F, FieldError, SummaryRow } from "@/components/forms/formShell";
 import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
+import { ColorSchemeField } from "@/components/leads/ColorSchemeField";
+import { useColorSchemeCheck } from "@/hooks/useColorSchemeCheck";
+import { MAX_COLORS } from "@/lib/leads/colorScheme";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -103,12 +106,17 @@ export function NewLeadForm({
   const contactForced = f.specify_pages.some((p) => p !== "Home" && p !== "Contact Us");
   // ISAP is available only once Service Areas = Yes AND at least one area is filled.
   const isapDisabled = f.has_service_areas !== "Yes" || areaCount === 0;
-  // A logo is "provided" once a valid URL is entered or the client said they'd text it over.
-  const logoProvided = (!!f.logo_link && /^https?:\/\/.+/.test(f.logo_link.trim())) || f.logo_via_sms;
-  // If the logo goes away while "Same as Logo" is selected, fall back to manual color entry.
-  useEffect(() => {
-    if (f.color_same_as_logo && !logoProvided) set("color_same_as_logo", false);
-  }, [logoProvided]);
+  // Advisory AI review of the colour scheme. Debounced inside the hook, and
+  // deliberately incapable of blocking anything unless it returns a definite
+  // rejection — see `colorBlocked` at the submit gate.
+  const colorCheck = useColorSchemeCheck(f.color_scheme, {
+    context: {
+      business_name: f.business_name,
+      services: nonEmpty(f.services),
+      site_type: f.site_type,
+    },
+  });
+  const colorBlocked = colorCheck.rejected;
 
   function togglePage(p: string) {
     setErrors((prev) => {
@@ -193,6 +201,14 @@ export function NewLeadForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const errs = validateNewLead(f);
+    // Re-run the colour check now (the debounce may still be pending), then gate
+    // on what we already know. Only a DEFINITE rejection blocks: if Gemini is
+    // down the check reports `aiUnavailable` and the deterministic rules —
+    // already inside validateNewLead / the hook's issues — are the whole gate.
+    colorCheck.checkNow();
+    if (colorBlocked && !errs.color_scheme) {
+      errs.color_scheme = colorCheck.issues[0] ?? "That is not a usable colour scheme.";
+    }
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
       requestAnimationFrame(() =>
@@ -475,44 +491,12 @@ export function NewLeadForm({
               </ConditionalBlock>
             </F>
             <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
-              <F error={errors.color_scheme} label="Color Scheme" required={!f.color_same_as_logo}>
-                <div className="mb-1.5 flex gap-2">
-                  <button
-                    type="button"
-                    aria-pressed={!f.color_same_as_logo}
-                    onClick={() => set("color_same_as_logo", false)}
-                    className={
-                      "px-3.5 py-1.5 text-sm rounded-full border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none " +
-                      (!f.color_same_as_logo
-                        ? "border-accent bg-accent-soft text-accent-ink font-medium"
-                        : "border-border text-text-muted hover:bg-surface-2")
-                    }
-                  >
-                    Enter manually
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={f.color_same_as_logo}
-                    disabled={!logoProvided}
-                    title={logoProvided ? undefined : "Add a logo first"}
-                    onClick={() => {
-                      set("color_same_as_logo", true);
-                      set("color_scheme", "");
-                    }}
-                    className={
-                      "px-3.5 py-1.5 text-sm rounded-full border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none " +
-                      (f.color_same_as_logo
-                        ? "border-accent bg-accent-soft text-accent-ink font-medium"
-                        : "border-border text-text-muted hover:bg-surface-2") +
-                      (!logoProvided ? " opacity-40 cursor-not-allowed" : "")
-                    }
-                  >
-                    Same as Logo
-                  </button>
-                </div>
-                {!f.color_same_as_logo && (
-                  <input value={f.color_scheme} onChange={(e) => set("color_scheme", e.target.value)} placeholder="e.g., #1A73E8, #FFFFFF, #000000" className={inputCls} />
-                )}
+              <F error={errors.color_scheme} label="Color Scheme" required hint={`Up to ${MAX_COLORS} colours. Pick swatches or type names/hex.`}>
+                <ColorSchemeField
+                  value={f.color_scheme}
+                  onChange={(v) => set("color_scheme", v)}
+                  check={colorCheck}
+                />
               </F>
               <F error={errors.logo_link} label="Logo Link">
                 <label className="mb-1.5 flex items-center gap-1.5 text-xs text-text-muted">

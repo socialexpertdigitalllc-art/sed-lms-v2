@@ -63,7 +63,10 @@ export function buildBrief(lead: Lead): GenerationBrief {
     years_experience:
       typeof lead.client_experience === "number" ? lead.client_experience : undefined,
     notes: str(lead.comments),
-    color_scheme: sameAsLogo ? "match the logo" : str(lead.color_scheme),
+    // An explicit palette always wins. `sameAsLogo` is a legacy flag we no
+    // longer let anyone set, so it only speaks for leads that never recorded
+    // colours — it must not override colours added since.
+    color_scheme: str(lead.color_scheme) ?? (sameAsLogo ? "match the logo" : undefined),
     logo_link: str(lead.logo_link),
     client_photos: arr(lead.image_links),
     design_references: arr(lead.design_reference_links),

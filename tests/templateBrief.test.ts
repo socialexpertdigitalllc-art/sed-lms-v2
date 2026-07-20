@@ -62,9 +62,17 @@ describe("buildBrief", () => {
     expect(b.notes).toBeUndefined();
     expect(b.logo_link).toBeUndefined();
   });
-  it("uses the logo as the colour source when color_same_as_logo", () => {
-    const b = buildBrief({ ...(lead as object), color_same_as_logo: true } as never);
+  it("uses the logo as the colour source only when no colours were recorded", () => {
+    const b = buildBrief({
+      ...(lead as object),
+      color_same_as_logo: true,
+      color_scheme: null,
+    } as never);
     expect(b.color_scheme).toBe("match the logo");
+  });
+  it("prefers an explicit colour scheme over the legacy same-as-logo flag", () => {
+    const b = buildBrief({ ...(lead as object), color_same_as_logo: true } as never);
+    expect(b.color_scheme).toBe("navy and white");
   });
   it("is JSON-serialisable and stable", () => {
     expect(() => JSON.stringify(buildBrief(lead))).not.toThrow();
