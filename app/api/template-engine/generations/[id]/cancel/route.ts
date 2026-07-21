@@ -7,11 +7,15 @@ import {
 } from "@/lib/template-engine/control";
 import { abortGeneration } from "@/lib/template-engine/abortRegistry";
 import { removeGenerationArtifacts } from "@/lib/template-engine/cleanup";
+import { isOrphaned } from "@/lib/template-engine/liveness";
+import { forceResolveGeneration } from "@/lib/template-engine/forceResolve";
 
 interface GenRow {
   id: string;
   lead_id: string;
   status: string;
+  heartbeat_at?: string | null;
+  updated_at?: string | null;
 }
 
 // POST /api/template-engine/generations/[id]/cancel — stop a generation for
@@ -32,7 +36,16 @@ interface GenRow {
 // resting at `curating`/`paused`. No runner is executing it, so nobody would
 // ever read the flag; the route deletes the pending queue row and makes the
 // `cancelled` transition itself.
-export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+//
+// THE DEAD-RUNNER CASE (the production incident, see liveness.ts). An IN-FLIGHT
+// status used to mean "a runner will read the flag" — true right up until the
+// process is replaced mid-build, after which the flag has no reader and the run
+// is unstoppable forever. So this route no longer assumes: it checks
+// `heartbeat_at`, and if the run has gone silent it force-resolves it here and
+// says so, distinctly, in the response (`forced: true`). `{ force: true }` in the
+// body does the same thing regardless of the heartbeat, for an operator who
+// knows the runner is gone before the threshold has elapsed.
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
   const {
@@ -44,10 +57,21 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: "Not allowed" }, { status: 403 });
   }
 
+  // `force` is an escape hatch, not a separate capability: it performs the same
+  // writes this route already performs, so it is gated by the same permission
+  // checked above. A body is optional (the UI's normal Stop sends none).
+  const body = (await req.json().catch(() => null)) as { force?: unknown } | null;
+  const forced = body?.force === true;
+
   const admin = createAdminClient();
   const { data: genRow } = await admin
     .from("template_generations")
-    .select("id, lead_id, status")
+    // `*` rather than a column list on purpose: `heartbeat_at` only exists once
+    // migration 0047 is applied, and naming a missing column would make this
+    // select ERROR and turn every Stop into a 404 on a database that is one
+    // deploy behind. With `*` the column is simply absent, isOrphaned() falls
+    // back to the row's age, and Stop keeps working.
+    .select("*")
     .eq("id", id)
     .maybeSingle();
   if (!genRow) return NextResponse.json({ error: "Generation not found" }, { status: 404 });
@@ -81,6 +105,29 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   // Kill the live run now. The runner's own catch does the artefact cleanup for
   // this path, because only it knows when the aborted upload actually stopped.
   const abortedInProcess = abortGeneration(id, "cancel");
+
+  // A run whose heartbeat has gone silent has no reader for the flag we just
+  // wrote. Do NOT wait for a runner that no longer exists — finish the job here.
+  // `abortedInProcess` is proof of life and overrides the heartbeat: a runner in
+  // THIS process is unambiguously alive and about to unwind on its own.
+  const dead =
+    !abortedInProcess &&
+    (forced || isOrphaned({ status: gen.status, heartbeatAt: gen.heartbeat_at, updatedAt: gen.updated_at }));
+  if (dead) {
+    const reason = forced
+      ? "Force-stopped by an operator — the run was not responding."
+      : "Stopped automatically: the run stopped reporting activity (its process was gone), so it could not stop itself.";
+    const resolved = await forceResolveGeneration(admin, id, {
+      mode: "cancel",
+      // Any status it could legally be cancelled from — including the at-rest
+      // ones, so a forced stop works on a queued/curating run too.
+      from: CANCELLABLE_STATUSES,
+      reason,
+    });
+    if (resolved) {
+      return NextResponse.json({ ok: true, status: "cancelled", forced: true, reason }, { status: 200 });
+    }
+  }
 
   if (isAtRestStatus(flagged.status as string)) {
     const { runnerInFlight } = await releasePendingQueue(admin, id);

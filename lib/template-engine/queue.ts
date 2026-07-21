@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runTemplateGenerationV2, buildFromSelection } from "./runnerV2";
 import { shouldSkipClaimed } from "./control";
+import { IN_FLIGHT_STATUSES, shouldReclaimQueueRow } from "./liveness";
 import { queuePhaseFor } from "./redo";
 
 // Fire-and-forget kick of the template processor (does not await; ignores errors).
@@ -28,8 +29,76 @@ export function kickTemplateProcessor(): void {
 // {id, generation_id, enqueued_by} regardless of kind, so we do one cheap
 // follow-up select on the claimed row's own id to learn which phase to run —
 // simpler than teaching the RPC a new return column.
+/**
+ * Free the queue of rows that will never finish.
+ *
+ * tge_claim_next() hands out NO work while any row is `processing`, so a single
+ * run whose process died takes the whole pipeline down with it — that is what
+ * turned one ghost generation into a stopped queue in the incident (see
+ * liveness.ts). The RPC `tge_reclaim_stale` only helps after 20 minutes, only
+ * for generations at `running` (not `building`/`planning`), and it RE-QUEUES the
+ * run, which for a build that already burned its AI budget is the wrong answer.
+ *
+ * This is the sharper version: a `processing` row whose generation has stopped
+ * heartbeating (or has been deleted outright) is closed as `failed` and its
+ * generation moved to `failed` too, with an error a human can read. Nothing is
+ * re-run automatically — /retry exists and is the operator's decision to make.
+ *
+ * Best-effort throughout: a reclaim that errors must never stop the processor
+ * from draining the rest of the queue.
+ */
+async function reclaimOrphanedQueueRows(admin: ReturnType<typeof createAdminClient>): Promise<void> {
+  try {
+    const { data: rows } = await admin
+      .from("template_gen_queue")
+      .select("id, generation_id, status")
+      .eq("status", "processing");
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    const now = Date.now();
+    for (const row of rows as { id: string; generation_id: string; status: string }[]) {
+      // `*` rather than a column list: `heartbeat_at` only exists once migration
+      // 0047 is applied, and naming it would error the select on a database one
+      // deploy behind — which would silently disable the whole reclaim.
+      const { data: gen } = await admin
+        .from("template_generations")
+        .select("*")
+        .eq("id", row.generation_id)
+        .maybeSingle();
+      const g = gen as { status?: unknown; heartbeat_at?: unknown; updated_at?: unknown } | null;
+      const reclaim = shouldReclaimQueueRow({
+        queueStatus: row.status,
+        generation: g ? { status: g.status, heartbeatAt: g.heartbeat_at, updatedAt: g.updated_at } : null,
+        now,
+      });
+      if (!reclaim) continue;
+
+      const reason =
+        "The run stopped reporting activity — its process was gone (most likely a server restart), so it could never finish or stop itself.";
+      await admin
+        .from("template_gen_queue")
+        .update({ status: "failed", error: reason.slice(0, 500), finished_at: new Date().toISOString() })
+        .eq("id", row.id)
+        .eq("status", "processing");
+      if (!g) continue;
+      // CAS on the in-flight statuses only: a generation that came back to life
+      // between the two reads keeps whatever it wrote for itself.
+      await admin
+        .from("template_generations")
+        .update({ status: "failed", control: null, error: reason, updated_at: new Date().toISOString() })
+        .eq("id", row.generation_id)
+        .in("status", [...IN_FLIGHT_STATUSES]);
+      console.warn(`[template-engine] reclaimed wedged queue row ${row.id} for orphaned generation ${row.generation_id}`);
+    }
+  } catch {
+    // A failed reclaim must not stop the queue from draining.
+  }
+}
+
 export async function processTemplateQueue(): Promise<{ processed: number }> {
   const admin = createAdminClient();
+  // BEFORE claiming: unwedge anything a dead runner left behind, or the claim
+  // below returns nothing at all and the queue stays blocked forever.
+  await reclaimOrphanedQueueRows(admin);
   await admin.rpc("tge_reclaim_stale");
 
   let processed = 0;

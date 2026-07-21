@@ -7,6 +7,7 @@ import { updateLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
 import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
+import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 
 /** True when the user belongs to the Sales department (slug "sales"). */
 async function isSalesMember(
@@ -222,6 +223,15 @@ export async function DELETE(
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  // A soft delete leaves `template_generations` untouched, so an in-flight build
+  // for this lead would keep running (and keep blocking the single-flight queue)
+  // for a lead nobody can open any more — and /pause and /cancel both 404 once
+  // the lead is soft-deleted, so it could not even be stopped by hand. Stop them
+  // here. Non-fatal by construction: the helper swallows its own failures, and
+  // the lead is deleted either way.
+  const stopped = await cancelGenerationsForLeads(admin, [id]);
+  if (stopped > 0) console.info(`[leads] stopped ${stopped} in-flight generation(s) for deleted lead ${id}`);
 
   await admin.from("activity_log").insert({
     user_id: user.id,

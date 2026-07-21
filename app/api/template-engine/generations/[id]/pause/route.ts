@@ -4,11 +4,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { isPausableStatus, isAtRestStatus, releasePendingQueue, PAUSABLE_STATUSES } from "@/lib/template-engine/control";
 import { abortGeneration } from "@/lib/template-engine/abortRegistry";
+import { isOrphaned } from "@/lib/template-engine/liveness";
+import { forceResolveGeneration } from "@/lib/template-engine/forceResolve";
 
 interface GenRow {
   id: string;
   lead_id: string;
   status: string;
+  heartbeat_at?: string | null;
+  updated_at?: string | null;
 }
 
 // POST /api/template-engine/generations/[id]/pause — stop a running generation
@@ -41,7 +45,10 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const admin = createAdminClient();
   const { data: genRow } = await admin
     .from("template_generations")
-    .select("id, lead_id, status")
+    // `*` on purpose — see the same select in the /cancel route: naming
+    // `heartbeat_at` before migration 0047 is applied would error the select and
+    // turn every Pause into a 404.
+    .select("*")
     .eq("id", id)
     .maybeSingle();
   if (!genRow) return NextResponse.json({ error: "Generation not found" }, { status: 404 });
@@ -77,6 +84,21 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   // False just means no runner for this generation lives in this process; the
   // DB watcher in whichever process owns it picks the flag up within ~1.5s.
   const abortedInProcess = abortGeneration(id, "pause");
+
+  // Nobody is listening to the flag if the run stopped heartbeating — its
+  // process was replaced (a deploy restart is routine on shared hosting) and it
+  // would otherwise sit "building" forever. Come to rest here instead. A runner
+  // aborted in THIS process is alive by definition and unwinds on its own, so
+  // that case always takes the cooperative path.
+  const dead =
+    !abortedInProcess &&
+    isOrphaned({ status: gen.status, heartbeatAt: gen.heartbeat_at, updatedAt: gen.updated_at });
+  if (dead) {
+    const reason =
+      "Paused automatically: the run stopped reporting activity (its process was gone), so it could not pause itself.";
+    const resolved = await forceResolveGeneration(admin, id, { mode: "pause", from: PAUSABLE_STATUSES, reason });
+    if (resolved) return NextResponse.json({ ok: true, status: "paused", forced: true, reason }, { status: 200 });
+  }
 
   if (isAtRestStatus(flagged.status as string)) {
     const { runnerInFlight } = await releasePendingQueue(admin, id);

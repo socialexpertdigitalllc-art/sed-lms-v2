@@ -66,13 +66,53 @@ export async function readControl(admin: SupabaseClient, generationId: string): 
 export const CONTROL_WATCH_INTERVAL_MS = 1500;
 
 /**
+ * How often the runner stamps `heartbeat_at` (migration 0047) while it executes.
+ *
+ * 10s is chosen against the thing that consumes it: ORPHAN_AFTER_MS (90s, see
+ * liveness.ts). Nine beats of margin means a run has to be genuinely gone —
+ * not merely slow, not merely blocked behind a long AI call — before anything
+ * declares it dead. Cheaper than that buys nothing (the stamp exists to prove a
+ * process is alive, not to measure progress); more expensive than that would
+ * push the orphan threshold up and leave the operator waiting longer to stop a
+ * dead run.
+ *
+ * It rides the control watcher's existing 1.5s timer rather than adding a second
+ * one — every timer is another thing that can leak on a long-lived server — and
+ * simply skips the write on the ticks that are too soon.
+ */
+export const HEARTBEAT_INTERVAL_MS = 10_000;
+
+/**
+ * Stamp "a runner is alive and owns this generation, right now".
+ *
+ * FIRE AND FORGET, BY DESIGN. Nothing about a generation may fail because a
+ * liveness write failed: not a transient network blip, and not a database where
+ * migration 0047 has not been applied yet (the update errors, the error is
+ * swallowed, orphan detection falls back to the row's age). Writes ONE column
+ * and deliberately does NOT touch `updated_at` — the whole point of the column
+ * is that it has a single writer.
+ */
+export function stampHeartbeat(admin: SupabaseClient, generationId: string): void {
+  void admin
+    .from("template_generations")
+    .update({ heartbeat_at: new Date().toISOString() })
+    .eq("id", generationId)
+    .then(
+      () => {},
+      () => {},
+    );
+}
+
+/**
  * Watch a running generation's `control` column and fire `onHalt` the moment it
- * turns into pause/cancel. This is the FALLBACK signalling path — see
- * abortRegistry.ts for the instant one.
+ * turns into pause/cancel — and, when `heartbeat` is on, prove on the same timer
+ * that this process is still executing the run.
  *
  * Returns a stop function that MUST be called in a `finally`. A leaked interval
  * on a long-lived Next.js server polls a finished generation forever, and one
- * per run compounds; that is a real bug, not a tidiness point.
+ * per run compounds; that is a real bug, not a tidiness point. Stopping the
+ * watcher stops the heartbeat too, which is exactly right: from the moment the
+ * runner starts unwinding it is no longer executing anything.
  *
  * `onHalt` fires at most once (the interval clears itself first), read errors
  * are swallowed as "continue" by readControl, and overlapping reads are
@@ -83,11 +123,22 @@ export function startControlWatcher(
   generationId: string,
   onHalt: (mode: HaltMode) => void,
   intervalMs: number = CONTROL_WATCH_INTERVAL_MS,
+  opts: { heartbeat?: boolean; heartbeatIntervalMs?: number } = {},
 ): () => void {
   let stopped = false;
   let inFlight = false;
+  const beatEvery = opts.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+  // Stamp once immediately: a run that dies in its first ten seconds must still
+  // be distinguishable from one that never started.
+  if (opts.heartbeat) stampHeartbeat(admin, generationId);
+  let lastBeat = Date.now();
   const timer = setInterval(() => {
-    if (stopped || inFlight) return;
+    if (stopped) return;
+    if (opts.heartbeat && Date.now() - lastBeat >= beatEvery) {
+      lastBeat = Date.now();
+      stampHeartbeat(admin, generationId);
+    }
+    if (inFlight) return;
     inFlight = true;
     void readControl(admin, generationId)
       .then((decision) => {

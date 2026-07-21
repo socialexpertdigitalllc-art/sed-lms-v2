@@ -280,6 +280,83 @@ describe("control watcher", () => {
   });
 });
 
+// The liveness half of the same timer (migration 0047). `heartbeat_at` is the
+// ONLY evidence that a runner still exists, so these guard the two properties
+// that make it trustworthy: it starts immediately, and it stops dead when the
+// runner unwinds — a heartbeat that outlived its run would keep a ghost looking
+// alive forever, which is precisely the bug this exists to fix.
+describe("heartbeat", () => {
+  function heartbeatAdmin() {
+    const beats: string[] = [];
+    const admin = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { control: null }, error: null }) }) }),
+        update: (patch: Record<string, string>) => ({
+          eq: () => {
+            beats.push(patch.heartbeat_at);
+            return Promise.resolve({ data: null, error: null });
+          },
+        }),
+      }),
+    } as never;
+    return { admin, beats };
+  }
+
+  it("stamps once immediately, then on its own interval — not on every control poll", async () => {
+    vi.useFakeTimers();
+    const { startControlWatcher } = await import("@/lib/template-engine/control");
+    const { admin, beats } = heartbeatAdmin();
+
+    const stop = startControlWatcher(admin, "gen-hb", vi.fn(), 100, { heartbeat: true, heartbeatIntervalMs: 1000 });
+    expect(beats.length).toBe(1); // on start, before any tick
+
+    await vi.advanceTimersByTimeAsync(900);
+    expect(beats.length).toBe(1); // ~9 control polls, still one beat
+    await vi.advanceTimersByTimeAsync(200);
+    expect(beats.length).toBe(2);
+    stop();
+    vi.useRealTimers();
+  });
+
+  it("stops the moment the runner releases the watcher", async () => {
+    vi.useFakeTimers();
+    const { startControlWatcher } = await import("@/lib/template-engine/control");
+    const { admin, beats } = heartbeatAdmin();
+
+    const stop = startControlWatcher(admin, "gen-hb2", vi.fn(), 100, { heartbeat: true, heartbeatIntervalMs: 200 });
+    await vi.advanceTimersByTimeAsync(500);
+    const seen = beats.length;
+    expect(seen).toBeGreaterThan(1);
+    stop();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(beats.length).toBe(seen);
+    vi.useRealTimers();
+  });
+
+  it("is off unless asked for, so nothing else can ever write the column", async () => {
+    vi.useFakeTimers();
+    const { startControlWatcher } = await import("@/lib/template-engine/control");
+    const { admin, beats } = heartbeatAdmin();
+
+    const stop = startControlWatcher(admin, "gen-hb3", vi.fn(), 100);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(beats.length).toBe(0);
+    stop();
+    vi.useRealTimers();
+  });
+
+  it("a failed stamp is swallowed — a liveness write must never break a run", async () => {
+    vi.useFakeTimers();
+    const { stampHeartbeat } = await import("@/lib/template-engine/control");
+    const admin = {
+      from: () => ({ update: () => ({ eq: () => Promise.reject(new Error("column does not exist")) }) }),
+    } as never;
+    expect(() => stampHeartbeat(admin, "gen-hb4")).not.toThrow();
+    await vi.advanceTimersByTimeAsync(10);
+    vi.useRealTimers();
+  });
+});
+
 afterEach(() => {
   clearAbortRegistry();
   vi.useRealTimers();

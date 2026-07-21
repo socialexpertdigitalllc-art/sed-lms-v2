@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle, CheckCircle2, Circle, Loader2, MinusCircle, Pause, Play, RotateCcw, Square,
+  AlertTriangle, CheckCircle2, Circle, Loader2, MinusCircle, Pause, Play, PlugZap, RotateCcw, Square,
 } from "lucide-react";
 import type { GenStep } from "@/lib/template-engine/types";
 import { buildEtaLabel } from "@/lib/template-engine/wizard";
+import { isOrphaned, orphanSilenceMinutes } from "@/lib/template-engine/liveness";
 import { useToast } from "@/components/common/Toast";
 import { RedoButton, StaleNotice } from "./RedoControls";
 import type { GenerationDetail } from "./GenerationWizard";
 import { cn } from "@/lib/utils";
 
-function StepIcon({ status }: { status: GenStep["status"] }) {
+function StepIcon({ status, stalled }: { status: GenStep["status"]; stalled?: boolean }) {
+  // A `running` step on a run that stopped responding is the endless spinner
+  // this change exists to kill — it is not running and it did not fail, so it
+  // gets the "needs attention" mark rather than either lie.
+  if (stalled && status === "running") return <AlertTriangle className="h-4 w-4 text-notready-fg" />;
   if (status === "done") return <CheckCircle2 className="h-4 w-4 text-accent-ink" />;
   if (status === "running") return <Loader2 className="h-4 w-4 animate-spin text-accent-ink" />;
   if (status === "failed") return <AlertTriangle className="h-4 w-4 text-dropped-fg" />;
@@ -30,16 +35,27 @@ function pausedAtLabel(gen: GenerationDetail, steps: GenStep[]): string {
 
 type Action = "pause" | "resume" | "cancel" | "retry";
 
+/**
+ * How long a "Stopping…" may last before the UI offers the force option.
+ *
+ * The stop itself is instant (the API aborts the in-flight AI call in process);
+ * all that remains is the runner unwinding and writing its final row, which is
+ * one database round-trip. Ten seconds of no status change means something is
+ * wrong — most likely that there was never a runner to hear the click, which is
+ * exactly the case that used to spin forever.
+ */
+const STOPPING_PATIENCE_MS = 10_000;
+
 export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChanged?: () => void }) {
   const steps = Array.isArray(gen.steps) ? gen.steps : [];
-  const running = ACTIVE_STATUSES.has(gen.status);
+  const inFlight = ACTIVE_STATUSES.has(gen.status);
   const paused = gen.status === "paused";
   const cancelled = gen.status === "cancelled";
   // The API aborts the run's in-flight AI call in process, so the stop itself
   // is instant — but the runner still has to unwind and write its final row, so
   // there is a brief window where the operator has clicked and the status has
   // not moved yet. Say so rather than looking unresponsive.
-  const stopping = running && (gen.control === "pause" || gen.control === "cancel");
+  const stopping = inFlight && (gen.control === "pause" || gen.control === "cancel");
   const [busy, setBusy] = useState<Action | null>(null);
   const { toast } = useToast();
 
@@ -70,24 +86,50 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
   // failure, then let the wizard re-fetch. A 202 from /pause or /cancel means
   // "the run has been aborted", not "the row already says stopped" — the runner
   // still needs a moment to unwind; /resume and /retry re-enqueue.
-  async function run(action: Action) {
-    if (action === "cancel") {
+  async function run(action: Action, force = false) {
+    if (action === "cancel" && !force) {
       const ok = window.confirm(
         "Stop this generation now? It stops immediately, so any partial build output is discarded. " +
           "It cannot be resumed — you would have to retry the run from the start.",
       );
       if (!ok) return;
     }
+    if (force) {
+      const ok = window.confirm(
+        "Force stop this run? Use this when the run is not responding — it marks the run stopped, frees the queue " +
+          "and discards any partial build output, without waiting for the process that was building it.",
+      );
+      if (!ok) return;
+    }
     setBusy(action);
     try {
-      const res = await fetch(`/api/template-engine/generations/${gen.id}/${action}`, { method: "POST" });
+      const res = await fetch(`/api/template-engine/generations/${gen.id}/${action}`, {
+        method: "POST",
+        ...(force
+          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }) }
+          : {}),
+      });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         toast({ kind: "error", title: MESSAGES[action].fail, body: body.error ?? "Try again" });
         return;
       }
-      const { status } = (await res.json().catch(() => ({}))) as { status?: string };
-      toast({ kind: "info", title: MESSAGES[action].title, body: MESSAGES[action].body(status ?? "") });
+      const { status, forced: wasForced } = (await res.json().catch(() => ({}))) as {
+        status?: string;
+        forced?: boolean;
+      };
+      // `forced` is the server telling us it resolved a run that was not
+      // responding, rather than one that stopped cooperatively. Those are very
+      // different events for an operator and must not read the same.
+      toast(
+        wasForced
+          ? {
+              kind: "info",
+              title: action === "pause" ? "Paused a run that had stopped responding" : "Stopped a run that was no longer responding",
+              body: "Its process was gone, so it was resolved here. The queue is free again.",
+            }
+          : { kind: "info", title: MESSAGES[action].title, body: MESSAGES[action].body(status ?? "") },
+      );
       onChanged?.();
     } catch {
       toast({ kind: "error", title: MESSAGES[action].fail, body: "Network error — please try again." });
@@ -122,13 +164,40 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
     );
   }
 
-  // Re-tick every 30s so the countdown stays honest between realtime pokes.
+  // Re-tick while the run claims to be in flight, so both the countdown and the
+  // liveness check stay honest between realtime pokes. 5s (rather than the 30s
+  // this used to be) because it now decides whether the operator is looking at a
+  // live build or a ghost, and being 30s late to say so is 30s of lying.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setNow(Date.now()), 30000);
+    if (!inFlight) return;
+    const t = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(t);
-  }, [running]);
+  }, [inFlight]);
+
+  // THE GHOST CHECK. Computed from the same pure helper the API uses, so the
+  // screen and the server can never disagree about whether a run is alive.
+  const orphaned = isOrphaned({
+    status: gen.status,
+    heartbeatAt: gen.heartbeat_at,
+    updatedAt: gen.updated_at,
+    now,
+  });
+  const silentFor = orphanSilenceMinutes({ heartbeatAt: gen.heartbeat_at, updatedAt: gen.updated_at, now });
+  // "Running" is now a claim we verify rather than a status we believe: the
+  // spinner, the ETA and the Pause/Stop controls all belong to a live run only.
+  const running = inFlight && !orphaned;
+
+  // A stop that has not landed. `stopping` comes from the row; this measures how
+  // long WE have been watching it stay that way, which needs no extra column and
+  // survives the runner being gone (the case where nothing will ever update the
+  // row again). Resets whenever the flag clears.
+  const stoppingSince = useRef<number | null>(null);
+  if (stopping && stoppingSince.current === null) stoppingSince.current = Date.now();
+  if (!stopping) stoppingSince.current = null;
+  const stoppingStuck =
+    stopping && stoppingSince.current !== null && now - stoppingSince.current > STOPPING_PATIENCE_MS;
+
   const eta = running ? buildEtaLabel(steps, gen.estimate_ms, now) : null;
 
   return (
@@ -173,14 +242,61 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
         </div>
       ) : null}
 
+      {/* THE GHOST PANEL. The row still says "building", but nothing has
+          reported activity in minutes — the process running it is gone (a deploy
+          restart is the usual cause). This used to be an endless spinner, and
+          pressing Stop did nothing at all, because Stop only writes a flag that a
+          live runner reads. Say what happened and offer the two things that
+          actually work: force stop, and retry. */}
+      {orphaned ? (
+        <div className="rounded-md border border-dropped-fg/30 bg-dropped-bg p-4 text-sm text-dropped-fg">
+          <p className="flex items-center gap-1.5 font-medium">
+            <PlugZap className="h-4 w-4" />
+            This run stopped responding
+          </p>
+          <p className="mt-1">
+            No activity for {silentFor} minute{silentFor === 1 ? "" : "s"}. The process that was building it is gone, so
+            it cannot stop itself and it is holding up the queue. Force stop clears it out; the brief, content model and
+            image picks are kept, so Retry starts again from the last point its work survives.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => run("cancel", true)}
+              disabled={busy !== null}
+              className="inline-flex items-center gap-1.5 rounded-md border border-dropped-fg/30 bg-surface px-3 py-1.5 text-sm font-medium text-dropped-fg hover:bg-dropped-bg disabled:opacity-60"
+            >
+              {busy === "cancel" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+              Force stop
+            </button>
+            <ControlButton action="retry" icon={RotateCcw} label="Retry run" />
+          </div>
+        </div>
+      ) : null}
+
       {running ? (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-2 p-3">
           <ControlButton action="pause" icon={Pause} label="Pause" />
           <ControlButton action="cancel" icon={Square} label="Stop" tone="danger" />
+          {/* A stop that has not landed within STOPPING_PATIENCE_MS is the early
+              warning for the same problem: almost certainly nobody heard it. */}
+          {stoppingStuck ? (
+            <button
+              type="button"
+              onClick={() => run("cancel", true)}
+              disabled={busy !== null}
+              className="inline-flex items-center gap-1.5 rounded-md border border-dropped-fg/30 bg-surface px-3 py-1.5 text-sm font-medium text-dropped-fg hover:bg-dropped-bg disabled:opacity-60"
+            >
+              <PlugZap className="h-4 w-4" />
+              Force stop
+            </button>
+          ) : null}
           <p className="text-xs text-text-muted">
-            {stopping
-              ? "Stopping now — cutting the current step short and tidying up."
-              : "Stops immediately: the current step is cut short and its work discarded. Completed steps are kept."}
+            {stoppingStuck
+              ? "Still stopping — this is taking longer than it should. Force stop resolves it here without waiting."
+              : stopping
+                ? "Stopping now — cutting the current step short and tidying up."
+                : "Stops immediately: the current step is cut short and its work discarded. Completed steps are kept."}
           </p>
         </div>
       ) : null}
@@ -202,7 +318,7 @@ export function BuildTracker({ gen, onChanged }: { gen: GenerationDetail; onChan
           <ol className="space-y-2">
             {steps.map((s) => (
               <li key={s.key} className="flex items-start gap-2.5 text-sm">
-                <StepIcon status={s.status} />
+                <StepIcon status={s.status} stalled={orphaned} />
                 <div className="min-w-0 flex-1">
                   <p className={cn("leading-5", s.status === "pending" ? "text-text-faint" : "text-text")}>
                     {s.label}

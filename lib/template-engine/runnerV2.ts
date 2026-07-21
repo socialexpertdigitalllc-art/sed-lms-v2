@@ -862,9 +862,19 @@ export async function runTemplateGenerationV2(generationId: string, phase: PlanP
   // abortRegistry.ts). Both are released in the `finally` at the bottom.
   const controller = registerGeneration(generationId);
   const { signal } = controller;
-  const stopWatching = startControlWatcher(admin, generationId, (mode) => {
-    if (!signal.aborted) controller.abort(new GenerationAbortReason(mode));
-  });
+  const stopWatching = startControlWatcher(
+    admin,
+    generationId,
+    (mode) => {
+      if (!signal.aborted) controller.abort(new GenerationAbortReason(mode));
+    },
+    undefined,
+    // Stamp `heartbeat_at` on this same timer. It is the ONLY writer of that
+    // column, which is what makes it a trustworthy liveness signal: if this
+    // process dies, the stamps stop, and /pause, /cancel, the processor and the
+    // wizard can all tell that the run they see is a ghost (see liveness.ts).
+    { heartbeat: true },
+  );
 
   let steps: GenStep[] = [];
   let currentKey: string | null = null;
@@ -1085,9 +1095,19 @@ export async function buildFromSelection(generationId: string): Promise<void> {
   // calls, which is exactly the window an operator used to wait out.
   const controller = registerGeneration(generationId);
   const { signal } = controller;
-  const stopWatching = startControlWatcher(admin, generationId, (mode) => {
-    if (!signal.aborted) controller.abort(new GenerationAbortReason(mode));
-  });
+  const stopWatching = startControlWatcher(
+    admin,
+    generationId,
+    (mode) => {
+      if (!signal.aborted) controller.abort(new GenerationAbortReason(mode));
+    },
+    undefined,
+    // Stamp `heartbeat_at` on this same timer. It is the ONLY writer of that
+    // column, which is what makes it a trustworthy liveness signal: if this
+    // process dies, the stamps stop, and /pause, /cancel, the processor and the
+    // wizard can all tell that the run they see is a ghost (see liveness.ts).
+    { heartbeat: true },
+  );
 
   let steps: GenStep[] = [];
   let currentKey: string | null = null;

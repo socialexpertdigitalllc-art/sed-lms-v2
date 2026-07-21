@@ -6,6 +6,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { statusSetError } from "@/lib/leads/categories";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { buildTagLinkRows } from "@/lib/leads/tagFilter";
+import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 
 const schema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(500),
@@ -117,6 +118,15 @@ export async function POST(req: Request) {
       );
     }
     return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  // Same ghost-build cleanup as the single-lead DELETE: a soft-deleted lead
+  // leaves its in-flight generations running (and wedging the single-flight
+  // queue) with no UI left to stop them. Best-effort and non-fatal — the leads
+  // are already deleted at this point.
+  if (action === "archive") {
+    const stopped = await cancelGenerationsForLeads(admin, ids);
+    if (stopped > 0) console.info(`[leads] stopped ${stopped} in-flight generation(s) for ${ids.length} deleted lead(s)`);
   }
 
   await admin.from("activity_log").insert({

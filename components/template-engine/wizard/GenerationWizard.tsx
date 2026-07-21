@@ -42,6 +42,13 @@ export type GenerationDetail = {
   // polls; `paused_at` is when it actually came to rest at a checkpoint.
   control?: string | null;
   paused_at?: string | null;
+  // Liveness (migration 0047). ONLY the runner writes `heartbeat_at`, which is
+  // what makes it trustworthy: if it goes stale while the status still claims
+  // the run is in flight, the run is a ghost. Absent on rows written before the
+  // migration, which the orphan check handles by falling back to `updated_at` as
+  // the row's AGE — never as a liveness signal (see lib/template-engine/liveness.ts).
+  heartbeat_at?: string | null;
+  updated_at?: string | null;
   // Per-step redo (migration 0045): which of "content" | "images" | "build"
   // have an output that predates a newer upstream redo. Absent on every row
   // written before the migration, which reads as "nothing stale".
