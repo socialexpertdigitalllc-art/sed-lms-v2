@@ -26,7 +26,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { buildBrief, type GenerationBrief } from "./brief";
 import { planContent } from "./plan";
 import type { ContentModel } from "./contentModel";
-import { buildThemeOverrideCss } from "./themeCss";
+import { applyThemeToCss } from "./themeCss";
+import { applyLogoToHtml } from "./logo";
+import { pruneNavToBuiltPages } from "./nav";
 import { classifyFiles } from "./classify";
 import { selectContentFiles, type ManifestPage } from "./pageSelect";
 import { neutralizeAppIdentifier } from "./neutralize";
@@ -719,12 +721,58 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   // half of the pipeline. style.css is included here unchanged, which is what
   // keeps the design identical. (A template whose CSS carried url() image refs
   // would get a deterministic rewrite here; this one has none, so it is a no-op.)
-  // The ONE deterministic edit: append the client's brand-color `:root` override
-  // to each stylesheet, applying their colors without regenerating any CSS.
-  const themeCss = buildThemeOverrideCss(contentModel.theme);
+  //
+  // POST-GATE POST-PROCESSING (theme -> logo -> nav prune).
+  // Order matters, and so does the fact that all of it runs HERE rather than
+  // inside regeneration. The gates have just proven the model preserved the
+  // template's structure, so from this point the markup is ours to transform:
+  // that is what makes it safe for the logo pass to ADD an <img> and for the
+  // nav pass to REMOVE a menu item — tag-count changes that the structure gate
+  // would (correctly) reject if they happened before it ran. Each step is a
+  // pure (input) -> (output) function unit-tested against fixture templates
+  // that look nothing like the one this engine shipped with.
+  //
+  // 7a. theme: apply the client's colors to each stylesheet. Binds onto the
+  //     template's OWN color custom properties when it has them, remaps its
+  //     dominant hex values when it does not, and always keeps emitting the
+  //     legacy --brand/--brand-deep/--accent override. See themeCss.ts.
   for (const f of passthrough) {
     if (textFiles[f] === undefined) continue;
-    finalText[f] = f.toLowerCase().endsWith(".css") ? textFiles[f] + themeCss : textFiles[f];
+    finalText[f] = f.toLowerCase().endsWith(".css")
+      ? applyThemeToCss(textFiles[f], contentModel.theme)
+      : textFiles[f];
+  }
+
+  // 7b. logo + 7c. nav prune, on every HTML page in the final site.
+  const builtPages = Object.keys(finalText).filter((f) => /\.html?$/i.test(f));
+  const logoUrl = contentModel.identity?.logo_url ?? "";
+  const navRemoved = new Set<string>();
+  const navKept: string[] = [];
+  let logoPages = 0;
+  for (const f of builtPages) {
+    // Logo: if the lead has one, the header AND footer show it — inserting an
+    // <img> when the template has no logo slot at all (logo.ts).
+    const withLogo = applyLogoToHtml(finalText[f], {
+      logoUrl,
+      businessName: contentModel.identity?.name ?? "",
+    });
+    if (withLogo.header || withLogo.footer) logoPages++;
+    // Nav: drop menu items pointing at pages this build did not produce, so the
+    // menu can never link to a 404 (nav.ts).
+    const pruned = pruneNavToBuiltPages(withLogo.html, builtPages);
+    for (const t of pruned.removed) navRemoved.add(t);
+    navKept.push(...pruned.keptEmptyGuard);
+    finalText[f] = pruned.html;
+  }
+  if (navKept.length > 0) {
+    console.warn(
+      `[template-engine] generation ${generationId}: kept stale menu link(s) rather than empty a menu: ${navKept.join(" | ")}`,
+    );
+  }
+  if (navRemoved.size > 0 || logoPages > 0) {
+    console.info(
+      `[template-engine] generation ${generationId}: post-process — logo on ${logoPages} page(s), pruned menu link(s): ${[...navRemoved].join(", ") || "none"}`,
+    );
   }
 
   const encoder = new TextEncoder();

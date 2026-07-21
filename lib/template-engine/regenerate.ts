@@ -23,7 +23,7 @@ ABSOLUTE RULES
   - LOGO vs BUSINESS NAME in the header brand area (mutually exclusive):
     - If identity.logo_url is non-empty AND the header brand area is or contains an <img> logo, set that <img>'s src to identity.logo_url. If a SEPARATE business-name wordmark (a text element such as the site title) also sits in the header brand area, keep that element EXACTLY (same tag, classes, ids, data-* attributes, same position) but add a bare 'hidden' attribute to it so only the logo shows — NEVER delete it or drop any of its attributes. Adding the 'hidden' attribute is the only change; this keeps every tag/class/id intact for the structure gate.
     - If identity.logo_url is empty, render the business name as text in the header brand area and add NO logo <img>.
-    - If the header brand area is a text wordmark with NO <img> slot, always keep it as the business name (there is nothing to swap a logo into).
+    - If the header brand area is a text wordmark with NO <img> slot, keep it as the business name — do NOT add an <img> yourself (that would fail the structure gate). A deterministic post-gate pass inserts the logo there instead.
     - Apply the same src swap to a footer logo <img> when identity.logo_url is non-empty; do not hide footer text.
   - If identity.profile_link is non-empty, use it as the href for any existing "reviews", "Google", "Yelp", or "view our profile" link/button. Never invent such a link.
 - In JavaScript, change only string/data VALUES and comments; never touch identifiers or control flow. The brand identifier was already neutralized upstream, so you will not see it.
