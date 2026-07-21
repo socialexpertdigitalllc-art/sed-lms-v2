@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { unzipToMap } from "@/lib/template-engine/zip";
 import { buildManifest, validateTemplate } from "@/lib/template-engine/manifest";
 import { extractDemoTokens } from "@/lib/template-engine/demoTokens";
+import { runTemplateHealthChecks } from "@/lib/template-engine/health";
 import { businessSlug } from "@/lib/template-engine/slug";
 import { contentTypeFor } from "@/lib/template-engine/runner";
 
@@ -88,11 +89,29 @@ export async function POST(req: Request) {
   // demo_tokens = [] and the gate protects nothing — which is exactly how v1
   // shipped "Northpoint Remodeling" to a client who bought a Warrior site.
   const templateText: Record<string, string> = {};
+  const healthText: Record<string, string> = {};
   const decoder = new TextDecoder();
   for (const [path, data] of Object.entries(filesMap)) {
-    if (/\.(html?|js|mjs)$/i.test(path)) templateText[path] = decoder.decode(data);
+    // Token extraction reads markup and script only — a stylesheet has no demo
+    // identity in it, and its hex values and font names would mint junk tokens.
+    if (/\.(html?|js|mjs)$/i.test(path)) {
+      const text = decoder.decode(data);
+      templateText[path] = text;
+      healthText[path] = text;
+    } else if (/\.css$/i.test(path)) {
+      // The health check DOES need the stylesheet: "will the client's colours
+      // apply at all" is answered by planning the theme against it.
+      healthText[path] = decoder.decode(data);
+    }
   }
   const demoTokens = extractDemoTokens(templateText);
+
+  // The upload is never blocked on a failing report. An operator may be
+  // uploading a work in progress, and a rejected upload with no way to inspect
+  // the reason is worse than a stored, loudly-flagged one — the templates admin
+  // shows the pill and the full report, and the generation launcher warns before
+  // any credits are spent.
+  const health = runTemplateHealthChecks({ files: healthText, demoTokens, manifest });
 
   const admin = createAdminClient();
 
@@ -132,6 +151,8 @@ export async function POST(req: Request) {
       storage_prefix: templateId,
       manifest,
       demo_tokens: demoTokens,
+      health,
+      health_checked_at: health.checkedAt,
       page_count: manifest.pages.length,
       status: "active",
       created_by: auth.userId,
@@ -148,7 +169,13 @@ export async function POST(req: Request) {
     action: "template.uploaded",
     entity_type: "website_template",
     entity_id: templateId,
-    new_value: { name, slug, page_count: manifest.pages.length, total_bytes: manifest.totalBytes },
+    new_value: {
+      name,
+      slug,
+      page_count: manifest.pages.length,
+      total_bytes: manifest.totalBytes,
+      health_status: health.status,
+    },
   });
 
   return NextResponse.json({ template: row }, { status: 201 });

@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Upload, Archive, RotateCcw, Save, ChevronRight, Loader2 } from "lucide-react";
+import { Upload, Archive, RotateCcw, Save, ChevronRight, Loader2, Stethoscope } from "lucide-react";
 import type { PageKind, TemplateManifest } from "@/lib/template-engine/types";
 import type { TemplateEngineSettings } from "@/lib/template-engine/settings";
 import { Select } from "@/components/common/Select";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
+import { HealthChecks, HealthPill, healthOf } from "@/components/template-engine/TemplateHealth";
 
 const PAGE_KINDS: PageKind[] = [
   "home",
@@ -28,6 +29,9 @@ type TemplateRow = {
   page_count: number;
   status: "active" | "archived";
   created_at: string;
+  /** jsonb — null for templates uploaded before health checks existed */
+  health: unknown;
+  health_checked_at: string | null;
 };
 
 function formatBytes(n: number): string {
@@ -54,6 +58,7 @@ export function TemplatesBoard() {
   const [kindDraft, setKindDraft] = useState<Record<string, PageKind>>({});
   const [savingKinds, setSavingKinds] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
 
   // engine settings
   const [settings, setSettings] = useState<TemplateEngineSettings | null>(null);
@@ -157,6 +162,33 @@ export function TemplatesBoard() {
       return;
     }
     toast({ kind: "success", title: status === "archived" ? "Template archived" : "Template restored" });
+    load(showArchived);
+  }
+
+  /**
+   * Re-run the deterministic checks against what is in storage now. Free — no
+   * AI, no generation — so it is safe to offer as a plain button.
+   */
+  async function recheck(t: TemplateRow) {
+    setCheckingId(t.id);
+    const res = await fetch(`/api/template-engine/templates/${t.id}/health`, { method: "POST" });
+    setCheckingId(null);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast({ kind: "error", title: "Re-check failed", body: j.error ?? "Could not run the health checks" });
+      return;
+    }
+    const status = j.health?.status as "pass" | "warn" | "fail" | undefined;
+    toast({
+      kind: status === "fail" ? "error" : "success",
+      title:
+        status === "fail"
+          ? "Health check failed"
+          : status === "warn"
+            ? "Health check passed with warnings"
+            : "Template is healthy",
+      body: "See the report below for what each check found.",
+    });
     load(showArchived);
   }
 
@@ -268,6 +300,7 @@ export function TemplatesBoard() {
         <div className="space-y-3 mb-6">
           {templates.map((t) => {
             const expanded = expandedId === t.id;
+            const health = healthOf(t.health);
             return (
               <div key={t.id} className="bg-surface border border-border rounded-lg">
                 <button
@@ -291,6 +324,7 @@ export function TemplatesBoard() {
                   >
                     {t.status}
                   </span>
+                  <HealthPill report={health} />
                   <span className="ml-auto flex items-center gap-4 text-xs text-text-muted">
                     <span>{t.page_count} page{t.page_count === 1 ? "" : "s"}</span>
                     <span className="font-mono">{formatBytes(t.manifest?.totalBytes ?? 0)}</span>
@@ -302,6 +336,39 @@ export function TemplatesBoard() {
 
                 {expanded && (
                   <div className="border-t border-border px-4 py-4">
+                    {/* Health report first: it is the thing that decides whether
+                        this template can produce a correct site at all. */}
+                    <div className="mb-5">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-text-faint">
+                          Health check
+                        </span>
+                        <HealthPill report={health} />
+                        {t.health_checked_at ? (
+                          <span className="text-[11px] text-text-faint">
+                            checked {new Date(t.health_checked_at).toLocaleString()}
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => recheck(t)}
+                          disabled={checkingId === t.id}
+                          className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-muted hover:bg-surface-2 disabled:opacity-60"
+                        >
+                          {checkingId === t.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Stethoscope className="h-4 w-4" />
+                          )}
+                          {checkingId === t.id ? "Checking…" : "Re-check"}
+                        </button>
+                      </div>
+                      <HealthChecks report={health} />
+                      <p className="mt-2 text-[11px] text-text-faint">
+                        Deterministic checks only — no AI is called and nothing is generated, so re-checking is free.
+                      </p>
+                    </div>
+
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>

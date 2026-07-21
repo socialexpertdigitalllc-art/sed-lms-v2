@@ -41,7 +41,7 @@ export default async function TemplateEnginePage() {
       .limit(300),
     admin
       .from("website_templates")
-      .select("id, name, manifest, page_count")
+      .select("id, name, manifest, page_count, health")
       .eq("status", "active")
       .order("created_at", { ascending: false }),
   ]);

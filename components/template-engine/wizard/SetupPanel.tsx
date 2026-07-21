@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Building2, Check, ChevronDown, FileText, Image as ImageIcon, Layers, Loader2,
-  Mail, MapPin, Minus, Palette, Phone, Rocket, Search, Link2, Award,
+  Mail, MapPin, Minus, Palette, Phone, Rocket, Search, Link2, Award, AlertTriangle,
 } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import type { TemplateManifest } from "@/lib/template-engine/types";
 import { resolveLeadPages } from "@/lib/template-engine/leadPages";
 import { dossierCompleteness } from "@/lib/template-engine/dossier";
+import { HealthPill, healthOf } from "@/components/template-engine/TemplateHealth";
 
 export type LeadOption = {
   id: string;
@@ -33,7 +34,14 @@ export type LeadOption = {
   color_same_as_logo: boolean | null;
   image_links: string[] | null;
 };
-export type TemplateOption = { id: string; name: string; manifest: TemplateManifest; page_count: number };
+export type TemplateOption = {
+  id: string;
+  name: string;
+  manifest: TemplateManifest;
+  page_count: number;
+  /** the stored health report (jsonb); null on templates uploaded before checks existed */
+  health?: unknown;
+};
 
 const list = (v: string[] | null): string[] => (Array.isArray(v) ? v.filter(Boolean) : []);
 
@@ -100,11 +108,18 @@ export function SetupPanel({ leads, templates }: { leads: LeadOption[]; template
                     "rounded-md border p-3 text-left transition-colors",
                     t.id === templateId ? "border-accent bg-accent-soft" : "border-border bg-surface hover:border-accent/50",
                   )}>
-                  <p className={cn("text-sm font-medium", t.id === templateId ? "text-accent-ink" : "text-text")}>{t.name}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className={cn("text-sm font-medium", t.id === templateId ? "text-accent-ink" : "text-text")}>{t.name}</p>
+                    <HealthPill report={healthOf(t.health)} />
+                  </div>
                   <p className="text-xs text-text-muted">{t.page_count} template pages</p>
                 </button>
               ))}
             </div>
+            {/* A failing template does not block the run — the operator may know
+                exactly what they are doing — but they must not find out at the
+                end of a paid generation that the colours never applied. */}
+            <TemplateHealthWarning template={template} />
           </div>
 
           <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-text">
@@ -131,6 +146,40 @@ export function SetupPanel({ leads, templates }: { leads: LeadOption[]; template
           Start generation
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * What will go wrong if the operator starts a generation on a failing template.
+ *
+ * Shown, never enforced: the failures this surfaces (an unpassable leak gate,
+ * colours that bind nothing, links that 404) are all things that cost a full
+ * paid generation to discover otherwise, but an operator testing a
+ * work-in-progress template has a legitimate reason to run one anyway.
+ */
+function TemplateHealthWarning({ template }: { template: TemplateOption | null }) {
+  const report = healthOf(template?.health);
+  if (!report || report.status !== "fail") return null;
+  const failing = report.checks.filter((c) => c.severity === "fail");
+  if (failing.length === 0) return null;
+
+  return (
+    <div className="mt-2 rounded-md border border-dropped-fg/30 bg-dropped-bg/40 p-3">
+      <p className="flex items-center gap-1.5 text-xs font-semibold text-dropped-fg">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        This template failed its health check — the generated site will be wrong
+      </p>
+      <ul className="mt-1.5 space-y-1 pl-5 text-xs text-text-muted">
+        {failing.map((c) => (
+          <li key={c.id} className="list-disc">
+            <span className="font-medium text-text">{c.label}:</span> {c.detail}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1.5 text-[11px] text-text-faint">
+        You can still start — nothing is blocked — but fixing the template first saves a full generation.
+      </p>
     </div>
   );
 }
