@@ -176,8 +176,10 @@ describe("resolveTaskModel", () => {
   });
 
   it("refuses to write an impossible assignment in the first place", async () => {
+    // Vision is the hard one: a text-only model here answers about photos it
+    // never saw. (file_regen no longer needs a huge budget — the default path
+    // sends only text, in batches — so DeepSeek is legitimately allowed there.)
     expect(await saveAiTaskAssignment("image_vision", "deepseek", "deepseek-chat")).toBeNull();
-    expect(await saveAiTaskAssignment("file_regen", "deepseek", "deepseek-chat")).toBeNull();
     expect(tables.ai_task_assignments).toHaveLength(0);
   });
 

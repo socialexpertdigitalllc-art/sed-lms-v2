@@ -4,6 +4,7 @@ import {
   AI_PROVIDER_REGISTRY,
   AI_TASK_REGISTRY,
   LONG_OUTPUT_TOKENS,
+  TEXT_BATCH_TOKENS,
   apiKeyFrom,
   assignmentError,
   capableModelsForTask,
@@ -73,7 +74,10 @@ describe("AI task registry", () => {
 
   it("states the capability each task actually demands", () => {
     expect(getTask("image_vision")!.requires.vision).toBe(true);
-    expect(getTask("file_regen")!.requires.minOutputTokens).toBe(LONG_OUTPUT_TOKENS);
+    // The default path sends only a page's TEXT, in ~4000-char batches, so a
+    // large output budget is no longer the requirement it was under the old
+    // whole-file rewrite.
+    expect(getTask("file_regen")!.requires.minOutputTokens).toBe(TEXT_BATCH_TOKENS);
     expect(getTask("content_plan")!.requires.vision).toBe(false);
     // The legacy generator reads its model off the generation row.
     expect(getTask("legacy_v1")!.routable).toBe(false);
@@ -92,12 +96,25 @@ describe("capability constraints", () => {
     expect(isValidAssignment("image_vision", "minimax", "MiniMax-M3")).toBe(true);
   });
 
-  it("refuses a model that cannot emit a whole page for the file rewrite", () => {
-    const reason = assignmentError("file_regen", "deepseek", "deepseek-chat");
-    expect(reason).toBeTruthy();
-    expect(reason).toMatch(/truncated/);
-    // Moonshot's 32k models clear the bar exactly.
+  it("allows a small model for the text rewrite, which only needs a batch's worth", () => {
+    // Previously barred: the old path made the model re-emit the ENTIRE file,
+    // so 8k truncated a page. The default path never sends markup at all, so a
+    // batch answer is ~2k and DeepSeek does the job.
+    expect(isValidAssignment("file_regen", "deepseek", "deepseek-chat")).toBe(true);
     expect(isValidAssignment("file_regen", "webcraft", "moonshot-v1-128k")).toBe(true);
+  });
+
+  it("keeps the output requirement wired up, just re-based on the batch size", () => {
+    // The gate is not switched off — every registered model now clears the new
+    // bar, so the guarantee worth pinning is that the threshold is still the
+    // one the task declares (the vision test above proves refusal still works).
+    const need = getTask("file_regen")!.requires.minOutputTokens;
+    expect(need).toBe(TEXT_BATCH_TOKENS);
+    for (const p of AI_PROVIDER_REGISTRY) {
+      for (const m of p.models) {
+        expect(isValidAssignment("file_regen", p.key, m.id)).toBe(m.maxOutputTokens >= need);
+      }
+    }
   });
 
   it("allows a small text model for planning, which only needs 8k", () => {
@@ -117,8 +134,9 @@ describe("capability constraints", () => {
     expect(vision.some(({ provider, model }) => provider.key === "minimax" && model.id === "MiniMax-M3")).toBe(true);
 
     const regen = capableModelsForTask("file_regen");
-    expect(regen.every(({ model }) => model.maxOutputTokens >= LONG_OUTPUT_TOKENS)).toBe(true);
-    expect(regen.some(({ provider }) => provider.key === "deepseek")).toBe(false);
+    expect(regen.every(({ model }) => model.maxOutputTokens >= TEXT_BATCH_TOKENS)).toBe(true);
+    // Now offered: the text-batch path asks for ~2k, not a whole page.
+    expect(regen.some(({ provider }) => provider.key === "deepseek")).toBe(true);
 
     // Every offered pairing is, by definition, one the API would accept.
     for (const task of AI_TASK_REGISTRY) {

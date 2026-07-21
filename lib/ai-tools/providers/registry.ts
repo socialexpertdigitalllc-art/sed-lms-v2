@@ -59,6 +59,15 @@ export interface AiProviderDescriptor {
  */
 export const LONG_OUTPUT_TOKENS = 32000;
 
+/**
+ * What the DEFAULT (text-batch) personalisation path actually needs per call.
+ * It sends only the translatable strings of a page — never the markup — in
+ * batches capped at ~60 items / ~4000 chars, so a single response is ~2k
+ * tokens. The old whole-file path needed LONG_OUTPUT_TOKENS; requiring that
+ * here now only excludes small models that do the job perfectly well.
+ */
+export const TEXT_BATCH_TOKENS = 8000;
+
 /* ------------------------------------------------------------- providers */
 
 const gemini: AiProviderDescriptor = {
@@ -192,11 +201,11 @@ const contentPlan: AiTaskDescriptor = {
 
 const fileRegen: AiTaskDescriptor = {
   key: "file_regen",
-  label: "Whole-file rewrite",
+  label: "Page text rewrite",
   description:
-    "The dominant cost: every content file, plus repair rounds. Must return the ENTIRE file with perfect structural fidelity, so it needs a very large output budget — a model that truncates produces a silently broken page.",
-  where: "lib/template-engine/regenerate.ts",
-  requires: { vision: false, minOutputTokens: LONG_OUTPUT_TOKENS },
+    "The dominant cost: the copy of every content file, plus repair rounds. Only the page's text is sent — never its markup — in small batches, so structure cannot be damaged and a modest output budget is enough.",
+  where: "lib/template-engine/personalize.ts",
+  requires: { vision: false, minOutputTokens: TEXT_BATCH_TOKENS },
   defaultProvider: "gemini",
   defaultModel: "gemini-3.1-pro-preview",
   routable: true,
