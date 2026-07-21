@@ -186,6 +186,37 @@ const isNoise = (w: string) => MARKUP_WORDS.has(w) || GENERIC_WORDS.has(w);
 /** Nothing below this length is ever a token (well above the 3-char floor). */
 const MIN_TOKEN_CHARS = 4;
 
+/**
+ * An identity token is a NAME, not a sentence.
+ *
+ * "Northpoint Remodeling", "King Painting", "Greater Seattle", "Cherry Creek" —
+ * the longest real identity any of these templates carries is three or four
+ * words. Everything longer that the extractor ever produced in production was
+ * prose or chrome: whole `<title>` strings ("Remodeling Services in Cherry Creek
+ * - Northpoint Remodeling"), and nav menus flattened into one run ("Explore Home
+ * Services Service Areas Contact Services Tiling Bathroom Remodeling Hardwood
+ * Floors Grouting"). Those tokens are not merely noisy — they are UNMATCHABLE as
+ * written, so they carry no catching power at all, and the moment the matcher
+ * learned to bridge markup they started matching text that only LOOKED like them
+ * because the words happened to fall in that order across five elements.
+ *
+ * This is not a relaxation of the asymmetry doctrine. A token that can only ever
+ * match by accident protects nothing; dropping it costs no coverage.
+ */
+const MAX_TOKEN_WORDS = 4;
+
+/**
+ * Sentence punctuation: the marks that prove a run of words is PROSE.
+ *
+ * No business name spans one of these. "Cherry Creek. We", "Denver. SELECTED
+ * WORK Proof" and "Pierce County. Seattle Tacoma Auburn..." are all a real place
+ * name glued to whatever the next element happened to say, and every one of them
+ * was minted because the extractor read across the full stop.
+ */
+const SENTENCE_PUNCT_RE = /[.!?:;|•]/;
+/** The same set, as a splitter (newlines included: see SEGMENT_BREAK). */
+const SENTENCE_SPLIT_RE = /[.!?:;|•\n]+/;
+
 /** Splits a phrase into comparable lowercase words, dropping punctuation. */
 function words(phrase: string): string[] {
   return phrase
@@ -226,7 +257,37 @@ const TAG_RE = /<[^>]+>/g;
 const JS_STRING_RE = /"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
 
 /**
- * The human-readable copy of a file, with the code removed.
+ * The tags that end a thought. A heading, a paragraph, a list item and a table
+ * cell are separate utterances; text either side of one is never one phrase.
+ * Shared with the matcher, where the same boundary decides what a multi-word
+ * token may bridge — see TOKEN_GAP.
+ */
+const BLOCK_TAG_NAMES =
+  "p|div|section|main|header|footer|nav|aside|article|h[1-6]|ul|ol|li|dl|dt|dd" +
+  "|table|thead|tbody|tfoot|tr|td|th|form|fieldset|legend|figure|figcaption" +
+  "|blockquote|pre|hr|br|address|details|summary|body|html|head|title|option";
+/**
+ * Extraction breaks on MORE than blocks: every link and control is its own
+ * label. This is the nav-menu rule at its source — a header's links are inline
+ * `<a>`s side by side, so nothing block-level separates them and "Explore",
+ * "Home", "Services", "Service Areas", "Tiling", "Grouting" flatten into one
+ * long capitalised run that recurs on every page and reads, to the repeated-
+ * phrase rule, exactly like a distinctive demo phrase. Text either side of an
+ * `</a>` is never one name.
+ *
+ * The MATCHER does not break on links: a leak may well sit inside one
+ * (`<a href="tel:...">Northpoint Remodeling</a>`), and there the risk runs the
+ * other way. See TOKEN_GAP.
+ */
+const UTTERANCE_TAG_RE = new RegExp(
+  `<\\s*/?\\s*(?:${BLOCK_TAG_NAMES}|a|button|label|select|textarea)\\b[^>]*>`,
+  "gi"
+);
+/** What a boundary becomes in the extracted copy. */
+const SEGMENT_BREAK = "\n";
+
+/**
+ * The human-readable copy of a file, as SEPARATE UTTERANCES, with code removed.
  *
  * HTML: comments, <script>/<style> bodies and tags are stripped, because the
  * prose rules below look for Capitalised runs and raw code is full of them
@@ -236,18 +297,34 @@ const JS_STRING_RE = /"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\
  * markup — including the demo email and "NORTHPOINT" — from strings, so the copy
  * is genuinely there; the surrounding identifiers are not copy and are left to
  * the JS-identifier rule.
+ *
+ * WHY SEGMENTS AND NOT ONE STRING. Flattening every tag to a space is what
+ * manufactured "Home Additions Additions", "Bathroom Remodeling Zero" and "Small
+ * Repairs The": a card heading and the paragraph under it became one sentence,
+ * and a run of adjacent nav links became one twelve-word "phrase". Block tags
+ * therefore break the text, and each block is then cut again at sentence
+ * punctuation, so no candidate phrase can ever span two utterances.
  */
-function prose(file: string, content: string): string {
+function proseSegments(file: string, content: string): string[] {
+  let raw: string;
   if (HTML_RE.test(file)) {
-    return norm(
-      content.replace(HTML_COMMENT_RE, " ").replace(SCRIPT_STYLE_RE, " ").replace(TAG_RE, " ")
-    );
+    raw = content
+      .replace(HTML_COMMENT_RE, " ")
+      .replace(SCRIPT_STYLE_RE, " ")
+      .replace(UTTERANCE_TAG_RE, SEGMENT_BREAK)
+      .replace(TAG_RE, " ");
+  } else {
+    const out: string[] = [];
+    for (const m of content.matchAll(JS_STRING_RE)) {
+      out.push(m[1] ?? m[2] ?? m[3] ?? "");
+    }
+    // Each string literal is its own utterance; markup inside one still breaks.
+    raw = out.join(SEGMENT_BREAK).replace(UTTERANCE_TAG_RE, SEGMENT_BREAK).replace(TAG_RE, " ");
   }
-  const out: string[] = [];
-  for (const m of content.matchAll(JS_STRING_RE)) {
-    out.push(m[1] ?? m[2] ?? m[3] ?? "");
-  }
-  return norm(out.join(" ").replace(TAG_RE, " "));
+  return decodeEntities(raw)
+    .split(SENTENCE_SPLIT_RE)
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
 const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/gi;
@@ -257,8 +334,13 @@ const TITLE_SPLIT_RE = /\s+[-–—|·:]\s+/;
 /**
  * A run of Capitalised words. Deliberately NOT case-insensitive: the capital is
  * the whole signal, and an `i` flag would make `[A-Z]` match anything.
+ *
+ * The full stop that used to sit in this class is gone. It let "Serving Cherry
+ * Creek. We build..." run straight through the sentence end and mint "Cherry
+ * Creek. We"; the text is now cut at sentence punctuation before this ever runs,
+ * so a `.` inside a run can only be a leftover from a decoded entity.
  */
-const CAP_RUN = "[A-Z][a-zA-Z'’.&-]*(?:\\s+[A-Z][a-zA-Z'’.&-]*)*";
+const CAP_RUN = "[A-Z][a-zA-Z'’&-]*(?:\\s+[A-Z][a-zA-Z'’&-]*)*";
 
 /**
  * Place triggers. "Serving Denver", "in Cherry Creek", "throughout Wash Park".
@@ -323,6 +405,10 @@ export function extractDemoTokens(files: Record<string, string>): string[] {
     const key = t.toLowerCase();
     if (seen.has(key)) return;
     if (isNoise(key)) return;
+    // Prose, not identity — see SENTENCE_PUNCT_RE and MAX_TOKEN_WORDS. Contact
+    // details keep their punctuation and go through addLiteral instead.
+    if (SENTENCE_PUNCT_RE.test(t)) return;
+    if (words(t).length > MAX_TOKEN_WORDS) return;
     // A lone ordinary English word is provably unusable as a gate token — the
     // phrase it belongs to is kept instead. See isCommonSingleWord.
     if (isCommonSingleWord(t)) return;
@@ -383,7 +469,20 @@ export function extractDemoTokens(files: Record<string, string>): string[] {
   }
 
   if (brand) add(brand);
-  for (const t of titles) add(t);
+  // Only the SEGMENTS of a title, never the whole string. A title is decorated
+  // — "About Us - Northpoint Remodeling", "Remodeling Services in Cherry Creek -
+  // Northpoint Remodeling" — and the decoration is page chrome, not identity.
+  // The whole title used to be a token on the theory that it is long and unique
+  // enough never to recur; it is, which is precisely why it caught nothing, and
+  // once the matcher could bridge markup those long strings started matching
+  // unrelated text spread across half a page. The brand-bearing segment is the
+  // part worth keeping, and `add` drops the segments that are pure chrome.
+  for (const t of titles) {
+    for (const seg of t.split(TITLE_SPLIT_RE)) {
+      const s = norm(seg);
+      if (s && isDistinctive(s)) add(s);
+    }
+  }
 
   // Individual brand words. This is what catches the logo, which this template
   // splits across two elements — `<span>NORTHPOINT</span><span>REMODELING</span>`
@@ -416,11 +515,12 @@ export function extractDemoTokens(files: Record<string, string>): string[] {
 
   // ---- geography ----------------------------------------------------------
   for (const [file, content] of entries) {
-    const text = prose(file, content);
-    for (const m of text.matchAll(PLACE_RE)) {
-      for (const part of m[1].split(/\s*(?:,|&|\band\b)\s*/)) {
-        const p = depossess(part);
-        if (p && isDistinctive(p)) add(p);
+    for (const segment of proseSegments(file, content)) {
+      for (const m of segment.matchAll(PLACE_RE)) {
+        for (const part of m[1].split(/\s*(?:,|&|\band\b)\s*/)) {
+          const p = depossess(part);
+          if (p && isDistinctive(p)) add(p);
+        }
       }
     }
     // An embedded map's `?q=` is unambiguous demo geography: this template
@@ -444,11 +544,22 @@ export function extractDemoTokens(files: Record<string, string>): string[] {
   // A demo identity recurs across PAGES; a headline lives on one. Requiring two
   // files is what separates "Cherry Creek" from "Two Decades Of Work", and keeps
   // this — the loosest rule here — from minting gate-disabling junk.
+  //
+  // The run is taken WHOLE or not at all, and a run longer than
+  // MAX_PHRASE_WORDS is discarded rather than trimmed. That is the nav-menu
+  // rule: a header's links flatten into one long run of capitalised words with
+  // no punctuation ("Explore Home Services Service Areas Contact Services
+  // Tiling Bathroom Remodeling Hardwood Floors Grouting"), it recurs on every
+  // page, and it looks exactly like a distinctive repeated phrase to this rule.
+  // A real recurring identity is two or three words; nothing longer is a name.
+  const MAX_PHRASE_WORDS = 3;
   const phraseFiles = new Map<string, { text: string; files: Set<string> }>();
   for (const [file, content] of entries) {
-    for (const m of prose(file, content).matchAll(REPEATED_PHRASE_RE)) {
+    const segments = proseSegments(file, content);
+    for (const m of segments.flatMap((s) => [...s.matchAll(REPEATED_PHRASE_RE)])) {
       const p = norm(m[0]);
       if (!isDistinctive(p)) continue;
+      if (words(p).length > MAX_PHRASE_WORDS) continue;
       const k = p.toLowerCase();
       const cur = phraseFiles.get(k);
       if (cur) cur.files.add(file);
@@ -465,7 +576,59 @@ export function extractDemoTokens(files: Record<string, string>): string[] {
     for (const m of content.matchAll(WINDOW_APP_RE)) add(m[1]);
   }
 
-  return out;
+  return dedupeByContainment(out);
+}
+
+/**
+ * The token's words as the MATCHER sees them — split on whitespace, because
+ * that is what `tokenPattern` splits on. `northpointremodel.com` is one word
+ * here, not two; treating it as two is what made containment delete
+ * `hello@northpointremodel.com` for "containing" the domain.
+ */
+function spacedWords(token: string): string[] {
+  return token
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, ""))
+    .filter(Boolean);
+}
+
+/** True when `needle`'s words appear as a contiguous run inside `hay`'s. */
+function containsWordRun(hay: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > hay.length) return false;
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Drops a phrase that already CONTAINS a shorter phrase token.
+ *
+ * If "Northpoint Remodeling" is a token then "Northpoint Remodeling - Beautiful
+ * Denver Kitchens & Bathrooms" can never leak without it leaking too: the long
+ * one is strictly weaker (it demands more words in the same order) and strictly
+ * noisier. Keeping both means the repair loop is handed two findings for one
+ * problem and told to fix a string the page never contained.
+ *
+ * Deliberately phrase-vs-phrase only. Single-word tokens are excluded on BOTH
+ * sides: "Northpoint" is a token and contains-checking against it would delete
+ * "Northpoint Remodeling", the most useful token the extractor produces. The
+ * single word is the wider net, but the phrase is what a human reading the leak
+ * report needs to see.
+ */
+function dedupeByContainment(tokens: string[]): string[] {
+  const parsed = tokens.map((t) => ({ text: t, w: spacedWords(t) }));
+  return parsed
+    .filter(
+      (t, i) =>
+        t.w.length < 2 ||
+        !parsed.some(
+          (o, j) => i !== j && o.w.length >= 2 && o.w.length < t.w.length && containsWordRun(t.w, o.w)
+        )
+    )
+    .map((t) => t.text);
 }
 
 /** Regex metacharacters — tokens are literal text ("(303) 555-1234", "a+b.co"). */
@@ -482,10 +645,27 @@ const WORD_CHAR_RE = /[A-Za-z0-9_]/;
  * Collapsed whitespace and newlines are the obvious case ("Northpoint\n
  * Remodeling"). Markup is the case that matters: this template's logo is
  * `<span>NORTHPOINT</span><span>REMODELING</span>`, so the phrase is never
- * adjacent in the file. Widening the gap can only ever catch MORE leaks, which
- * is the direction this module is allowed to err in.
+ * adjacent in the file and a contiguous match sails straight past it.
+ *
+ * THE PRODUCTION FAILURE THAT BOUNDS IT. "Widening the gap can only ever catch
+ * MORE leaks" was wrong, and it cost a day of generations. An unbounded
+ * `<[^>]*>` gap bridges ANY markup, including the end of one element and the
+ * start of another, so the (junk) token "Denver. SELECTED WORK Proof" matched
+ * `Denver.</p><h2>SELECTED WORK</h2><p>Proof` — three unrelated utterances that
+ * happen to contain those words in that order. Roughly forty phantom leaks per
+ * file went to the repair loop, and the model deleted real structure trying to
+ * remove text that was never there.
+ *
+ * So the gap is now exactly what a SPLIT WORD looks like and nothing more:
+ *   - inline markup only — a closing or opening block tag (`p`, `div`, `li`,
+ *     `h1`-`h6`, `br`, ...) ends the utterance and ends the match;
+ *   - a bounded number of gap units, so two words a paragraph of markup apart
+ *     can never join even when every tag between them is inline;
+ *   - bounded whitespace, for the same reason.
+ * `</span><span>` is two units of inline markup: the logo still leaks.
  */
-const TOKEN_GAP = "(?:\\s|&nbsp;|<[^>]*>)+";
+const INLINE_TAG_ONLY = `<(?!\\s*/?\\s*(?:${BLOCK_TAG_NAMES})\\b)[^>]{0,80}>`;
+const TOKEN_GAP = `(?:\\s{1,8}|&nbsp;|${INLINE_TAG_ONLY}){1,5}`;
 
 /**
  * A token as a WHOLE WORD (or whole phrase), case-insensitive.
@@ -517,6 +697,14 @@ function tokenPattern(token: string): RegExp | null {
   if (!parts.length) return null;
   const lead = WORD_CHAR_RE.test(t[0]) ? `(?<![${WORD_CHAR_CLASS}])` : "";
   const tail = WORD_CHAR_RE.test(t[t.length - 1]) ? `(?![${WORD_CHAR_CLASS}])` : "";
+  // A token that carries sentence punctuation is prose, not a name — the
+  // extractor can no longer mint one, but templates uploaded before that fix
+  // still have them stored. Bridging markup for such a token is what produced
+  // the phantom leaks, and a genuine leak of a whole sentence would be
+  // contiguous anyway, so these match literally or not at all.
+  if (parts.length > 1 && SENTENCE_PUNCT_RE.test(t)) {
+    return new RegExp(lead + escapeRe(t) + tail, "i");
+  }
   return new RegExp(lead + parts.join(TOKEN_GAP) + tail, "i");
 }
 
