@@ -327,6 +327,45 @@ describe("end to end: zero structure drift, zero leaks", () => {
   });
 });
 
+describe("places the extractors deliberately skip, which the leak gate still reads", () => {
+  it("evicts the demo identity from HTML comments, inline scripts and JS comments", async () => {
+    callForTask.mockResolvedValue({ text: "{}", tokens: 0, providerKey: "mock", model: "mock" });
+    const page = `<body>
+  <!-- Northpoint Remodeling header, call (555) 210-4400 -->
+  <div class="x">Copy</div>
+  <script>
+    // Northpoint config
+    window.CONFIG = { phone: "(555) 210-4400", site: "northpointremodel.com" };
+  </script>
+  <script src="script.js"></script>
+</body>`;
+    const out = await personalizeFile({
+      file: "index.html",
+      source: page,
+      contentModel: CONTENT_MODEL,
+      imagesForFile: [],
+      demoTokens: DEMO_TOKENS,
+    });
+    expect(out.text).not.toMatch(/northpoint/i);
+    expect(out.text).not.toContain("(555) 210-4400");
+    expect(out.text).toContain("window.CONFIG = {");
+    expect(out.text).toContain(`<script src="script.js"></script>`);
+    expect(out.text).toContain(`phone: "(720) 888-1212"`);
+  });
+
+  it("evicts it from a .js file's comments too", async () => {
+    callForTask.mockResolvedValue({ text: "{}", tokens: 0, providerKey: "mock", model: "mock" });
+    const out = await personalizeFile({
+      file: "script.js",
+      source: `/* Northpoint Remodeling — built 2019 */\nconst n = 1; // call (555) 210-4400\n`,
+      contentModel: CONTENT_MODEL,
+      imagesForFile: [],
+      demoTokens: DEMO_TOKENS,
+    });
+    expect(out.text).toBe(`/* Warrior Contracting — built 2019 */\nconst n = 1; // call (720) 888-1212\n`);
+  });
+});
+
 describe("regen_mode switch", () => {
   it("defaults to the new text-only path and only opts out on an explicit flag", async () => {
     const { regenModeOf } = await import("@/lib/template-engine/runnerV2");

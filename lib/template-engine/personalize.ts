@@ -238,6 +238,52 @@ export function substituteIdentity(text: string, rules: Rule[]): string {
   return out;
 }
 
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+/** Line and block comments. Applied to JS files only. */
+const JS_COMMENT_RE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
+
+/**
+ * Comments are not copy, so nothing extracts them — but the leak gate reads
+ * them, and templates are full of `<!-- Northpoint header -->`. The identity
+ * rules are literal substitutions, so running them over comment bodies is
+ * always safe: the structure gate strips comments before comparing, and the
+ * rules only ever swap one demo literal for its client equivalent.
+ *
+ * The JS pattern can misfire on a `//` inside a string literal. That is
+ * harmless: the same rules already ran over that string, and applying them
+ * twice is idempotent.
+ */
+export function substituteInComments(text: string, rules: Rule[], isHtml: boolean): string {
+  if (rules.length === 0) return text;
+  const re = isHtml ? HTML_COMMENT_RE : JS_COMMENT_RE;
+  re.lastIndex = 0;
+  return text.replace(re, (comment) => substituteIdentity(comment, rules));
+}
+
+const INLINE_SCRIPT_RE = /(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi;
+
+/**
+ * An INLINE <script> in an HTML page is code, so nothing extracts it — but the
+ * leak gate reads it, and a demo phone number sitting in an inline config
+ * object would fail a build the repair loop could never fix.
+ *
+ * So its string literals and comments get the deterministic identity pass (the
+ * same one script.js gets), and nothing else. No model call: this is eviction,
+ * not copywriting, and the strings that deserve rewriting live in the markup
+ * and in the linked script file.
+ */
+export function substituteInInlineScripts(html: string, rules: Rule[]): string {
+  if (rules.length === 0) return html;
+  INLINE_SCRIPT_RE.lastIndex = 0;
+  return html.replace(INLINE_SCRIPT_RE, (whole, open: string, body: string, close: string) => {
+    if (/\bsrc\s*=/i.test(open) || !body.trim()) return whole;
+    const ex = extractJsStrings(body);
+    const map: Record<string, string> = {};
+    for (const item of ex.items) map[item.id] = substituteIdentity(item.text, rules);
+    return open + substituteInComments(ex.apply(map), rules, false) + close;
+  });
+}
+
 /* ------------------------------------------------------------- batching */
 
 export interface Batch {
@@ -429,9 +475,10 @@ export async function personalizeFile(args: PersonalizeArgs): Promise<Personaliz
   }
 
   // 4. reassemble deterministically ---------------------------------------
-  let text = extracted.apply(map);
+  let text = substituteInComments(extracted.apply(map), rules, isHtml);
   let imagesApplied = 0;
   if (isHtml) {
+    text = substituteInInlineScripts(text, rules);
     const applied = applyImagesToHtml(text, imageUrlsOf(args.imagesForFile));
     text = applied.html;
     imagesApplied = applied.count;
