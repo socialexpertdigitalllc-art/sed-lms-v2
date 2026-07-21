@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { applyLogoToHtml, isSafeLogoUrl } from "@/lib/template-engine/logo";
+import { parse } from "node-html-parser";
+import { applyLogoToHtml, isSafeLogoUrl, PARSE_OPTIONS } from "@/lib/template-engine/logo";
+
+/** True when the inserted logo would be invisible because something above it is hidden. */
+function logoIsUnderHiddenAncestor(html: string): boolean {
+  const img = parse(html, PARSE_OPTIONS).querySelector("img.tev2-logo");
+  if (!img) return false;
+  for (let el = img.parentNode; el; el = el.parentNode) {
+    if (el.getAttribute?.("hidden") !== undefined) return true;
+  }
+  return false;
+}
 
 const LOGO = "https://cdn.example.com/acme-logo.png";
 const ARGS = { logoUrl: LOGO, businessName: "Acme Roofing" };
@@ -59,6 +70,11 @@ describe("applyLogoToHtml — template WITH an <img> slot", () => {
     const out = applyLogoToHtml(WITH_IMG, ARGS);
     expect(out.html).toContain('<span class="site-title">Demo Co</span>');
   });
+  it("does not hide anything — the prompt pass owns that when a slot exists", () => {
+    const out = applyLogoToHtml(WITH_IMG, ARGS);
+    expect(out.html).not.toContain("hidden");
+    expect(out.html).not.toContain("tev2-name");
+  });
 });
 
 describe("applyLogoToHtml — wordmark-only template (the bug)", () => {
@@ -86,6 +102,88 @@ describe("applyLogoToHtml — wordmark-only template (the bug)", () => {
   it("escapes the alt text rather than emitting raw markup", () => {
     const out = applyLogoToHtml(WORDMARK_ONLY, { logoUrl: LOGO, businessName: 'A&B "Best" <Roofing>' });
     expect(out.html).toContain("alt=\"A&amp;B &quot;Best&quot; &lt;Roofing&gt;\"");
+  });
+});
+
+// The header shows the logo INSTEAD of the business name — they are mutually
+// exclusive — so once an <img> is inserted the wordmark text beside it is hidden.
+describe("applyLogoToHtml — the name gives way to the logo in the header", () => {
+  const headerOf = (html: string) => html.slice(html.indexOf("<div class=\"topbar\""), html.indexOf("<main>"));
+
+  it("hides the bare wordmark text next to the inserted logo", () => {
+    const out = applyLogoToHtml(WORDMARK_ONLY, ARGS);
+    expect(headerOf(out.html)).toContain(
+      `<a class="site-title" href="/"><img class="tev2-logo" src="${LOGO}"`,
+    );
+    expect(headerOf(out.html)).toContain('<span class="tev2-name" hidden>Demo Co</span>');
+  });
+
+  it("never hides the element the logo now lives in", () => {
+    const out = applyLogoToHtml(WORDMARK_ONLY, ARGS);
+    expect(logoIsUnderHiddenAncestor(out.html)).toBe(false);
+    expect(out.html).not.toContain('<a class="site-title" href="/" hidden>');
+  });
+
+  it("keeps the name for screen readers and SEO via the logo's alt", () => {
+    const out = applyLogoToHtml(WORDMARK_ONLY, ARGS);
+    expect(headerOf(out.html)).toContain('alt="Acme Roofing"');
+  });
+
+  it("marks an existing inline wrapper instead of adding one", () => {
+    const src = `<header class="site-header"><a class="brand" href="/"><span class="brand-name">Demo Co</span></a></header>`;
+    const out = applyLogoToHtml(src, ARGS);
+    expect(out.html).toContain('<span class="brand-name" hidden>Demo Co</span>');
+    expect(out.html).not.toContain("tev2-name");
+    expect(out.html).not.toMatch(/<img class="tev2-logo"[^>]*\shidden/);
+    expect(logoIsUnderHiddenAncestor(out.html)).toBe(false);
+  });
+
+  it("leaves the footer wordmark visible — a footer may show both", () => {
+    const out = applyLogoToHtml(WORDMARK_ONLY, ARGS);
+    const footer = out.html.slice(out.html.indexOf('class="footer"'));
+    expect(footer).toContain("tev2-logo");
+    expect(footer).toContain('<p class="site-title"><img class="tev2-logo"');
+    expect(footer).not.toContain("hidden");
+  });
+
+  it("hides nothing when there is no business name to put in the alt", () => {
+    const out = applyLogoToHtml(WORDMARK_ONLY, { logoUrl: LOGO, businessName: "  " });
+    expect(out.html).toContain("tev2-logo");
+    expect(out.html).not.toContain("hidden");
+  });
+});
+
+describe("applyLogoToHtml — conservative when the brand area is ambiguous", () => {
+  it("leaves text visible when the name is mixed with other elements", () => {
+    const src = `<header class="site-header"><div class="brand">Demo Co<span class="tagline">We fix pipes</span></div></header>`;
+    const out = applyLogoToHtml(src, ARGS);
+    expect(out.html).toContain("tev2-logo");
+    expect(out.html).not.toContain("hidden");
+    expect(out.html).toContain("Demo Co");
+    expect(out.html).toContain('<span class="tagline">We fix pipes</span>');
+  });
+
+  it("leaves a nav link alone when it is only the region's first anchor", () => {
+    const src = `<header class="site-header"><div class="brand"><nav><a href="/services">Services</a></nav></div></header>`;
+    const out = applyLogoToHtml(src, ARGS);
+    expect(out.html).toContain("tev2-logo");
+    expect(out.html).not.toContain("hidden");
+    expect(out.html).toContain(">Services</a>");
+  });
+
+  it("leaves a bare header alone when no brand element could be identified", () => {
+    const src = `<header class="site-header">Demo Co<p>Fast, friendly plumbing</p></header>`;
+    const out = applyLogoToHtml(src, ARGS);
+    expect(out.html).toContain("tev2-logo");
+    expect(out.html).not.toContain("hidden");
+    expect(out.html).toContain("<p>Fast, friendly plumbing</p>");
+  });
+
+  it("hides nothing when the wrapper beside the logo holds more than text", () => {
+    const src = `<header class="site-header"><a class="brand" href="/"><span class="brand-name">Demo Co<svg></svg></span></a></header>`;
+    const out = applyLogoToHtml(src, ARGS);
+    expect(out.html).toContain("tev2-logo");
+    expect(out.html).not.toContain("hidden");
   });
 });
 

@@ -14,11 +14,17 @@
 // fail the gate if it ran before, and after the gate the markup is ours to
 // transform. The prompt rule stays as a first pass; this is the guarantee.
 //
+// The logo and the business name are mutually exclusive in the header: when
+// there is a logo, the header shows the LOGO and not the name. Templates that
+// already had an <img> get that from the prompt pass (it marks the separate
+// wordmark `hidden`); templates where we INSERT the <img> get it here, by
+// hiding the wordmark text left beside it. See hideWordmarkText.
+//
 // Uses a real HTML parser (node-html-parser) — never regex — because this runs
 // on every page of every site and hand-rolled HTML rewriting corrupts markup in
 // ways nobody spots until a client does. Pure: no I/O.
 
-import { parse, type HTMLElement } from "node-html-parser";
+import { parse, NodeType, type HTMLElement, type Node } from "node-html-parser";
 
 /** Parse options that make toString() a byte-faithful round-trip. */
 export const PARSE_OPTIONS = {
@@ -86,7 +92,76 @@ function brandArea(region: HTMLElement): HTMLElement {
   return firstMatch(region, BRAND_SELECTORS) ?? region.querySelector("a") ?? region;
 }
 
-function applyToRegion(region: HTMLElement, args: LogoArgs): boolean {
+// Tags a template may legitimately wrap the wordmark text in. Anything else
+// beside the logo (nav, ul, button, svg, a second link…) means the brand area
+// holds more than the business name, and we leave it all visible.
+const WORDMARK_TAGS = new Set(["SPAN", "B", "STRONG", "EM", "I", "SMALL", "H1", "H2", "H3", "H4", "H5", "H6", "P"]);
+
+/** True when `el` is an inline-ish wrapper holding nothing but wordmark text. */
+function isTextOnlyWrapper(el: HTMLElement): boolean {
+  if (!WORDMARK_TAGS.has(el.tagName ?? "")) return false;
+  // Nested markup gets the same treatment — one stray <img> or link and we bail.
+  return el.querySelectorAll("*").every((child) => WORDMARK_TAGS.has(child.tagName ?? ""));
+}
+
+function hasText(node: Node): boolean {
+  return node.text.trim().length > 0;
+}
+
+/**
+ * Suppress the business-name text that sits beside a freshly inserted logo.
+ *
+ * The product rule is that the header shows the logo INSTEAD of the name, so
+ * once an <img> is in the brand area the wordmark text next to it is a visible
+ * duplicate. Nothing is ever deleted — the text is hidden, so it stays in the
+ * DOM and the change is recoverable — and the logo carries the name as `alt`,
+ * which is what keeps the name available to screen readers and crawlers.
+ *
+ * `host` is the element the <img> was inserted into, so it is never itself
+ * hidden (that would hide the logo); only its other children are candidates.
+ * Deliberately timid: if the brand area holds anything we cannot confidently
+ * read as "just the name", everything stays visible. A logo next to the name is
+ * a cosmetic miss; a hidden nav or tagline is a broken page.
+ */
+function hideWordmarkText(host: HTMLElement, logo: HTMLElement): void {
+  const rest = host.childNodes.filter((n) => n !== logo);
+  // Comments render nothing, so they neither block us nor need hiding.
+  const visible = rest.filter((n) => n.nodeType !== NodeType.COMMENT_NODE && hasText(n));
+  if (visible.length === 0) return; // nothing beside the logo — already logo-only
+
+  // Exactly one element beside the logo: the template already wrapped the name
+  // for us, so mark that wrapper (never the host, which now holds the <img>).
+  if (visible.length === 1 && visible[0].nodeType === NodeType.ELEMENT_NODE) {
+    const wrapper = visible[0] as HTMLElement;
+    if (isTextOnlyWrapper(wrapper)) wrapper.setAttribute("hidden", "");
+    return;
+  }
+  // Otherwise only bare text qualifies. Any element mixed in with it could be a
+  // tagline, a phone number, a nav — things we must not hide — and we have no
+  // way to tell which run of text is the name, so nothing is touched.
+  if (!visible.every((n) => n.nodeType === NodeType.TEXT_NODE)) return;
+  // Bare text needs a wrapper to hang `hidden` on. Safe to re-serialise the
+  // host here precisely because everything left in it is text.
+  const kept = rest.map((n) => n.toString()).join("");
+  host.set_content(`${logo.toString()}<span class="tev2-name" hidden>${kept}</span>`, PARSE_OPTIONS);
+}
+
+/**
+ * Navigation between the brand element and the anchor we inserted into means
+ * that anchor is a menu link, not the wordmark — hiding its text would delete a
+ * nav item from view. The brand element itself is exempt: `.navbar-brand` is a
+ * brand, not a nav.
+ */
+function sitsInNavigation(host: HTMLElement, area: HTMLElement): boolean {
+  if (host === area) return false;
+  for (let el = host.parentNode; el && el !== area; el = el.parentNode) {
+    if (["NAV", "UL", "OL", "LI", "MENU"].includes(el.tagName ?? "")) return true;
+    if (/nav|menu/i.test(el.getAttribute("class") ?? "")) return true;
+  }
+  return false;
+}
+
+function applyToRegion(region: HTMLElement, args: LogoArgs, hideWordmark: boolean): boolean {
   const area = brandArea(region);
   const existing = area.querySelector("img") ?? (area.tagName === "IMG" ? area : null);
   if (existing) {
@@ -104,7 +179,26 @@ function applyToRegion(region: HTMLElement, args: LogoArgs): boolean {
   // Reuse the wordmark's own anchor when there is one, so the logo keeps the
   // "click the brand to go home" behaviour the template already had.
   const anchor = area.tagName === "A" ? area : area.querySelector("a");
-  (anchor ?? area).insertAdjacentHTML("afterbegin", img);
+  const host = anchor ?? area;
+  host.insertAdjacentHTML("afterbegin", img);
+  // The logo now stands in for the name, so the name text beside it goes.
+  // Guarded four ways, because over-hiding breaks a page and under-hiding is
+  // only cosmetic:
+  //   - header only — a footer commonly shows the logo AND the name;
+  //   - only with a real business name, since the <img> alt is what keeps the
+  //     name available to screen readers and search once the text is invisible;
+  //   - only inside a brand element we actually identified (`area === region`
+  //     is the last-ditch fallback, where the "wordmark" could be anything);
+  //   - never into a nav link that merely happened to be the region's first <a>.
+  if (
+    hideWordmark &&
+    args.businessName.trim().length > 0 &&
+    area !== region &&
+    !sitsInNavigation(host, area)
+  ) {
+    const inserted = host.querySelector("img.tev2-logo");
+    if (inserted) hideWordmarkText(host, inserted);
+  }
   return true;
 }
 
@@ -125,8 +219,8 @@ export function applyLogoToHtml(html: string, args: LogoArgs): LogoResult {
   const header = firstMatch(root, HEADER_SELECTORS);
   const footer = firstMatch(root, FOOTER_SELECTORS);
   const clean: LogoArgs = { logoUrl: args.logoUrl.trim(), businessName: args.businessName || "" };
-  const didHeader = header ? applyToRegion(header, clean) : false;
-  const didFooter = footer ? applyToRegion(footer, clean) : false;
+  const didHeader = header ? applyToRegion(header, clean, true) : false;
+  const didFooter = footer ? applyToRegion(footer, clean, false) : false;
   if (!didHeader && !didFooter) return { html, header: false, footer: false };
   return { html: root.toString(), header: didHeader, footer: didFooter };
 }
