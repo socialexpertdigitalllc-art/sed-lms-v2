@@ -33,6 +33,7 @@ import { classifyFiles } from "./classify";
 import { selectContentFiles, type ManifestPage } from "./pageSelect";
 import { neutralizeAppIdentifier } from "./neutralize";
 import { regenerateFile } from "./regenerate";
+import { personalizeFile } from "./personalize";
 import { runGates, type GateResult } from "./gates";
 import { zipFromMap } from "./zip";
 import { buildInitialSlots } from "./gatherImages";
@@ -133,6 +134,28 @@ export function pruneBuildPhaseSteps(steps: GenStep[]): GenStep[] {
   return steps.filter((s) => !BUILD_PHASE_KEYS.has(s.key) && !s.key.startsWith("build:") && !s.key.startsWith("deploy:"));
 }
 
+/**
+ * How a content file is personalised.
+ *
+ *  - "text"       — the DEFAULT. Extract the translatable strings, rewrite them
+ *                   in bounded batches, splice them back deterministically. The
+ *                   markup never reaches the model, so it cannot be damaged, and
+ *                   a small/cheap model (MiniMax, DeepSeek) can do the job.
+ *                   See personalize.ts.
+ *  - "whole_file" — the original path: send the whole file, demand the whole
+ *                   file back. Kept intact as the escape hatch, and still the
+ *                   only thing that has run in production. See regenerate.ts.
+ *
+ * Selected per generation via `template_generations.options.regen_mode` — a
+ * JSON column, so switching back costs no migration and no deploy.
+ */
+export type RegenMode = "text" | "whole_file";
+
+export function regenModeOf(options: unknown): RegenMode {
+  const v = options && typeof options === "object" ? (options as { regen_mode?: unknown }).regen_mode : undefined;
+  return v === "whole_file" ? "whole_file" : "text";
+}
+
 /** `template_generations.options` — defaults to excluding people unless explicitly set to false. */
 function excludePeopleOf(options: unknown): boolean {
   const v = options && typeof options === "object" ? (options as { exclude_people?: unknown }).exclude_people : undefined;
@@ -198,6 +221,28 @@ function imagesForFileFrom(slots: ImageSlot[]): SelectedImage[] {
     if (top) out.push({ slot_id: slot.id, kind: slot.kind, url: top.url, source: top.source });
   }
   return out;
+}
+
+/**
+ * Personalise ONE content file by whichever path this generation selected.
+ *
+ * The two paths are interchangeable at this seam by design: same inputs, same
+ * `string` out, same gates behind them. That is what makes `regen_mode` a real
+ * escape hatch rather than a flag nobody dares flip.
+ */
+async function buildOneFile(args: {
+  regenMode: RegenMode;
+  file: string;
+  source: string;
+  contentModel: ContentModel;
+  imagesForFile: SelectedImage[];
+  demoTokens: string[];
+  repairNote?: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const { regenMode, ...rest } = args;
+  if (regenMode === "whole_file") return regenerateFile(rest);
+  return (await personalizeFile(rest)).text;
 }
 
 /** Download every template file, splitting text (editable/passthrough) from binary. */
@@ -447,6 +492,7 @@ interface BuildGenRow {
   id: string;
   template_id: string;
   requested_pages: unknown;
+  options: unknown;
   brief: unknown;
   content_model: unknown;
   image_slots: unknown;
@@ -468,6 +514,8 @@ interface BuildCtx {
   template: TemplateRow;
   contentModel: ContentModel;
   imagesForFile: SelectedImage[];
+  /** Which personalisation path this generation runs. See RegenMode. */
+  regenMode: RegenMode;
   runStart: number;
   progress: { pagesBuilt: number };
   steps: GenStep[];
@@ -498,7 +546,8 @@ interface BuildCtx {
  * verify -> finalize steps, extracted here so the Phase 2 build phase reuses
  * them verbatim. Downloads the template, neutralizes the demo app identifier,
  * classifies content vs passthrough files, selects which content files this
- * request actually needs, whole-file regenerates each at bounded concurrency,
+ * request actually needs, personalises each at bounded concurrency (text-only by
+ * default, whole-file rewrite when `options.regen_mode` says so),
  * runs the leak/structure gates with a bounded repair loop, then zips +
  * uploads to `template-sites`. Writes the generation's terminal `review`
  * status itself on success; a failing gate writes `failed` itself too (as
@@ -514,6 +563,7 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     template,
     contentModel,
     imagesForFile,
+    regenMode,
     runStart,
     progress,
     steps,
@@ -583,7 +633,10 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   // which is already marked `done`.
   await checkpoint("prepare");
 
-  // 5. regenerate every content file whole (concurrency-capped) ---------------
+  // 5. personalise every content file (concurrency-capped) --------------------
+  // By default that is the TEXT-ONLY path (personalize.ts): the model sees the
+  // page's strings, never its markup. `options.regen_mode: "whole_file"` puts
+  // the original whole-file rewrite back in its place — see buildOneFile.
   // Pre-register one step per file so concurrent workers each update only their
   // own step by key — the shared "last step" endStep pattern is not safe here.
   for (const file of contentFiles) {
@@ -608,7 +661,8 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     const step = steps.find((s) => s.key === `build:${file}`)!;
     const t0 = Date.now();
     try {
-      const out = await regenerateFile({
+      rebuilt[file] = await buildOneFile({
+        regenMode,
         file,
         source: contentSources[file],
         contentModel,
@@ -616,7 +670,6 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
         demoTokens,
         signal,
       });
-      rebuilt[file] = out;
       progress.pagesBuilt++;
       step.status = "done";
       step.ms = Date.now() - t0;
@@ -663,8 +716,13 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
 
     const notes = targets.map((file) => repairNoteFor(file, gate));
     const settled = await Promise.allSettled(
+      // The repair re-runs the SAME path the build used, with the gate's
+      // findings attached — under "text" that means the offending strings are
+      // re-extracted and re-sent, so the model is fixing exact strings rather
+      // than being asked to reproduce a whole file a second time.
       targets.map((file, i) =>
-        regenerateFile({
+        buildOneFile({
+          regenMode,
           file,
           source: contentSources[file],
           contentModel,
@@ -1152,7 +1210,7 @@ export async function buildFromSelection(generationId: string): Promise<void> {
     // plan phase started rather than resetting it.
     const { data: genRow, error: genErr } = await admin
       .from("template_generations")
-      .select("id, template_id, requested_pages, brief, content_model, image_slots, steps, current_step")
+      .select("id, template_id, requested_pages, options, brief, content_model, image_slots, steps, current_step")
       .eq("id", generationId)
       .single();
     if (genErr || !genRow) throw new Error(`Generation ${generationId} not found`);
@@ -1186,6 +1244,7 @@ export async function buildFromSelection(generationId: string): Promise<void> {
       template: { storage_prefix: template.storage_prefix, demo_tokens: template.demo_tokens, manifest: template.manifest },
       contentModel,
       imagesForFile,
+      regenMode: regenModeOf(gen.options),
       runStart,
       progress,
       steps,
