@@ -196,7 +196,7 @@ describe("guaranteeNoNicheDrift — the end-to-end postcondition", () => {
     const clean = { "index.html": `<p>Auto window tinting and ceramic coating done right.</p>` };
     const { files, report } = guaranteeNoNicheDrift({ files: clean, nicheTerms: NICHE_TERMS, contentModel: TINT_MODEL });
     expect(files).toEqual(clean);
-    expect(report).toEqual({ fixes: [] });
+    expect(report).toEqual({ fixes: [], skipped: [] });
 
     const first = guaranteeNoNicheDrift({
       files: { "index.html": REAL_FAILURE_HTML },

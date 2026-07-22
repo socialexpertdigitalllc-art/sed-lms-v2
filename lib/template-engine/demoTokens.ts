@@ -763,7 +763,7 @@ export function findTokenMatches(content: string, token: string): TokenMatch[] {
  * still points at the right place in the original text and excerpts stay honest.
  */
 const STRUCTURAL_ATTR_RE = /(\b(?:class|id|data-[a-zA-Z0-9_-]+)\s*=\s*)("[^"]*"|'[^']*'|[^\s"'`=<>]+)/gi;
-const MASK_CHAR = " ";
+const MASK_CHAR = "\u0000";
 
 function maskStructuralAttrs(content: string): string {
   return content.replace(STRUCTURAL_ATTR_RE, (_m, head: string, value: string) => {

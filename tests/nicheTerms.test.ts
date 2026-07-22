@@ -47,7 +47,12 @@ describe("extractNicheTerms", () => {
     expect(terms).toContain("bathroom remodeling");
     expect(terms).toContain("kitchen remodel");
     expect(terms).toContain("custom cabinetry");
-    expect(terms).toContain("every subcontractor");
+    // "every subcontractor" recurs twice but is a quantifier + noun fragment
+    // sliced out of running prose ("...apart from every subcontractor crew...",
+    // "Every subcontractor we hire..."), not a nameable service/category — the
+    // same fragment shape as "built to" below. isEdgeWord rejects it because
+    // "every" is a stopword, so it correctly never reaches niche_terms.
+    expect(terms).not.toContain("every subcontractor");
   });
 
   it("does not return one-off sentences", () => {
@@ -101,5 +106,42 @@ const B = "Kitchen remodeling is what we do best.";
 `;
     const terms = extractNicheTerms({ "script.js": js });
     expect(terms).toContain("kitchen remodeling");
+  });
+
+  // Real production incident: this exact sentence shipped on Knights Auto
+  // Window Tint's site (generated from a Denver remodeling template) and,
+  // before this test existed, the guarantee corrupted it into "A process
+  // Paint Protection Film (PPF) remove every surprise." — because "built to"
+  // (a verb fragment, not a service name) was extracted as a niche term
+  // purely because "built" is >=3 chars and not on any stoplist, then had a
+  // client service name pasted into its exact position. isKeepableGram now
+  // requires (a) the phrase's own first/last word each be able to anchor a
+  // nameable thing, not a stray word sliced out of running prose, and (b) at
+  // least one word actually be trade vocabulary (INDUSTRY_WORDS or a
+  // length-tolerant prefix of one) — "built"/"to" satisfy neither.
+  it("never extracts a verb/connective fragment sliced out of a sentence ('built to', 'a single')", () => {
+    const html = `
+<h2>A process built to remove every surprise.</h2>
+<p>We run a single accountable team, a single point of contact, on every project.</p>
+<p>Another process built to make you comfortable, another team built to deliver.</p>
+`;
+    const terms = extractNicheTerms({ "index.html": html });
+    expect(terms).not.toContain("built to");
+    expect(terms).not.toContain("a single");
+    expect(terms).not.toContain("single accountable");
+    expect(terms).not.toContain("accountable team");
+  });
+
+  it("still extracts genuine industry noun phrases even when short/common-word-adjacent", () => {
+    const html = `
+<h2>Kitchen remodeling done right.</h2>
+<p>Our kitchen remodeling process is transparent from day one.</p>
+<p>See our custom cabinetry work and home renovation gallery below.</p>
+<p>Every home renovation includes a walkthrough before custom cabinetry begins.</p>
+`;
+    const terms = extractNicheTerms({ "index.html": html });
+    expect(terms).toContain("kitchen remodeling");
+    expect(terms).toContain("custom cabinetry");
+    expect(terms).toContain("home renovation");
   });
 });

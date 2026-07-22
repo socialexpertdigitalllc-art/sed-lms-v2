@@ -126,21 +126,72 @@ function wordsOf(segment: string): string[] {
 }
 
 /**
+ * A word this phrase carries as its OWN edge must be able to stand as the
+ * start/end of a nameable thing — a stopword there means the n-gram is a
+ * slice out of the MIDDLE of a sentence ("...a process built to remove..."
+ * -> "built to"), not a phrase anyone would recognise as a service/category
+ * name on its own.
+ */
+function isEdgeWord(w: string): boolean {
+  return !STOPWORDS.has(w) && w.length >= 2;
+}
+
+/**
+ * Does this phrase look like a nameable thing rather than a slice out of the
+ * middle of a sentence? Exported so the terminal guarantee can re-check a
+ * term at CONSUMPTION time, independent of whether it passed this module's
+ * own extraction filter — a defense-in-depth layer, not a redundant no-op:
+ * a term could reach the guarantee from a `niche_terms` value computed by an
+ * older/future version of this extractor, or hand-edited, without ever
+ * passing through today's `isKeepableGram`. Same edge-word rule extraction
+ * uses (`isEdgeWord` on the phrase's first/last word) — see `isKeepableGram`'s
+ * doc comment for why a stopword edge means "sentence fragment", never
+ * "service name" (this is what closed the "built to" -> broken-sentence
+ * corruption).
+ */
+export function looksLikeNameablePhrase(phrase: string): boolean {
+  const words = phrase.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length < 2) return false;
+  return isEdgeWord(words[0]) && isEdgeWord(words[words.length - 1]);
+}
+
+/**
+ * Does this word belong to the template's own trade vocabulary? Exact-set
+ * membership, plus a length-tolerant prefix match (`cabinetry` -> `cabinet`)
+ * so a plain suffix variant of a listed root still counts — INDUSTRY_WORDS is
+ * a representative sample of trade nouns, not an exhaustive dictionary, and a
+ * phrase built entirely around one of its roots is exactly the recurring
+ * service vocabulary this module exists to find.
+ */
+function isIndustryWord(w: string): boolean {
+  if (INDUSTRY_WORDS.has(w)) return true;
+  for (const root of INDUSTRY_WORDS) {
+    if (root.length >= 5 && w.startsWith(root)) return true;
+  }
+  return false;
+}
+
+/**
  * Is this word-run worth keeping as a candidate? Every rule here is biased
  * toward DROPPING a candidate — this is the opposite asymmetry from
  * demoTokens.ts (which is biased toward catching too much identity): a missed
- * niche phrase costs nothing but a slightly smaller list, while a chrome phrase
- * kept as a "niche term" would make the drift guarantee rewrite or scrub
- * copy that was never wrong in the first place.
+ * niche phrase costs nothing but a slightly smaller list, while a chrome OR
+ * sentence-fragment phrase kept as a "niche term" gets ACTED ON by the
+ * terminal guarantee, which pastes a client service name into its exact
+ * position — safe for a real service noun phrase ("kitchen remodeling" ->
+ * "auto window tinting"), destructive for a verb/connective fragment ("built
+ * to" -> "a process [Paint Protection Film (PPF)] remove every surprise").
+ * So this requires BOTH: the phrase's own first and last word must each be
+ * able to anchor a nameable thing (not a stray stopword pulled out of running
+ * prose), AND at least one word in the phrase must be actual trade
+ * vocabulary — not merely "non-chrome", which "built", "single" and
+ * "accountable" all satisfy despite none of them naming a service.
  */
 function isKeepableGram(words: string[]): boolean {
   if (words.length < 2) return false;
   if (words.every((w) => /^[0-9]+$/.test(w))) return false; // purely numeric
-  if (words.every(isChromeWord)) return false; // purely chrome/function words
-  // At least one substantive (non-chrome, length >= 3) word — the same
-  // "distinctive word" bar isDistinctive() applies in demoTokens.ts, adapted
-  // from brand-detection to ordinary service vocabulary.
-  return words.some((w) => w.length >= 3 && !isChromeWord(w));
+  if (!isEdgeWord(words[0]) || !isEdgeWord(words[words.length - 1])) return false;
+  return words.some(isIndustryWord);
 }
 
 /** One extracted item's translatable text, from the SAME surface personalize.ts sends to the model. */

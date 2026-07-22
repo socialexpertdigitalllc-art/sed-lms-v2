@@ -44,6 +44,7 @@
 
 import { extractTranslatable } from "./textExtract";
 import { extractJsStrings } from "./jsStrings";
+import { looksLikeNameablePhrase } from "./nicheTerms";
 import {
   buildServiceScrubMachine,
   clientIdentityOf,
@@ -209,6 +210,17 @@ export interface NicheFix {
 
 export interface NicheGuaranteeReport {
   fixes: NicheFix[];
+  /**
+   * Drifted terms deliberately left untouched because they failed
+   * `looksLikeNameablePhrase` — a defense-in-depth re-check at the point of
+   * substitution, independent of extraction-time filtering. buildServiceScrubMachine
+   * pastes a client service name into a term's exact text position, which is only
+   * safe when the term is actually shaped like a nameable thing; for a template
+   * whose stored `niche_terms` predate a tightened extractNicheTerms (stale DB
+   * value), forcing a substitution here is how a verb/connective fragment like
+   * "built to" turns into broken grammar instead of being left alone.
+   */
+  skipped: string[];
 }
 
 export interface NicheGuaranteeResult {
@@ -236,14 +248,20 @@ export function guaranteeNoNicheDrift(args: {
   const { nicheTerms, contentModel, brief } = args;
   const files = { ...args.files };
   const hits = findNicheDrift({ files, nicheTerms, contentModel, brief });
-  if (hits.length === 0) return { files, report: { fixes: [] } };
+  if (hits.length === 0) return { files, report: { fixes: [], skipped: [] } };
 
   // Built ONLY from the terms that actually drifted (client-safe terms were
   // already excluded by findNicheDrift) — a machine built from every stored
   // niche term would also rewrite vocabulary the client legitimately shares
   // with the template, which is exactly the false-positive this guarantee must
   // not create.
-  const driftTerms = [...new Set(hits.map((h) => h.term))];
+  const allDriftTerms = [...new Set(hits.map((h) => h.term))];
+  // Second, independent check at the point of substitution — see
+  // NicheGuaranteeReport.skipped. Re-validates edge words rather than trusting
+  // that whatever is in `nicheTerms` already passed extractNicheTerms's filter,
+  // which protects against a stale DB value computed before this filter existed.
+  const driftTerms = allDriftTerms.filter(looksLikeNameablePhrase);
+  const skipped = allDriftTerms.filter((t) => !looksLikeNameablePhrase(t));
   const machine = buildServiceScrubMachine(driftTerms, contentModel);
 
   const byFile = new Map<string, NicheDriftHit[]>();
@@ -285,7 +303,7 @@ export function guaranteeNoNicheDrift(args: {
     if (touched) files[file] = extracted.apply(map);
   }
 
-  return { files, report: { fixes } };
+  return { files, report: { fixes, skipped } };
 }
 
 /**
@@ -295,9 +313,17 @@ export function guaranteeNoNicheDrift(args: {
  */
 export function describeNicheGuarantee(report: NicheGuaranteeReport): string {
   const total = report.fixes.reduce((n, f) => n + f.occurrences, 0);
-  if (total === 0) return "";
-  const files = new Set(report.fixes.map((f) => f.file));
-  return `category-drift guarantee fixed ${total} occurrence(s) across ${files.size} file(s)`;
+  const parts: string[] = [];
+  if (total > 0) {
+    const files = new Set(report.fixes.map((f) => f.file));
+    parts.push(`category-drift guarantee fixed ${total} occurrence(s) across ${files.size} file(s)`);
+  }
+  if (report.skipped.length > 0) {
+    parts.push(
+      `left ${report.skipped.length} flagged term(s) untouched, not shaped like a nameable thing to safely substitute: "${report.skipped.join('", "')}"`,
+    );
+  }
+  return parts.join("; ");
 }
 
 /**
