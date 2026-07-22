@@ -30,11 +30,25 @@
 //     progress, and a blocked upload with no way to inspect the reason is worse
 //     than a flagged one. Severity is advisory; the caller decides.
 //
-// `fail` vs `warn` is drawn on one line: FAIL means every generation with this
-// template is broken in a way the operator cannot fix from inside the run (an
-// unpassable gate, colours that bind nothing, a 404 baked into the markup).
-// WARN means the site still builds, but a feature quietly degrades (no logo, a
-// stale menu entry, a page with nothing to curate images into).
+// SEVERITY IS GRADED TO WHAT THE BUILD ACTUALLY DOES NOW. The engine's finalize
+// pass (runnerV2) handles most of what these checks used to fail on, so the line
+// has moved:
+//   - FAIL means the build genuinely cannot produce a correct site, and no step
+//     downstream can save it: a demo token that collides with ordinary copy
+//     (the leak gate fails on legitimate client words), or a file the pipeline
+//     cannot parse at all. These are the only build-blockers left.
+//   - WARN means the engine WILL produce a shippable site, but a feature is less
+//     precise than it could be: the client's palette gets hex-remapped rather
+//     than bound onto named variables, or a dangling link is served by an
+//     integrity redirect stub instead of a real page, or a page has no <img> for
+//     curation to fill. Worth surfacing; never build-blocking.
+//   - INFO is a pass-with-note: the thing the check looks for is missing, but the
+//     build inserts it deterministically (a logo <img> where the header has no
+//     slot; a pruned menu where links sit outside a detectable <nav>). Nothing
+//     for the operator to do — it is recorded so the report explains what the
+//     build did on their behalf.
+// The overall status is still worst-severity-wins, so a `fail` pill now means
+// exactly one thing: this template will not build a correct site.
 
 import { findLeaks } from "./demoTokens";
 import { planThemeApplication } from "./themeCss";
@@ -44,7 +58,7 @@ import { htmlSkeleton, jsIdentifiers } from "./structure";
 import type { TemplateManifest } from "./types";
 import { parse } from "node-html-parser";
 
-export type HealthSeverity = "pass" | "warn" | "fail";
+export type HealthSeverity = "pass" | "info" | "warn" | "fail";
 
 export interface HealthCheck {
   /** stable id — the UI and any future tooling key off this, never the label */
@@ -181,10 +195,17 @@ const check = (
   hint: string
 ): HealthCheck => ({ id, label, severity, detail, hint });
 
-/** Worst severity wins: one fail makes the whole template a fail. */
-const RANK: Record<HealthSeverity, number> = { pass: 0, warn: 1, fail: 2 };
+/**
+ * Worst severity wins: one fail makes the whole template a fail. `info` ranks
+ * above `pass` but below `warn`, so a template whose only findings are
+ * build-inserted (logo, nav prune) reports `info`, never a scarier `warn`.
+ */
+export const SEVERITY_RANK: Record<HealthSeverity, number> = { pass: 0, info: 1, warn: 2, fail: 3 };
 function worst(checks: HealthCheck[]): HealthSeverity {
-  return checks.reduce<HealthSeverity>((acc, c) => (RANK[c.severity] > RANK[acc] ? c.severity : acc), "pass");
+  return checks.reduce<HealthSeverity>(
+    (acc, c) => (SEVERITY_RANK[c.severity] > SEVERITY_RANK[acc] ? c.severity : acc),
+    "pass"
+  );
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -248,17 +269,17 @@ const SAMPLE_THEME = { brand: "#1d4ed8", brand_deep: "#0f2f7a", accent: "#f59e0b
 function checkThemeApplicable(files: Record<string, string>): HealthCheck {
   const id = "theme_applicable";
   const label = "Client colours can be applied";
-  const hintFail =
-    "Expose your palette as CSS custom properties on :root (e.g. --primary, --primary-dark, --accent) and use them via var() throughout the stylesheet — that is what the client's colours bind onto.";
+  const hintWarn =
+    "The engine applies colours automatically, but only when the stylesheet gives it something to bind to. Expose your palette as CSS custom properties on :root (e.g. --primary, --primary-dark, --accent) and use them via var(), or keep at least one distinctive (non-grey) brand colour in the stylesheet for the engine to remap — otherwise the site ships in this template's own palette.";
 
   const sheets = Object.keys(files).filter((f) => CSS_RE.test(f)).sort();
   if (sheets.length === 0) {
     return check(
       id,
       label,
-      "fail",
-      "This template has no stylesheet, so there is nothing for the client's brand colours to be applied to.",
-      hintFail
+      "warn",
+      "This template has no stylesheet, so there is nothing for the client's brand colours to be applied to — the site will ship without their palette.",
+      hintWarn
     );
   }
 
@@ -292,10 +313,10 @@ function checkThemeApplicable(files: Record<string, string>): HealthCheck {
   return check(
     id,
     label,
-    "fail",
-    `Neither a variable binding nor a hex remap could be planned for ${plural(sheets.length, "stylesheet")} (${list(sheets)}). ` +
-      "The client's chosen colours will silently never appear — the site ships in this template's own palette.",
-    hintFail
+    "warn",
+    `Neither a variable binding nor a hex remap could be planned for ${plural(sheets.length, "stylesheet")} (${list(sheets)}), ` +
+      "so the client's chosen colours will not appear — the site still builds, but in this template's own palette.",
+    hintWarn
   );
 }
 
@@ -330,9 +351,10 @@ function checkLogoSlot(files: Record<string, string>): HealthCheck {
     return check(
       id,
       label,
-      "warn",
-      `No header or brand area could be found on ${plural(missing.length, "page")} (${list(missing)}), so the client's logo will not render there.`,
-      "Give the header a recognisable brand wrapper — a <header> containing an element with class \"logo\" or \"brand\" — so the logo has somewhere to go."
+      "info",
+      `No header region could be found on ${plural(missing.length, "page")} (${list(missing)}), so the build cannot place the client's logo in a header there ` +
+        "(it is still inserted into the footer when one exists). The site builds normally either way — this only affects where the logo appears.",
+      "Optional: give the page a <header> (or an element classed \"site-header\"/\"navbar\") so the build can insert the logo into it."
     );
   }
   const detail =
@@ -380,19 +402,19 @@ function checkNavPrunable(files: Record<string, string>): HealthCheck {
     return check(
       id,
       label,
-      "warn",
-      "No page links to another page in this template, so there is no menu to prune.",
-      "Add a <nav> menu linking the template's pages to each other — without one, visitors can only reach the home page."
+      "info",
+      "No page links to another page in this template, so there is no menu to prune — nothing for the build to do here.",
+      "Optional: add a <nav> menu linking the template's pages to each other, so a generated site can offer navigation between them."
     );
   }
   if (orphans.length > 0) {
     return check(
       id,
       label,
-      "warn",
-      `Internal page links on ${plural(orphans.length, "page")} (${list(orphans)}) sit outside any detectable menu, ` +
-        "so links to pages the client never ordered cannot be pruned and will 404.",
-      "Wrap the site menu in a <nav> element (or give its container a \"nav\"/\"menu\" class) so unbuilt pages can be removed from it."
+      "info",
+      `Internal page links on ${plural(orphans.length, "page")} (${list(orphans)}) sit outside any detectable menu, so they cannot be pruned to the client's page order. ` +
+        "The build's integrity pass still keeps them from 404ing (a link to an unbuilt page is served a redirect stub), so the site is safe — the menu just cannot self-trim.",
+      "Optional: wrap the site menu in a <nav> element (or give its container a \"nav\"/\"menu\" class) so unbuilt pages are removed from it instead of redirected."
     );
   }
   return check(
@@ -451,9 +473,10 @@ function checkLinksResolve(files: Record<string, string>, manifest?: TemplateMan
     return check(
       id,
       label,
-      "fail",
-      `${parts.join("; ")}. These 404 even when every page the client ordered is built.`,
-      "Fix or remove the dangling links — every href ending in .html must point at a page the zip actually contains."
+      "warn",
+      `${parts.join("; ")}. ` +
+        "The build's integrity pass emits a redirect stub for each, so a visitor never hits a 404 — but a stub is a redirect to the home page, not the real destination the link promised.",
+      "For a real page instead of a redirect, fix or remove the dangling links — every href ending in .html should point at a page the zip actually contains."
     );
   }
   return check(
@@ -590,7 +613,8 @@ export function isHealthReport(v: unknown): v is HealthReport {
   if (!v || typeof v !== "object") return false;
   const r = v as Partial<HealthReport>;
   return (
-    (r.status === "pass" || r.status === "warn" || r.status === "fail") &&
+    typeof r.status === "string" &&
+    Object.prototype.hasOwnProperty.call(SEVERITY_RANK, r.status) &&
     Array.isArray(r.checks)
   );
 }

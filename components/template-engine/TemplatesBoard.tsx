@@ -13,9 +13,13 @@ import {
   Trash2,
   Check,
   X,
+  Sparkles,
+  ArrowRight,
+  ShieldCheck,
 } from "lucide-react";
 import type { PageKind, TemplateManifest } from "@/lib/template-engine/types";
 import type { TemplateEngineSettings } from "@/lib/template-engine/settings";
+import type { FixPreview } from "@/lib/template-engine/fix";
 import { Select } from "@/components/common/Select";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
@@ -73,6 +77,11 @@ export function TemplatesBoard() {
   const [savingKinds, setSavingKinds] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [checkingId, setCheckingId] = useState<string | null>(null);
+
+  // AI-fix preview + apply, keyed by template id.
+  const [fixPreview, setFixPreview] = useState<Record<string, FixPreview>>({});
+  const [fixingId, setFixingId] = useState<string | null>(null);
+  const [applyingId, setApplyingId] = useState<string | null>(null);
 
   // inline rename
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -270,7 +279,7 @@ export function TemplatesBoard() {
       toast({ kind: "error", title: "Re-check failed", body: j.error ?? "Could not run the health checks" });
       return;
     }
-    const status = j.health?.status as "pass" | "warn" | "fail" | undefined;
+    const status = j.health?.status as "pass" | "info" | "warn" | "fail" | undefined;
     toast({
       kind: status === "fail" ? "error" : "success",
       title:
@@ -278,10 +287,87 @@ export function TemplatesBoard() {
           ? "Health check failed"
           : status === "warn"
             ? "Health check passed with warnings"
-            : "Template is healthy",
+            : status === "info"
+              ? "Health check passed with notes"
+              : "Template is healthy",
       body: "See the report below for what each check found.",
     });
     load(showArchived);
+  }
+
+  /**
+   * Ask the model for a NON-DESTRUCTIVE fix. This only PREVIEWS: the route
+   * applies the proposed edits to a copy, re-runs the health checks, and returns
+   * what it would change plus a before/after — it writes nothing until the
+   * operator confirms with "Apply fix".
+   */
+  async function askAiFix(t: TemplateRow) {
+    setFixingId(t.id);
+    const res = await fetch(`/api/template-engine/templates/${t.id}/fix`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    setFixingId(null);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast({ kind: "error", title: "Couldn't propose a fix", body: j.error ?? "The model could not be reached" });
+      return;
+    }
+    const preview = j.preview as FixPreview | undefined;
+    if (!preview) {
+      toast({ kind: "error", title: "Couldn't propose a fix", body: "No preview was returned" });
+      return;
+    }
+    setFixPreview((p) => ({ ...p, [t.id]: preview }));
+    if (!preview.fixable) {
+      toast({ kind: "info", title: "Nothing the AI can safely fix", body: preview.reason ?? undefined });
+    } else if (!preview.improved) {
+      toast({
+        kind: "error",
+        title: "Proposed edit is not an improvement",
+        body: preview.reason ?? "It would not clear the failure, so it can't be applied.",
+      });
+    } else {
+      toast({ kind: "success", title: "Fix ready to review", body: "Check the diff, then Apply." });
+    }
+  }
+
+  /** Write the previewed patch. The route re-verifies and refuses unless it genuinely improves the template, backing up the old files first. */
+  async function applyAiFix(t: TemplateRow) {
+    const preview = fixPreview[t.id];
+    if (!preview || !preview.improved) return;
+    setApplyingId(t.id);
+    const res = await fetch(`/api/template-engine/templates/${t.id}/fix`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apply: true, files: preview.proposedFiles }),
+    });
+    setApplyingId(null);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast({ kind: "error", title: "Apply failed", body: j.error ?? "The fix could not be applied" });
+      return;
+    }
+    setFixPreview((p) => {
+      const next = { ...p };
+      delete next[t.id];
+      return next;
+    });
+    toast({
+      kind: "success",
+      title: "Fix applied",
+      body: `Old files backed up at ${j.backupPrefix ?? "a backup prefix"}.`,
+    });
+    load(showArchived);
+  }
+
+  function dismissFix(id: string) {
+    setFixPreview((p) => {
+      const next = { ...p };
+      delete next[id];
+      return next;
+    });
   }
 
   async function saveSettings() {
@@ -532,6 +618,116 @@ export function TemplatesBoard() {
                       <p className="mt-2 text-[11px] text-text-faint">
                         Deterministic checks only — no AI is called and nothing is generated, so re-checking is free.
                       </p>
+
+                      {health?.status === "fail" && (
+                        <div className="mt-3 rounded-md border border-border-subtle bg-surface-2 p-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Sparkles className="h-4 w-4 text-accent" />
+                            <span className="text-sm font-medium text-text">AI-assisted fix</span>
+                            <span className="text-[11px] text-text-faint">
+                              Edits the template itself, backs up the current version first, and only offers Apply
+                              when the health genuinely improves.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => askAiFix(t)}
+                              disabled={fixingId === t.id}
+                              className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-muted hover:bg-surface disabled:opacity-60"
+                            >
+                              {fixingId === t.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-4 w-4" />
+                              )}
+                              {fixingId === t.id ? "Thinking…" : fixPreview[t.id] ? "Re-run" : "Ask AI to fix"}
+                            </button>
+                          </div>
+
+                          {fixPreview[t.id] &&
+                            (() => {
+                              const fp = fixPreview[t.id];
+                              if (!fp.fixable) {
+                                return (
+                                  <p className="mt-3 text-xs text-text-muted">
+                                    {fp.reason ?? "There is nothing the AI can safely auto-fix here."}
+                                  </p>
+                                );
+                              }
+                              const blocked =
+                                fp.improvement.newFails.length > 0 || fp.blanked.length > 0;
+                              return (
+                                <div className="mt-3 border-t border-border-subtle pt-3">
+                                  {fp.summary && <p className="text-xs text-text">{fp.summary}</p>}
+                                  {!fp.improved && fp.reason && (
+                                    <p className="mt-1 text-xs text-text-muted">{fp.reason}</p>
+                                  )}
+                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <span className="text-[11px] text-text-faint">Health</span>
+                                    <HealthPill report={fp.before} />
+                                    <ArrowRight className="h-3.5 w-3.5 text-text-faint" />
+                                    <HealthPill report={fp.after} />
+                                  </div>
+                                  {fp.improvement.resolvedFails.length > 0 && (
+                                    <p className="mt-2 text-[11px] text-ready-fg">
+                                      Resolves: {fp.improvement.resolvedFails.join(", ")}
+                                    </p>
+                                  )}
+                                  {blocked && (
+                                    <p className="mt-2 text-[11px] text-dropped-fg">
+                                      {fp.blanked.length > 0
+                                        ? `Would blank ${fp.blanked.join(", ")}`
+                                        : `Would introduce new failures: ${fp.improvement.newFails.join(", ")}`}
+                                      {" "}— cannot apply.
+                                    </p>
+                                  )}
+                                  {fp.changes.length > 0 && (
+                                    <ul className="mt-2 space-y-1">
+                                      {fp.changes.map((c) => (
+                                        <li
+                                          key={c.file}
+                                          className="flex flex-wrap items-center gap-2 text-[11px] text-text-muted"
+                                        >
+                                          <span className="font-mono">{c.file}</span>
+                                          <span className="text-text-faint">
+                                            {c.sizeBefore} → {c.sizeAfter} bytes
+                                          </span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => applyAiFix(t)}
+                                      disabled={!fp.improved || applyingId === t.id}
+                                      className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-ink disabled:opacity-50"
+                                    >
+                                      {applyingId === t.id ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <ShieldCheck className="h-4 w-4" />
+                                      )}
+                                      {applyingId === t.id ? "Applying…" : "Apply fix"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => dismissFix(t.id)}
+                                      disabled={applyingId === t.id}
+                                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-text-muted hover:bg-surface disabled:opacity-60"
+                                    >
+                                      Discard
+                                    </button>
+                                    {!fp.improved && (
+                                      <span className="text-[11px] text-text-faint">
+                                        Apply is disabled until a proposal clears a failure without a regression.
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                        </div>
+                      )}
                     </div>
 
                     <div className="overflow-x-auto">

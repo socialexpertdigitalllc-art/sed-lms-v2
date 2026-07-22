@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { extractDemoTokens } from "@/lib/template-engine/demoTokens";
-import { runTemplateHealthChecks, ORDINARY_COPY_CORPUS, type HealthReport } from "@/lib/template-engine/health";
+import {
+  runTemplateHealthChecks,
+  isHealthReport,
+  ORDINARY_COPY_CORPUS,
+  SEVERITY_RANK,
+  type HealthReport,
+} from "@/lib/template-engine/health";
 import type { TemplateManifest } from "@/lib/template-engine/types";
 
 const severity = (r: HealthReport, id: string) => r.checks.find((c) => c.id === id)?.severity;
@@ -191,8 +197,13 @@ describe("template health — a healthy template", () => {
 describe("template health — the deliberately bad template", () => {
   const report = reportFor(BAD_TEMPLATE, BAD_MANIFEST);
 
-  it("fails overall", () => {
+  it("fails overall — and the fail is now the poison token alone", () => {
     expect(report.status).toBe("fail");
+    // With theme/logo/nav/links downgraded, the ONLY thing that makes this
+    // template a `fail` is the build-blocking, unfixable-from-inside-the-run
+    // poison token. `fail` means "won't build", nothing weaker.
+    const fails = report.checks.filter((c) => c.severity === "fail").map((c) => c.id);
+    expect(fails).toEqual(["demo_tokens_poison"]);
   });
 
   // Historical failure 1: a demo token that matches ordinary copy.
@@ -201,26 +212,30 @@ describe("template health — the deliberately bad template", () => {
     expect(detail(report, "demo_tokens_poison")).toContain("Comfort");
   });
 
-  // Historical failure 2: the client's colours silently never apply.
-  it("catches a stylesheet the client's colours cannot reach", () => {
-    expect(severity(report, "theme_applicable")).toBe("fail");
+  // Historical failure 2: the client's colours silently never apply. Now a WARN
+  // — the engine still ships a correct site, just in the template's own palette.
+  it("warns that the client's colours cannot reach a stylesheet", () => {
+    expect(severity(report, "theme_applicable")).toBe("warn");
     expect(detail(report, "theme_applicable")).toContain("style.css");
   });
 
-  // Historical failure 3a: no logo slot.
-  it("catches the missing header brand area", () => {
-    expect(severity(report, "logo_slot")).toBe("warn");
+  // Historical failure 3a: no header region. Now INFO — the build inserts the
+  // logo itself; this only affects where it can land.
+  it("notes the missing header region without blocking the build", () => {
+    expect(severity(report, "logo_slot")).toBe("info");
     expect(detail(report, "logo_slot")).toContain("index.html");
   });
 
-  // Historical failure 3b: menu links that cannot be pruned.
-  it("catches page links that sit outside any prunable menu", () => {
-    expect(severity(report, "nav_prunable")).toBe("warn");
+  // Historical failure 3b: menu links that cannot be pruned. Now INFO — the
+  // integrity pass keeps them from 404ing regardless.
+  it("notes page links that sit outside any prunable menu", () => {
+    expect(severity(report, "nav_prunable")).toBe("info");
   });
 
-  // Historical failure 3c: a nav link to a page the template does not have.
-  it("catches the dangling link to a page that does not exist", () => {
-    expect(severity(report, "links_resolve")).toBe("fail");
+  // Historical failure 3c: a nav link to a page the template does not have. Now a
+  // WARN — the integrity pass serves a redirect stub, so it is not a 404.
+  it("warns about the dangling link to a page that does not exist", () => {
+    expect(severity(report, "links_resolve")).toBe("warn");
     expect(detail(report, "links_resolve")).toContain("gallery.html");
   });
 
@@ -247,10 +262,12 @@ describe("template health — individual checks", () => {
     expect(detail(r, "theme_applicable")).toContain("#b3541e");
   });
 
-  it("fails the theme check when the template has no stylesheet at all", () => {
+  it("warns (does not fail) the theme check when the template has no stylesheet at all", () => {
     const { "style.css": _css, ...files } = HEALTHY_TEMPLATE;
     const r = reportFor(files, HEALTHY_MANIFEST);
-    expect(severity(r, "theme_applicable")).toBe("fail");
+    // No stylesheet means colours cannot be applied, but the site still builds —
+    // a warn, not a build-blocking fail.
+    expect(severity(r, "theme_applicable")).toBe("warn");
   });
 
   it("passes the logo check when an <img> would be inserted into a real brand area", () => {
@@ -266,13 +283,13 @@ describe("template health — individual checks", () => {
     expect(detail(r, "logo_slot")).toContain("inserted");
   });
 
-  it("fails links_resolve when a manifest page has no file", () => {
+  it("warns links_resolve when a manifest page has no file (the integrity stub saves it from a 404)", () => {
     const manifest = {
       ...HEALTHY_MANIFEST,
       pages: [...HEALTHY_MANIFEST.pages, { file: "services.html", title: "Services", kind: "services_hub" as const }],
     } as TemplateManifest;
     const r = reportFor(HEALTHY_TEMPLATE, manifest);
-    expect(severity(r, "links_resolve")).toBe("fail");
+    expect(severity(r, "links_resolve")).toBe("warn");
     expect(detail(r, "links_resolve")).toContain("services.html");
   });
 
@@ -310,6 +327,73 @@ describe("template health — individual checks", () => {
     const a = reportFor(BAD_TEMPLATE, BAD_MANIFEST);
     const b = reportFor(BAD_TEMPLATE, BAD_MANIFEST);
     expect({ ...a, checkedAt: "" }).toEqual({ ...b, checkedAt: "" });
+  });
+});
+
+describe("template health — recalibrated grading (info level)", () => {
+  // A template whose ONLY finding is one the build handles itself: it declares
+  // no header region (so the logo pass has nowhere to put an <img>), but keeps a
+  // detectable <nav>, a bindable palette, resolving links and image slots. Every
+  // other check passes; the logo finding is an INFO note, not a warn or a fail.
+  const infoPage = (title: string, body: string) => `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>${title} - Northpoint Remodeling</title>
+<link rel="stylesheet" href="style.css"></head>
+<body>
+  <div class="masthead">
+    <a class="brand" href="index.html"><img src="images/logo.svg" alt="Northpoint Remodeling"></a>
+    <nav class="nav"><ul>
+      <li><a href="index.html">Home</a></li>
+      <li><a href="about.html">About</a></li>
+    </ul></nav>
+  </div>
+  <main>${body}</main>
+  <div class="tail"><p>Northpoint Remodeling, (303) 555-0142, hello@northpoint-remodel.com</p></div>
+</body>
+</html>`;
+
+  const INFO_TEMPLATE: Record<string, string> = {
+    "index.html": infoPage("Home", `<h1>Kitchen and bath remodeling</h1><img src="images/hero.jpg" alt="A kitchen">`),
+    "about.html": infoPage("About Us", `<h2>Who we are</h2><img src="images/crew.jpg" alt="The crew">`),
+    "style.css": HEALTHY_CSS,
+  };
+  const INFO_MANIFEST = {
+    pages: [
+      { file: "index.html", title: "Home", kind: "home" },
+      { file: "about.html", title: "About Us", kind: "about" },
+    ],
+    css: ["style.css"],
+    js: [],
+    components: null,
+    assets: [],
+    imageFiles: [],
+    totalBytes: 2048,
+  } as unknown as TemplateManifest;
+
+  const report = reportFor(INFO_TEMPLATE, INFO_MANIFEST);
+
+  it("ranks severities pass < info < warn < fail", () => {
+    expect(SEVERITY_RANK.pass).toBeLessThan(SEVERITY_RANK.info);
+    expect(SEVERITY_RANK.info).toBeLessThan(SEVERITY_RANK.warn);
+    expect(SEVERITY_RANK.warn).toBeLessThan(SEVERITY_RANK.fail);
+  });
+
+  it("grades the build-handled logo finding as info, not warn", () => {
+    expect(severity(report, "logo_slot")).toBe("info");
+  });
+
+  it("reports overall info — an info note never inflates to a scarier warn", () => {
+    expect(report.status).toBe("info");
+    // Nothing above info: no warns, no fails.
+    expect(report.checks.some((c) => c.severity === "warn" || c.severity === "fail")).toBe(false);
+  });
+
+  it("recognises an info-status report as a valid HealthReport (not 'never checked')", () => {
+    expect(isHealthReport(report)).toBe(true);
+    expect(isHealthReport({ status: "info", checks: [] })).toBe(true);
+    // A bogus status must not sneak through via the prototype chain.
+    expect(isHealthReport({ status: "constructor", checks: [] })).toBe(false);
+    expect(isHealthReport({ status: "nope", checks: [] })).toBe(false);
   });
 });
 
