@@ -49,7 +49,26 @@ export async function GET(req: Request) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  return NextResponse.json({ templates: data ?? [] });
+  const templates = data ?? [];
+
+  // Attach how many generations each template has produced, so the delete
+  // confirm dialog can state the consequence honestly ("N site(s) were generated
+  // from it"). One extra query total, bounded to the listed templates.
+  const ids = templates.map((t) => t.id);
+  const counts = new Map<string, number>();
+  if (ids.length) {
+    const { data: gens } = await admin
+      .from("template_generations")
+      .select("template_id")
+      .in("template_id", ids);
+    for (const g of gens ?? []) {
+      if (g.template_id) counts.set(g.template_id, (counts.get(g.template_id) ?? 0) + 1);
+    }
+  }
+
+  return NextResponse.json({
+    templates: templates.map((t) => ({ ...t, generation_count: counts.get(t.id) ?? 0 })),
+  });
 }
 
 export async function POST(req: Request) {

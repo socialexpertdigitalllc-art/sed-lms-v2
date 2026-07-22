@@ -1,7 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Upload, Archive, RotateCcw, Save, ChevronRight, Loader2, Stethoscope } from "lucide-react";
+import {
+  Upload,
+  Archive,
+  RotateCcw,
+  Save,
+  ChevronRight,
+  Loader2,
+  Stethoscope,
+  Pencil,
+  Trash2,
+  Check,
+  X,
+} from "lucide-react";
 import type { PageKind, TemplateManifest } from "@/lib/template-engine/types";
 import type { TemplateEngineSettings } from "@/lib/template-engine/settings";
 import { Select } from "@/components/common/Select";
@@ -29,6 +41,8 @@ type TemplateRow = {
   page_count: number;
   status: "active" | "archived";
   created_at: string;
+  /** How many generations were built from this template (drives the delete-confirm copy). */
+  generation_count?: number;
   /** jsonb — null for templates uploaded before health checks existed */
   health: unknown;
   health_checked_at: string | null;
@@ -59,6 +73,16 @@ export function TemplatesBoard() {
   const [savingKinds, setSavingKinds] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [checkingId, setCheckingId] = useState<string | null>(null);
+
+  // inline rename
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renaming, setRenaming] = useState(false);
+
+  // delete confirm
+  const [deleteTarget, setDeleteTarget] = useState<TemplateRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // engine settings
   const [settings, setSettings] = useState<TemplateEngineSettings | null>(null);
@@ -146,6 +170,74 @@ export function TemplatesBoard() {
     }
     toast({ kind: "success", title: "Page kinds saved" });
     load(showArchived);
+  }
+
+  function startRename(t: TemplateRow) {
+    setEditingId(t.id);
+    setRenameDraft(t.name);
+  }
+
+  function cancelRename() {
+    setEditingId(null);
+    setRenameDraft("");
+  }
+
+  async function saveRename(t: TemplateRow) {
+    const name = renameDraft.trim();
+    if (!name) {
+      toast({ kind: "error", title: "A template name is required" });
+      return;
+    }
+    if (name === t.name) {
+      cancelRename();
+      return;
+    }
+    setRenaming(true);
+    // Optimistic: show the new name immediately, roll back if the PATCH fails.
+    const prev = templates;
+    setTemplates((ts) => ts.map((x) => (x.id === t.id ? { ...x, name } : x)));
+    const res = await fetch(`/api/template-engine/templates/${t.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    setRenaming(false);
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setTemplates(prev);
+      toast({ kind: "error", title: "Rename failed", body: j.error ?? "Could not rename the template" });
+      return;
+    }
+    cancelRename();
+    toast({ kind: "success", title: "Template renamed" });
+  }
+
+  function askDelete(t: TemplateRow) {
+    setDeleteError(null);
+    setDeleteTarget(t);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    const res = await fetch(`/api/template-engine/templates/${deleteTarget.id}`, { method: "DELETE" });
+    setDeleting(false);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // 409 carries the specific in-progress message; surface it in the dialog.
+      setDeleteError(j.error ?? "Could not delete the template");
+      return;
+    }
+    setTemplates((ts) => ts.filter((x) => x.id !== deleteTarget.id));
+    toast({
+      kind: "success",
+      title: `Template "${deleteTarget.name}" deleted`,
+      body: `${j.unlinkedGenerations ?? 0} generated site${
+        (j.unlinkedGenerations ?? 0) === 1 ? "" : "s"
+      } unlinked`,
+    });
+    setDeleteTarget(null);
   }
 
   async function setStatus(t: TemplateRow, status: "active" | "archived") {
@@ -303,19 +395,84 @@ export function TemplatesBoard() {
             const health = healthOf(t.health);
             return (
               <div key={t.id} className="bg-surface border border-border rounded-lg">
-                <button
-                  type="button"
-                  onClick={() => toggleExpand(t)}
-                  className="w-full flex flex-wrap items-center gap-3 px-4 py-3 text-left"
-                >
-                  <ChevronRight
-                    className={
-                      "w-4 h-4 text-text-faint shrink-0 transition-transform" + (expanded ? " rotate-90" : "")
-                    }
-                  />
-                  <span className={"font-semibold text-text" + (t.status === "archived" ? " opacity-60" : "")}>
-                    {t.name}
-                  </span>
+                <div className="w-full flex flex-wrap items-center gap-3 px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleExpand(t)}
+                    aria-expanded={expanded}
+                    aria-label={expanded ? "Collapse template" : "Expand template"}
+                    className="shrink-0 text-text-faint"
+                  >
+                    <ChevronRight
+                      className={"w-4 h-4 transition-transform" + (expanded ? " rotate-90" : "")}
+                    />
+                  </button>
+
+                  {editingId === t.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        autoFocus
+                        type="text"
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            saveRename(t);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            cancelRename();
+                          }
+                        }}
+                        placeholder="Template name"
+                        className="w-56 px-2.5 py-1.5 rounded-md border border-border bg-surface text-sm font-semibold text-text outline-none focus:ring-2 focus:ring-accent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => saveRename(t)}
+                        disabled={renaming}
+                        aria-label="Save name"
+                        className="inline-flex items-center justify-center rounded-md border border-border p-1.5 text-text-muted hover:bg-surface-2 disabled:opacity-60"
+                      >
+                        {renaming ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Check className="w-4 h-4" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelRename}
+                        disabled={renaming}
+                        aria-label="Cancel rename"
+                        className="inline-flex items-center justify-center rounded-md border border-border p-1.5 text-text-muted hover:bg-surface-2 disabled:opacity-60"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => toggleExpand(t)}
+                        className={
+                          "font-semibold text-text text-left" +
+                          (t.status === "archived" ? " opacity-60" : "")
+                        }
+                      >
+                        {t.name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startRename(t)}
+                        aria-label="Rename template"
+                        className="shrink-0 rounded p-1 text-text-faint hover:text-text hover:bg-surface-2"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
+
                   <span
                     className={
                       "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium " +
@@ -331,8 +488,16 @@ export function TemplatesBoard() {
                     <span className="text-text-faint whitespace-nowrap">
                       {new Date(t.created_at).toLocaleDateString()}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => askDelete(t)}
+                      aria-label="Delete template"
+                      className="shrink-0 rounded p-1 text-text-faint hover:text-dropped-fg hover:bg-surface-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </span>
-                </button>
+                </div>
 
                 {expanded && (
                   <div className="border-t border-border px-4 py-4">
@@ -524,6 +689,62 @@ export function TemplatesBoard() {
                   className={inputCls}
                 />
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirm — states the consequence honestly */}
+      {deleteTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 bg-black/30 grid place-items-center z-50 p-4"
+        >
+          <div className="bg-surface border border-border rounded-lg p-6 w-full max-w-[440px] max-h-[90vh] overflow-y-auto">
+            <h2 className="font-semibold text-text">Delete template</h2>
+            <p className="text-sm text-text-muted mt-2">
+              This permanently deletes{" "}
+              <span className="font-medium text-text">{deleteTarget.name}</span> and its files.
+              {(deleteTarget.generation_count ?? 0) > 0 ? (
+                <>
+                  {" "}
+                  <span className="font-medium text-text">{deleteTarget.generation_count}</span>{" "}
+                  site{(deleteTarget.generation_count ?? 0) === 1 ? " was" : "s were"} generated from
+                  it — those built sites are <span className="font-medium text-text">not</span>{" "}
+                  deleted, but they&apos;ll no longer be linked to a template.
+                </>
+              ) : (
+                " No sites have been generated from it yet."
+              )}
+            </p>
+            {deleteError && (
+              <div className="mt-3 text-sm text-dropped-fg bg-dropped-bg rounded-md px-3 py-2">
+                {deleteError}
+              </div>
+            )}
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="px-4 py-2 text-sm rounded-md border border-border text-text-muted hover:bg-surface-2 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={deleting}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-md bg-dropped-fg text-white font-semibold hover:opacity-90 disabled:opacity-50"
+              >
+                {deleting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Trash2 className="w-4 h-4" />
+                )}
+                {deleting ? "Deleting…" : "Delete template"}
+              </button>
             </div>
           </div>
         </div>
