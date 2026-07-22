@@ -36,6 +36,7 @@ import { neutralizeAppIdentifier } from "./neutralize";
 import { regenerateFile } from "./regenerate";
 import { personalizeFile } from "./personalize";
 import { runGates, type GateResult } from "./gates";
+import { describeLeakGuarantee, guaranteeNoLeaks } from "./leakGuarantee";
 import { zipFromMap } from "./zip";
 import { buildInitialSlots } from "./gatherImages";
 import type { ImageCandidate, ImageSlot } from "./imageSlots";
@@ -699,6 +700,23 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   // sees work happening instead of a stalled "Verifying".
   await beginStep("verify", "Verifying");
   const verifyStep = steps[steps.length - 1];
+  // The terminal leak guarantee runs immediately before EVERY gate invocation.
+  // It uses findLeaks itself as its oracle (see leakGuarantee.ts), so after it
+  // the leak gate can only fail if the guarantee itself is broken — the repair
+  // loop below is, for leaks, effectively dead code; it remains for structure.
+  // Idempotent and cheap (one findLeaks scan when the files are clean), so it
+  // runs unconditionally. Anything it fixed is surfaced on the verify step.
+  const guaranteeNotes: string[] = [];
+  const applyLeakGuarantee = () => {
+    const g = guaranteeNoLeaks({ files: rebuilt, demoTokens, contentModel });
+    for (const [file, text] of Object.entries(g.files)) rebuilt[file] = text;
+    const note = describeLeakGuarantee(g.report);
+    if (note) {
+      guaranteeNotes.push(note);
+      console.info(`[template-engine] ${note}`);
+    }
+  };
+  applyLeakGuarantee();
   let gate = runGates({ template: contentSources, output: rebuilt, demoTokens });
   let rounds = 0;
   let stalled = false;
@@ -742,6 +760,7 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     // than re-running the gates and starting another round on a stopped run.
     haltIfAborted(`repair round ${rounds}`);
 
+    applyLeakGuarantee();
     const next = runGates({ template: contentSources, output: rebuilt, demoTokens });
     stalled = repairStalled(gate, next);
     gate = next;
@@ -755,7 +774,8 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     await endStep("failed", detail, { status: "failed", error: `Verification gate failed: ${detail}` });
     throw new Error(`Verification gate failed: ${detail}`);
   }
-  await endStep("done", rounds ? `leak + structure gates passed after ${rounds} repair round(s)` : "leak + structure gates passed");
+  const passed = rounds ? `leak + structure gates passed after ${rounds} repair round(s)` : "leak + structure gates passed";
+  await endStep("done", guaranteeNotes.length ? `${passed}; ${guaranteeNotes.join("; ")}` : passed);
 
   // CHECKPOINT — after the gates passed, before packaging begins. This is the
   // LAST safe point: everything past it writes to the `template-sites` bucket

@@ -703,9 +703,48 @@ function tokenPattern(token: string): RegExp | null {
   // the phantom leaks, and a genuine leak of a whole sentence would be
   // contiguous anyway, so these match literally or not at all.
   if (parts.length > 1 && SENTENCE_PUNCT_RE.test(t)) {
-    return new RegExp(lead + escapeRe(t) + tail, "i");
+    return new RegExp(lead + escapeRe(t) + tail, "gi");
   }
-  return new RegExp(lead + parts.join(TOKEN_GAP) + tail, "i");
+  return new RegExp(lead + parts.join(TOKEN_GAP) + tail, "gi");
+}
+
+/** One occurrence of a token, as offsets into the ORIGINAL (unmasked) content. */
+export interface TokenMatch {
+  start: number;
+  end: number;
+}
+
+/**
+ * Every match of `re` in `hay`, in document order. The one exec loop both
+ * `findLeaks` and `findTokenMatches` run — there is no second matcher to drift.
+ */
+function matchesIn(hay: string, re: RegExp, firstOnly = false): TokenMatch[] {
+  re.lastIndex = 0;
+  const out: TokenMatch[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(hay)) !== null) {
+    out.push({ start: m.index, end: m.index + m[0].length });
+    if (firstOnly) break;
+    if (m[0].length === 0) re.lastIndex++; // defensive: a token can never be empty
+  }
+  return out;
+}
+
+/**
+ * Every occurrence of ONE token in ONE file's content, located with the EXACT
+ * machinery `findLeaks` uses — same `tokenPattern`, same structural-attr mask.
+ * The mask preserves length, so the offsets index into the original content.
+ *
+ * This is the oracle export: anything that claims to REMOVE a leak must find it
+ * with this function, so the scrubber and the gate can never disagree about
+ * what "content" means. (That disagreement is the bug class this closes: JS
+ * strings, then comments, then map-iframe URLs each leaked because the scrub's
+ * hand-maintained list of surfaces lagged the gate's.)
+ */
+export function findTokenMatches(content: string, token: string): TokenMatch[] {
+  const re = tokenPattern(token);
+  if (!re) return [];
+  return matchesIn(maskStructuralAttrs(content), re);
 }
 
 /**
@@ -758,13 +797,12 @@ export function findLeaks(files: Record<string, string>, tokens: string[]): Leak
   for (const [file, content] of Object.entries(files)) {
     const hay = maskStructuralAttrs(content);
     for (const { token, re } of patterns) {
-      const m = re.exec(hay);
+      const [m] = matchesIn(hay, re, true);
       if (!m) continue;
-      const at = m.index;
       leaks.push({
         file,
         token,
-        excerpt: content.slice(Math.max(0, at - 40), at + m[0].length + 40).replace(/\s+/g, " ").trim(),
+        excerpt: content.slice(Math.max(0, m.start - 40), m.end + 40).replace(/\s+/g, " ").trim(),
       });
     }
   }
