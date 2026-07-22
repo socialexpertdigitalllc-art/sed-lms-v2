@@ -37,6 +37,14 @@ import { regenerateFile } from "./regenerate";
 import { personalizeFile } from "./personalize";
 import { runGates, type GateResult } from "./gates";
 import { describeLeakGuarantee, guaranteeNoLeaks } from "./leakGuarantee";
+import {
+  describeNicheGuarantee,
+  findNicheDrift,
+  guaranteeNoNicheDrift,
+  nicheDriftFingerprint,
+  repairNoteForNiche,
+  type NicheDriftHit,
+} from "./nicheGuarantee";
 import { zipFromMap } from "./zip";
 import { buildInitialSlots } from "./gatherImages";
 import type { ImageCandidate, ImageSlot } from "./imageSlots";
@@ -506,6 +514,8 @@ interface TemplateRow {
   storage_prefix: unknown;
   demo_tokens: unknown;
   manifest: unknown;
+  /** Recurring service/category vocabulary of the template's ORIGINAL demo business — see nicheTerms.ts. */
+  niche_terms?: unknown;
 }
 
 /** Everything runBuildPipeline needs; each phase builds this differently but the pipeline consumes it identically. */
@@ -560,6 +570,7 @@ interface BuildCtx {
 async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<void> {
   const {
     generationId,
+    brief,
     requestedPages,
     template,
     contentModel,
@@ -628,6 +639,7 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   );
 
   const demoTokens = stringArray(template.demo_tokens);
+  const nicheTerms = stringArray(template.niche_terms);
 
   // CHECKPOINT — between `prepare` and the (long, expensive) regeneration loop.
   // SAFE: `prepare` only downloaded and classified files into memory. It wrote
@@ -707,6 +719,81 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   // Idempotent and cheap (one findLeaks scan when the files are clean), so it
   // runs unconditionally. Anything it fixed is surfaced on the verify step.
   const guaranteeNotes: string[] = [];
+
+  // The category-drift guarantee runs FIRST, before the leak guarantee and
+  // before the gate: a niche term is not identity (the leak gate/findLeaks
+  // correctly never sees it — see nicheGuarantee.ts), so nothing else in this
+  // pipeline would ever catch a page that reads like the TEMPLATE's trade
+  // instead of the CLIENT's. Two bounded stages, same discipline as the
+  // leak/structure repair loop below:
+  //   1. up to MAX_REPAIR_ROUNDS AI repair rounds, each re-personalizing ONLY
+  //      the offending files with a targeted note (repairNoteForNiche) naming
+  //      the wrong-category terms and the client's real services;
+  //   2. a deterministic terminal scrub (guaranteeNoNicheDrift) that
+  //      neutralizes whatever survives, so packaging never ships a term the
+  //      client cannot claim as their own — a guarantee, not a hope.
+  if (nicheTerms.length > 0) {
+    let nicheHits = findNicheDrift({ files: rebuilt, nicheTerms, contentModel, brief });
+    let nicheRounds = 0;
+    while (nicheHits.length > 0 && nicheRounds < MAX_REPAIR_ROUNDS) {
+      const targets = [...new Set(nicheHits.map((h) => h.file))].filter((f) => contentSources[f] !== undefined);
+      if (targets.length === 0) break;
+      // CHECKPOINT — between category-drift repair rounds, same rationale as
+      // the leak/structure repair loop's checkpoint below: each round is
+      // another full AI call per offending file.
+      await checkpoint(`niche repair round ${nicheRounds + 1}`);
+      nicheRounds++;
+      verifyStep.label = `Fixing category drift (round ${nicheRounds} of ${MAX_REPAIR_ROUNDS})`;
+      await writeThrough();
+
+      const hitsByFile = new Map<string, NicheDriftHit[]>();
+      for (const h of nicheHits) {
+        const cur = hitsByFile.get(h.file);
+        if (cur) cur.push(h);
+        else hitsByFile.set(h.file, [h]);
+      }
+      const settled = await Promise.allSettled(
+        targets.map((file) =>
+          buildOneFile({
+            regenMode,
+            file,
+            source: contentSources[file],
+            contentModel,
+            imagesForFile,
+            demoTokens,
+            repairNote: repairNoteForNiche(hitsByFile.get(file) ?? [], contentModel),
+            signal,
+          }),
+        ),
+      );
+      settled.forEach((r, i) => {
+        if (r.status === "fulfilled") rebuilt[targets[i]] = r.value;
+      });
+      // allSettled swallows rejections, including aborts — unwind here rather
+      // than looping again on a stopped run.
+      haltIfAborted(`niche repair round ${nicheRounds}`);
+
+      const next = findNicheDrift({ files: rebuilt, nicheTerms, contentModel, brief });
+      const stalled = next.length > 0 && nicheDriftFingerprint(nicheHits) === nicheDriftFingerprint(next);
+      nicheHits = next;
+      if (stalled) break; // the model cannot resolve this — stop burning AI calls, let the terminal scrub finish it
+    }
+    verifyStep.label = "Verifying";
+
+    const { files: scrubbedFiles, report: nicheReport } = guaranteeNoNicheDrift({
+      files: rebuilt,
+      nicheTerms,
+      contentModel,
+      brief,
+    });
+    for (const [file, text] of Object.entries(scrubbedFiles)) rebuilt[file] = text;
+    const nicheNote = describeNicheGuarantee(nicheReport);
+    if (nicheNote) {
+      guaranteeNotes.push(nicheNote);
+      console.info(`[template-engine] ${nicheNote}`);
+    }
+  }
+
   const applyLeakGuarantee = () => {
     const g = guaranteeNoLeaks({ files: rebuilt, demoTokens, contentModel });
     for (const [file, text] of Object.entries(g.files)) rebuilt[file] = text;
@@ -1269,7 +1356,7 @@ export async function buildFromSelection(generationId: string): Promise<void> {
 
     const { data: template } = await admin
       .from("website_templates")
-      .select("id, name, storage_prefix, demo_tokens, manifest")
+      .select("id, name, storage_prefix, demo_tokens, manifest, niche_terms")
       .eq("id", gen.template_id)
       .single();
     if (!template) throw new Error("Template not found");
@@ -1284,7 +1371,12 @@ export async function buildFromSelection(generationId: string): Promise<void> {
       generationId,
       brief,
       requestedPages,
-      template: { storage_prefix: template.storage_prefix, demo_tokens: template.demo_tokens, manifest: template.manifest },
+      template: {
+        storage_prefix: template.storage_prefix,
+        demo_tokens: template.demo_tokens,
+        manifest: template.manifest,
+        niche_terms: (template as { niche_terms?: unknown }).niche_terms,
+      },
       contentModel,
       imagesForFile,
       regenMode: regenModeOf(gen.options),

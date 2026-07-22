@@ -34,6 +34,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { listStorageFiles } from "@/lib/template-engine/runner";
 import { extractDemoTokens } from "@/lib/template-engine/demoTokens";
+import { extractNicheTerms } from "@/lib/template-engine/nicheTerms";
 import { runTemplateHealthChecks } from "@/lib/template-engine/health";
 import type { TemplateManifest } from "@/lib/template-engine/types";
 
@@ -98,6 +99,11 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   }
 
   const demoTokens = extractDemoTokens(tokenText);
+  // Re-derived for the same reason demo_tokens is: niche_terms is a pure
+  // function of the same files, so recomputing it here is idempotent — except
+  // when the extractor itself improves, in which case a template health-checked
+  // under the old extractor picks up the new one. See nicheTerms.ts.
+  const nicheTerms = extractNicheTerms(tokenText);
   const health = runTemplateHealthChecks({
     files: healthText,
     demoTokens,
@@ -108,6 +114,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     .from("website_templates")
     .update({
       demo_tokens: demoTokens,
+      niche_terms: nicheTerms,
       health,
       health_checked_at: health.checkedAt,
       updated_at: new Date().toISOString(),

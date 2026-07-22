@@ -38,7 +38,7 @@ export interface Leak {
  * Markup and code vocabulary. These are never identity — they are the language
  * the file is written in, and they appear in every file of every site.
  */
-const MARKUP_WORDS = new Set([
+export const MARKUP_WORDS = new Set([
   "html", "head", "body", "span", "div", "class", "const", "window", "function",
   "script", "style", "title", "meta", "link", "href", "http", "https", "www",
   "doctype", "charset", "utf-8", "viewport", "initial-scale", "content", "src",
@@ -73,7 +73,7 @@ const MARKUP_WORDS = new Set([
  * word from being a token BY ITSELF. "Denver Kitchens" and "Northpoint
  * Remodeling" are still caught whole, because each carries a distinctive word.
  */
-const GENERIC_WORDS = new Set([
+export const GENERIC_WORDS = new Set([
   // the industries these templates are sold into
   "remodeling", "remodel", "remodels", "renovation", "renovations", "reno",
   "contracting", "contractor", "contractors", "construction", "builder",

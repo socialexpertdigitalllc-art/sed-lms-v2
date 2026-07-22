@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { unzipToMap } from "@/lib/template-engine/zip";
 import { buildManifest, validateTemplate } from "@/lib/template-engine/manifest";
 import { extractDemoTokens } from "@/lib/template-engine/demoTokens";
+import { extractNicheTerms } from "@/lib/template-engine/nicheTerms";
 import { runTemplateHealthChecks } from "@/lib/template-engine/health";
 import { businessSlug } from "@/lib/template-engine/slug";
 import { contentTypeFor } from "@/lib/template-engine/runner";
@@ -124,6 +125,12 @@ export async function POST(req: Request) {
     }
   }
   const demoTokens = extractDemoTokens(templateText);
+  // The template's OWN recurring service/category vocabulary — a SEPARATE list
+  // from demoTokens: demo_tokens is who the demo business IS, niche_terms is
+  // what it SELLS. Derived once, here, from the same pre-personalization files,
+  // so the category-drift guarantee (nicheGuarantee.ts) has something to check
+  // a generation's output against. See nicheTerms.ts for the full rationale.
+  const nicheTerms = extractNicheTerms(templateText);
 
   // The upload is never blocked on a failing report. An operator may be
   // uploading a work in progress, and a rejected upload with no way to inspect
@@ -170,6 +177,7 @@ export async function POST(req: Request) {
       storage_prefix: templateId,
       manifest,
       demo_tokens: demoTokens,
+      niche_terms: nicheTerms,
       health,
       health_checked_at: health.checkedAt,
       page_count: manifest.pages.length,

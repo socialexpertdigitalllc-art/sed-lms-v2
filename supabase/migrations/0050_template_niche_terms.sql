@@ -1,0 +1,41 @@
+-- 0050_template_niche_terms.sql — the template's own niche/category vocabulary
+--
+-- THE BUG THIS EXISTS FOR. "Knights Auto Window Tint" (services: window
+-- tinting, ceramic coating, PPF, vehicle wraps) was generated from a Denver
+-- REMODELING template. The leak gate passed — no demo business name, city,
+-- phone or email survived — but the shipped site still read like a remodeling
+-- site: "Full-service remodeling, start to finish.", alt="Kitchen remodeling",
+-- alt="Bathroom remodeling", "<option>Kitchen remodel</option>", "cabinetry",
+-- "subcontractor". None of that is IDENTITY (demoTokens.ts deliberately treats
+-- trade vocabulary as GENERIC_WORDS — a real remodeling client's site is
+-- SUPPOSED to say "remodeling"), so nothing existing was ever going to catch a
+-- client whose ACTUAL trade differs from the template's.
+--
+-- `niche_terms` is a SEPARATE column from `demo_tokens`, on purpose:
+--   demo_tokens  -> WHO the template's original demo business is (name, phone,
+--                   email, demo cities) — the identity leak gate's oracle.
+--   niche_terms  -> WHAT that demo business SELLS (recurring service/category
+--                   phrases like "kitchen remodeling", "cabinetry") — the
+--                   category-drift guarantee's oracle (see
+--                   lib/template-engine/nicheGuarantee.ts).
+-- Merging the two lists would make the identity leak gate fire on a client's
+-- own, perfectly legitimate trade vocabulary — exactly the "gate that always
+-- fails on correct work gets disabled" mistake demoTokens.ts's GENERIC_WORDS
+-- comment warns against.
+--
+-- Computed once per template — at upload (app/api/template-engine/templates/
+-- route.ts) and at health re-check (app/api/template-engine/templates/[id]/
+-- health/route.ts) — from the template's OWN pre-personalization files, mirroring
+-- demo_tokens's lifecycle exactly (see lib/template-engine/nicheTerms.ts).
+--
+-- Additive only: nullable, no default. A template uploaded before this feature
+-- reads back null/empty, and the category-drift guarantee is a no-op when
+-- niche_terms is empty — it protects nothing for that template until the next
+-- health re-check backfills it, same as demo_tokens does for templates
+-- uploaded before 0034.
+alter table public.website_templates
+  add column if not exists niche_terms text[];
+
+-- No index. Read only alongside the template row it belongs to (a generation's
+-- build phase loads it with the rest of the row), and the table holds a
+-- handful of rows — same rationale as health/health_checked_at in 0048.

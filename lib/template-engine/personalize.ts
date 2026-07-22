@@ -59,6 +59,7 @@ ABSOLUTE RULES
 - Replace 100% of the template's demo identity: no other business name, city, service area, person name, phone or email may survive in your text. The client's own details come from the content model.
 - Keep the FUNCTION of each string: a nav label stays a short nav label, a button stays a call to action, a heading stays a heading, a testimonial stays a testimonial with a plausible local customer name.
 - Match the tone of the content model's positioning. Write specific, professional copy — never lorem ipsum, never "Your Company", never a placeholder.
+- CATEGORY, not just identity: the template was built for a DIFFERENT trade or business category than the one in the content model. Any string that describes a service, product, category or trade the content model's services/site_type/about do NOT mention — a menu option, an image caption, a heading, a sentence of body copy — describes the WRONG business and must be rewritten to describe what THIS business actually does, even if that means writing fresh copy rather than a light edit. The "return it unchanged" allowance below does NOT excuse this: category mismatch is never a case of "already correct" or "unsure what it means".
 - If a string is already correct for this business, or you are unsure what it means, return it UNCHANGED. Never return an empty string.`;
 
 export interface PersonalizeStats {
@@ -182,8 +183,13 @@ const WORD_CHAR_RE = /[A-Za-z0-9_]/;
  * A token as a whole word/phrase, case-insensitive, matching LITERAL text only.
  * Unlike the leak gate's pattern this never bridges markup — items are already
  * plain strings, and a gap-bridging pattern here could eat real copy.
+ *
+ * Exported: nicheGuarantee.ts (the category-drift guarantee) reuses this exact
+ * matcher for niche-term occurrences and for the client-safe corpus check, so
+ * the drift check and the scrub agree on what "matches a term" means — the same
+ * discipline `findTokenMatches` enforces for the identity leak gate.
  */
-function literalPattern(token: string): RegExp | null {
+export function literalPattern(token: string): RegExp | null {
   const t = token.trim();
   if (!t) return null;
   const body = t.replace(/\s+/g, " ").replace(RE_META, "\\$&").replace(/ /g, "\\s+");
@@ -308,7 +314,8 @@ export interface ScrubMachine {
   area: { i: number };
 }
 
-function servicesOf(contentModel: unknown): string[] {
+/** Exported for nicheGuarantee.ts's repair note and terminal scrub. */
+export function servicesOf(contentModel: unknown): string[] {
   const cm = contentModel as { services?: unknown } | null;
   const list = cm && typeof cm === "object" && Array.isArray(cm.services) ? cm.services : [];
   const out: string[] = [];
@@ -368,6 +375,41 @@ export function buildScrubMachine(demoTokens: string[], contentModel: unknown): 
     } else {
       rules.push({ token: t, re, kind: "delete", neutral: PLACE_NEUTRAL });
     }
+  }
+  rules.sort((a, b) => b.token.length - a.token.length);
+  return { rules, services, areas, svc: { i: 0 }, area: { i: 0 } };
+}
+
+/**
+ * The terminal machine for CATEGORY-DRIFT vocabulary (nicheGuarantee.ts).
+ *
+ * Every niche term is, by construction (see nicheTerms.ts), a recurring service
+ * / trade descriptor from the TEMPLATE's original business — never a place or a
+ * person — so every rule here is unconditionally `kind: "service"`, cycling
+ * through the client's own services exactly like buildScrubMachine's service
+ * rules do. This is the SAME cycling machinery and the SAME `scrubText` walker,
+ * reused rather than forked, so a future niche term can never bypass it by
+ * accident.
+ *
+ * `terms` must already be the DRIFTED terms (client-safe ones excluded by the
+ * caller — see nicheGuarantee.ts's findNicheDrift) — this function does not
+ * re-check client-safety, so passing every extracted niche term unfiltered
+ * would neutralize vocabulary the client legitimately shares with the template.
+ */
+export function buildServiceScrubMachine(terms: string[], contentModel: unknown): ScrubMachine {
+  const services = servicesOf(contentModel);
+  const areas = areasOf(contentModel);
+  const rules: ScrubRule[] = [];
+  const seen = new Set<string>();
+  for (const raw of terms) {
+    const t = raw.trim();
+    if (!t) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    const re = literalPattern(t);
+    if (!re) continue;
+    seen.add(key);
+    rules.push({ token: t, re, kind: "service", neutral: services[0] ?? "our services" });
   }
   rules.sort((a, b) => b.token.length - a.token.length);
   return { rules, services, areas, svc: { i: 0 }, area: { i: 0 } };
