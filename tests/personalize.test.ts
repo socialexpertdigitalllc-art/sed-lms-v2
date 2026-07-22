@@ -15,9 +15,14 @@ const {
   planBatches,
   parseBatchResponse,
   applyImagesToHtml,
+  buildScrubMachine,
+  scrubText,
+  batchPrompt,
+  forbiddenForBatch,
   MAX_ITEMS_PER_BATCH,
 } = await import("@/lib/template-engine/personalize");
 const { runGates } = await import("@/lib/template-engine/gates");
+const { findLeaks } = await import("@/lib/template-engine/demoTokens");
 
 const DEMO_TOKENS = [
   "Northpoint Remodeling",
@@ -363,6 +368,203 @@ describe("places the extractors deliberately skip, which the leak gate still rea
       demoTokens: DEMO_TOKENS,
     });
     expect(out.text).toBe(`/* Warrior Contracting — built 2019 */\nconst n = 1; // call (720) 888-1212\n`);
+  });
+});
+
+// The real production failure: a Denver *remodeling* template rebuilt for
+// "Knights Auto Window Tint", a window-tint shop that lists NO service areas.
+// After the model pass the structure was perfect; what hard-failed the leak gate
+// was surviving demo IDENTITY — neighbourhoods, a fictional family, and two demo
+// service headings.
+const DEMO_KNIGHTS = [
+  "Northpoint Remodeling",
+  "Northpoint",
+  "(555) 210-4400",
+  "5552104400",
+  "hello@northpointremodel.com",
+  "northpointremodel.com",
+  "Cherry Creek",
+  "Denver",
+  "LoDo",
+  "Wash Park",
+  "Maple Grove",
+  "Centennial",
+  "Oak Park",
+  "Cedar Heights",
+  "The Alvarez Family",
+  "Home Additions",
+  "Basement Finishing",
+];
+
+// service_areas: null → no client area to swap a demo neighbourhood for.
+const KNIGHTS_MODEL = {
+  identity: {
+    name: "Knights Auto Window Tint",
+    tagline: "Cooler rides, clearer views",
+    phone: "(303) 555-9000",
+    email: "info@knightstint.com",
+    areas: [] as string[],
+  },
+  services: [
+    { key: "auto", name: "Automotive Window Tinting", short: "", long: "", bullets: [], image_query: "car tint" },
+    { key: "ceramic", name: "Ceramic Tint", short: "", long: "", bullets: [], image_query: "ceramic tint" },
+    { key: "removal", name: "Tint Removal", short: "", long: "", bullets: [], image_query: "tint removal" },
+  ],
+};
+
+describe("the deterministic identity scrub — the guarantee", () => {
+  it("removes a demo neighbourhood the client cannot replace, cleanly (no double space)", () => {
+    const m = buildScrubMachine(DEMO_KNIGHTS, KNIGHTS_MODEL);
+    const out = scrubText("Beautiful Denver Kitchens & Bathrooms", m);
+    expect(out).toBe("Beautiful Kitchens & Bathrooms");
+    expect(out).not.toMatch(/denver/i);
+    expect(out).not.toMatch(/ {2,}/);
+  });
+
+  it("turns a dangling place list into a neutral, no orphaned 'and'", () => {
+    const m = buildScrubMachine(DEMO_KNIGHTS, KNIGHTS_MODEL);
+    const out = scrubText("Serving Cherry Creek and Denver", m);
+    expect(out).toBe("Serving the local area");
+    expect(out).not.toMatch(/cherry|denver|\band\s*$/i);
+  });
+
+  it("maps a demo service heading to one of the client's own services", () => {
+    const m = buildScrubMachine(DEMO_KNIGHTS, KNIGHTS_MODEL);
+    const out = scrubText("Our Home Additions team is ready", m);
+    expect(out).not.toMatch(/home additions/i);
+    expect(out).toContain("Automotive Window Tinting");
+  });
+
+  it("removes a demo family name, falling back to a neutral rather than blanking", () => {
+    const m = buildScrubMachine(DEMO_KNIGHTS, KNIGHTS_MODEL);
+    expect(scrubText("The Alvarez Family", m)).toBe("a valued client");
+    expect(scrubText("Cherry Creek", m)).toBe("the local area");
+  });
+
+  it("replaces cities with client areas (cycled) when the client HAS service areas", () => {
+    const withAreas = {
+      ...KNIGHTS_MODEL,
+      identity: { ...KNIGHTS_MODEL.identity, areas: ["Aurora", "Littleton"] },
+    };
+    const m = buildScrubMachine(DEMO_KNIGHTS, withAreas);
+    const out = scrubText("We proudly serve Cherry Creek, Denver and LoDo", m);
+    expect(out).not.toMatch(/cherry|denver|lodo/i);
+    expect(out).toContain("Aurora");
+    expect(out).toContain("Littleton");
+  });
+
+  it("is idempotent and never empties a non-empty string", () => {
+    const m = buildScrubMachine(DEMO_KNIGHTS, KNIGHTS_MODEL);
+    for (const input of [
+      "Serving Cherry Creek and Denver",
+      "Beautiful Denver Kitchens & Bathrooms",
+      "The Alvarez Family",
+      "Home Additions and Basement Finishing in Maple Grove",
+      "Cherry Creek",
+    ]) {
+      const once = scrubText(input, m);
+      const twice = scrubText(once, m);
+      expect(twice).toBe(once);
+      expect(once.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("the forbidden list names only the demo tokens present in a batch", () => {
+    const batch = {
+      items: [
+        { id: "t1", text: "Remodeling across Cherry Creek and Denver" },
+        { id: "t2", text: "Our Home Additions crew" },
+      ],
+      chars: 0,
+    };
+    const forbidden = forbiddenForBatch(DEMO_KNIGHTS, batch);
+    expect(forbidden).toContain("Cherry Creek");
+    expect(forbidden).toContain("Denver");
+    expect(forbidden).toContain("Home Additions");
+    // Not in the batch text → not in the prompt.
+    expect(forbidden).not.toContain("Basement Finishing");
+    expect(forbidden).not.toContain("Oak Park");
+    const prompt = batchPrompt({ file: "index.html", contentModel: KNIGHTS_MODEL, batch, demoTokens: DEMO_KNIGHTS });
+    expect(prompt).toContain("FORBIDDEN");
+    expect(prompt).toContain("Cherry Creek");
+    expect(prompt).toMatch(/STRINGS \(2\)/);
+    expect(prompt).toContain("Return ONLY");
+  });
+});
+
+describe("the scrub guarantees zero leaks even when the model changes NOTHING", () => {
+  // The worst case named in the task: components.js parks its demo geography, a
+  // fictional family and its service headings in JS string literals — some of
+  // which the extractor marks non-translatable — and the model returns every id
+  // unchanged. The scrub, operating on final text regardless, must still leave
+  // findLeaks nothing to find.
+  const COMPONENTS = `export const AREAS = ["Cherry Creek", "Denver", "LoDo", "Wash Park", "Maple Grove", "Centennial", "Oak Park", "Cedar Heights"];
+export const SERVICES = ["Home Additions", "Basement Finishing"];
+export const TESTIMONIAL = { quote: "Best remodel in Denver.", author: "The Alvarez Family" };
+function mount(el) { el.querySelector(".hero"); return "<section>Serving Cherry Creek and Denver</section>"; }`;
+
+  const INDEX = `<!doctype html>
+<html><head><title>Home Additions in Cherry Creek</title>
+<meta name="description" content="Remodeling across Denver and Wash Park.">
+</head><body>
+  <!-- Basement Finishing promo for Cherry Creek -->
+  <h1>Home Additions and Basement Finishing</h1>
+  <p>Proudly serving Cherry Creek, Denver and Wash Park.</p>
+  <blockquote>Loved our new kitchen. — The Alvarez Family</blockquote>
+  <script>window.CONFIG = { city: "Denver", hood: "Cherry Creek" };</script>
+</body></html>`;
+
+  it("evicts every demo token from a components.js of string literals", async () => {
+    echoModel();
+    const out = await personalizeFile({
+      file: "components.js",
+      source: COMPONENTS,
+      contentModel: KNIGHTS_MODEL,
+      imagesForFile: [],
+      demoTokens: DEMO_KNIGHTS,
+    });
+    expect(findLeaks({ "components.js": out.text }, DEMO_KNIGHTS)).toEqual([]);
+    // still valid JS shape: the code the extractor left alone is untouched
+    expect(out.text).toContain('el.querySelector(".hero")');
+    expect(out.text).toContain("export const AREAS =");
+  });
+
+  it("evicts every demo token from index.html — text, comments and inline script", async () => {
+    echoModel();
+    const out = await personalizeFile({
+      file: "index.html",
+      source: INDEX,
+      contentModel: KNIGHTS_MODEL,
+      imagesForFile: [],
+      demoTokens: DEMO_KNIGHTS,
+    });
+    expect(findLeaks({ "index.html": out.text }, DEMO_KNIGHTS)).toEqual([]);
+    expect(out.text).toContain("window.CONFIG = {");
+  });
+
+  it("both files pass the full gate against the real survivor set", async () => {
+    echoModel();
+    const components = await personalizeFile({
+      file: "components.js",
+      source: COMPONENTS,
+      contentModel: KNIGHTS_MODEL,
+      imagesForFile: [],
+      demoTokens: DEMO_KNIGHTS,
+    });
+    const index = await personalizeFile({
+      file: "index.html",
+      source: INDEX,
+      contentModel: KNIGHTS_MODEL,
+      imagesForFile: [],
+      demoTokens: DEMO_KNIGHTS,
+    });
+    const gate = runGates({
+      template: { "components.js": COMPONENTS, "index.html": INDEX },
+      output: { "components.js": components.text, "index.html": index.text },
+      demoTokens: DEMO_KNIGHTS,
+    });
+    expect(gate.leaks).toEqual([]);
+    expect(gate.ok).toBe(true);
   });
 });
 

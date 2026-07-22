@@ -238,6 +238,203 @@ export function substituteIdentity(text: string, rules: Rule[]): string {
   return out;
 }
 
+/* ---------------------------------------------------- the identity scrub */
+//
+// The identity RULES above are the exact swaps: phone, email, domain, brand. But
+// a template's demo identity is more than its contact card — it is a set of
+// neighbourhoods ("Cherry Creek", "LoDo"), service headings ("Home Additions",
+// "Basement Finishing") and a fictional customer ("The Alvarez Family"). None of
+// those has a 1:1 client equivalent, so the model was left to rewrite the
+// sentences around them — and when it does nothing (a small model, an omitted
+// id) they survive, and the leak gate hard-fails a build the repair loop can
+// never rescue.
+//
+// This scrub is the GUARANTEE the rules cannot give: after it runs over a file's
+// final text, no known demo token is left. It classifies every demo token the
+// identity rules did not claim and replaces it deterministically — a service
+// heading becomes one of the client's services, a place becomes a client area
+// (or is deleted, when the client serves no named areas), a person is removed —
+// with cleanup so a deletion never leaves `Beautiful  Kitchens` or a dangling
+// "Serving  and ".
+
+/**
+ * Words that mark a demo token as a SERVICE heading rather than a place or a
+ * person. "Home Additions" and "Basement Finishing" are the demo's services; a
+ * token carrying one of these words is swapped for one of the client's own.
+ */
+const SERVICE_WORDS = new Set([
+  "remodeling", "remodel", "remodels", "renovation", "renovations", "renovate",
+  "renovating", "addition", "additions", "finishing", "refinishing", "install",
+  "installs", "installation", "installations", "repair", "repairs", "repairing",
+  "restoration", "restore", "maintenance", "construction", "building", "painting",
+  "roofing", "plumbing", "electrical", "flooring", "landscaping", "cleaning",
+  "tiling", "siding", "fencing", "decking", "framing", "insulation",
+  "waterproofing", "kitchen", "kitchens", "bathroom", "bathrooms", "basement",
+  "basements", "deck", "decks", "fence", "fences", "roof", "roofs", "window",
+  "windows", "door", "doors", "cabinet", "cabinets", "countertop", "countertops",
+  "gutter", "gutters", "tile", "tiles", "patio", "patios", "porch", "porches",
+  "driveway", "driveways", "garage", "garages", "sunroom", "sunrooms", "pergola",
+  "carpentry", "masonry", "concrete", "paving", "drywall", "stucco", "hardscape",
+  "hardscaping", "tinting", "tint",
+]);
+
+/** A demo token that names a PERSON or family, not a place or a service. */
+const PERSON_TOKEN_RE = /\bfamil(?:y|ies)\b|\b(?:mr|mrs|ms|dr)\.?\s/i;
+
+/** A place with no client area to become: the neutral it collapses to. */
+const PLACE_NEUTRAL = "the local area";
+/** A person with no equivalent, sitting where a name is expected. */
+const PERSON_NEUTRAL = "a valued client";
+
+const scrubWords = (s: string): string[] =>
+  s.toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
+
+type ScrubKind = "service" | "area" | "delete";
+
+interface ScrubRule {
+  token: string;
+  re: RegExp;
+  kind: ScrubKind;
+  /** The minimal neutral used if scrubbing this token would empty the string. */
+  neutral: string;
+}
+
+export interface ScrubMachine {
+  rules: ScrubRule[];
+  services: string[];
+  areas: string[];
+  /** Cycling cursors, shared across a whole file so replacements vary. */
+  svc: { i: number };
+  area: { i: number };
+}
+
+function servicesOf(contentModel: unknown): string[] {
+  const cm = contentModel as { services?: unknown } | null;
+  const list = cm && typeof cm === "object" && Array.isArray(cm.services) ? cm.services : [];
+  const out: string[] = [];
+  for (const s of list) {
+    const name = s && typeof s === "object" ? (s as { name?: unknown }).name : undefined;
+    if (typeof name === "string" && name.trim()) out.push(name.trim());
+  }
+  return out;
+}
+
+function areasOf(contentModel: unknown): string[] {
+  const cm = contentModel as { identity?: { areas?: unknown } } | null;
+  const areas =
+    cm && typeof cm === "object" && cm.identity && Array.isArray(cm.identity.areas) ? cm.identity.areas : [];
+  return areas.filter((a): a is string => typeof a === "string" && a.trim().length > 0).map((a) => a.trim());
+}
+
+/** service | place | person — everything the identity rules did not already own. */
+function classifyRest(token: string): "service" | "place" | "person" {
+  if (PERSON_TOKEN_RE.test(token)) return "person";
+  const w = scrubWords(token);
+  if (w.some((x) => SERVICE_WORDS.has(x))) return "service";
+  return "place";
+}
+
+/**
+ * Build the scrub machine for one file. Every demo token the identity rules
+ * already handle (email, domain, phone, brand — see classifyDemoTokens) is
+ * skipped; the rest are classified and given a deterministic fate. Longest token
+ * first, so "Cherry Creek" is consumed before a bare "Cherry" ever could be.
+ */
+export function buildScrubMachine(demoTokens: string[], contentModel: unknown): ScrubMachine {
+  const demo = classifyDemoTokens(demoTokens);
+  const handled = new Set(
+    [...demo.emails, ...demo.domains, ...demo.phones, ...demo.brands].map((t) => t.toLowerCase()),
+  );
+  const services = servicesOf(contentModel);
+  const areas = areasOf(contentModel);
+
+  const rules: ScrubRule[] = [];
+  const seen = new Set<string>();
+  for (const raw of demoTokens) {
+    const t = raw.trim();
+    if (!t) continue;
+    const key = t.toLowerCase();
+    if (handled.has(key) || seen.has(key)) continue;
+    const re = literalPattern(t);
+    if (!re) continue;
+    seen.add(key);
+    const cls = classifyRest(t);
+    if (cls === "service") {
+      rules.push({ token: t, re, kind: "service", neutral: services[0] ?? "our services" });
+    } else if (cls === "person") {
+      rules.push({ token: t, re, kind: "delete", neutral: PERSON_NEUTRAL });
+    } else if (areas.length > 0) {
+      rules.push({ token: t, re, kind: "area", neutral: areas[0] });
+    } else {
+      rules.push({ token: t, re, kind: "delete", neutral: PLACE_NEUTRAL });
+    }
+  }
+  rules.sort((a, b) => b.token.length - a.token.length);
+  return { rules, services, areas, svc: { i: 0 }, area: { i: 0 } };
+}
+
+/** A private-use sentinel marking where a token was deleted, so cleanup can see it. */
+const GAP = "";
+const GAP_RE = new RegExp(GAP, "g");
+/** A run of deleted places joined by a connective collapses to one gap. */
+const GAP_LIST_RE = new RegExp(`${GAP}(?:\\s*(?:,|&|and)\\s*${GAP})+`, "gi");
+/** A connective bound to a single gap on either side — remove it with the gap. */
+const GAP_CONN_LEFT_RE = new RegExp(`\\s*(?:,|&|\\band\\b)\\s*${GAP}`, "gi");
+const GAP_CONN_RIGHT_RE = new RegExp(`${GAP}\\s*(?:,|&|\\band\\b)\\s*`, "gi");
+/** A place preposition left dangling once its object was deleted. */
+const DANGLING_PREP_RE =
+  /\b(serving|servicing|serves?|serviced|throughout|across|around|near|located in|based in|in)\b\s*([.,!?;:]?)\s*$/i;
+
+/**
+ * Remove the deletion sentinels and repair the grammar they leave behind. The
+ * order matters: collapse lists first ("GAP and GAP" -> "GAP"), then strip a
+ * connective still glued to a lone gap, then drop the gap itself, then rescue a
+ * preposition whose object is now gone ("Serving" -> "Serving the local area").
+ */
+function cleanupGaps(text: string): string {
+  let out = text;
+  out = out.replace(GAP_LIST_RE, GAP);
+  out = out.replace(GAP_CONN_LEFT_RE, GAP).replace(GAP_CONN_RIGHT_RE, GAP);
+  out = out.replace(new RegExp(`\\s*${GAP}\\s*`, "g"), " ");
+  out = out.replace(/\s+([.,!?;:])/g, "$1").replace(/\s{2,}/g, " ").trim();
+  if (DANGLING_PREP_RE.test(out)) {
+    out = out.replace(DANGLING_PREP_RE, (_m, prep: string, punct: string) => `${prep} ${PLACE_NEUTRAL}${punct}`);
+  }
+  return out.replace(GAP_RE, "").replace(/\s{2,}/g, " ").trim();
+}
+
+/**
+ * The deterministic final scrub, applied to one string of already-personalised
+ * text. Idempotent: on a string with no demo tokens it is a no-op, so running it
+ * twice equals running it once. Never returns an empty string for a non-empty
+ * input — a token that would blank the string collapses to a minimal neutral.
+ */
+export function scrubText(text: string, machine: ScrubMachine): string {
+  if (machine.rules.length === 0 || !text) return text;
+  let out = text;
+  let neutral = PLACE_NEUTRAL;
+  let deleted = false;
+  for (const rule of machine.rules) {
+    rule.re.lastIndex = 0;
+    if (rule.kind === "service") {
+      out = out.replace(rule.re, () =>
+        machine.services.length ? machine.services[machine.svc.i++ % machine.services.length] : rule.neutral,
+      );
+    } else if (rule.kind === "area") {
+      out = out.replace(rule.re, () => machine.areas[machine.area.i++ % machine.areas.length]);
+    } else {
+      out = out.replace(rule.re, () => {
+        deleted = true;
+        neutral = rule.neutral;
+        return GAP;
+      });
+    }
+  }
+  if (deleted) out = cleanupGaps(out);
+  if (!out.trim() && text.trim()) return neutral;
+  return out;
+}
+
 const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
 /** Line and block comments. Applied to JS files only. */
 const JS_COMMENT_RE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
@@ -253,11 +450,20 @@ const JS_COMMENT_RE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
  * harmless: the same rules already ran over that string, and applying them
  * twice is idempotent.
  */
-export function substituteInComments(text: string, rules: Rule[], isHtml: boolean): string {
-  if (rules.length === 0) return text;
+export function substituteInComments(
+  text: string,
+  rules: Rule[],
+  isHtml: boolean,
+  machine?: ScrubMachine,
+): string {
+  const scrubbing = machine !== undefined && machine.rules.length > 0;
+  if (rules.length === 0 && !scrubbing) return text;
   const re = isHtml ? HTML_COMMENT_RE : JS_COMMENT_RE;
   re.lastIndex = 0;
-  return text.replace(re, (comment) => substituteIdentity(comment, rules));
+  return text.replace(re, (comment) => {
+    const swapped = substituteIdentity(comment, rules);
+    return scrubbing ? scrubText(swapped, machine) : swapped;
+  });
 }
 
 const INLINE_SCRIPT_RE = /(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi;
@@ -272,15 +478,19 @@ const INLINE_SCRIPT_RE = /(<script\b[^>]*>)([\s\S]*?)(<\/script\s*>)/gi;
  * not copywriting, and the strings that deserve rewriting live in the markup
  * and in the linked script file.
  */
-export function substituteInInlineScripts(html: string, rules: Rule[]): string {
-  if (rules.length === 0) return html;
+export function substituteInInlineScripts(html: string, rules: Rule[], machine?: ScrubMachine): string {
+  const scrubbing = machine !== undefined && machine.rules.length > 0;
+  if (rules.length === 0 && !scrubbing) return html;
   INLINE_SCRIPT_RE.lastIndex = 0;
   return html.replace(INLINE_SCRIPT_RE, (whole, open: string, body: string, close: string) => {
     if (/\bsrc\s*=/i.test(open) || !body.trim()) return whole;
     const ex = extractJsStrings(body);
     const map: Record<string, string> = {};
-    for (const item of ex.items) map[item.id] = substituteIdentity(item.text, rules);
-    return open + substituteInComments(ex.apply(map), rules, false) + close;
+    for (const item of ex.items) {
+      const swapped = substituteIdentity(item.text, rules);
+      map[item.id] = scrubbing ? scrubText(swapped, machine) : swapped;
+    }
+    return open + substituteInComments(ex.apply(map), rules, false, machine) + close;
   });
 }
 
@@ -316,19 +526,54 @@ export function planBatches(
   return batches;
 }
 
+/**
+ * The demo tokens that actually occur in THIS batch's strings — so the prompt
+ * names only the forbidden terms the model can see, not the whole identity list.
+ * Whole-word / whole-phrase, case-insensitive, longest first.
+ */
+export function forbiddenForBatch(demoTokens: string[], batch: Batch): string[] {
+  const hay = batch.items.map((i) => i.text).join("\n");
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const token of demoTokens) {
+    const t = token.trim();
+    if (!t) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    const re = literalPattern(t);
+    if (!re) continue;
+    re.lastIndex = 0;
+    if (re.test(hay)) {
+      seen.add(key);
+      out.push(t);
+    }
+  }
+  return out.sort((a, b) => b.length - a.length);
+}
+
 export function batchPrompt(args: {
   file: string;
   contentModel: unknown;
   batch: Batch;
   repairNote?: string;
+  demoTokens?: string[];
 }): string {
   const repair = args.repairNote
     ? `\n\nA PREVIOUS ATTEMPT FAILED VERIFICATION. Fix exactly these problems in the strings below and change nothing else:\n${args.repairNote}`
     : "";
+  // The forbidden list is the FORBIDDEN-TOKENS blacklist the old whole-file
+  // prompt carried and this path had dropped: these belong to the template's
+  // previous demo business, and without naming them the model happily keeps
+  // plausible demo copy ("Cherry Creek", "Home Additions").
+  const forbidden = forbiddenForBatch(args.demoTokens ?? [], args.batch);
+  const forbiddenBlock = forbidden.length
+    ? `\n\nFORBIDDEN — these belong to a DIFFERENT, PREVIOUS business and must NOT appear anywhere in your output. Replace each with this business's equivalent from the content model (its own service, its own service area); where there is no equivalent — a city or neighbourhood this business does not operate in, a former customer's name — rewrite the surrounding phrase naturally so the term is simply gone:\n${forbidden.map((t) => `- ${t}`).join("\n")}`
+    : "";
+
   return `Rewrite these strings from "${args.file}" so they belong to the business below.
 
 BUSINESS CONTENT MODEL (the only source of facts):
-${JSON.stringify(args.contentModel)}${repair}
+${JSON.stringify(args.contentModel)}${repair}${forbiddenBlock}
 
 STRINGS (${args.batch.items.length}) — "context" tells you where the string sits:
 ${JSON.stringify(args.batch.items)}
@@ -474,11 +719,20 @@ export async function personalizeFile(args: PersonalizeArgs): Promise<Personaliz
     throw new Error(`Personalisation of ${file}: all ${batches.length} model batch(es) failed`);
   }
 
+  // 3.5 the deterministic identity scrub — the GUARANTEE. The model does the
+  //     quality copy; this makes the identity swap a fact, not a hope. It runs
+  //     over EVERY string's final text (including the JS literals the extractor
+  //     marked non-translatable and the model never saw), evicting any demo
+  //     neighbourhood, service heading or person the rewrite left behind, so
+  //     findLeaks over the reassembled file can no longer return a demo token.
+  const machine = buildScrubMachine(demoTokens, contentModel);
+  for (const item of items) map[item.id] = scrubText(map[item.id], machine);
+
   // 4. reassemble deterministically ---------------------------------------
-  let text = substituteInComments(extracted.apply(map), rules, isHtml);
+  let text = substituteInComments(extracted.apply(map), rules, isHtml, machine);
   let imagesApplied = 0;
   if (isHtml) {
-    text = substituteInInlineScripts(text, rules);
+    text = substituteInInlineScripts(text, rules, machine);
     const applied = applyImagesToHtml(text, imageUrlsOf(args.imagesForFile));
     text = applied.html;
     imagesApplied = applied.count;
@@ -555,6 +809,7 @@ async function callBatch(
     contentModel: args.contentModel,
     batch: args.batch,
     repairNote: args.repairNote,
+    demoTokens: args.demoTokens,
   });
   // Output is bounded by what went in: rewritten copy is about the same length
   // as the original, so a small model is never asked for a heroic completion.
