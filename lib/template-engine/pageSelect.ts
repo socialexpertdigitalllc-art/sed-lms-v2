@@ -3,12 +3,22 @@
 // runnerV2 used to regenerate EVERY content file classifyFiles handed it, ignoring
 // what the client actually asked for. On the first real run that shipped
 // `area-cherry-creek.html` — a demo service-area page nobody requested — for a
-// client with NO service areas of their own, so its geography could never be
-// de-leaked: a guaranteed verification failure for a page the client never wanted
-// built in the first place. This module is the fix: build only pages the client
-// requested (plus shared content JS, which every page depends on and which is
-// never itself a "page" a client requests), and never build an area page when the
-// client has no service areas to put in its place.
+// client with NO service areas of their own. This module is the fix: build only
+// pages the client requested (plus shared content JS, which every page depends
+// on and which is never itself a "page" a client requests).
+//
+// HISTORY — the retired "no service areas" drop rule. This module originally
+// also dropped REQUESTED area pages (kind `area_detail`/`areas_hub`) whenever
+// the client had no service areas, on the grounds that the demo geography could
+// never be de-leaked without real areas to put in its place: a guaranteed
+// verification failure. That precondition is gone. personalize.ts now runs a
+// deterministic scrub (buildScrubMachine/scrubText) that removes demo geography
+// cleanly for no-areas clients — "Serving the local area", grammar tidied —
+// even when the model changes nothing, so an areas page for a no-areas client
+// verifies fine with generic local-area copy. The rule outlived its reason and
+// caused real damage: a requested `service-areas.html` was silently dropped
+// while the template's JS-rendered nav kept linking to it — a built-in 404.
+// A page the client explicitly requested is now ALWAYS honoured.
 //
 // Pure: no I/O, no dependencies — consumed by the v2 runner.
 
@@ -23,27 +33,21 @@ export interface PageSelection {
 }
 
 /**
- * Page kinds whose entire reason for existing is a service area. Without a real
- * area to name, the AI has nothing to replace the demo geography with — the
- * leak gate would fail every time — so these are dropped rather than built.
- */
-const AREA_KINDS = new Set(["area_detail", "areas_hub"]);
-
-/**
  * Decide which content files to regenerate + ship.
  * - Shared content JS (a content file NOT listed as a manifest page, e.g. script.js,
  *   components.js) is ALWAYS built — it holds testimonial content + app logic used by every page.
- * - A manifest HTML page is built only if it's in requestedPages...
- * - ...and dropped if it's an area page (kind area_detail/areas_hub) while the client has no
- *   service areas (its geography can't be de-leaked).
+ * - A manifest HTML page is built if and only if it's in requestedPages. An
+ *   explicitly requested page is built, full stop — including area pages for
+ *   clients with no service areas (the deterministic scrub in personalize.ts
+ *   guarantees no demo geography survives, so there is nothing left to protect
+ *   by dropping them).
  */
 export function selectContentFiles(args: {
   contentFiles: string[];
   manifestPages: ManifestPage[];
   requestedPages: string[];
-  hasServiceAreas: boolean;
 }): PageSelection {
-  const { contentFiles, manifestPages, requestedPages, hasServiceAreas } = args;
+  const { contentFiles, manifestPages, requestedPages } = args;
   const pageByFile = new Map(manifestPages.map((p) => [p.file, p]));
   const requested = new Set(requestedPages);
 
@@ -62,10 +66,6 @@ export function selectContentFiles(args: {
     }
     if (!requested.has(file)) {
       dropped.push({ file, reason: "not requested" });
-      continue;
-    }
-    if (AREA_KINDS.has(page.kind) && !hasServiceAreas) {
-      dropped.push({ file, reason: "no service areas" });
       continue;
     }
     build.push(file);

@@ -29,6 +29,7 @@ import type { ContentModel } from "./contentModel";
 import { applyThemeToCss } from "./themeCss";
 import { applyLogoToHtml } from "./logo";
 import { pruneNavToBuiltPages } from "./nav";
+import { ensureSiteIntegrity } from "./integrity";
 import { classifyFiles } from "./classify";
 import { selectContentFiles, type ManifestPage } from "./pageSelect";
 import { neutralizeAppIdentifier } from "./neutralize";
@@ -558,7 +559,6 @@ interface BuildCtx {
 async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<void> {
   const {
     generationId,
-    brief,
     requestedPages,
     template,
     contentModel,
@@ -601,21 +601,22 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   const { content, passthrough } = classifyFiles([...Object.keys(textFiles), ...Object.keys(binaryFiles)]);
   const classifiedContentFiles = content.filter((f) => textFiles[f] !== undefined);
   // Build only what the client actually requested (plus shared content JS,
-  // which is never itself a requestable "page"), and never an area page for a
-  // client with no service areas to de-leak it with — see pageSelect.ts.
+  // which is never itself a requestable "page"). A requested page is ALWAYS
+  // built — including area pages for no-areas clients, whose demo geography
+  // the deterministic scrub removes — see pageSelect.ts.
   const manifestPages = manifestPagesOf(template.manifest);
-  const hasServiceAreas = brief.service_areas.length > 0;
   const sel = selectContentFiles({
     contentFiles: classifiedContentFiles,
     manifestPages,
     requestedPages,
-    hasServiceAreas,
   });
   const contentFiles = sel.build;
   const contentSources: Record<string, string> = {};
   for (const f of contentFiles) contentSources[f] = textFiles[f];
+  // Never a silent drop: what was skipped and why lands in this step's
+  // persisted detail, so the BuildTracker timeline shows it to the operator.
   const droppedDetail = sel.dropped.length
-    ? `, ${sel.dropped.length} dropped (${sel.dropped.map((d) => `${d.file}: ${d.reason}`).join("; ")})`
+    ? `; skipped: ${sel.dropped.map((d) => `${d.file} (${d.reason})`).join(", ")}`
     : "";
   const renameDetail = appRenames.length
     ? `, neutralized ${appRenames.map((r) => `${r.from}->${r.to}`).join(", ")}`
@@ -780,7 +781,7 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
   // keeps the design identical. (A template whose CSS carried url() image refs
   // would get a deterministic rewrite here; this one has none, so it is a no-op.)
   //
-  // POST-GATE POST-PROCESSING (theme -> logo -> nav prune).
+  // POST-GATE POST-PROCESSING (theme -> logo -> nav prune -> integrity).
   // Order matters, and so does the fact that all of it runs HERE rather than
   // inside regeneration. The gates have just proven the model preserved the
   // template's structure, so from this point the markup is ours to transform:
@@ -833,6 +834,28 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
     );
   }
 
+  // 7d. integrity: the unconditional guarantee that no internal link can 404.
+  // The nav prune above only sees statically-rendered menus; this template
+  // renders its header from components.js, so a JS-held "service-areas.html"
+  // entry sails straight past it. Scan every HTML href/src and JS string
+  // literal in the FINAL file set and emit a redirect stub (to index.html) for
+  // any referenced page that was not built — however a template renders its
+  // nav, a click lands on a real page, never a 404. Idempotent (integrity.ts).
+  const integrity = ensureSiteIntegrity({
+    textFiles: finalText,
+    allPaths: [...Object.keys(finalText), ...Object.keys(binaryFiles)],
+    businessName: contentModel.identity?.name ?? "",
+  });
+  for (const [path, stubHtml] of Object.entries(integrity.added)) finalText[path] = stubHtml;
+  const stubDetail = integrity.report.stubs.length
+    ? `; ${integrity.report.stubs.length} redirect stub(s) for dangling link(s): ${integrity.report.stubs
+        .map((s) => `${s} (referenced by ${integrity.report.referencedBy[s].join(", ")})`)
+        .join("; ")}`
+    : "";
+  if (stubDetail) {
+    console.info(`[template-engine] generation ${generationId}: integrity — ${stubDetail.slice(2)}`);
+  }
+
   const encoder = new TextEncoder();
   const siteMap: Record<string, Uint8Array> = {};
   for (const [path, content_] of Object.entries(finalText)) siteMap[path] = encoder.encode(content_);
@@ -861,7 +884,7 @@ async function runBuildPipeline(admin: SupabaseClient, ctx: BuildCtx): Promise<v
 
   setCurrentKey(null);
   const staleCleared = finalizeExtra ? await finalizeExtra() : {};
-  await endStep("done", `${siteEntries.length} files packaged`, {
+  await endStep("done", `${siteEntries.length} files packaged${stubDetail}`, {
     status: "review",
     zip_path: zipPath,
     pages_built: progress.pagesBuilt,
