@@ -33,6 +33,10 @@ describe("manifestSchema", () => {
   it("rejects a manifest with zero pages", () => {
     expect(manifestSchema.safeParse({ ...manifest, pages: [] }).success).toBe(false);
   });
+  it("rejects duplicate page ids", () => {
+    const bad = { ...manifest, pages: [manifest.pages[0], { ...manifest.pages[0], file: "index2.html" }] };
+    expect(manifestSchema.safeParse(bad).success).toBe(false);
+  });
 });
 
 describe("contentDocSchema", () => {
@@ -54,6 +58,22 @@ describe("contentDocSchema", () => {
     const bad = { ...doc, pages: [{ ...doc.pages[0], slots: { index_s1: "Hi {{slot:other}}" } }] };
     expect(contentDocSchema.safeParse(bad).success).toBe(false);
   });
+  it("rejects a slot value containing an HTML comment token", () => {
+    const bad = { ...doc, pages: [{ ...doc.pages[0], slots: { index_s1: "<!--@repeat:x-->" } }] };
+    expect(contentDocSchema.safeParse(bad).success).toBe(false);
+  });
+  it("validates theme values as hex colors", () => {
+    const bad = { ...doc, theme: { brand: "red; } body{display:none}" } };
+    expect(contentDocSchema.safeParse(bad).success).toBe(false);
+    const ok = { ...doc, theme: { brand: "#ff0000" } };
+    expect(contentDocSchema.safeParse(ok).success).toBe(true);
+  });
+  it("validates output as a safe relative html path", () => {
+    const bad = { ...doc, pages: [{ ...doc.pages[0], output: "../../evil.html" }] };
+    expect(contentDocSchema.safeParse(bad).success).toBe(false);
+    const ok = { ...doc, pages: [{ ...doc.pages[0], output: "services/sewer.html" }] };
+    expect(contentDocSchema.safeParse(ok).success).toBe(true);
+  });
 });
 
 describe("pageKindFromFilename", () => {
@@ -63,6 +83,10 @@ describe("pageKindFromFilename", () => {
     expect(pageKindFromFilename("services.html")).toBe("services_hub");
     expect(pageKindFromFilename("contact.html")).toBe("contact");
     expect(pageKindFromFilename("menu.html")).toBe("generic");
+  });
+  it("prefers more specific patterns over the bare service pattern", () => {
+    expect(pageKindFromFilename("service-areas.html")).toBe("areas_hub");
+    expect(pageKindFromFilename("service-reviews.html")).toBe("reviews");
   });
   it("PAGE_KINDS matches the spec set", () => {
     expect(PAGE_KINDS).toContain("service");

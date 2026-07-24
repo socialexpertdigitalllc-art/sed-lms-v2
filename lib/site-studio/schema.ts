@@ -18,11 +18,11 @@ export type PageKind = (typeof PAGE_KINDS)[number];
 const KIND_PATTERNS: [RegExp, PageKind][] = [
   [/^index\./, "home"],
   [/about/, "about"],
-  [/service/, "services_hub"],
-  [/area|location|cities/, "areas_hub"],
   [/contact/, "contact"],
   [/gallery|portfolio|project/, "gallery"],
   [/review|testimonial/, "reviews"],
+  [/area|location|cities/, "areas_hub"],
+  [/service/, "services_hub"],
 ];
 
 export function pageKindFromFilename(file: string): PageKind {
@@ -57,7 +57,7 @@ export const repeatDefSchema = z.object({
   max: z.number().int().min(1),
   slots: z.array(slotDefSchema),
   samples: z.array(z.record(z.string(), z.string())),
-});
+}).refine((r) => r.max >= r.min, "max must be >= min");
 export type RepeatDef = z.infer<typeof repeatDefSchema>;
 
 export const pageDefSchema = z.object({
@@ -78,9 +78,11 @@ export const navRegionSchema = z.object({
 });
 export type NavRegionDef = z.infer<typeof navRegionSchema>;
 
+const hexColor = z.string().regex(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+
 export const themeDefSchema = z.object({
   mode: z.enum(["css_vars", "literal_remap", "none"]),
-  roles: z.record(z.string(), z.object({ var: z.string().optional(), hex: z.string() })),
+  roles: z.record(z.string(), z.object({ var: z.string().optional(), hex: hexColor })),
 });
 export type ThemeDef = z.infer<typeof themeDefSchema>;
 
@@ -92,6 +94,15 @@ export const manifestSchema = z.object({
   theme: themeDefSchema,
   nav: z.array(navRegionSchema),
   pages: z.array(pageDefSchema).min(1),
+}).superRefine((m, ctx) => {
+  const ids = new Set<string>();
+  const files = new Set<string>();
+  for (const p of m.pages) {
+    if (ids.has(p.id)) ctx.addIssue({ code: "custom", message: "duplicate page id", path: ["pages"] });
+    ids.add(p.id);
+    if (files.has(p.file)) ctx.addIssue({ code: "custom", message: "duplicate page file", path: ["pages"] });
+    files.add(p.file);
+  }
 });
 export type TemplateManifest = z.infer<typeof manifestSchema>;
 
@@ -105,7 +116,9 @@ export interface CompiledTemplate {
 
 export const contentDocPageSchema = z.object({
   page_id: z.string().min(1),
-  output: z.string().optional(),
+  output: z.string().refine(
+    (p) => /^[A-Za-z0-9][A-Za-z0-9/_.-]*\.html$/.test(p) && !p.includes("..") && !p.startsWith("/"),
+  ).optional(),
   nav_title: z.string().optional(),
   title: z.string().refine(tokenFree),
   slots: z.record(z.string(), z.string().refine(tokenFree)),
@@ -115,11 +128,13 @@ export type ContentDocPage = z.infer<typeof contentDocPageSchema>;
 
 export const contentDocSchema = z.object({
   identity: z.record(z.string(), z.string().refine(tokenFree)),
-  theme: z.record(z.string(), z.string()),
+  theme: z.record(z.string(), hexColor),
   pages: z.array(contentDocPageSchema).min(1),
 });
 export type ContentDoc = z.infer<typeof contentDocSchema>;
 
+// {{id:*}} tokens in values resolve at render time; presence of a token is not
+// proof of resolution — renderer verifies referenced identity keys exist.
 export type RenderResult =
   | { ok: true; files: FileMap }
   | { ok: false; missing: { page_id: string; slot_id: string }[] };
