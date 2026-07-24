@@ -38,4 +38,11 @@ describe("sanitizeInline", () => {
     expect(sanitizeInline("Fast <strong>same-day</strong> fix")).toBe("Fast <strong>same-day</strong> fix");
     expect(sanitizeInline(`Hi <script>x()</script><div>there</div>`)).toBe("Hi x()there");
   });
+  it("neutralizes parser-differential payloads (malformed tags read as text)", () => {
+    expect(sanitizeInline("<svg/onload=alert(1)>")).toBe("&lt;svg/onload=alert(1)&gt;");
+    expect(sanitizeInline("<b/onmouseover=alert(1)>click</b>")).toBe("&lt;b/onmouseover=alert(1)&gt;click");
+  });
+  it("does not double-escape entities in legitimate text", () => {
+    expect(sanitizeInline("Bread &amp; butter")).toBe("Bread &amp; butter");
+  });
 });
