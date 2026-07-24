@@ -45,3 +45,31 @@ describe("compileTemplate (empty zip)", () => {
     expect(result.diagnostics.some((d) => d.code === "no_pages")).toBe(true);
   });
 });
+
+const enc = (s: string) => new TextEncoder().encode(s);
+
+describe("tokenizeInternalLinks (pass 4b hardening)", () => {
+  it("preserves a #fragment suffix on the token", () => {
+    const result = compileTemplate(zipFromMap({
+      "index.html": enc(`<html><head><title>Home</title></head><body><a href="about.html#team">Team</a></body></html>`),
+      "about.html": enc(`<html><head><title>About</title></head><body><p>About us</p></body></html>`),
+    }), "frag-fixture");
+    expect(result.template.pages["index.html"]).toContain("{{link:about}}#team");
+  });
+
+  it("resolves a page link case-insensitively instead of leaving it raw", () => {
+    const result = compileTemplate(zipFromMap({
+      "index.html": enc(`<html><head><title>Home</title></head><body><a href="About.html">About</a></body></html>`),
+      "about.html": enc(`<html><head><title>About</title></head><body><p>About us</p></body></html>`),
+    }), "case-fixture");
+    expect(result.template.pages["index.html"]).toContain("{{link:about}}");
+    expect(result.template.pages["index.html"]).not.toContain('href="About.html"');
+  });
+
+  it("flags an unresolved internal page link with an info diagnostic", () => {
+    const result = compileTemplate(zipFromMap({
+      "index.html": enc(`<html><head><title>Home</title></head><body><a href="nonexistent.html">Nowhere</a></body></html>`),
+    }), "unresolved-fixture");
+    expect(result.diagnostics.some((d) => d.level === "info" && d.code === "link_unresolved")).toBe(true);
+  });
+});

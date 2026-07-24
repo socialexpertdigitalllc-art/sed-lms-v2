@@ -21,6 +21,11 @@ export interface CompileResult {
  * identity first (tokens flow into fragments/samples), nav before repeats
  * (nav lists must not become repeats), repeats before slots (card text
  * belongs to fragments, not page slots).
+ *
+ * @throws synchronously if `unzipToMap` rejects a malformed or unsafe zip
+ * (bad archive, path traversal, duplicate paths). Phase 1 has no upload
+ * route calling this directly; the Phase 2 upload route must catch this
+ * and convert it into a blocker diagnostic rather than letting it bubble up.
  */
 export function compileTemplate(zipBytes: Uint8Array, name: string): CompileResult {
   const diagnostics: Diagnostic[] = [];
@@ -49,6 +54,10 @@ export function compileTemplate(zipBytes: Uint8Array, name: string): CompileResu
 
     pageDefs.push({
       id: page.id, file: page.file, kind: page.kind,
+      // page.kind only ever comes from pageKindFromFilename (see ../schema),
+      // which emits "services_hub"/"areas_hub" — never the singular
+      // "service"/"area". So this stays false until Phase 2's AI semantic-label
+      // pass can assign singular kinds; the branch is intentionally inert in Phase 1.
       stampable: page.kind === "service" || page.kind === "area",
       title_sample: slot.titleSample,
       slots: slot.slots,
