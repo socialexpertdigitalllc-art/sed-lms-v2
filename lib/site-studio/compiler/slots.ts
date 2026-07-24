@@ -16,6 +16,8 @@ const SKIP = new Set(["script", "style", "title", "noscript"]);
 export function isSlottableLeaf(el: HTMLElement): boolean {
   const tag = el.rawTagName?.toLowerCase() ?? "";
   if (!tag || SKIP.has(tag) || INLINE.has(tag) || tag === "a") return false;
+  // A container holding a nav/repeat region marker is structural, not a content leaf.
+  if (findTokens(el.innerHTML).some((t) => t.kind === "nav" || t.kind === "repeat")) return false;
   for (const desc of el.querySelectorAll("*")) {
     const t = desc.rawTagName?.toLowerCase() ?? "";
     if (!INLINE.has(t)) return false;

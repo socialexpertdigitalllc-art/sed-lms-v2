@@ -82,4 +82,20 @@ describe("extractSlots", () => {
     const { diagnostics } = extractSlots(p);
     expect(diagnostics.some((d) => d.code === "img_alt_missing")).toBe(true);
   });
+  it("does not slot a nav/repeat marker container", () => {
+    // The shared page() helper uses bare parse(html), which drops comments
+    // entirely (options.comment defaults to false) — the marker wouldn't
+    // survive into the DOM and this test would pass for the wrong reason.
+    // Parse with { comment: true } here so the marker is a real CommentNode,
+    // matching what extractNav/extractRepeats leave behind before extractSlots runs.
+    const root = parse(
+      `<body><ul><!--@nav:nav_header--></ul><div class="cards"><!--@repeat:index_r1--></div><p>Real body copy here</p></body>`,
+      { comment: true },
+    );
+    const p: PageSource = { file: "index.html", id: "index", kind: "home", root };
+    const { slots } = extractSlots(p);
+    expect(slots).toHaveLength(1);
+    expect(slots[0].sample).toBe("Real body copy here");
+    expect(slots.some((s) => s.sample.includes("<!--@"))).toBe(false);
+  });
 });
