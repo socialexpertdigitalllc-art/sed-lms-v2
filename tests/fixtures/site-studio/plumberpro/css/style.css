@@ -1,0 +1,12 @@
+:root {
+  --primary: #0a5adf;
+  --primary-dark: #063a91;
+  --highlight: #ff9f1c;
+  --ink: #222222;
+}
+body { color: var(--ink); font-family: sans-serif; }
+h1 { color: var(--primary); }
+h3 { color: var(--primary-dark); }
+.card { border-top: 3px solid var(--primary); }
+a { color: var(--primary); }
+.logo { color: var(--highlight); }
