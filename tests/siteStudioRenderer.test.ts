@@ -167,3 +167,53 @@ describe("renderSite refusals", () => {
     expect(r.missing.some((m) => m.slot_id === "id:phone")).toBe(true);
   });
 });
+
+describe("renderSite nav href prefixing", () => {
+  const navTpl: CompiledTemplate = {
+    manifest: {
+      engine: 3, name: "mini2", version: 1,
+      identity: { business_name: "Demo Co" },
+      theme: { mode: "none", roles: {} },
+      nav: [{
+        id: "nav_header", fragment: "nav_header", location: "header",
+        items: [
+          { page_id: "p1", href: "p1.html", label: "P1" },
+          { page_id: null, href: "//cdn.example.com/widget", label: "CDN" },
+          { page_id: null, href: "javascript:void(0)", label: "Toggle" },
+        ],
+      }],
+      pages: [
+        { id: "p1", file: "p1.html", kind: "home", stampable: false, title_sample: "P1", slots: [], repeats: [] },
+        { id: "sub", file: "page.html", kind: "generic", stampable: false, title_sample: "Sub", slots: [], repeats: [] },
+      ],
+    },
+    pages: {
+      "p1.html": `<html><head><title>{{title}}</title></head><body><ul><!--@nav:nav_header--></ul></body></html>`,
+      "page.html": `<html><head><title>{{title}}</title></head><body><ul><!--@nav:nav_header--></ul></body></html>`,
+    },
+    fragments: { nav_header: `<li><a href="{{nav:href}}">{{nav:title}}</a></li>` },
+    assets: {},
+  };
+  const navDoc: ContentDoc = {
+    identity: { business_name: "Acme" },
+    theme: {},
+    pages: [
+      { page_id: "p1", title: "P1", slots: {}, repeats: {} },
+      { page_id: "sub", output: "sub/page.html", title: "Sub", slots: {}, repeats: {} },
+    ],
+  };
+
+  it("renders scheme/protocol-relative nav hrefs verbatim on a subpage (no ../ prepended)", () => {
+    const r = renderSite(navTpl, navDoc);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const sub = dec(r.files["sub/page.html"]);
+    // page link gets the depth prefix...
+    expect(sub).toContain(`<a href="../p1.html">P1</a>`);
+    // ...but scheme/protocol-relative links render verbatim, never corrupted with ../
+    expect(sub).toContain(`<a href="//cdn.example.com/widget">CDN</a>`);
+    expect(sub).toContain(`<a href="javascript:void(0)">Toggle</a>`);
+    expect(sub).not.toContain(`..//cdn.example.com`);
+    expect(sub).not.toContain(`../javascript:`);
+  });
+});

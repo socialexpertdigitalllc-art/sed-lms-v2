@@ -17,6 +17,12 @@ const renderNavLi = (frag: string, href: string, label: string): string =>
 /** Depth-aware relative prefix: "services/sewer.html" links back up with "../". */
 const relPrefix = (from: string) => "../".repeat(from.split("/").length - 1);
 
+/** Apply the depth prefix to a nav href, unless it's absolute, scheme-qualified
+ *  (http:, javascript:, …), protocol-relative (//host), or a bare anchor (#x) —
+ *  those must render verbatim, never rewritten with "../". */
+const prefixHref = (prefix: string, href: string): string =>
+  /^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(href) ? href : prefix + href;
+
 export function renderSite(tpl: CompiledTemplate, doc: ContentDoc): RenderResult {
   const missing: { page_id: string; slot_id: string }[] = [];
   const defs = new Map(tpl.manifest.pages.map((p) => [p.id, p]));
@@ -72,7 +78,7 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc): RenderResult
             }
             // page not built (or stampable) → skipped: nav-prune done right
           } else {
-            parts.push(renderNavLi(frag, prefix + it.href, it.label)); // non-page nav link → verbatim
+            parts.push(renderNavLi(frag, prefixHref(prefix, it.href), it.label)); // non-page nav link → verbatim
           }
         }
         // fan-out: built non-stampable pages that weren't in the original nav, appended in doc order
