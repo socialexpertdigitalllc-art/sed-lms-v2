@@ -3,9 +3,9 @@ import { Diagnostic } from "../schema";
 import { idToken } from "../tokens";
 import { Inventory } from "./inventory";
 
-const PHONE_RE = /(?:\(\d{3}\)\s?|\d{3}[-. ])\d{3}[-. ]\d{4}/g;
+const PHONE_RE = /(?:\+1[-. ]?)?(?:\(\d{3}\)\s?|\d{3}[-. ])\d{3}[-. ]\d{4}/g;
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-const YEAR_RE = /(©|&copy;)\s*(20\d\d)/;
+const YEAR_RE = /(©|&copy;)\s*(20\d\d)(?:\s*[-–—]\s*(20\d\d))?/;
 
 function mostFrequent(values: string[]): string | undefined {
   const counts = new Map<string, number>();
@@ -41,17 +41,50 @@ export function extractIdentity(inv: Inventory): { identity: Record<string, stri
   const identity: Record<string, string> = {};
   const allText = inv.pages.map((p) => p.root.toString()).join("\n");
 
-  const phone = mostFrequent(allText.match(PHONE_RE) ?? []);
+  const phoneMatches = allText.match(PHONE_RE) ?? [];
+  const distinctPhones = [...new Set(phoneMatches)];
+  const phone = mostFrequent(phoneMatches);
   if (phone) {
     identity.phone = phone;
-    identity.phone_href = `tel:${phone.replace(/[^\d+]/g, "")}`;
-    replaceEverywhere(inv.pages, identity.phone_href, idToken("phone_href"), false);
+    if (distinctPhones.length > 1) {
+      diagnostics.push({
+        level: "warn",
+        code: "identity_phone_multiple",
+        message: `Multiple phone numbers found; kept "${phone}", dropped: ${distinctPhones.filter((p) => p !== phone).join(", ")}`,
+      });
+    }
+
+    // Discover actual tel: hrefs from the DOM (mirror the map-iframe scan below) —
+    // a synthesized tel: href never matches a real one written in a different format
+    // (e.g. E.164), so prefer whatever the template actually uses.
+    const telHrefs: string[] = [];
+    for (const page of inv.pages) {
+      for (const a of page.root.querySelectorAll("a")) {
+        const href = a.getAttribute("href") ?? "";
+        if (href.startsWith("tel:") && !telHrefs.includes(href)) telHrefs.push(href);
+      }
+    }
+    if (telHrefs.length > 0) {
+      identity.phone_href = telHrefs[0];
+      for (const href of telHrefs) replaceEverywhere(inv.pages, href, idToken("phone_href"), false);
+    } else {
+      identity.phone_href = `tel:${phone.replace(/[^\d+]/g, "")}`;
+    }
     replaceEverywhere(inv.pages, phone, idToken("phone"), false);
   }
 
-  const email = mostFrequent(allText.match(EMAIL_RE) ?? []);
+  const emailMatches = allText.match(EMAIL_RE) ?? [];
+  const distinctEmails = [...new Set(emailMatches)];
+  const email = mostFrequent(emailMatches);
   if (email) {
     identity.email = email;
+    if (distinctEmails.length > 1) {
+      diagnostics.push({
+        level: "warn",
+        code: "identity_email_multiple",
+        message: `Multiple email addresses found; kept "${email}", dropped: ${distinctEmails.filter((e) => e !== email).join(", ")}`,
+      });
+    }
     replaceEverywhere(inv.pages, `mailto:${email}`, idToken("email_href"), false);
     identity.email_href = `mailto:${email}`;
     replaceEverywhere(inv.pages, email, idToken("email"), false);
@@ -79,8 +112,18 @@ export function extractIdentity(inv: Inventory): { identity: Record<string, stri
 
   const yearMatch = allText.match(YEAR_RE);
   if (yearMatch) {
-    identity.year = yearMatch[2];
-    replaceEverywhere(inv.pages, yearMatch[2], idToken("year"), true);
+    if (yearMatch[3]) {
+      identity.year = yearMatch[3];
+      replaceEverywhere(inv.pages, yearMatch[3], idToken("year"), true);
+      diagnostics.push({
+        level: "warn",
+        code: "identity_year_range",
+        message: `Copyright year range "${yearMatch[2]}-${yearMatch[3]}" detected; tokenized the end year only, start year "${yearMatch[2]}" left raw — verify in review.`,
+      });
+    } else {
+      identity.year = yearMatch[2];
+      replaceEverywhere(inv.pages, yearMatch[2], idToken("year"), true);
+    }
   }
 
   return { identity, diagnostics };
