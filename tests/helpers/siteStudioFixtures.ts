@@ -9,7 +9,7 @@ export function fixtureFiles(name: string): Record<string, Uint8Array> {
   const base = path.join(ROOT, name);
   const out: Record<string, Uint8Array> = {};
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
+    for (const entry of readdirSync(dir).sort()) {
       const full = path.join(dir, entry);
       if (statSync(full).isDirectory()) walk(full);
       else out[path.relative(base, full).replace(/\\/g, "/")] = new Uint8Array(readFileSync(full));
