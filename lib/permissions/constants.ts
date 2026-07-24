@@ -81,6 +81,7 @@ export const PERMISSIONS = [
   { key: "templates.generate", name: "Generate From Templates", category: "templates" },
   { key: "templates.deploy", name: "Deploy Generated Websites", category: "templates", is_sensitive: true },
   { key: "analytics.view_templates", name: "View Template Engine Analytics", category: "templates" },
+  { key: "studio.manage", name: "Manage Site Studio (Template Engine v3)", category: "templates", is_sensitive: true },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
