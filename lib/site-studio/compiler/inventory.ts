@@ -26,10 +26,10 @@ const pageId = (file: string) =>
 function stripLegacyScriptWrapper(text: string): { stripped: string; changed: boolean } {
   const trimmed = text.trim();
   if (!trimmed.startsWith("<!--")) return { stripped: text, changed: false };
-  let body = trimmed.slice(4);
-  if (body.endsWith("//-->")) body = body.slice(0, -5);
-  else if (body.endsWith("-->")) body = body.slice(0, -3);
-  return { stripped: body, changed: true };
+  const body = trimmed.slice(4);
+  if (body.endsWith("//-->")) return { stripped: body.slice(0, -5), changed: true };
+  if (body.endsWith("-->")) return { stripped: body.slice(0, -3), changed: true };
+  return { stripped: text, changed: false }; // no matching closer — leave intact, let the includes() check flag it
 }
 
 /** Pass 1: classify files, parse pages (comments stripped), assign ids/kinds. */

@@ -49,4 +49,10 @@ describe("inventory", () => {
     expect(inv.pages.map((p) => p.file)).toEqual(["about.html"]);
     expect(inv.diagnostics.some((d) => d.level === "blocker" && d.code === "page_id_collision")).toBe(true);
   });
+  it("leaves an unclosed legacy script wrapper intact and flags it", () => {
+    const html = "<html><body><script><!-- old debug flag\nvar x = 1;</script></body></html>";
+    const inv = inventory({ "index.html": new TextEncoder().encode(html) });
+    expect(inv.pages[0].root.toString()).toContain("<!--");
+    expect(inv.diagnostics.some((d) => d.code === "script_comment_content")).toBe(true);
+  });
 });
