@@ -13,6 +13,7 @@ export function unzipToMap(bytes: Uint8Array): Record<string, Uint8Array> {
     const parts = normalized.split("/").filter((p) => p.length > 0 && p !== ".");
     if (parts.length === 0) continue;
     if (parts.includes("..")) throw new Error(`Unsafe path in zip entry: ${name}`);
+    if (/^[A-Za-z]:$/.test(parts[0])) throw new Error(`Unsafe path in zip entry: ${name}`);
     entries.push([parts.join("/"), data]);
   }
   if (entries.length > 0) {
@@ -24,7 +25,10 @@ export function unzipToMap(bytes: Uint8Array): Record<string, Uint8Array> {
     if (allShareRoot) for (const e of entries) e[0] = e[0].split("/").slice(1).join("/");
   }
   const out: Record<string, Uint8Array> = {};
-  for (const [p, data] of entries) out[p] = data;
+  for (const [p, data] of entries) {
+    if (p in out) throw new Error(`Duplicate path in zip: ${p}`);
+    out[p] = data;
+  }
   return out;
 }
 
