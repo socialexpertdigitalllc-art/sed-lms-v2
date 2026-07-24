@@ -22,4 +22,16 @@ describe("flagJs", () => {
   it("silent on clean templates", () => {
     expect(flagJs(inv("<body><p>Hi</p></body>", { "app.js": "console.log(1)" }), { phone: "(512) 555-0147" })).toEqual([]);
   });
+  it("flags jQuery injection idioms in assets", () => {
+    const d = flagJs(inv("<body></body>", { "app.js": `$("#menu").html(navHtml);` }), {});
+    expect(d.some((x) => x.code === "js_renders_dom" && x.level === "warn")).toBe(true);
+  });
+  it("flags phone echoed with different separators via digit-normalized matching", () => {
+    const d = flagJs(inv("<body></body>", { "app.js": `var p="512.555.0147";` }), { phone: "(512) 555-0147" });
+    expect(d.some((x) => x.code === "asset_identity_echo" && x.level === "warn")).toBe(true);
+  });
+  it("flags email echoed with different case", () => {
+    const d = flagJs(inv("<body></body>", { "app.js": `var e="HELP@PLUMBERPRO.COM";` }), { email: "help@plumberpro.com" });
+    expect(d.some((x) => x.code === "asset_identity_echo" && x.level === "warn")).toBe(true);
+  });
 });
