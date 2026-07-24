@@ -159,7 +159,7 @@ export function getModel(providerKey: string, modelId: string): AiModelDescripto
 
 /* ----------------------------------------------------------------- tasks */
 
-export type AiTaskKey = "content_plan" | "file_regen" | "image_vision" | "legacy_v1";
+export type AiTaskKey = "content_plan" | "file_regen" | "image_vision" | "legacy_v1" | "template_compile";
 
 export interface AiTaskDescriptor {
   key: AiTaskKey;
@@ -237,7 +237,19 @@ const legacyV1: AiTaskDescriptor = {
   routable: false,
 };
 
-export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [contentPlan, fileRegen, imageVision, legacyV1];
+const templateCompile: AiTaskDescriptor = {
+  key: "template_compile",
+  label: "Template compile (Site Studio)",
+  description:
+    "One or two short calls per template upload: finds residual demo identity (person names, addresses, places) the deterministic pass cannot, and labels pages/slots semantically. Strict JSON out; a model that drifts into prose is rejected and the template simply stays un-enriched.",
+  where: "lib/site-studio/compiler/ai/*",
+  requires: { vision: false, minOutputTokens: 8000 },
+  defaultProvider: "gemini",
+  defaultModel: "gemini-3.1-pro-preview",
+  routable: true,
+};
+
+export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [contentPlan, fileRegen, imageVision, legacyV1, templateCompile];
 
 export function getTask(key: string): AiTaskDescriptor | undefined {
   return AI_TASK_REGISTRY.find((t) => t.key === key);
