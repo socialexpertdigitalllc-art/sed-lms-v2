@@ -24,4 +24,29 @@ describe("inventory", () => {
     expect(inv.pages).toEqual([]);
     expect(inv.diagnostics.some((d) => d.level === "blocker" && d.code === "no_pages")).toBe(true);
   });
+  it("unwraps a legacy-wrapped script comment without warning", () => {
+    const html = "<html><body><script><!--\nvar x=1;\n//--></script></body></html>";
+    const inv = inventory({ "index.html": new TextEncoder().encode(html) });
+    const out = inv.pages[0].root.toString();
+    expect(out).toContain("var x=1;");
+    expect(out).not.toContain("<!--");
+    expect(inv.diagnostics.some((d) => d.code === "script_comment_content")).toBe(false);
+  });
+  it("warns when a script body embeds HTML-comment content mid-script", () => {
+    const html = '<html><body><script>var a=1; /* x */ var s="<!-- note -->";</script></body></html>';
+    const inv = inventory({ "index.html": new TextEncoder().encode(html) });
+    expect(inv.diagnostics.some((d) => d.code === "script_comment_content")).toBe(true);
+    expect(inv.pages[0].root.toString()).toContain('var a=1; /* x */ var s="<!-- note -->";');
+  });
+  it("flags suspect encoding when decoded bytes contain replacement characters", () => {
+    const bytes = new Uint8Array([0x3c, 0x68, 0x31, 0x3e, 0x43, 0x61, 0x66, 0xe9, 0x3c, 0x2f, 0x68, 0x31, 0x3e]);
+    const inv = inventory({ "bad.html": bytes });
+    expect(inv.diagnostics.some((d) => d.code === "encoding_suspect")).toBe(true);
+  });
+  it("reports a blocker and keeps the first file on page id collision", () => {
+    const files = fixtureFiles("bakery");
+    const inv = inventory({ "about.html": files["index.html"], "About.HTML": files["index.html"] });
+    expect(inv.pages.map((p) => p.file)).toEqual(["about.html"]);
+    expect(inv.diagnostics.some((d) => d.level === "blocker" && d.code === "page_id_collision")).toBe(true);
+  });
 });
