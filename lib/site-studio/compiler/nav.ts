@@ -79,6 +79,7 @@ export function extractNav(inv: Inventory): { regions: NavRegionDef[]; fragments
   // location wins; anything else at that location is either an exact repeat
   // (joins) or genuinely different content (left untouched, flagged).
   const byLocation = new Map<NavRegionDef["location"], RegionRecord>();
+  const idByFile = new Map(inv.pages.map((p) => [p.file, p.id]));
   let found = false;
 
   for (const page of inv.pages) {
@@ -131,6 +132,12 @@ export function extractNav(inv: Inventory): { regions: NavRegionDef[]; fragments
       }
 
       const id = `nav_${location}`;
+      const regionItems = links.map((a) => {
+        const href = a!.getAttribute("href") ?? "";
+        const label = a!.text;
+        const clean = href.replace(/^\.\//, "").split(/[?#]/)[0];
+        return { page_id: idByFile.get(clean) ?? null, href, label };
+      });
       const fragLi = items[0].clone() as HTMLElement;
       const a = fragLi.querySelector("a")!;
       stripActiveClass(fragLi);
@@ -138,7 +145,7 @@ export function extractNav(inv: Inventory): { regions: NavRegionDef[]; fragments
       a.setAttribute("href", NAV_HREF);
       a.set_content(NAV_TITLE);
       fragments[id] = fragLi.toString();
-      regions.push({ id, fragment: id, location });
+      regions.push({ id, fragment: id, location, items: regionItems });
       byLocation.set(location, { id, hrefs });
 
       list.set_content(navMarker(id));

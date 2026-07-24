@@ -26,6 +26,22 @@ describe("extractNav (plumberpro)", () => {
   });
 });
 
+describe("extractNav (plumberpro — ordered items)", () => {
+  const inv = inventory(fixtureFiles("plumberpro"));
+  const { regions } = extractNav(inv);
+  const header = regions.find((r) => r.location === "header")!;
+
+  it("captures the header nav's original items in order (page_id + label), href present", () => {
+    expect(header.items?.map((it) => ({ page_id: it.page_id, label: it.label }))).toEqual([
+      { page_id: "index", label: "Home" },
+      { page_id: "about", label: "About" },
+      { page_id: "services", label: "Services" },
+      { page_id: "contact", label: "Contact" },
+    ]);
+    for (const it of header.items ?? []) expect(it.href.length).toBeGreaterThan(0);
+  });
+});
+
 describe("extractNav (bakery — div nav is not detected)", () => {
   const inv = inventory(fixtureFiles("bakery"));
   const { regions, diagnostics } = extractNav(inv);

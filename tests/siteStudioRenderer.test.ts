@@ -85,6 +85,69 @@ describe("renderSite", () => {
   });
 });
 
+const tplWithNavItems: CompiledTemplate = {
+  manifest: {
+    engine: 3, name: "mini2", version: 1,
+    identity: {},
+    theme: { mode: "none", roles: {} },
+    nav: [{
+      id: "nav_header", fragment: "nav_header", location: "header",
+      items: [
+        { page_id: "index", href: "index.html", label: "Home" },
+        { page_id: "ghost", href: "ghost.html", label: "Ghost" },
+        { page_id: "about", href: "about.html", label: "About" },
+      ],
+    }],
+    pages: [
+      { id: "index", file: "index.html", kind: "home", stampable: false, title_sample: "Index Title", slots: [], repeats: [] },
+      { id: "about", file: "about.html", kind: "about", stampable: false, title_sample: "About Title", slots: [], repeats: [] },
+      { id: "extra", file: "extra.html", kind: "generic", stampable: false, title_sample: "Extra Title", slots: [], repeats: [] },
+      { id: "svc", file: "service.html", kind: "service", stampable: true, title_sample: "Service Title", slots: [], repeats: [] },
+    ],
+  },
+  pages: {
+    "index.html": `<html><body><ul><!--@nav:nav_header--></ul></body></html>`,
+    "about.html": `<html><body><ul><!--@nav:nav_header--></ul></body></html>`,
+    "extra.html": `<html><body><ul><!--@nav:nav_header--></ul></body></html>`,
+    "service.html": `<html><body><ul><!--@nav:nav_header--></ul></body></html>`,
+  },
+  fragments: { nav_header: `<li><a href="{{nav:href}}">{{nav:title}}</a></li>` },
+  assets: {},
+};
+
+const docWithNavItems: ContentDoc = {
+  identity: {},
+  theme: {},
+  pages: [
+    { page_id: "index", title: "Index Page", slots: {}, repeats: {} },
+    { page_id: "about", title: "About Page", slots: {}, repeats: {} },
+    { page_id: "extra", title: "Extra Page", slots: {}, repeats: {} },
+    { page_id: "svc", title: "Service Page", slots: {}, repeats: {} },
+  ],
+};
+
+describe("renderSite (nav region with items: order, prune, fan-out)", () => {
+  const result = renderSite(tplWithNavItems, docWithNavItems);
+  it("renders ok", () => { expect(result.ok).toBe(true); });
+  if (!result.ok) return;
+  const index = dec(result.files["index.html"]);
+
+  it("renders in region-item order using item labels", () => {
+    expect(index).toContain(
+      `<li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li>`,
+    );
+  });
+  it("skips a region item whose page_id isn't built", () => {
+    expect(index).not.toContain("Ghost");
+  });
+  it("appends a built non-stampable page not present in items, after the item-ordered ones", () => {
+    expect(index).toContain(
+      `<li><a href="about.html">About</a></li><li><a href="extra.html">Extra Page</a></li>`,
+    );
+    expect(index).not.toContain("Service Page");
+  });
+});
+
 describe("renderSite refusals", () => {
   it("refuses and names missing slots", () => {
     const bad: ContentDoc = { ...doc, pages: [{ ...doc.pages[0], slots: { index_i1: "x.jpg" } }] };

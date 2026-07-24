@@ -11,6 +11,9 @@ const escapeText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;")
 const fillSlot = (value: string, sample: string, html: boolean): string =>
   html ? (value === sample ? value : sanitizeInline(value)) : escapeText(value);
 
+const renderNavLi = (frag: string, href: string, label: string): string =>
+  frag.split(NAV_HREF).join(href).split(NAV_TITLE).join(escapeHtml(label));
+
 /** Depth-aware relative prefix: "services/sewer.html" links back up with "../". */
 const relPrefix = (from: string) => "../".repeat(from.split("/").length - 1);
 
@@ -32,17 +35,19 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc): RenderResult
     built.push({ def, page, output: page.output ?? def.file });
   }
 
-  // completeness: identity keys the skeletons actually reference
+  // completeness: identity keys the skeletons actually reference (including
+  // nav labels captured on region.items, which live in the manifest, not the
+  // page/fragment skeletons)
+  const navLabels = tpl.manifest.nav.flatMap((r) => (r.items ?? []).map((it) => it.label));
   const referenced = new Set(
-    Object.values(tpl.pages).concat(Object.values(tpl.fragments))
+    Object.values(tpl.pages).concat(Object.values(tpl.fragments)).concat(navLabels)
       .flatMap((html) => findTokens(html)).filter((t) => t.kind === "id").map((t) => t.key),
   );
   for (const key of referenced) if (!(key in doc.identity)) missing.push({ page_id: "(site)", slot_id: `id:${key}` });
 
   if (missing.length > 0) return { ok: false, missing };
 
-  const navItems = built.filter((b) => !b.def.stampable)
-    .map((b) => ({ href: b.output, title: b.page.nav_title ?? b.page.title }));
+  const builtByDefId = new Map(built.map((b) => [b.def.id, b]));
   const outputOf = new Map<string, string>();
   for (const b of built) if (!outputOf.has(b.def.id)) outputOf.set(b.def.id, b.output);
 
@@ -55,10 +60,34 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc): RenderResult
 
     for (const region of tpl.manifest.nav) {
       const frag = tpl.fragments[region.fragment];
-      const rendered = navItems
-        .map((item) => frag.split(NAV_HREF).join(prefix + item.href).split(NAV_TITLE).join(escapeHtml(item.title)))
-        .join("");
-      html = html.split(navMarker(region.id)).join(rendered);
+      const parts: string[] = [];
+      if (region.items && region.items.length) {
+        const seen = new Set<string>();
+        for (const it of region.items) {
+          if (it.page_id) {
+            const nb = builtByDefId.get(it.page_id);
+            if (nb && !nb.def.stampable) {
+              parts.push(renderNavLi(frag, prefix + nb.output, nb.page.nav_title ?? it.label));
+              seen.add(it.page_id);
+            }
+            // page not built (or stampable) → skipped: nav-prune done right
+          } else {
+            parts.push(renderNavLi(frag, prefix + it.href, it.label)); // non-page nav link → verbatim
+          }
+        }
+        // fan-out: built non-stampable pages that weren't in the original nav, appended in doc order
+        for (const nb of built) {
+          if (nb.def.stampable || seen.has(nb.def.id)) continue;
+          parts.push(renderNavLi(frag, prefix + nb.output, nb.page.nav_title ?? nb.page.title));
+        }
+      } else {
+        // fallback for manifests without items (e.g. hand-written test tpl): original behavior
+        for (const nb of built) {
+          if (nb.def.stampable) continue;
+          parts.push(renderNavLi(frag, prefix + nb.output, nb.page.nav_title ?? nb.page.title));
+        }
+      }
+      html = html.split(navMarker(region.id)).join(parts.join(""));
     }
 
     for (const r of b.def.repeats) {

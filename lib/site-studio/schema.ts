@@ -75,6 +75,11 @@ export const navRegionSchema = z.object({
   id: z.string().min(1),
   fragment: z.string().min(1),
   location: z.enum(["header", "footer", "mobile"]),
+  items: z.array(z.object({
+    page_id: z.string().nullable(),
+    href: z.string(),
+    label: z.string(),
+  })).optional(),
 });
 export type NavRegionDef = z.infer<typeof navRegionSchema>;
 
