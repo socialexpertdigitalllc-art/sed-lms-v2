@@ -21,6 +21,12 @@ const replaceBounded = (text: string, value: string, token: string): { text: str
   return { text: out, hits };
 };
 
+/** HTML-entity-encode the plain-text form of a value (& < >). title_sample is
+ *  captured decoded (.text) but slot samples are captured encoded
+ *  (.innerHTML), so a value containing these characters tokenizes in one
+ *  place and silently not the other unless both forms are matched. */
+const encodeEntities = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 /**
  * Apply AI-proposed identity additions to a compiled package. PURE — deep
  * clones, never mutates the input. The caller re-runs verifyTemplate on the
@@ -35,7 +41,13 @@ export function applyIdentityAdditions(
   const applied: IdentityAddition[] = [];
   const skipped: ApplyIdentityResult["skipped"] = [];
 
-  for (const raw of additions) {
+  // Longest value first: additions are applied sequentially against
+  // already-mutated text, so a short value ("John") consuming its match
+  // before a longer value that contains it ("John Carpenter") is even tried
+  // would permanently bake the remainder ("Carpenter") into raw text.
+  const ordered = [...additions].sort((a, b) => (b.value ?? "").length - (a.value ?? "").length);
+
+  for (const raw of ordered) {
     const key = (raw.key ?? "").trim();
     const value = (raw.value ?? "").trim();
     const skip = (reason: string) => skipped.push({ key, value, reason });
@@ -51,11 +63,20 @@ export function applyIdentityAdditions(
     if (Object.values(template.manifest.identity).some((v) => v === value)) { skip("value already tokenized"); continue; }
 
     const token = idToken(key);
+    const encoded = encodeEntities(value);
     let hits = 0;
     const sub = (s: string): string => {
       const r = replaceBounded(s, value, token);
       hits += r.hits;
-      return r.text;
+      let out = r.text;
+      // also catch the value's HTML-entity-encoded form (slot samples are
+      // captured via .innerHTML, title_sample via .text — see encodeEntities)
+      if (encoded !== value) {
+        const r2 = replaceBounded(out, encoded, token);
+        hits += r2.hits;
+        out = r2.text;
+      }
+      return out;
     };
 
     // hold results until we know the addition lands (hits > 0)
@@ -66,11 +87,15 @@ export function applyIdentityAdditions(
     const manifest = structuredClone(template.manifest);
     for (const page of manifest.pages) {
       page.title_sample = sub(page.title_sample);
-      for (const s of page.slots) s.sample = sub(s.sample);
+      // image slot samples are FILE PATHS, not prose — never substitute into
+      // them, or an unrelated identity edit later silently breaks the asset
+      // reference (the real file key never changes to match).
+      for (const s of page.slots) { if (s.type === "image") continue; s.sample = sub(s.sample); }
       for (const rep of page.repeats) {
-        for (const s of rep.slots) s.sample = sub(s.sample);
+        const imageSlotIds = new Set(rep.slots.filter((s) => s.type === "image").map((s) => s.id));
+        for (const s of rep.slots) { if (s.type === "image") continue; s.sample = sub(s.sample); }
         rep.samples = rep.samples.map((row) =>
-          Object.fromEntries(Object.entries(row).map(([k, v]) => [k, sub(v)])));
+          Object.fromEntries(Object.entries(row).map(([k, v]) => [k, imageSlotIds.has(k) ? v : sub(v)])));
       }
     }
     for (const region of manifest.nav) {

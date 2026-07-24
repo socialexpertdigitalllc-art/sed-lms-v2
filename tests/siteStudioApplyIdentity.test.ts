@@ -62,4 +62,42 @@ describe("applyIdentityAdditions", () => {
     const r = applyIdentityAdditions(t, [{ key: "city", value: "Denver" }]);
     expect(r.template.pages["index.html"]).toBe(`<p>A true Denverite in {{id:city}}.</p>`);
   });
+  it("never tokenizes inside image slot samples (file paths), even when the value matches", () => {
+    const t = tpl();
+    t.manifest.pages[0].slots.push({ id: "img1", type: "image", sample: "img/Denver-photo.jpg", html: false });
+    t.manifest.pages[0].repeats[0].slots.push({ id: "r1_img", type: "image", sample: "img/Denver-card.jpg", html: false });
+    t.manifest.pages[0].repeats[0].samples[0].r1_img = "img/Denver-card.jpg";
+    const r = applyIdentityAdditions(t, [{ key: "city", value: "Denver" }]);
+    expect(r.applied.map((a) => a.key)).toContain("city");
+    const page = r.template.manifest.pages[0];
+    expect(page.slots.find((s) => s.id === "img1")!.sample).toBe("img/Denver-photo.jpg");
+    expect(page.repeats[0].slots.find((s) => s.id === "r1_img")!.sample).toBe("img/Denver-card.jpg");
+    expect(page.repeats[0].samples[0].r1_img).toBe("img/Denver-card.jpg");
+    // meanwhile the paired text slot/sample still gets tokenized normally
+    expect(page.slots[0].sample).toContain("{{id:city}}");
+  });
+  it("also matches the HTML-entity-encoded form of a value (title_sample raw vs slot sample encoded)", () => {
+    const t = tpl();
+    t.manifest.pages[0].title_sample = "Welcome to Denver & Sons";
+    t.manifest.pages[0].slots[0].sample = "Trusted since 1999 — Denver &amp; Sons crew";
+    const r = applyIdentityAdditions(t, [{ key: "company", value: "Denver & Sons" }]);
+    expect(r.applied.map((a) => a.key)).toContain("company");
+    const page = r.template.manifest.pages[0];
+    expect(page.title_sample).toBe("Welcome to {{id:company}}");
+    expect(page.slots[0].sample).toBe("Trusted since 1999 — {{id:company}} crew");
+    expect(page.title_sample).not.toContain("Denver & Sons");
+    expect(page.slots[0].sample).not.toContain("Denver &amp; Sons");
+  });
+  it("orders longest-value-first so a short value proposed alongside a longer one doesn't fragment it", () => {
+    const r = applyIdentityAdditions(tpl(), [
+      { key: "first", value: "John" },
+      { key: "owner", value: "John Carpenter" },
+    ]);
+    expect(r.applied.map((a) => a.key)).toEqual(["owner"]);
+    expect(r.template.manifest.identity.owner).toBe("John Carpenter");
+    const skel = r.template.pages["index.html"];
+    expect(skel).not.toContain("Carpenter");
+    expect(skel).not.toContain("John Carpenter");
+    expect(r.skipped.some((s) => s.key === "first" && s.reason === "value not found in package")).toBe(true);
+  });
 });
