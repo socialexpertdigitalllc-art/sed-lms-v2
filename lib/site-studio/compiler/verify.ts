@@ -16,7 +16,9 @@ export function normalizeHtml(html: string): string {
     const el = node as HTMLElement;
     const tag = el.rawTagName?.toLowerCase() ?? "";
     const attrs = Object.entries(el.attributes)
-      .map(([k, v]) => `${k}="${decode(v).replace(/\s+/g, " ").trim()}"`)
+      // escape " in the value so an embedded quote can't forge a fake `key="value`
+      // boundary and let two structurally-different tags normalize identically
+      .map(([k, v]) => `${k}="${decode(v).replace(/\s+/g, " ").trim().replace(/"/g, "&quot;")}"`)
       .join(" ");
     const inner = el.childNodes.map(walk).filter(Boolean).join("|");
     return `<${tag}${attrs ? " " + attrs : ""}>${inner}</${tag}>`;

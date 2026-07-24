@@ -12,6 +12,12 @@ describe("normalizeHtml", () => {
   it("still distinguishes real content differences", () => {
     expect(normalizeHtml("<p>Hello</p>")).not.toBe(normalizeHtml("<p>Goodbye</p>"));
   });
+  it("does not collide when an attribute value contains an embedded quote (injectivity)", () => {
+    // one attribute whose value contains a quote vs two genuinely distinct attributes
+    const oneAttr = `<a data-x='b" onclick="evil()'>x</a>`;
+    const twoAttr = `<a data-x="b" onclick="evil()">x</a>`;
+    expect(normalizeHtml(oneAttr)).not.toBe(normalizeHtml(twoAttr));
+  });
 });
 
 describe("round-trip property: render(compile(zip), samples) ≈ original", () => {
