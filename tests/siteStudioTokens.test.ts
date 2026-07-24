@@ -45,4 +45,10 @@ describe("sanitizeInline", () => {
   it("does not double-escape entities in legitimate text", () => {
     expect(sanitizeInline("Bread &amp; butter")).toBe("Bread &amp; butter");
   });
+  it("keeps span and small as safe inline tags", () => {
+    expect(sanitizeInline("Hi <span>there</span> <small>x</small>")).toBe("Hi <span>there</span> <small>x</small>");
+  });
+  it("strips attributes from inline tags even when the tag itself is allowed", () => {
+    expect(sanitizeInline('<span onclick="x()">hi</span>')).toBe("<span>hi</span>");
+  });
 });

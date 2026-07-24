@@ -31,7 +31,7 @@ export function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-const INLINE_ALLOWED = new Set(["b", "i", "em", "strong", "br"]);
+const INLINE_ALLOWED = new Set(["b", "i", "em", "strong", "br", "span", "small"]);
 
 /** Strip all markup except harmless inline formatting; text is preserved. */
 export function sanitizeInline(s: string): string {

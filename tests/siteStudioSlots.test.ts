@@ -18,6 +18,10 @@ describe("isSlottableLeaf", () => {
     expect(isSlottableLeaf(parse("<span>ok</span>").querySelector("span")!)).toBe(false);
     expect(isSlottableLeaf(parse("<p><a href='x.html'>Go</a></p>").querySelector("p")!)).toBe(false);
   });
+  it("rejects leaves whose non-inline descendant is nested inside an inline wrapper", () => {
+    expect(isSlottableLeaf(parse(`<p>Hi <span><a href="x.html">link</a></span> there</p>`).querySelector("p")!)).toBe(false);
+    expect(isSlottableLeaf(parse(`<p>Hi <span><img src="x.jpg"></span></p>`).querySelector("p")!)).toBe(false);
+  });
 });
 
 describe("extractSlots", () => {
@@ -50,5 +54,32 @@ describe("extractSlots", () => {
     const { slots } = extractSlots(p);
     expect(slots).toHaveLength(1);
     expect(slots[0].sample).toBe("Call {{id:phone}} now for help");
+  });
+  it("tokenizes an img stranded between sibling text and warns stranded_text", () => {
+    const p = page(`<body><p>Call us <img src="i.jpg" alt="Phone"> now</p></body>`);
+    const { slots, diagnostics } = extractSlots(p);
+    const img = slots.find((s) => s.type === "image")!;
+    expect(p.root.querySelector("img")!.getAttribute("src")).toBe(`{{img:${img.id}}}`);
+    expect(diagnostics.some((d) => d.code === "stranded_text")).toBe(true);
+  });
+  it("warns and inserts a title token when the page has no <title>", () => {
+    const p = page("<html><head></head><body><h1>Hello there</h1></body></html>");
+    const { titleSample, diagnostics } = extractSlots(p);
+    expect(titleSample).toBe("");
+    expect(diagnostics.some((d) => d.code === "title_missing")).toBe(true);
+    expect(p.root.querySelector("head")!.toString()).toContain("<title>{{title}}</title>");
+  });
+  it("keeps only the first of multiple <title> elements and warns title_duplicate", () => {
+    const p = page("<html><head><title>First</title><title>Second</title></head><body></body></html>");
+    const { titleSample, diagnostics } = extractSlots(p);
+    expect(titleSample).toBe("First");
+    expect(p.root.querySelectorAll("title")).toHaveLength(1);
+    expect(p.root.querySelector("title")!.innerHTML).toBe("{{title}}");
+    expect(diagnostics.some((d) => d.code === "title_duplicate")).toBe(true);
+  });
+  it("flags an img with no alt attribute", () => {
+    const p = page(`<body><img src="x.jpg"></body>`);
+    const { diagnostics } = extractSlots(p);
+    expect(diagnostics.some((d) => d.code === "img_alt_missing")).toBe(true);
   });
 });
