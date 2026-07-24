@@ -19,18 +19,33 @@ const cssAssets = (files: FileMap): [string, string][] =>
     .filter(([p]) => p.toLowerCase().endsWith(".css"))
     .map(([p, b]) => [p, new TextDecoder().decode(b)]);
 
+const HEX = "#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})";
+
 /** Pass 5: map the template's colors to named roles. */
 export function extractTheme(files: FileMap): { theme: ThemeDef; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
-  const css = cssAssets(files).map(([, s]) => s).join("\n");
+  const css = cssAssets(files)
+    .map(([, s]) => s)
+    .join("\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/url\([^)]*\)/g, "url()");
 
-  // Path 1: custom properties ranked by var() usage
-  const decls = [...css.matchAll(/(--[A-Za-z0-9_-]+)\s*:\s*(#[0-9a-fA-F]{3,6})\b/g)]
-    .map(([, name, hex]) => ({ name, hex: hex.toLowerCase() }))
-    .filter((d) => !isNeutralHex(d.hex));
-  if (decls.length > 0) {
-    const ranked = decls
-      .map((d) => ({ ...d, uses: (css.match(new RegExp(`var\\(${d.name}\\)`, "g")) ?? []).length }))
+  // Path 1: custom properties ranked by var() usage, deduped by name
+  // (first non-neutral hex seen wins — later redeclarations, e.g. a
+  // dark-mode @media override, must not mint a second ranked entry)
+  const declMap = new Map<string, string>();
+  for (const [, name, hex] of css.matchAll(new RegExp(`(--[A-Za-z0-9_-]+)\\s*:\\s*(${HEX})\\b`, "g"))) {
+    const norm = hex.toLowerCase();
+    if (isNeutralHex(norm)) continue;
+    if (!declMap.has(name)) declMap.set(name, norm);
+  }
+  if (declMap.size > 0) {
+    const ranked = [...declMap.entries()]
+      .map(([name, hex]) => ({
+        name,
+        hex,
+        uses: (css.match(new RegExp(`var\\(\\s*${name}\\s*[,)]`, "g")) ?? []).length,
+      }))
       .sort((a, b) => b.uses - a.uses);
     const roles: ThemeDef["roles"] = {};
     ROLE_ORDER.forEach((role, i) => { if (ranked[i]) roles[role] = { var: ranked[i].name, hex: ranked[i].hex }; });
@@ -39,7 +54,7 @@ export function extractTheme(files: FileMap): { theme: ThemeDef; diagnostics: Di
 
   // Path 2: literal hex frequency
   const counts = new Map<string, number>();
-  for (const [, hex] of css.matchAll(/(#[0-9a-fA-F]{3,6})\b/g)) {
+  for (const [, hex] of css.matchAll(new RegExp(`(${HEX})\\b`, "g"))) {
     const norm = hex.toLowerCase();
     if (!isNeutralHex(norm)) counts.set(norm, (counts.get(norm) ?? 0) + 1);
   }
