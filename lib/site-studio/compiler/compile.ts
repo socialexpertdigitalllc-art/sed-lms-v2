@@ -8,6 +8,7 @@ import { extractRepeats } from "./repeats";
 import { extractSlots } from "./slots";
 import { extractTheme } from "./theme";
 import { flagJs } from "./jsflags";
+import { verifyTemplate } from "./verify";
 
 export interface CompileResult {
   ok: boolean;
@@ -23,7 +24,8 @@ export interface CompileResult {
  */
 export function compileTemplate(zipBytes: Uint8Array, name: string): CompileResult {
   const diagnostics: Diagnostic[] = [];
-  const inv = inventory(unzipToMap(zipBytes));
+  const files = unzipToMap(zipBytes);
+  const inv = inventory(files);
   diagnostics.push(...inv.diagnostics);
 
   const { identity, diagnostics: idDiags } = extractIdentity(inv);
@@ -64,9 +66,13 @@ export function compileTemplate(zipBytes: Uint8Array, name: string): CompileResu
     theme: theme.theme, nav: nav.regions, pages: pageDefs,
   };
 
+  const template: CompiledTemplate = { manifest, pages, fragments, assets: inv.assets };
+  if (!diagnostics.some((d) => d.level === "blocker") && inv.pages.length > 0)
+    diagnostics.push(...verifyTemplate(template, files));
+
   return {
     ok: !diagnostics.some((d) => d.level === "blocker"),
-    template: { manifest, pages, fragments, assets: inv.assets },
+    template,
     diagnostics,
   };
 }
