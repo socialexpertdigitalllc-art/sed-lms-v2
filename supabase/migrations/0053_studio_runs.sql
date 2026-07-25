@@ -28,7 +28,9 @@
 create table public.studio_runs (
   id uuid primary key default gen_random_uuid(),
   lead_id uuid references public.leads (id) on delete set null,
-  template_id uuid references public.studio_templates (id) on delete restrict,
+  -- not null + restrict: a run is meaningless without the template it was
+  -- built from, and must never be silently orphaned from it
+  template_id uuid not null references public.studio_templates (id) on delete restrict,
   -- the package version actually used; a later re-compile must not silently
   -- change what this run was built from
   template_version int not null,
