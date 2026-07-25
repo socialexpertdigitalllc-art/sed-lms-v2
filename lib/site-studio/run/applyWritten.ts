@@ -95,6 +95,110 @@ export function applyWritten(
   };
 }
 
+export interface RewriteOptions {
+  /** Merge only this one slot's value from the write result — title and
+   *  repeats are left completely alone. Used by `rerollSlot`; a whole-page
+   *  re-roll (the default) leaves this unset. */
+  onlySlot?: string;
+  /** Overwrite every field, including ones an operator has already hand-
+   *  edited. Without this, any field currently stamped `written_by:
+   *  "operator"` is skipped entirely — a re-roll must not silently clobber a
+   *  human's edit (spec §7). */
+  includeOperatorFields?: boolean;
+  model?: string;
+}
+
+const isOperatorOwned = (field?: FieldProvenance): boolean => field?.written_by === "operator";
+
+/**
+ * Provenance-aware merge of a re-roll's WriteResult — the granular sibling of
+ * `applyWritten` (used for the page's FIRST write, which always overwrites
+ * everything unconditionally since there is nothing yet to protect).
+ *
+ *  - Whole-page re-roll (`onlySlot` unset): every field the write touched
+ *    (title, each text slot, each repeat) is applied UNLESS its CURRENT
+ *    provenance is already "operator" — unless `includeOperatorFields` is
+ *    set, in which case every field is overwritten, exactly like
+ *    `applyWritten`.
+ *  - Slot re-roll (`onlySlot` set): ONLY that one slot's value from the
+ *    result is applied; title and repeats are left completely alone even
+ *    though the Writer returned fresh values for them too (the Writer always
+ *    writes a whole page in one call — the merge is what cherry-picks).
+ *    Callers are expected to have already refused the re-roll before ever
+ *    reaching here when the target slot is operator-owned and
+ *    `includeOperatorFields` is not set (see `rerollSlot`); this function
+ *    does not re-check that on its own.
+ *
+ * Does not mutate its input — returns a new RunContentDoc.
+ */
+export function applyRewrite(
+  doc: ContentDoc | RunContentDoc,
+  pageIndex: number,
+  result: WrittenPage,
+  opts: RewriteOptions = {},
+): RunContentDoc {
+  if (pageIndex < 0 || pageIndex >= doc.pages.length) {
+    throw new RangeError(`applyRewrite: page index ${pageIndex} is out of range (doc has ${doc.pages.length} pages)`);
+  }
+
+  const provenanceSource: PageProvenance[] =
+    "provenance" in doc && Array.isArray((doc as RunContentDoc).provenance)
+      ? (doc as RunContentDoc).provenance
+      : emptyProvenance(doc.pages.length);
+  const provenance = provenanceSource.map(cloneProvenance);
+
+  const pages = doc.pages.map((page, i) => (i === pageIndex ? clonePage(page) : page));
+  const target = pages[pageIndex];
+  const pageProvenance = provenance[pageIndex];
+  const field: FieldProvenance = opts.model ? { written_by: "ai", model: opts.model } : { written_by: "ai" };
+  const includeOperator = opts.includeOperatorFields === true;
+
+  if (opts.onlySlot) {
+    const value = result.slots[opts.onlySlot];
+    if (value !== undefined) {
+      target.slots[opts.onlySlot] = value;
+      pageProvenance.slots[opts.onlySlot] = field;
+    }
+  } else {
+    if (includeOperator || !isOperatorOwned(pageProvenance.title)) {
+      target.title = result.title;
+      pageProvenance.title = field;
+    }
+    for (const [id, value] of Object.entries(result.slots)) {
+      if (includeOperator || !isOperatorOwned(pageProvenance.slots[id])) {
+        target.slots[id] = value;
+        pageProvenance.slots[id] = field;
+      }
+    }
+    for (const [id, rows] of Object.entries(result.repeats)) {
+      if (includeOperator || !isOperatorOwned(pageProvenance.repeats[id])) {
+        target.repeats[id] = rows.map((r) => ({ ...r }));
+        pageProvenance.repeats[id] = field;
+      }
+    }
+  }
+
+  return {
+    identity: doc.identity,
+    theme: doc.theme,
+    pages,
+    provenance,
+  };
+}
+
+/** The provenance recorded for one doc-page, or an empty one when the doc
+ *  (or this page) has never been written/edited yet. Exported so callers
+ *  that need to make a decision BEFORE attempting a merge (e.g. `rerollSlot`
+ *  refusing an operator-owned slot without spending an AI call) don't have
+ *  to duplicate the "does this doc carry a provenance array yet" check. */
+export function getPageProvenance(doc: ContentDoc | RunContentDoc, pageIndex: number): PageProvenance {
+  const provenance: PageProvenance[] =
+    "provenance" in doc && Array.isArray((doc as RunContentDoc).provenance)
+      ? (doc as RunContentDoc).provenance
+      : emptyProvenance(doc.pages.length);
+  return provenance[pageIndex] ?? { slots: {}, repeats: {} };
+}
+
 export interface OperatorEdit {
   title?: string;
   slots?: Record<string, string>;
