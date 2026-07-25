@@ -27,6 +27,7 @@ function seedIdentity(dossier: Dossier): Record<string, string> {
   if (dossier.phone) identity.phone = dossier.phone;
   if (dossier.phone_href) identity.phone_href = dossier.phone_href;
   if (dossier.email) identity.email = dossier.email;
+  if (dossier.email_href) identity.email_href = dossier.email_href;
   if (dossier.logo) identity.logo = dossier.logo;
   if (dossier.map_embed) identity.map_embed = dossier.map_embed;
   if (dossier.profile_link) identity.profile_link = dossier.profile_link;

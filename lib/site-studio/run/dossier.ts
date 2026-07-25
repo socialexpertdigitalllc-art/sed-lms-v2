@@ -13,6 +13,11 @@ export interface Dossier {
   phone?: string;
   phone_href?: string;
   email?: string;
+  /** `mailto:` form, derived whenever `email` is present. The compiler
+   *  tokenizes a template's mailto links as {{id:email_href}}, so this must be
+   *  supplied as a matched pair with `email` exactly like phone/phone_href —
+   *  omitting it made every render refuse. */
+  email_href?: string;
   /** True only when the lead explicitly says the business has no email. An
    *  absent email is "not captured yet", which is a different thing. */
   no_email: boolean;
@@ -78,6 +83,7 @@ export function buildDossier(lead: Record<string, unknown>): Dossier {
     phone: phone?.display,
     phone_href: phone?.href ?? undefined,
     email: str(lead.business_email),
+    email_href: str(lead.business_email) ? `mailto:${str(lead.business_email)}` : undefined,
     no_email: lead.no_email === true,
     profile_link: str(lead.business_profile_link),
     logo: str(lead.logo_link),
