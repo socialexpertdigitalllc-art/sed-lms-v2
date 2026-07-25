@@ -28,6 +28,7 @@ function freshRow(overrides: Partial<StudioRunRow> = {}): StudioRunRow {
     zip_path: null,
     deployed_url: null,
     error: null,
+    paused: false,
     created_by: null,
     created_at: NOW().toISOString(),
     updated_at: NOW().toISOString(),
@@ -125,9 +126,11 @@ const onePageCompiled: CompiledTemplate = {
 // ------------------------------------------------------------------ tests
 
 describe("runStep — the chain advances one status per call", () => {
-  it("walks queued -> preparing -> writing -> rendering -> ready -> done", async () => {
+  it("walks queued -> preparing -> approved (auto skips the gate) -> rendering -> ready -> done", async () => {
     const { state, admin } = await seedTwoPageAdmin();
     let row = state.runs["run1"] as unknown as StudioRunRow;
+    row.options = { auto: true }; // this test proves the mechanical chain end-to-end;
+    // Gate 1's park itself is covered by tests/siteStudioGateEngine.test.ts.
     const deps: RunStepDeps = { aiCall: genericAiCall, now: NOW };
 
     const r1 = await runStep(admin, row, deps);
@@ -138,7 +141,7 @@ describe("runStep — the chain advances one status per call", () => {
     row = r1.row;
 
     const r2 = await runStep(admin, row, deps);
-    expect(r2.row.status).toBe("writing"); // both pages written in one parallel call
+    expect(r2.row.status).toBe("approved"); // both pages written in one parallel call; auto mode skips the gate
     row = r2.row;
 
     const r3 = await runStep(admin, row, deps);
@@ -177,10 +180,10 @@ describe("runStep — write: per-page isolation and retry-only-failed", () => {
 
     const w1 = await runStep(admin, row, { aiCall: flakyAiCall });
     // write is incomplete (about failed) — status must stay exactly where it
-    // was, so a re-call routes back to "write" instead of advancing to render
-    // with a half-written doc.
+    // was, so a re-call routes back to "write" instead of advancing to the
+    // gate with a half-written doc.
     expect(w1.row.status).toBe(row.status);
-    expect(w1.row.status).not.toBe("writing");
+    expect(w1.row.status).not.toBe("reviewing");
     const pages1 = w1.row.steps.write!.pages;
     expect(pages1["0"].status).toBe("written"); // index
     expect(pages1["1"].status).toBe("failed"); // about
@@ -198,7 +201,7 @@ describe("runStep — write: per-page isolation and retry-only-failed", () => {
     // ONLY the previously-failed page is re-called; the already-written page
     // is left completely alone.
     expect(calls).toEqual(["about"]);
-    expect(w2.row.status).toBe("writing");
+    expect(w2.row.status).toBe("reviewing"); // all pages now written -> parks at Gate 1 (no options.auto here)
     expect(w2.row.content_doc!.pages[1].slots.about_s1).toBe("Custom copy for about_s1");
     expect(w2.row.steps.write!.pages["0"].attempts).toBe(1);
     expect(w2.row.steps.write!.pages["1"].attempts).toBe(2);
@@ -237,12 +240,13 @@ describe("runStep — render: a refusal fails the run with the missing list", ()
     state.templates["tpl2"] = { manifest: repeatManifest };
     state.leads["lead2"] = { id: "lead2", business_name: "Acme" };
 
-    // Bypass prepare/write: construct a row already past write, with the
-    // repeat region left under-filled, to exercise render's own defensive
-    // check (rather than write's, which is covered above) in isolation.
+    // Bypass prepare/write/gate: construct a row already past the gate
+    // ("approved" -> nextStep is "render"), with the repeat region left
+    // under-filled, to exercise render's own defensive check (rather than
+    // write's, which is covered above) in isolation.
     const row = freshRow({
       id: "run2", lead_id: "lead2", template_id: "tpl2",
-      status: "writing",
+      status: "approved",
       content_doc: { identity: {}, theme: {}, pages: [{ page_id: "about", title: "About", slots: {}, repeats: {} }] },
     });
     state.runs["run2"] = row as unknown as Record<string, unknown>;
@@ -302,7 +306,12 @@ describe("runStep — full happy path", () => {
       client_experience: 15,
       about_business: "Family owned since 2010.",
     };
-    state.runs["run-complete"] = freshRow({ id: "run-complete", lead_id: "lead-complete", template_id: "tpl-pp2" }) as unknown as Record<string, unknown>;
+    // auto:true — this test is proving the full mechanical chain reaches a
+    // real, non-empty zip end to end; Gate 1's park is covered on its own in
+    // tests/siteStudioGateEngine.test.ts.
+    state.runs["run-complete"] = freshRow({
+      id: "run-complete", lead_id: "lead-complete", template_id: "tpl-pp2", options: { auto: true },
+    }) as unknown as Record<string, unknown>;
 
     let row = state.runs["run-complete"] as unknown as StudioRunRow;
     const deps: RunStepDeps = { aiCall: genericAiCall, now: NOW };
@@ -408,7 +417,7 @@ describe("runStep — concurrent calls: only one claims the step, no double AI s
 
     const winner = await runStep(admin, staleRow, { aiCall: countingAiCall });
     expect(winner.claimed).toBe(true);
-    expect(winner.row.status).toBe("writing");
+    expect(winner.row.status).toBe("reviewing"); // single page written -> parks at Gate 1 (no options.auto here)
     expect(callCount).toBe(1);
 
     // The second caller still only has the ORIGINAL stale snapshot (its
