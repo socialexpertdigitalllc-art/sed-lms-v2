@@ -148,6 +148,58 @@ describe("renderSite (nav region with items: order, prune, fan-out)", () => {
   });
 });
 
+const tplStampableInItems: CompiledTemplate = {
+  manifest: {
+    engine: 3, name: "mini3", version: 1,
+    identity: {},
+    theme: { mode: "none", roles: {} },
+    nav: [{
+      id: "nav_header", fragment: "nav_header", location: "header",
+      items: [
+        { page_id: "index", href: "index.html", label: "Home" },
+        { page_id: "svc", href: "service.html", label: "Our Service" },
+      ],
+    }],
+    pages: [
+      { id: "index", file: "index.html", kind: "home", stampable: false, title_sample: "Index Title", slots: [], repeats: [] },
+      { id: "svc", file: "service.html", kind: "service", stampable: true, title_sample: "Service Title", slots: [], repeats: [] },
+      { id: "extra", file: "extra.html", kind: "generic", stampable: true, title_sample: "Extra Title", slots: [], repeats: [] },
+    ],
+  },
+  pages: {
+    "index.html": `<html><body><ul><!--@nav:nav_header--></ul></body></html>`,
+    "service.html": `<html><body><ul><!--@nav:nav_header--></ul></body></html>`,
+    "extra.html": `<html><body><ul><!--@nav:nav_header--></ul></body></html>`,
+  },
+  fragments: { nav_header: `<li><a href="{{nav:href}}">{{nav:title}}</a></li>` },
+  assets: {},
+};
+
+const docStampableInItems: ContentDoc = {
+  identity: {},
+  theme: {},
+  pages: [
+    { page_id: "index", title: "Index Page", slots: {}, repeats: {} },
+    { page_id: "svc", title: "Service Page", slots: {}, repeats: {} },
+    { page_id: "extra", title: "Extra Page", slots: {}, repeats: {} },
+  ],
+};
+
+describe("renderSite (nav region items honor explicit stampable pages)", () => {
+  const result = renderSite(tplStampableInItems, docStampableInItems);
+  it("renders ok", () => { expect(result.ok).toBe(true); });
+  if (!result.ok) return;
+  const index = dec(result.files["index.html"]);
+
+  it("renders a region.items entry whose page is now stampable — nav-linked service pages are the normal case", () => {
+    expect(index).toContain(`<li><a href="index.html">Home</a></li><li><a href="service.html">Our Service</a></li>`);
+  });
+  it("does not fan-out a stampable page that isn't listed in region.items", () => {
+    expect(index).not.toContain("Extra Page");
+    expect(index).not.toContain("extra.html");
+  });
+});
+
 describe("renderSite refusals", () => {
   it("refuses and names missing slots", () => {
     const bad: ContentDoc = { ...doc, pages: [{ ...doc.pages[0], slots: { index_i1: "x.jpg" } }] };

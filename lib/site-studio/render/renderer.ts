@@ -72,11 +72,15 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc): RenderResult
         for (const it of region.items) {
           if (it.page_id) {
             const nb = builtByDefId.get(it.page_id);
-            if (nb && !nb.def.stampable) {
+            // region.items records the ORIGINAL demo nav; stampable exists to
+            // keep NEWLY stamped fan-out pages out of nav, not to evict a page
+            // the demo site itself linked — so an explicit item renders even
+            // when semantics later flips its page to a stampable kind.
+            if (nb) {
               parts.push(renderNavLi(frag, prefix + nb.output, nb.page.nav_title ?? it.label));
               seen.add(it.page_id);
             }
-            // page not built (or stampable) → skipped: nav-prune done right
+            // page not built → skipped: nav-prune done right
           } else {
             parts.push(renderNavLi(frag, prefixHref(prefix, it.href), it.label)); // non-page nav link → verbatim
           }
