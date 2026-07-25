@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { RunLaunch } from "@/components/site-studio/RunLaunch";
 import { RunCockpit } from "@/components/site-studio/RunCockpit";
 import { ImagePicker } from "@/components/site-studio/ImagePicker";
+import { AssetLibrary } from "@/components/site-studio/AssetLibrary";
 
 /**
  * Mount smoke tests, 2b precedent (tests/siteStudioBoard.test.tsx): the
@@ -216,5 +217,53 @@ describe("ImagePicker", () => {
     );
 
     expect(await screen.findByText(/photo by ana/i)).toBeInTheDocument();
+  });
+});
+
+const assetsFixture = [
+  {
+    id: "a1", kind: "stock", lead_id: null, subject: "plumber van", niche_tags: ["plumbing"],
+    width: 1600, height: 1200, source: "pexels", pexels_id: 1, photographer: "Ana",
+    storage_path: "a1.jpg", content_type: "image/jpeg", use_count: 2, created_at: "2026-07-25T00:00:00.000Z",
+    thumb_url: "https://img.example/a1.jpg",
+  },
+  {
+    id: "a2", kind: "client", lead_id: "lead-1", subject: "storefront", niche_tags: [],
+    width: 800, height: 600, source: "upload", pexels_id: null, photographer: null,
+    storage_path: "a2.jpg", content_type: "image/jpeg", use_count: 0, created_at: "2026-07-25T00:00:00.000Z",
+    thumb_url: "https://img.example/a2.jpg",
+  },
+];
+
+describe("AssetLibrary", () => {
+  it("renders a grid from canned rows", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/leads")) return { body: { leads: [{ id: "lead-1", business_name: "Ace Plumbing" }] } };
+      if (url.includes("/api/site-studio/assets")) return { body: { assets: assetsFixture } };
+      return { body: {} };
+    });
+    render(<AssetLibrary />);
+    expect(await screen.findByText("plumber van")).toBeInTheDocument();
+    expect(screen.getByText("storefront")).toBeInTheDocument();
+    // client-owned card names its lead and carries the fence badge
+    expect(screen.getByText(/never offered to other clients/i)).toBeInTheDocument();
+  });
+
+  it("filters by kind when a chip is clicked", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/leads")) return { body: { leads: [] } };
+      if (url.includes("/api/site-studio/assets")) {
+        const kind = new URL(url, "http://x").searchParams.get("kind");
+        const rows = kind === "client" ? assetsFixture.filter((a) => a.kind === "client") : assetsFixture;
+        return { body: { assets: rows } };
+      }
+      return { body: {} };
+    });
+    render(<AssetLibrary />);
+    await screen.findByText("plumber van");
+
+    fireEvent.click(screen.getByRole("button", { name: /^client$/i }));
+    await waitFor(() => expect(screen.queryByText("plumber van")).not.toBeInTheDocument());
+    expect(screen.getByText("storefront")).toBeInTheDocument();
   });
 });
