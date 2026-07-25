@@ -71,25 +71,41 @@ function rehostStatus(error: string): number {
  * POST: pick an image for one slot. `key` is `"${docPageIndex}:${slotId}"`
  * (types.ts's `SlotImageState` doc comment).
  *
- * SECURITY: nothing in `choice` is trusted at face value — every branch is
- * checked against what the SERVER itself sourced/knows for this exact run
- * and slot, never against whatever the request body claims:
- *  - `library`: the asset id must appear in THIS SLOT's own sourced
- *    candidates as a `kind:"library"` entry, AND (defense in depth, in case
- *    a candidate list is ever stale) the row itself is re-checked against
- *    the client fence (`kind='stock'` or `lead_id` = this run's lead) —
- *    otherwise any operator who learns another lead's client-photo UUID
- *    could write it straight into a different lead's site, bypassing the
- *    fence at the one point that decides what actually ships.
- *  - `pexels`: the pexels id must match a `kind:"pexels"` candidate this
- *    slot was actually sourced with; the URL/dimensions/photographer that
- *    get rehosted are the CANDIDATE's own stored values, never the
- *    request body's copies — otherwise the body could hand `rehostFromUrl`
- *    an arbitrary URL (server-side fetch of attacker-chosen hosts) stored
- *    under fabricated attribution as a new SHARED stock asset.
+ * SECURITY: nothing in `choice` is trusted at face value, but the three
+ * kinds are NOT held to the same check — each is checked against whatever
+ * actually protects it, and those boundaries differ on purpose:
+ *  - `library`: NOT checked against this slot's sourced candidates. A
+ *    library asset's bytes already live in OUR bucket and its attribution
+ *    is already ours (set at upload/rehost time) — there is no server-side
+ *    fetch of caller-controlled input here, and nothing to forge. Candidate
+ *    membership would only accomplish restricting an operator to images the
+ *    server happened to think of for this exact slot, which is exactly what
+ *    breaks the Upload tab (a freshly uploaded asset was never a candidate
+ *    for any slot) and the Library-search tab (arbitrary search hits aren't
+ *    candidates either) — both are legitimate, sighted picks of an asset the
+ *    operator can already see and preview. The real, sufficient property is
+ *    the CLIENT FENCE: a lead's own photo must never end up on another
+ *    lead's site. That check (`kind='stock'` or `lead_id` = this run's lead)
+ *    is the sole gate for this kind, so it fails CLOSED — any error loading
+ *    the row, not just a missing one, is refused, never treated as "assume
+ *    it's fine."
+ *  - `pexels`: the opposite shape. The pexels id must match a `kind:"pexels"`
+ *    candidate this slot was actually sourced with, and the URL/dimensions/
+ *    photographer that get rehosted are the CANDIDATE's own stored values,
+ *    never the request body's copies. This IS a server-side fetch of a URL
+ *    (`rehostFromUrl`), so an unchecked body would let any caller hand it an
+ *    arbitrary URL (SSRF) stored under fabricated attribution as a new
+ *    SHARED stock asset — candidate matching is what closes that off.
  *  - `client`: `choice.url` must be an exact match against this run's own
  *    `client_photos` (captured at prepare time) — otherwise any URL could be
- *    fetched and stored as if it were this lead's own photo.
+ *    fetched and stored as if it were this lead's own photo. Also a
+ *    server-side fetch of a URL, so also checked against a server-known list
+ *    rather than trusted at face value.
+ *
+ * Do not "helpfully" re-unify these into one shared check: `library` has no
+ * SSRF and nothing forgeable to protect against, so candidate-membership
+ * there is pure friction with no security payoff, while `pexels`/`client`
+ * both gate an actual outbound fetch and need it.
  *
  * The target slot must also be declared `type:"image"` on that doc page in
  * the compiled manifest — a `key` naming a TEXT slot is refused (422) rather
@@ -167,17 +183,16 @@ export async function POST(req: Request, ctx: Ctx) {
 
   let assetId: string;
   if (choice.kind === "library") {
-    const candidateMatch = slotState.candidates.find(
-      (c) => c.kind === "library" && c.asset_id === choice.asset_id,
-    );
-    if (!candidateMatch) {
-      return NextResponse.json({ error: "That library asset was not offered as a candidate for this slot" }, { status: 422 });
-    }
-    // Defense in depth: don't rely on the candidate list alone (it was
-    // sourced once and could in principle be stale) — re-verify the row
-    // itself still satisfies the client fence for THIS run's lead.
-    const { data: asset } = await admin.from("studio_assets").select("id,kind,lead_id").eq("id", choice.asset_id).single();
-    if (!asset) return NextResponse.json({ error: "Library asset not found" }, { status: 404 });
+    // No candidate-membership check here — see the route doc comment above
+    // for why that's the correct call for this kind specifically. The fence
+    // is the ONLY gate, so it must fail closed: a query error is treated the
+    // same as "not found," never silently let through.
+    const { data: asset, error: assetErr } = await admin
+      .from("studio_assets")
+      .select("id,kind,lead_id")
+      .eq("id", choice.asset_id)
+      .single();
+    if (assetErr || !asset) return NextResponse.json({ error: "Library asset not found" }, { status: 404 });
     const fenced = asset.kind === "stock" || asset.lead_id === row.lead_id;
     if (!fenced) {
       return NextResponse.json({ error: "This asset is not available to this run's lead" }, { status: 422 });
@@ -235,13 +250,25 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: `Pick rejected: ${check.error.issues[0]?.message ?? "invalid content"}` }, { status: 422 });
   }
 
+  // CAS on `updated_at` (the same shape the engine's own `persistRun`/
+  // `claimRun` use, see engine.ts): a text edit and an image pick landing
+  // near-simultaneously on the same run would otherwise silently drop
+  // whichever one's read->merge->write finished last. Zero rows back means
+  // someone else wrote this run since `row` was read — refuse rather than
+  // overwrite, and tell the operator to redo the change against fresh state.
   const { data: updated, error } = await admin
     .from("studio_runs")
     .update({ content_doc: merged, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("updated_at", row.updated_at)
     .select("*")
     .single();
-  if (error || !updated) return NextResponse.json({ error: error?.message ?? "Update failed" }, { status: 400 });
+  if (error || !updated) {
+    return NextResponse.json(
+      { error: "This run changed while you were editing — your view has been refreshed, please redo that change" },
+      { status: 409 },
+    );
+  }
 
   await admin.from("studio_run_events").insert({
     run_id: id,

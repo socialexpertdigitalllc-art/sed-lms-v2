@@ -44,5 +44,5 @@ export async function POST(_req: Request, ctx: Ctx) {
     });
   }
 
-  return NextResponse.json({ run: result.row, done: result.done, claimed: result.claimed });
+  return NextResponse.json({ run: result.row, done: result.done, claimed: result.claimed, paused: result.paused });
 }

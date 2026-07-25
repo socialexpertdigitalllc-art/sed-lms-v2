@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { RunLaunch } from "@/components/site-studio/RunLaunch";
 import { RunCockpit } from "@/components/site-studio/RunCockpit";
 import { ImagePicker } from "@/components/site-studio/ImagePicker";
@@ -178,6 +178,81 @@ describe("RunCockpit", () => {
     render(<RunCockpit runId="run-1" />);
     expect(await screen.findByText("Write failed: page 0 exhausted its attempts")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("RunCockpit drive loop", () => {
+  /**
+   * The drive loop (`driveStep` in RunCockpit.tsx) is the highest-risk code
+   * in this component — it is what turns "the run has more work to do" into
+   * repeated `POST /step` calls, and what has to correctly stop the instant
+   * the row parks at Gate 1. It had zero automated coverage before this
+   * test. Fake timers let this run in well under a second instead of
+   * waiting on the real 3s fallback poll, while `vi.waitFor` (unlike
+   * `@testing-library/react`'s `waitFor`) uses the REAL underlying timers
+   * even while fake timers are active, so it can still poll for the
+   * promise-driven state changes the mocked fetch produces.
+   */
+  it("issues repeated POST /step calls for an advancing run and stops once the row reports reviewing", async () => {
+    vi.useFakeTimers();
+    try {
+      let stepCalls = 0;
+      // Three steps: two "still advancing" responses (status stays
+      // "preparing", not done), then the response that parks the run at
+      // Gate 1 ("reviewing", done:true) — the loop must call POST /step for
+      // each of the first two, then stop dead after the third.
+      const stepResponses = [
+        { run: runFixture({ status: "preparing" }), done: false, claimed: true },
+        { run: runFixture({ status: "preparing" }), done: false, claimed: true },
+        { run: runFixture({ status: "reviewing" }), done: true, claimed: true },
+      ];
+      let latestRun: unknown = runFixture({ status: "queued" });
+
+      stubFetch((url, method) => {
+        if (method === "POST" && url.includes("/api/site-studio/runs/run-1/step")) {
+          const resp = stepResponses[Math.min(stepCalls, stepResponses.length - 1)];
+          stepCalls += 1;
+          latestRun = resp.run;
+          return { body: resp };
+        }
+        if (method === "GET" && url.includes("/api/site-studio/runs/run-1")) {
+          return { body: { run: latestRun } };
+        }
+        if (url.includes("/api/site-studio/templates/tmpl-1")) {
+          return { body: { template: { id: "tmpl-1", manifest: manifestFixture } } };
+        }
+        return { body: {} };
+      });
+
+      render(<RunCockpit runId="run-1" />);
+
+      // Drains the loop: 2 "keep going" steps + 1 "reached the gate" step.
+      // `vi.waitFor` (not `@testing-library/react`'s `waitFor`/`findBy*`,
+      // which poll via `setTimeout` and would hang forever against faked
+      // timers unless manually advanced) uses the real underlying timer
+      // regardless of `vi.useFakeTimers()`, so it can safely poll this
+      // promise-driven state to settle. Wrapped in `act` since the state
+      // updates it's waiting on happen outside any user-event handler.
+      await act(async () => {
+        await vi.waitFor(() => expect(stepCalls).toBe(3));
+      });
+      await act(async () => {
+        await vi.waitFor(() =>
+          expect(screen.getByRole("button", { name: /approve & render/i })).toBeInTheDocument(),
+        );
+      });
+
+      // The fallback poll (every 3s) picks up the now-"reviewing" row and
+      // calls `applyRun`, which re-enters `driveStep` — but the loop's own
+      // top-of-iteration check (`!awaitingGate(current.status)`) must make
+      // that re-entry a no-op rather than a 4th POST /step.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3500);
+      });
+      expect(stepCalls).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

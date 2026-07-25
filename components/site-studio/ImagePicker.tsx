@@ -123,6 +123,22 @@ export function ImagePicker({
         body: JSON.stringify({ key, choice }),
       });
       const body = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        // The row changed under us (another edit or pick landed first, see
+        // images/route.ts's CAS comment) — this dialog's candidate list may
+        // now be stale too, so refetch the run for the parent and close
+        // rather than leave a picker open against a doc that no longer
+        // matches what's on the row. Toast the server's message verbatim.
+        toast({
+          kind: "error",
+          title: body.error ?? "This run changed while you were editing — your view has been refreshed, please redo that change",
+        });
+        const freshRes = await fetch(`/api/site-studio/runs/${runId}`);
+        const freshBody = await freshRes.json().catch(() => ({}));
+        if (freshRes.ok && freshBody.run) onPicked(freshBody.run as StudioRunRow);
+        onClose();
+        return;
+      }
       if (!res.ok) {
         toast({ kind: "error", title: body.error ?? "Could not pick this image" });
         return;

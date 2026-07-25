@@ -49,8 +49,20 @@ export function RunCockpit({ runId }: { runId: string }) {
   const [controlBusy, setControlBusy] = useState(false);
 
   const drivingRef = useRef(false);
-  const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Starts false and flips true in the effect BODY (not at ref-init time) —
+  // under React 18 Strict Mode's dev mount->cleanup->remount, a `useRef(true)`
+  // with only a cleanup setting it false gets stuck permanently false after
+  // the first (throwaway) mount/unmount pass, which silently kills both the
+  // drive loop's `while (mountedRef.current && ...)` and the 3s poll's
+  // `if (row && mountedRef.current)` for the rest of the component's life —
+  // the run looks frozen in dev while working fine in prod (no Strict Mode
+  // double-invoke there). Setting it true in the body means the SECOND
+  // (real) mount flips it back on before anything reads it.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const loadRun = useCallback(async (): Promise<StudioRunRow | null> => {
     try {
@@ -154,6 +166,21 @@ export function RunCockpit({ runId }: { runId: string }) {
     return () => clearInterval(id);
   }, [loadRun, applyRun]);
 
+  // A 409 here means the row changed under us (another edit or an image
+  // pick landed first, see content/route.ts's CAS comment) — the operator's
+  // draft is now against a stale doc, so refetch the real row and toast the
+  // server's message verbatim rather than leaving the stale draft on screen.
+  // Returns normally (doesn't throw) so the caller's editor closes against
+  // the refreshed state instead of getting stuck open on a failed save.
+  async function handleStaleWrite(body: { error?: string }) {
+    toast({
+      kind: "error",
+      title: body.error ?? "This run changed while you were editing — your view has been refreshed, please redo that change",
+    });
+    const fresh = await loadRun();
+    if (fresh) setRun(fresh);
+  }
+
   async function editSlot(pageIndex: number, slotId: string, value: string) {
     const res = await fetch(`/api/site-studio/runs/${runId}/content`, {
       method: "PATCH",
@@ -161,6 +188,7 @@ export function RunCockpit({ runId }: { runId: string }) {
       body: JSON.stringify({ page_index: pageIndex, slots: { [slotId]: value } }),
     });
     const body = await res.json().catch(() => ({}));
+    if (res.status === 409) { await handleStaleWrite(body); return; }
     if (!res.ok) {
       toast({ kind: "error", title: body.error ?? "Edit rejected" });
       throw new Error(body.error ?? "Edit rejected");
@@ -175,6 +203,7 @@ export function RunCockpit({ runId }: { runId: string }) {
       body: JSON.stringify({ page_index: pageIndex, title: value }),
     });
     const body = await res.json().catch(() => ({}));
+    if (res.status === 409) { await handleStaleWrite(body); return; }
     if (!res.ok) {
       toast({ kind: "error", title: body.error ?? "Edit rejected" });
       throw new Error(body.error ?? "Edit rejected");
