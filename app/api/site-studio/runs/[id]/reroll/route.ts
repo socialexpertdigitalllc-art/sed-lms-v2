@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { productionWriterCall } from "@/lib/site-studio/run/engine";
+import { productionWriterCall, loadManifest } from "@/lib/site-studio/run/engine";
 import { rerollPage, rerollSlot } from "@/lib/site-studio/run/reroll";
 import { buildDossier } from "@/lib/site-studio/run/dossier";
-import { manifestSchema, type TemplateManifest } from "@/lib/site-studio/schema";
+import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { StudioRunRow } from "@/lib/site-studio/run/types";
 
 export const runtime = "nodejs";
@@ -13,15 +13,16 @@ export const maxDuration = 120;
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/** Same tiny loader `engine.ts` uses internally (not exported from there —
- *  duplicated here rather than widening engine.ts's public surface for one
- *  caller). */
-async function loadManifest(admin: SupabaseClient, templateId: string): Promise<TemplateManifest> {
-  const { data, error } = await admin.from("studio_templates").select("manifest").eq("id", templateId).single();
-  if (error || !data?.manifest) {
-    throw new Error(`re-roll: template "${templateId}" has no compiled manifest (${error?.message ?? "not found"})`);
-  }
-  return manifestSchema.parse(data.manifest);
+/** `outcome.error` distinguishes two very different failure classes by its
+ *  own prefix: `writer.ts`'s failures are always prefixed "writer:" (a
+ *  genuine model/upstream failure — malformed JSON, missing slots, a
+ *  disallowed value the model produced) — that's the caller's dependency
+ *  failing, not the request being wrong, so it gets 502. Everything else
+ *  `reroll.ts` reports (out-of-range page index, an operator-owned slot
+ *  refused, an undefined page/slot) is the REQUEST being wrong — 422, same
+ *  split `images/route.ts`'s `rehostStatus` already draws for picks. */
+function rerollStatus(error: string): number {
+  return /^writer:/i.test(error) ? 502 : 422;
 }
 
 async function loadLeadRow(admin: SupabaseClient, leadId: string): Promise<Record<string, unknown> | null> {
@@ -80,7 +81,7 @@ export async function POST(req: Request, ctx: Ctx) {
         includeOperatorFields: includeOperator,
       });
 
-  if (!outcome.ok) return NextResponse.json({ error: outcome.error }, { status: 422 });
+  if (!outcome.ok) return NextResponse.json({ error: outcome.error }, { status: rerollStatus(outcome.error) });
 
   const { data: updated, error } = await admin
     .from("studio_runs")

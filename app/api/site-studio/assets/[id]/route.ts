@@ -55,9 +55,16 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     );
   }
 
-  await admin.storage.from(STUDIO_ASSETS_BUCKET).remove([assetRow.storage_path]).catch(() => {});
+  // Row first, bucket object second — the mirror image of `rehostFromUrl`'s
+  // "insert only after a successful upload" direction (assets/rehost.ts). A
+  // failed row delete here must never leave a live, searchable row pointing
+  // at bytes that are already gone; a failed (best-effort) object removal
+  // after a successful row delete just leaves an orphaned, unreferenced
+  // object in storage — harmless, and nothing else can ever pick it since
+  // the row that named it no longer exists.
   const { error } = await admin.from("studio_assets").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  await admin.storage.from(STUDIO_ASSETS_BUCKET).remove([assetRow.storage_path]).catch(() => {});
 
   await admin.from("activity_log").insert({
     user_id: auth.userId,

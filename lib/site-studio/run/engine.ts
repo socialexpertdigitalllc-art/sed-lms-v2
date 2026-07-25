@@ -111,7 +111,10 @@ function randomBase36(len: number): string {
   return Math.random().toString(36).slice(2, 2 + len).padEnd(len, "0");
 }
 
-async function loadManifest(admin: SupabaseClient, templateId: string): Promise<TemplateManifest> {
+/** Exported so routes that need the compiled manifest (Task 9's `reroll` and
+ *  `images` routes) load it exactly this way, rather than triplicating this
+ *  five-line fetch-and-parse per route. */
+export async function loadManifest(admin: SupabaseClient, templateId: string): Promise<TemplateManifest> {
   const { data, error } = await admin.from("studio_templates").select("manifest").eq("id", templateId).single();
   if (error || !data?.manifest) {
     throw new Error(`engine: template "${templateId}" has no compiled manifest (${error?.message ?? "not found"})`);
@@ -159,14 +162,48 @@ function preciseNow(): string {
  * predicate would still match. This function always bumps it (via
  * `preciseNow()`) for exactly this reason; Task 9's control route (pause/
  * resume/cancel) must go through this same path, not a raw `.update()`.
+ *
+ * `guard`, when supplied, adds `.eq("status", guard.expectStatus)` to the
+ * update — the SAME optimistic-concurrency shape `claimRun` uses below, but
+ * keyed on `status` instead of `updated_at` for exactly the scenario
+ * `claimRun`'s own claim can't cover: a run that was CANCELLED (or otherwise
+ * changed) by a concurrent actor (the control route) AFTER this step already
+ * won its claim. Without this, a step's own FINAL persist — e.g.
+ * `runFinalize` deciding "ready" — would unconditionally overwrite whatever
+ * `status` the row holds NOW, silently resurrecting a run the operator just
+ * cancelled mid-step. Every step's terminal persist (the one that decides
+ * the run's new `status`) must pass `guard: { expectStatus: <the status this
+ * step read at claim time>, step: <this step> }`. A zero-row update (someone
+ * else already changed `status`) is NOT an error: this function re-fetches
+ * the CURRENT row, logs one `studio_run_events` note explaining the
+ * abandonment, and returns that current row untouched by this call's patch —
+ * "abandon my status write" rather than clobber a status a human explicitly
+ * set.
  */
-async function persistRun(admin: SupabaseClient, id: string, patch: Record<string, unknown>): Promise<StudioRunRow> {
-  const { data, error } = await admin
-    .from("studio_runs")
-    .update({ ...patch, updated_at: preciseNow() })
-    .eq("id", id)
-    .select("*")
-    .single();
+async function persistRun(
+  admin: SupabaseClient,
+  id: string,
+  patch: Record<string, unknown>,
+  guard?: { expectStatus: RunStatus; step: RunStep },
+): Promise<StudioRunRow> {
+  let query = admin.from("studio_runs").update({ ...patch, updated_at: preciseNow() }).eq("id", id);
+  if (guard) query = query.eq("status", guard.expectStatus);
+  const { data, error } = await query.select("*").single();
+
+  if (guard && (error || !data)) {
+    const { data: current, error: currentErr } = await admin.from("studio_runs").select("*").eq("id", id).single();
+    if (currentErr || !current) {
+      throw new Error(
+        `engine: failed to persist run "${id}" (${error?.message ?? "no data"}) and could not re-fetch it either (${currentErr?.message ?? "no data"})`,
+      );
+    }
+    await logEvent(
+      admin, id, guard.step, "warn",
+      `Abandoned this step's terminal write: expected status "${guard.expectStatus}" but the run is now "${(current as StudioRunRow).status}" — someone else (a cancel, a concurrent step) changed it first.`,
+    );
+    return current as StudioRunRow;
+  }
+
   if (error || !data) throw new Error(`engine: failed to persist run "${id}" (${error?.message ?? "no data"})`);
   return data as StudioRunRow;
 }
@@ -233,10 +270,11 @@ async function logEvent(
  *  have `render` refuse at the end. */
 async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => Date): Promise<StudioRunRow> {
   if (!row.lead_id) {
-    const updated = await persistRun(admin, row.id, {
-      status: "failed",
-      error: "This run has no lead (it may have been deleted). Start a new run against a live lead.",
-    });
+    const updated = await persistRun(
+      admin, row.id,
+      { status: "failed", error: "This run has no lead (it may have been deleted). Start a new run against a live lead." },
+      { expectStatus: row.status, step: "prepare" },
+    );
     await logEvent(admin, row.id, "prepare", "error", "Prepare refused: run has no lead.");
     return updated;
   }
@@ -263,7 +301,11 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
     const message =
       `This template needs ${humanizeMissingIdentity(missingIdentity)}, which this lead doesn't have. ` +
       `Add them to the lead and start a new run.`;
-    const updated = await persistRun(admin, row.id, { status: "failed", error: message });
+    const updated = await persistRun(
+      admin, row.id,
+      { status: "failed", error: message },
+      { expectStatus: row.status, step: "prepare" },
+    );
     await logEvent(
       admin, row.id, "prepare", "error",
       "Prepare refused: lead is missing identity data the template requires.",
@@ -274,13 +316,17 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
 
   const siteSlug = `${slugify(dossier.business_name) || "site"}-${randomBase36(6)}`;
 
-  const updated = await persistRun(admin, row.id, {
-    content_doc: doc,
-    client_photos: dossier.client_photos,
-    site_slug: siteSlug,
-    steps: { ...row.steps, prepare: { at: now().toISOString(), pages: doc.pages.length } },
-    status: "preparing",
-  });
+  const updated = await persistRun(
+    admin, row.id,
+    {
+      content_doc: doc,
+      client_photos: dossier.client_photos,
+      site_slug: siteSlug,
+      steps: { ...row.steps, prepare: { at: now().toISOString(), pages: doc.pages.length } },
+      status: "preparing",
+    },
+    { expectStatus: row.status, step: "prepare" },
+  );
   await logEvent(
     admin, row.id, "prepare", "info",
     `Prepared ${doc.pages.length} page(s)${selection.skipped.length ? `; skipped: ${selection.skipped.join(", ")}` : ""}.`,
@@ -434,12 +480,16 @@ async function runWrite(admin: SupabaseClient, row: StudioRunRow, deps: RunStepD
     message = `${notWritten.length} page(s) not yet written; will retry on the next step call.`;
   }
 
-  const updated = await persistRun(admin, row.id, {
-    content_doc: workingDoc,
-    steps: { ...row.steps, write: { pages }, images: { slots: imagesOutcome.slots } },
-    status,
-    ...(runError !== undefined ? { error: runError } : {}),
-  });
+  const updated = await persistRun(
+    admin, row.id,
+    {
+      content_doc: workingDoc,
+      steps: { ...row.steps, write: { pages }, images: { slots: imagesOutcome.slots } },
+      status,
+      ...(runError !== undefined ? { error: runError } : {}),
+    },
+    { expectStatus: row.status, step: "write" },
+  );
 
   await logEvent(admin, row.id, "write", level, message, { pages });
   for (const warning of imagesOutcome.warnings) {
@@ -465,15 +515,23 @@ async function runRender(admin: SupabaseClient, row: StudioRunRow): Promise<Stud
 
   if (!result.ok) {
     const message = `Render refused: missing ${result.missing.map((m) => `${m.page_id}/${m.slot_id}`).join(", ")}`;
-    const updated = await persistRun(admin, row.id, { status: "failed", error: message });
+    const updated = await persistRun(
+      admin, row.id,
+      { status: "failed", error: message },
+      { expectStatus: row.status, step: "render" },
+    );
     await logEvent(admin, row.id, "render", "error", "Render refused: content is incomplete.", { missing: result.missing });
     return updated;
   }
 
-  const updated = await persistRun(admin, row.id, {
-    steps: { ...row.steps, render: { at: new Date().toISOString(), files: Object.keys(result.files).length } },
-    status: "rendering",
-  });
+  const updated = await persistRun(
+    admin, row.id,
+    {
+      steps: { ...row.steps, render: { at: new Date().toISOString(), files: Object.keys(result.files).length } },
+      status: "rendering",
+    },
+    { expectStatus: row.status, step: "render" },
+  );
   await logEvent(admin, row.id, "render", "info", `Rendered ${Object.keys(result.files).length} file(s).`);
   return updated;
 }
@@ -511,16 +569,24 @@ async function runFinalize(admin: SupabaseClient, row: StudioRunRow, now: () => 
       "missingAssets" in outcome
         ? `Finalize refused: picked image(s) failed to resolve — missing asset(s): ${outcome.missingAssets.join(", ")}`
         : `Render refused: missing ${outcome.missing.map((m) => `${m.page_id}/${m.slot_id}`).join(", ")}`;
-    const updated = await persistRun(admin, row.id, { status: "failed", error: message });
+    const updated = await persistRun(
+      admin, row.id,
+      { status: "failed", error: message },
+      { expectStatus: row.status, step: "finalize" },
+    );
     await logEvent(admin, row.id, "finalize", "error", "Finalize's re-render was refused.", { outcome });
     return updated;
   }
 
-  const updated = await persistRun(admin, row.id, {
-    zip_path: outcome.zipPath,
-    steps: { ...row.steps, finalize: { at: now().toISOString(), zip_bytes: outcome.zipBytes } },
-    status: "ready",
-  });
+  const updated = await persistRun(
+    admin, row.id,
+    {
+      zip_path: outcome.zipPath,
+      steps: { ...row.steps, finalize: { at: now().toISOString(), zip_bytes: outcome.zipBytes } },
+      status: "ready",
+    },
+    { expectStatus: row.status, step: "finalize" },
+  );
   await logEvent(admin, row.id, "finalize", "info", `Finalized: ${outcome.zipBytes} byte zip.`);
   return updated;
 }

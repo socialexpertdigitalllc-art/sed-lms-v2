@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { applyOperatorEdit } from "@/lib/site-studio/run/applyWritten";
+import { loadManifest } from "@/lib/site-studio/run/engine";
 import { contentDocSchema, type ContentDoc } from "@/lib/site-studio/schema";
 import type { SlotImageState } from "@/lib/site-studio/run/types";
-import type { PickChoice } from "@/lib/site-studio/assets/types";
+import type { ImageCandidate, PickChoice } from "@/lib/site-studio/assets/types";
 import { bumpUseCount } from "@/lib/site-studio/assets/library";
 import { rehostFromUrl, STUDIO_ASSETS_BUCKET } from "@/lib/site-studio/assets/rehost";
 
@@ -68,16 +69,45 @@ function rehostStatus(error: string): number {
 
 /**
  * POST: pick an image for one slot. `key` is `"${docPageIndex}:${slotId}"`
- * (types.ts's `SlotImageState` doc comment). Only a `library` pick reuses an
- * existing asset untouched (its `subject` stays whatever the library already
- * recorded); a `pexels` or `client` pick REHOSTS a new asset, and per this
- * phase's contract that new asset's `subject` is forced to the slot's own
- * recorded search `query` (`steps.images.slots[key].query`) — NEVER whatever
- * the client happened to send — so the library warms up with the same text
- * `searchLibrary` will actually match against on a future run. Writes
- * `asset:{id}` into the doc slot via `applyOperatorEdit` (provenance
- * "operator" — an image pick is a human decision, and a later re-roll must
- * never silently replace it).
+ * (types.ts's `SlotImageState` doc comment).
+ *
+ * SECURITY: nothing in `choice` is trusted at face value — every branch is
+ * checked against what the SERVER itself sourced/knows for this exact run
+ * and slot, never against whatever the request body claims:
+ *  - `library`: the asset id must appear in THIS SLOT's own sourced
+ *    candidates as a `kind:"library"` entry, AND (defense in depth, in case
+ *    a candidate list is ever stale) the row itself is re-checked against
+ *    the client fence (`kind='stock'` or `lead_id` = this run's lead) —
+ *    otherwise any operator who learns another lead's client-photo UUID
+ *    could write it straight into a different lead's site, bypassing the
+ *    fence at the one point that decides what actually ships.
+ *  - `pexels`: the pexels id must match a `kind:"pexels"` candidate this
+ *    slot was actually sourced with; the URL/dimensions/photographer that
+ *    get rehosted are the CANDIDATE's own stored values, never the
+ *    request body's copies — otherwise the body could hand `rehostFromUrl`
+ *    an arbitrary URL (server-side fetch of attacker-chosen hosts) stored
+ *    under fabricated attribution as a new SHARED stock asset.
+ *  - `client`: `choice.url` must be an exact match against this run's own
+ *    `client_photos` (captured at prepare time) — otherwise any URL could be
+ *    fetched and stored as if it were this lead's own photo.
+ *
+ * The target slot must also be declared `type:"image"` on that doc page in
+ * the compiled manifest — a `key` naming a TEXT slot is refused (422) rather
+ * than silently writing `asset:{uuid}` as literal visible copy (that value
+ * is not itself markup/URL/token, so nothing else in the pipeline would ever
+ * catch it: `contentDocSchema.tokenFree` only blocks `{{`-style tokens, and
+ * `resolveAssets` only rewrites slots the manifest already says are images —
+ * a text slot's `asset:` value would ship to the deployed site verbatim).
+ *
+ * Only a `library` pick reuses an existing asset untouched (its `subject`
+ * stays whatever the library already recorded); a `pexels` or `client` pick
+ * REHOSTS a new asset, and per this phase's contract that new asset's
+ * `subject` is forced to the slot's own recorded search `query`
+ * (`steps.images.slots[key].query`) — NEVER whatever the client sent — so the
+ * library warms up with the same text `searchLibrary` will actually match on
+ * a future run. Writes `asset:{id}` into the doc slot via `applyOperatorEdit`
+ * (provenance "operator" — an image pick is a human decision, and a later
+ * re-roll must never silently replace it).
  */
 export async function POST(req: Request, ctx: Ctx) {
   const auth = await guard();
@@ -110,23 +140,69 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: `page index ${pageIndex} out of range (doc has ${doc.pages.length} page(s))` }, { status: 422 });
   }
 
-  const slotQuery = ((row.steps?.images?.slots ?? {}) as Record<string, SlotImageState>)[body.key]?.query;
+  // The target slot must be a declared IMAGE slot on this doc page — never
+  // inferred from the value being written, always from the manifest (see
+  // resolveAssets.ts's own note on why that distinction matters).
+  const docPage = doc.pages[pageIndex];
+  let manifest;
+  try {
+    manifest = await loadManifest(admin, row.template_id);
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : "Could not load template" }, { status: 500 });
+  }
+  const pageDef = manifest.pages.find((p) => p.id === docPage.page_id);
+  if (!pageDef) {
+    return NextResponse.json({ error: `Page "${docPage.page_id}" is not in the template manifest` }, { status: 422 });
+  }
+  const slotDef = pageDef.slots.find((s) => s.id === slotId);
+  if (!slotDef || slotDef.type !== "image") {
+    return NextResponse.json({ error: `Slot "${slotId}" is not an image slot on this page` }, { status: 422 });
+  }
+
+  const slotState = ((row.steps?.images?.slots ?? {}) as Record<string, SlotImageState>)[body.key];
+  if (!slotState) {
+    return NextResponse.json({ error: `No sourced candidates for slot "${body.key}"` }, { status: 422 });
+  }
+  const slotQuery = slotState.query;
 
   let assetId: string;
   if (choice.kind === "library") {
-    const { data: asset } = await admin.from("studio_assets").select("id").eq("id", choice.asset_id).single();
+    const candidateMatch = slotState.candidates.find(
+      (c) => c.kind === "library" && c.asset_id === choice.asset_id,
+    );
+    if (!candidateMatch) {
+      return NextResponse.json({ error: "That library asset was not offered as a candidate for this slot" }, { status: 422 });
+    }
+    // Defense in depth: don't rely on the candidate list alone (it was
+    // sourced once and could in principle be stale) — re-verify the row
+    // itself still satisfies the client fence for THIS run's lead.
+    const { data: asset } = await admin.from("studio_assets").select("id,kind,lead_id").eq("id", choice.asset_id).single();
     if (!asset) return NextResponse.json({ error: "Library asset not found" }, { status: 404 });
+    const fenced = asset.kind === "stock" || asset.lead_id === row.lead_id;
+    if (!fenced) {
+      return NextResponse.json({ error: "This asset is not available to this run's lead" }, { status: 422 });
+    }
     await bumpUseCount(admin, choice.asset_id);
     assetId = choice.asset_id;
   } else if (choice.kind === "pexels") {
-    const result = await rehostFromUrl(admin, choice.download_url, {
+    const candidateMatch = slotState.candidates.find(
+      (c): c is Extract<ImageCandidate, { kind: "pexels" }> => c.kind === "pexels" && c.pexels_id === choice.pexels_id,
+    );
+    if (!candidateMatch) {
+      return NextResponse.json({ error: "That Pexels photo was not offered as a candidate for this slot" }, { status: 422 });
+    }
+    // Rehost the CANDIDATE's own stored fields — never the request body's
+    // copies. Trusting the body's `download_url` would let any caller hand
+    // an arbitrary URL to a server-side fetch (SSRF) and have it stored as a
+    // shared stock asset under fabricated dimensions/attribution.
+    const result = await rehostFromUrl(admin, candidateMatch.download_url, {
       kind: "stock",
-      subject: slotQuery || choice.subject,
+      subject: slotQuery,
       source: "pexels",
-      pexels_id: choice.pexels_id,
-      width: choice.width,
-      height: choice.height,
-      photographer: choice.photographer,
+      pexels_id: candidateMatch.pexels_id,
+      width: candidateMatch.width,
+      height: candidateMatch.height,
+      photographer: candidateMatch.photographer,
     });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: rehostStatus(result.error) });
     assetId = result.asset.id;
@@ -134,10 +210,14 @@ export async function POST(req: Request, ctx: Ctx) {
     if (!row.lead_id) {
       return NextResponse.json({ error: "This run has no lead to attribute a client photo to" }, { status: 422 });
     }
+    const clientPhotos = Array.isArray(row.client_photos) ? (row.client_photos as string[]) : [];
+    if (!clientPhotos.includes(choice.url)) {
+      return NextResponse.json({ error: "That photo is not one of this lead's own client photos" }, { status: 422 });
+    }
     const result = await rehostFromUrl(admin, choice.url, {
       kind: "client",
       lead_id: row.lead_id,
-      subject: slotQuery || choice.subject,
+      subject: slotQuery,
       source: "client_link",
     });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: rehostStatus(result.error) });

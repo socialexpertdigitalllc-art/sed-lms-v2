@@ -14,6 +14,12 @@ const EXT_BY_CONTENT_TYPE: Record<string, string> = {
   "image/webp": "webp",
   "image/avif": "avif",
 };
+// `probeImageDimensions` only understands PNG/JPEG/WEBP magic bytes (AVIF is
+// an ISOBMFF container — a materially bigger parser for a format uploads
+// rarely use); the spoof-detection gate below is therefore only enforced for
+// the three types it actually verifies. An AVIF upload still degrades to
+// 0x0 dimensions exactly as before this fix, rather than being probed at all.
+const PROBED_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 // `searchLibrary` (assets/library.ts) already fails CLOSED on a malformed
 // `leadId` — returns no rows rather than widening the query — but that's a
@@ -86,6 +92,18 @@ export async function POST(req: Request) {
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   const dims = probeImageDimensions(bytes, file.type);
+  // The client-declared MIME type is the only content-type gate above; a
+  // GENUINE png/jpeg/webp file always parses (PNG's signature, JPEG's SOF
+  // marker, WEBP's RIFF/VP8 header are all mandatory). A probe failure for
+  // one of those three means the bytes don't actually match the declared
+  // type — a spoofed upload — so it's refused outright rather than silently
+  // stored at 0x0 and later re-served under a content-type it doesn't match.
+  if (!dims && PROBED_CONTENT_TYPES.has(file.type)) {
+    return NextResponse.json(
+      { error: `File does not look like a valid ${file.type} image (failed the dimension probe)` },
+      { status: 422 },
+    );
+  }
 
   const admin = createAdminClient();
   const assetId = crypto.randomUUID();

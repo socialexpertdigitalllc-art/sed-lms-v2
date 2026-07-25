@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { runStep, setRunPaused, type RunStepDeps } from "@/lib/site-studio/run/engine";
 import type { AiCall } from "@/lib/site-studio/run/writer";
 import type { StudioRunRow } from "@/lib/site-studio/run/types";
@@ -306,6 +307,58 @@ describe("Gate 1 — cancel from the gate", () => {
     expect(result.claimed).toBe(true);
     expect(result.row.status).toBe("cancelled");
     expect(calls).toBe(0);
+  });
+});
+
+describe("persistRun's terminal guard — a mid-step cancel is never resurrected by that step's own persist", () => {
+  it("a cancel that lands while finalize's zip upload is in flight is NOT overwritten back to 'ready'", async () => {
+    const { state, admin: baseAdmin } = await seedOnePageAdmin();
+    let row = state.runs["run1"] as unknown as StudioRunRow;
+    const deps: RunStepDeps = { aiCall: genericAiCall, now: NOW, searchPexels: noPexels };
+
+    row = (await runStep(baseAdmin, row, deps)).row; // prepare
+    row = (await runStep(baseAdmin, row, deps)).row; // write -> reviewing
+    state.runs["run1"] = { ...(state.runs["run1"] as Record<string, unknown>), status: "approved" };
+    row = state.runs["run1"] as unknown as StudioRunRow;
+    row = (await runStep(baseAdmin, row, deps)).row; // render -> rendering
+    expect(row.status).toBe("rendering");
+
+    // Wrap storage.upload so the INSTANT finalize starts uploading the zip
+    // (mid-step, after claimRun already succeeded for this call), a
+    // concurrent cancel lands — exactly the "control route cancels while
+    // finalize is mid-upload" scenario Fix 3 closes. claimRun's own CAS
+    // cannot see this: it already ran, before this race, for this call.
+    const racyAdmin = {
+      ...baseAdmin,
+      storage: {
+        from: (bucket: string) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const real = (baseAdmin as any).storage.from(bucket);
+          if (bucket !== "studio-sites") return real;
+          return {
+            ...real,
+            upload: async (...args: unknown[]) => {
+              state.runs["run1"] = {
+                ...(state.runs["run1"] as Record<string, unknown>),
+                status: "cancelled",
+                updated_at: new Date(Date.now() + 1).toISOString(),
+              };
+              return real.upload(...args);
+            },
+          };
+        },
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await runStep(racyAdmin, row, deps); // finalize
+    expect(result.claimed).toBe(true); // this call DID win its own claim, before the race
+    expect(result.row.status).toBe("cancelled"); // NOT resurrected to "ready"
+    expect((state.runs["run1"] as unknown as StudioRunRow).status).toBe("cancelled");
+
+    const abandonEvent = state.events.find(
+      (e) => e.step === "finalize" && e.level === "warn" && String(e.message).includes("Abandoned"),
+    );
+    expect(abandonEvent).toBeTruthy();
   });
 });
 
