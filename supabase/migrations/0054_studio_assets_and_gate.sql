@@ -13,8 +13,15 @@
 create table public.studio_assets (
   id uuid primary key default gen_random_uuid(),
   kind text not null check (kind in ('stock','client')),
-  -- client-owned assets MUST carry their lead; stock MUST NOT
-  lead_id uuid references public.leads (id) on delete set null,
+  -- client-owned assets MUST carry their lead; stock MUST NOT.
+  -- CASCADE, not SET NULL: set-null's internal UPDATE would violate the CHECK
+  -- below on every client row (kind stays 'client', lead_id goes null), making
+  -- the lead DELETE itself fail with 23514. Cascade is also the right
+  -- semantics — fenced client photos have no purpose without their lead, and a
+  -- deployed site already carries its image BYTES (zipped at finalize), so a
+  -- vanished row can never break a live site; a mid-flight run that picked one
+  -- fails loudly at resolveAssets with the asset id named.
+  lead_id uuid references public.leads (id) on delete cascade,
   constraint studio_assets_client_needs_lead
     check ((kind = 'client') = (lead_id is not null)),
   subject text not null default '',

@@ -69,6 +69,12 @@ export interface PageWriteState {
 
 /** Per-slot image sourcing state, filled once during the write phase and
  *  never re-queried once present (sourcing is idempotent — see engine.ts). */
+/** Keyed in `RunSteps.images.slots` by `"${docPageIndex}:${slotId}"` — the
+ *  doc-page INDEX (not page_id: stamped fan-out pages share a page_id) plus
+ *  the image slot id. imageSource.ts writes these keys, the images route
+ *  serves and accepts them, and the cockpit's ImagePicker echoes them back;
+ *  all three must agree on this exact shape, and nothing enforces it at the
+ *  type level, so it is documented here at the source. */
 export interface SlotImageState {
   query: string;
   candidates: ImageCandidate[];
