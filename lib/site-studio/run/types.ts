@@ -10,7 +10,19 @@ export type RunStep = (typeof STEP_ORDER)[number];
 const TERMINAL: RunStatus[] = ["ready","failed","cancelled"];
 export const isTerminal = (s: RunStatus): boolean => TERMINAL.includes(s);
 
-/** Which step a run in this status should execute next, or null when done. */
+/**
+ * Which step a run in this status should execute next, or null when done.
+ *
+ * NAMING NOTE: a status names the step that JUST COMPLETED, not the step
+ * about to run — "preparing" means "prepare is done, run write next", not
+ * "prepare is currently running". This reads backwards at first glance, but
+ * it is the only reading consistent with the chain below: "queued" (nothing
+ * done yet) -> prepare -> "preparing" -> write -> "writing" -> render ->
+ * "rendering" -> finalize -> "ready". There is deliberately no separate
+ * status for "render" actively running — render and finalize both execute
+ * while the row reads "rendering" (see finalize.ts's own note on why
+ * finalize must never trust a prior render's output).
+ */
 export function nextStep(status: RunStatus): RunStep | null {
   switch (status) {
     case "queued": return "prepare";

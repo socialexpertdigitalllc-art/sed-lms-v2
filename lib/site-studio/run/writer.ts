@@ -103,7 +103,13 @@ function truncateAtWord(value: string, maxChars: number): string {
   return cut.trimEnd();
 }
 
-const DISALLOWED = /<|\{\{|https?:\/\/|www\./i;
+/** No markup, no template tokens, no bare links — plain text only. Applied to
+ *  every AI-written value here, and reused verbatim by the operator-edit
+ *  route (PATCH /runs/[id]/content) so a hand-typed edit is held to the same
+ *  bar: the schema's own `tokenFree` check is narrower (it only blocks
+ *  `{{`-style tokens) and would silently let `<b>`/a bare URL through to be
+ *  escaped or stripped at render time with no error at edit time. */
+export const DISALLOWED = /<|\{\{|https?:\/\/|www\./i;
 
 /** One AI call for one page. Parses strict JSON (tolerating code fences),
  *  validates every text slot is present and every value is plain text, then

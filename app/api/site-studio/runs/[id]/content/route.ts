@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { isTerminal } from "@/lib/site-studio/run/types";
-import { applyOperatorEdit } from "@/lib/site-studio/run/applyWritten";
+import { applyOperatorEdit, findDisallowedEditField } from "@/lib/site-studio/run/applyWritten";
 import { contentDocSchema, type ContentDoc } from "@/lib/site-studio/schema";
 
 export const runtime = "nodejs";
@@ -36,6 +36,20 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "title must be a string" }, { status: 422 });
   }
   if (!hasSlots && !hasTitle) return NextResponse.json({ error: "Nothing to update" }, { status: 422 });
+
+  // Hold an operator's hand-typed edit to the same bar the Writer's AI
+  // output is held to (see findDisallowedEditField's own note): no markup,
+  // no template tokens, no bare links.
+  const badField = findDisallowedEditField({
+    title: hasTitle ? (body.title as string) : undefined,
+    slots: hasSlots ? (body.slots as Record<string, string>) : undefined,
+  });
+  if (badField) {
+    return NextResponse.json(
+      { error: `${badField} contains markup, a URL, or token syntax, which isn't allowed` },
+      { status: 422 },
+    );
+  }
 
   const admin = createAdminClient();
   const { data: row, error: fetchErr } = await admin.from("studio_runs").select("*").eq("id", id).single();

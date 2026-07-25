@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { seedContentDoc } from "@/lib/site-studio/run/seed";
-import { applyWritten, applyOperatorEdit } from "@/lib/site-studio/run/applyWritten";
+import { applyWritten, applyOperatorEdit, findDisallowedEditField } from "@/lib/site-studio/run/applyWritten";
 import { contentDocSchema } from "@/lib/site-studio/schema";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { Dossier } from "@/lib/site-studio/run/dossier";
@@ -188,5 +188,36 @@ describe("applyOperatorEdit", () => {
     const written = applyWritten(doc, 0, indexResult);
     const edited = applyOperatorEdit(written, 0, { slots: { index_s1: "Fixed by hand" } });
     expect(() => contentDocSchema.parse(edited)).not.toThrow();
+  });
+});
+
+describe("findDisallowedEditField", () => {
+  it("passes a clean edit", () => {
+    expect(findDisallowedEditField({ title: "A fine title", slots: { s1: "Plain copy." } })).toBeNull();
+  });
+
+  it("catches markup in the title", () => {
+    expect(findDisallowedEditField({ title: "<b>Bold</b>" })).toBe("title");
+  });
+
+  it("catches a script tag, a bare URL, and www. in slot values, naming the slot", () => {
+    expect(findDisallowedEditField({ slots: { s1: "ok", s2: "<script>alert(1)</script>" } })).toBe('slot "s2"');
+    expect(findDisallowedEditField({ slots: { s1: "Visit https://example.com now" } })).toBe('slot "s1"');
+    expect(findDisallowedEditField({ slots: { s1: "See www.example.com" } })).toBe('slot "s1"');
+  });
+
+  it("catches a template token, so an operator can't smuggle in {{id:*}} either", () => {
+    expect(findDisallowedEditField({ slots: { s1: "Call {{id:phone}}" } })).toBe('slot "s1"');
+  });
+
+  it("holds the operator to exactly writePage's own bar (DISALLOWED), not the schema's laxer tokenFree", () => {
+    // contentDocSchema's tokenFree would let this straight through (it only
+    // blocks {{ tokens) — findDisallowedEditField must not.
+    expect(findDisallowedEditField({ title: "<i>fine print</i>" })).not.toBeNull();
+  });
+
+  it("ignores fields that were not part of the edit", () => {
+    expect(findDisallowedEditField({})).toBeNull();
+    expect(findDisallowedEditField({ slots: {} })).toBeNull();
   });
 });

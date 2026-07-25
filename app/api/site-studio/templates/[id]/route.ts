@@ -49,7 +49,11 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   // studio_runs.template_id is `on delete restrict` (migration 0053), so
   // without this guard the DELETE below would surface a raw Postgres FK
   // violation (23503) as an opaque 400 — this is the proven v2 rule.
-  const { count } = await admin.from("studio_runs").select("id", { count: "exact", head: true }).eq("template_id", id);
+  const { count, error: countErr } = await admin
+    .from("studio_runs")
+    .select("id", { count: "exact", head: true })
+    .eq("template_id", id);
+  if (countErr) return NextResponse.json({ error: `Could not check for existing runs: ${countErr.message}` }, { status: 500 });
   if (count && count > 0) {
     return NextResponse.json(
       { error: `Cannot delete: ${count} generation run(s) were built from this template.` },

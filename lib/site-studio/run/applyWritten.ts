@@ -1,5 +1,5 @@
 import type { ContentDoc, ContentDocPage } from "../schema";
-import type { WriteResult } from "./writer";
+import { DISALLOWED, type WriteResult } from "./writer";
 
 /** A successful write — the only variant applyWritten accepts. Callers must
  *  already have checked `ok`; there is no such thing as applying a failure
@@ -95,18 +95,45 @@ export function applyWritten(
   };
 }
 
+export interface OperatorEdit {
+  title?: string;
+  slots?: Record<string, string>;
+}
+
+/**
+ * Holds an operator's hand-typed edit to the SAME plain-text bar the
+ * Writer's AI output is held to (writer.ts's `DISALLOWED`): no markup, no
+ * template tokens, no bare links. `contentDocSchema`'s own `tokenFree` check
+ * is narrower — it only blocks `{{`-style tokens — and would otherwise let
+ * e.g. `<b>` or a raw URL through to be silently escaped or stripped at
+ * render time, with no error at edit time. Returns a human-readable name for
+ * the first offending field (e.g. `slot "index_s1"`), or null when the edit
+ * is clean.
+ */
+export function findDisallowedEditField(edit: OperatorEdit): string | null {
+  if (edit.title !== undefined && DISALLOWED.test(edit.title)) return "title";
+  if (edit.slots) {
+    for (const [id, value] of Object.entries(edit.slots)) {
+      if (DISALLOWED.test(value)) return `slot "${id}"`;
+    }
+  }
+  return null;
+}
+
 /**
  * Merge an OPERATOR's edit into one page. Unlike `applyWritten` (which always
  * sets every field a completed AI write touched), this only touches the
  * fields actually supplied — an operator fixing one headline must not blank
  * out the rest of the page. Stamps `written_by:"operator"` on every field it
  * touches, so a later AI re-roll (spec: "re-roll only touches AI-written
- * fields") leaves operator edits alone. Does not mutate its input.
+ * fields") leaves operator edits alone. Does not mutate its input. Callers
+ * should run `findDisallowedEditField` first (this function does not
+ * validate content on its own — it is a pure merge, same as `applyWritten`).
  */
 export function applyOperatorEdit(
   doc: ContentDoc | RunContentDoc,
   pageIndex: number,
-  edit: { title?: string; slots?: Record<string, string> },
+  edit: OperatorEdit,
 ): RunContentDoc {
   if (pageIndex < 0 || pageIndex >= doc.pages.length) {
     throw new RangeError(`applyOperatorEdit: page index ${pageIndex} is out of range (doc has ${doc.pages.length} pages)`);

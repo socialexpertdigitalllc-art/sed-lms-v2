@@ -29,9 +29,17 @@ export interface RunStepDeps {
   now?: () => Date;
 }
 
-export type RunStepResult =
-  | { done: true; row: StudioRunRow }
-  | { done: false; row: StudioRunRow };
+export interface RunStepResult {
+  done: boolean;
+  row: StudioRunRow;
+  /** False only when this call lost the race to claim the run — another
+   *  concurrent call already advanced it between this call's read and its
+   *  claim attempt. When false, `row` is simply the row as it was passed in:
+   *  no work was done and, critically, no AI call was made. Always true for
+   *  the done:true no-op case (nothing to claim) and for every step that
+   *  actually ran. */
+  claimed: boolean;
+}
 
 const MAX_WRITE_ATTEMPTS = 2;
 
@@ -88,14 +96,64 @@ async function loadLeadRow(admin: SupabaseClient, leadId: string): Promise<Recor
   return data as Record<string, unknown>;
 }
 
+/**
+ * A `timestamptz`-valid ISO string with sub-millisecond entropy appended.
+ * Plain `new Date().toISOString()` truncates to milliseconds — and the exact
+ * scenario the claim below exists to stop (a double-click, two racing
+ * requests) can easily put TWO writes inside the same millisecond. If a
+ * claim's new value and the value a loser compares against ever collide as
+ * STRINGS, the CAS silently stops distinguishing "unchanged" from "changed".
+ * A per-process monotonic counter, cycled into the microsecond digits
+ * Postgres `timestamptz` already accepts (up to 6 fractional digits), makes
+ * every call from THIS process produce a distinct value even when several
+ * land in the same millisecond — still a valid, still-basically-accurate
+ * timestamp, not a marker value smuggled into a real column. It does not
+ * protect against a same-microsecond collision from a genuinely SEPARATE
+ * process racing this one, but that residual window is astronomically
+ * narrower than the millisecond one a plain `toISOString()` left open.
+ */
+let claimSeq = 0;
+function preciseNow(): string {
+  const iso = new Date().toISOString(); // "...sss.SSSZ"
+  claimSeq = (claimSeq + 1) % 1000;
+  return `${iso.slice(0, -1)}${String(claimSeq).padStart(3, "0")}Z`;
+}
+
 async function persistRun(admin: SupabaseClient, id: string, patch: Record<string, unknown>): Promise<StudioRunRow> {
   const { data, error } = await admin
     .from("studio_runs")
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update({ ...patch, updated_at: preciseNow() })
     .eq("id", id)
     .select("*")
     .single();
   if (error || !data) throw new Error(`engine: failed to persist run "${id}" (${error?.message ?? "no data"})`);
+  return data as StudioRunRow;
+}
+
+/**
+ * Optimistic claim: before doing any work (and before making any AI call),
+ * atomically re-touch the row's `updated_at`, guarded by the exact value
+ * this caller read it at. Postgres only lets ONE concurrent `UPDATE ...
+ * WHERE id = $1 AND updated_at = $2` succeed on the same row — the loser's
+ * predicate no longer matches once the winner has committed a fresh
+ * `updated_at` — so this is a real single-winner race, not just a
+ * best-effort check. `updated_at` is used rather than `status` deliberately:
+ * this table has no separate claim/heartbeat column by design (migration
+ * 0053), and stamping a transitional "claimed" status here would corrupt
+ * the meaning `nextStep`/`RUNNING_STATUS` already give the status column
+ * (see the note on `nextStep`) — `updated_at` gives the same single-winner
+ * guarantee without touching that. See `preciseNow` for why this doesn't
+ * just call `new Date().toISOString()` directly.
+ */
+async function claimRun(admin: SupabaseClient, row: StudioRunRow): Promise<StudioRunRow | null> {
+  const { data, error } = await admin
+    .from("studio_runs")
+    .update({ updated_at: preciseNow() })
+    .eq("id", row.id)
+    .eq("updated_at", row.updated_at)
+    .select("*")
+    .single();
+  if (error || !data) return null;
   return data as StudioRunRow;
 }
 
@@ -180,9 +238,14 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
  *  2-attempt cap — so re-running this step (status stays unchanged while any
  *  page remains incomplete, letting `nextStep` route back here) naturally
  *  retries ONLY the pages that still need it; an already-written page is
- *  never re-called, and a page that has exhausted its attempts is left
- *  reported (not silently dropped) rather than retried forever. Status only
- *  advances once every doc-page is `written`. */
+ *  never re-called. Status only advances to "writing" once every doc-page is
+ *  `written`. A page that has now EXHAUSTED its attempts and still isn't
+ *  written can never become written by retrying — retrying it forever would
+ *  wedge the run at this status permanently (every `POST /step` a no-op
+ *  forever, silently), which is exactly the orphaned-run class the
+ *  short-step design exists to prevent. So once at least one unwritten page
+ *  has hit the cap, the RUN itself fails, naming the stuck page(s) and their
+ *  last error — never a silent, endless "will retry" that no longer will. */
 async function runWrite(admin: SupabaseClient, row: StudioRunRow, deps: RunStepDeps): Promise<StudioRunRow> {
   if (!row.content_doc) throw new Error("engine: write step reached before prepare completed");
   if (!row.lead_id) throw new Error("engine: write step has no lead");
@@ -235,26 +298,43 @@ async function runWrite(admin: SupabaseClient, row: StudioRunRow, deps: RunStepD
     }
   });
 
-  const allWritten = doc.pages.every((_, i) => pages[String(i)]?.status === "written");
+  const notWritten = doc.pages.map((_, i) => i).filter((i) => pages[String(i)]?.status !== "written");
+  const allWritten = notWritten.length === 0;
+  const stuck = notWritten.filter((i) => (pages[String(i)]?.attempts ?? 0) >= MAX_WRITE_ATTEMPTS);
+
+  let status: string = row.status; // default: unchanged, still retryable
+  let runError: string | undefined;
+  let level: "info" | "warn" | "error" = "warn";
+  let message: string;
+
+  if (allWritten) {
+    status = "writing";
+    level = "info";
+    message = `All ${doc.pages.length} page(s) written.`;
+  } else if (stuck.length > 0) {
+    // At least one page can never become "written" by retrying — fail the
+    // RUN rather than leaving it retryable forever (see the doc comment
+    // above). Pages that are merely failed-but-still-under-budget don't
+    // block this; only truly exhausted ones do.
+    status = "failed";
+    level = "error";
+    const details = stuck
+      .map((i) => `"${doc.pages[i].page_id}" (page ${i}): ${pages[String(i)]?.error ?? "unknown error"}`)
+      .join("; ");
+    runError = `Write failed: ${stuck.length} page(s) exhausted ${MAX_WRITE_ATTEMPTS} write attempt(s) — ${details}`;
+    message = runError;
+  } else {
+    message = `${notWritten.length} page(s) not yet written; will retry on the next step call.`;
+  }
 
   const updated = await persistRun(admin, row.id, {
     content_doc: workingDoc,
     steps: { ...row.steps, write: { pages } },
-    // Advance only once every page is written; otherwise leave status
-    // exactly as it was so nextStep routes back to "write" and retries only
-    // what's left.
-    status: allWritten ? "writing" : row.status,
+    status,
+    ...(runError !== undefined ? { error: runError } : {}),
   });
 
-  const failedCount = Object.values(pages).filter((p) => p.status === "failed").length;
-  await logEvent(
-    admin, row.id, "write",
-    failedCount > 0 ? "warn" : "info",
-    allWritten
-      ? `All ${doc.pages.length} page(s) written.`
-      : `${failedCount} page(s) failed to write this round; will retry on the next step call.`,
-    { pages },
-  );
+  await logEvent(admin, row.id, "write", level, message, { pages });
 
   return updated;
 }
@@ -313,8 +393,14 @@ async function runFinalize(admin: SupabaseClient, row: StudioRunRow, now: () => 
 /**
  * Advances a run by exactly ONE step. Reads `nextStep(row.status)`: null
  * means the run is already terminal (or has nothing left to do), so this is
- * a safe no-op returning `{done:true}`. Otherwise runs that single step —
- * loading whatever durable inputs it needs (template package, lead row) from
+ * a safe no-op returning `{done:true, claimed:true}`. Otherwise it first
+ * CLAIMS the row (see `claimRun`) — if a concurrent call already advanced
+ * this run since `row` was read, the claim fails and this returns
+ * immediately with `claimed:false`, doing no work and making no AI call.
+ * This is what stops two overlapping `POST /step` calls (a double-click, a
+ * timeout-triggered retry, two open tabs) from paying for the same page
+ * twice. Only the caller that wins the claim runs the step — loading
+ * whatever durable inputs it needs (template package, lead row) from
  * `admin` fresh, never assuming anything from a previous call survived in
  * memory — and persists once. Every step appends a `studio_run_events` row.
  *
@@ -323,17 +409,20 @@ async function runFinalize(admin: SupabaseClient, row: StudioRunRow, now: () => 
  */
 export async function runStep(admin: SupabaseClient, row: StudioRunRow, deps: RunStepDeps): Promise<RunStepResult> {
   const step = nextStep(row.status);
-  if (!step) return { done: true, row };
+  if (!step) return { done: true, row, claimed: true };
   const now = deps.now ?? (() => new Date());
+
+  const claimed = await claimRun(admin, row);
+  if (!claimed) return { done: false, row, claimed: false };
 
   switch (step) {
     case "prepare":
-      return { done: false, row: await runPrepare(admin, row, now) };
+      return { done: false, row: await runPrepare(admin, claimed, now), claimed: true };
     case "write":
-      return { done: false, row: await runWrite(admin, row, deps) };
+      return { done: false, row: await runWrite(admin, claimed, deps), claimed: true };
     case "render":
-      return { done: false, row: await runRender(admin, row) };
+      return { done: false, row: await runRender(admin, claimed), claimed: true };
     case "finalize":
-      return { done: false, row: await runFinalize(admin, row, now) };
+      return { done: false, row: await runFinalize(admin, claimed, now), claimed: true };
   }
 }

@@ -103,6 +103,25 @@ async function seedTwoPageAdmin(): Promise<{ state: FakeAdminState; admin: Retur
   return { state, admin };
 }
 
+const onePageManifest: TemplateManifest = {
+  engine: 3, name: "engine-test-single", version: 1,
+  identity: {},
+  theme: { mode: "none", roles: {} },
+  nav: [],
+  pages: [{
+    id: "index", file: "index.html", kind: "home", stampable: false, title_sample: "Home",
+    slots: [{ id: "index_s1", type: "text", sample: "Welcome", max_chars: 60, html: false }],
+    repeats: [],
+  }],
+};
+
+const onePageCompiled: CompiledTemplate = {
+  manifest: onePageManifest,
+  pages: { "index.html": `<html><head><title>{{title}}</title></head><body><h1>{{slot:index_s1}}</h1></body></html>` },
+  fragments: {},
+  assets: {},
+};
+
 // ------------------------------------------------------------------ tests
 
 describe("runStep — the chain advances one status per call", () => {
@@ -306,5 +325,101 @@ describe("runStep — full happy path", () => {
     expect(index).toContain("Reliable Plumbing Co");
     expect(index).not.toContain("PlumberPro");
     expect(index).not.toMatch(/\{\{|<!--@/);
+  });
+});
+
+describe("runStep — write: an exhausted page fails the run rather than wedging it forever", () => {
+  it("after the retry budget, the run reaches failed with the page named, and further steps are a no-op", async () => {
+    const { state, admin } = await seedTwoPageAdmin();
+    let row = state.runs["run1"] as unknown as StudioRunRow;
+
+    const prep = await runStep(admin, row, { aiCall: genericAiCall, now: NOW });
+    row = prep.row;
+
+    const alwaysFailsForAbout: AiCall = async (system, user) => {
+      if (user.includes("PAGE: about")) return { text: "still not json" };
+      return genericAiCall(system, user);
+    };
+
+    // Attempt 1: "about" fails but is still under budget -> retryable, not failed.
+    const w1 = await runStep(admin, row, { aiCall: alwaysFailsForAbout });
+    expect(w1.row.status).not.toBe("failed");
+    expect(w1.row.steps.write!.pages["1"].attempts).toBe(1);
+    row = w1.row;
+
+    // Attempt 2: "about" fails again and is now exhausted -> the RUN fails,
+    // naming the stuck page, instead of sitting at "preparing" forever.
+    const w2 = await runStep(admin, row, { aiCall: alwaysFailsForAbout });
+    expect(w2.row.status).toBe("failed");
+    expect(w2.row.error).toContain("about");
+    expect(w2.row.error).toMatch(/exhausted/i);
+    expect(state.events.some((e) => e.step === "write" && e.level === "error")).toBe(true);
+    row = w2.row;
+
+    // A further POST /step-equivalent call is a safe, honest no-op — not
+    // another silent "will retry" round, and no further AI spend.
+    const calls: string[] = [];
+    const spy: AiCall = async (s, u) => {
+      calls.push(u);
+      return genericAiCall(s, u);
+    };
+    const w3 = await runStep(admin, row, { aiCall: spy });
+    expect(w3.done).toBe(true);
+    expect(w3.claimed).toBe(true);
+    expect(w3.row.status).toBe("failed");
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("runStep — concurrent calls: only one claims the step, no double AI spend", () => {
+  async function seedSinglePageRun() {
+    const state = emptyFakeAdminState();
+    const admin = makeFakeAdmin(state);
+    await savePackage(admin, "tpl-single", onePageCompiled);
+    state.templates["tpl-single"] = { manifest: onePageManifest };
+    state.leads["lead-single"] = { id: "lead-single", business_name: "Solo Co" };
+    state.runs["run-single"] = freshRow({
+      id: "run-single", lead_id: "lead-single", template_id: "tpl-single",
+    }) as unknown as Record<string, unknown>;
+
+    let row = state.runs["run-single"] as unknown as StudioRunRow;
+    const prep = await runStep(admin, row, { aiCall: genericAiCall, now: NOW });
+    row = prep.row;
+    return { state, admin, row };
+  }
+
+  it("a second caller holding a stale row snapshot loses the claim: no work, no AI call", async () => {
+    // The deterministic form of "two concurrent callers": both read the row
+    // at the SAME moment (the shared `staleRow` snapshot below) before either
+    // submits its claim — exactly what a double-click, a timeout-triggered
+    // retry, or two open cockpit tabs produce. Driving this via a real
+    // Promise.all race is timing-dependent (whichever microtask the runtime
+    // happens to schedule first) and was flaky under the full suite's test
+    // scheduling; asserting on two callers sharing one stale snapshot proves
+    // the SAME compare-and-swap guarantee deterministically.
+    const { state, admin, row: staleRow } = await seedSinglePageRun();
+    expect(staleRow.status).toBe("preparing");
+
+    let callCount = 0;
+    const countingAiCall: AiCall = async (system, user) => {
+      callCount++;
+      return genericAiCall(system, user);
+    };
+
+    const winner = await runStep(admin, staleRow, { aiCall: countingAiCall });
+    expect(winner.claimed).toBe(true);
+    expect(winner.row.status).toBe("writing");
+    expect(callCount).toBe(1);
+
+    // The second caller still only has the ORIGINAL stale snapshot (its
+    // updated_at no longer matches the row the winner just persisted) — it
+    // must lose the claim outright: no work done, and critically, no AI call.
+    const loser = await runStep(admin, staleRow, { aiCall: countingAiCall });
+    expect(loser.claimed).toBe(false);
+    expect(loser.done).toBe(false);
+    expect(loser.row).toBe(staleRow); // untouched — exactly what it was given
+    expect(callCount).toBe(1); // still just the one AI call, not two
+
+    expect(state.runs["run-single"]).toBe(winner.row);
   });
 });

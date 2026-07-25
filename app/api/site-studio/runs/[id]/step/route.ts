@@ -32,13 +32,17 @@ export async function POST(_req: Request, ctx: Ctx) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Step failed" }, { status: 500 });
   }
 
-  await admin.from("activity_log").insert({
-    user_id: auth.userId,
-    action: "studio.run.step",
-    entity_type: "studio_run",
-    entity_id: id,
-    new_value: { status: result.row.status, done: result.done },
-  });
+  // A lost claim (another concurrent call already advanced this run) did no
+  // work and made no AI call — nothing happened worth an activity_log entry.
+  if (result.claimed) {
+    await admin.from("activity_log").insert({
+      user_id: auth.userId,
+      action: "studio.run.step",
+      entity_type: "studio_run",
+      entity_id: id,
+      new_value: { status: result.row.status, done: result.done },
+    });
+  }
 
-  return NextResponse.json({ run: result.row, done: result.done });
+  return NextResponse.json({ run: result.row, done: result.done, claimed: result.claimed });
 }
