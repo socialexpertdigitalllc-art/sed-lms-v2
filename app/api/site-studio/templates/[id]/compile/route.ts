@@ -17,7 +17,7 @@ export async function POST(_req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
 
   const admin = createAdminClient();
-  const { data: row } = await admin.from("studio_templates").select("id,name,status,version,compiled_at").eq("id", id).single();
+  const { data: row } = await admin.from("studio_templates").select("id,name,status,version,manifest,compiled_at").eq("id", id).single();
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (row.status === "certified") {
     return NextResponse.json({ error: "Disable the template before re-compiling a certified package" }, { status: 409 });
@@ -43,13 +43,31 @@ export async function POST(_req: Request, ctx: Ctx) {
   const version = row.compiled_at ? row.version + 1 : row.version;
   if (result.ok) {
     result.template.manifest.version = version;
-    await savePackage(admin, id, result.template);
+    try {
+      await savePackage(admin, id, result.template);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Storage error";
+      // Storage is left as-is (a mix of old/new files at worst); a later
+      // successful compile overwrites every file via upsert: true. Don't
+      // claim the new package is live — fall back to "uploaded" and keep
+      // whatever manifest was already on the row (Fix 3 below).
+      await admin.from("studio_templates").update({
+        status: "uploaded",
+        manifest: row.manifest,
+        diagnostics: [{ level: "blocker", code: "package_write_failed", message: `Compiled package could not be stored (${message}). Re-compile to retry.` }],
+        updated_at: new Date().toISOString(),
+      }).eq("id", id);
+      return NextResponse.json({ error: `Compiled package could not be stored (${message}). Re-compile to retry.` }, { status: 500 });
+    }
   }
 
   const { data: updated, error: upErr } = await admin.from("studio_templates").update({
     status: result.ok ? "needs_review" : "uploaded",
     version,
-    manifest: result.ok ? result.template.manifest : null,
+    // a FAILED re-compile of a previously-compiled template keeps the
+    // existing manifest — nulling it would 404 /preview for a template that
+    // worked moments ago (Fix 3).
+    manifest: result.ok ? result.template.manifest : row.manifest,
     diagnostics: result.diagnostics,
     compiled_at: new Date().toISOString(),
     // a re-compile invalidates prior enrichment — the package was rebuilt

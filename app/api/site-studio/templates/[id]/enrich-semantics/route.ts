@@ -10,7 +10,7 @@ export const maxDuration = 120;
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const OWNED_CODES = ["ai_semantics_unparseable", "ai_semantics_rejected", "ai_enrichment_reverted"];
+const OWNED_CODES = ["ai_semantics_unparseable", "ai_semantics_rejected", "ai_enrichment_reverted", "package_write_failed"];
 
 export async function POST(_req: Request, ctx: Ctx) {
   const auth = await guard();
@@ -24,11 +24,18 @@ export async function POST(_req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Only a compiled, un-certified template can be enriched" }, { status: 409 });
   }
 
-  const outcome = await runEnrichment(admin, row, async (tpl) => {
-    const { proposal, diagnostics } = await proposeSemantics(tpl, aiCall);
-    const result = applySemantics(tpl, proposal);
-    return { template: result.template, diagnostics: [...diagnostics, ...result.diagnostics] };
-  });
+  let outcome;
+  try {
+    outcome = await runEnrichment(admin, row, async (tpl) => {
+      const { proposal, diagnostics } = await proposeSemantics(tpl, aiCall);
+      const result = applySemantics(tpl, proposal);
+      return { template: result.template, diagnostics: [...diagnostics, ...result.diagnostics] };
+    });
+  } catch (e) {
+    // manifestSchema.parse / loadPackage / callForTask threw — the row is
+    // untouched (no *_enriched_at write), so a retry is simply "try again".
+    return NextResponse.json({ error: e instanceof Error ? e.message : "Enrichment failed" }, { status: 502 });
+  }
 
   const { data: updated, error } = await admin.from("studio_templates").update({
     manifest: outcome.template.manifest,

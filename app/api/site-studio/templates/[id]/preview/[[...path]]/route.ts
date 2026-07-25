@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { guard, guardError } from "@/lib/site-studio/service/guard";
+import { guard, guardError, untrustedContentHeaders } from "@/lib/site-studio/service/guard";
 import { manifestSchema } from "@/lib/site-studio/schema";
 import { sampleContentDoc } from "@/lib/site-studio/sample";
 import { renderSite } from "@/lib/site-studio/render/renderer";
@@ -32,9 +32,6 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (!bytes) return NextResponse.json({ error: "File not in rendered package" }, { status: 404 });
 
   return new NextResponse(new Uint8Array(bytes), {
-    headers: {
-      "Content-Type": contentTypeFor(file),
-      "Cache-Control": "private, max-age=0, must-revalidate",
-    },
+    headers: untrustedContentHeaders(contentTypeFor(file)),
   });
 }

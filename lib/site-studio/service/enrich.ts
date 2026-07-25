@@ -55,7 +55,27 @@ export async function runEnrichment(
     };
   }
 
-  await savePackage(admin, row.id, candidate);
+  try {
+    await savePackage(admin, row.id, candidate);
+  } catch (e) {
+    // A partial/failed write can leave storage holding a mix of old and new
+    // package files. Fail closed: report the OLD template back to the caller
+    // (nothing here claims the new content is live) and mark the row with a
+    // blocker so certify refuses until a re-compile rebuilds every file.
+    return {
+      ok: false,
+      reverted: true,
+      template: tpl,
+      diagnostics: [
+        ...diagnostics,
+        {
+          level: "blocker",
+          code: "package_write_failed",
+          message: `Enrichment could not be saved (${e instanceof Error ? e.message : "storage error"}). The stored package may be inconsistent — re-compile this template before certifying.`,
+        },
+      ],
+    };
+  }
   return { ok: true, reverted: false, template: candidate, diagnostics: [...diagnostics, ...verify] };
 }
 
