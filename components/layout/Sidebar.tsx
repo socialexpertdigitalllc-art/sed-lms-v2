@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Building2, PhoneCall, Ticket, BarChart3, MessageSquare,
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
-  Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu,
+  Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -55,6 +55,7 @@ const AI_TOOLS: NavItemAny[] = [
   { href: "/ai-tools/template-engine", label: "Template Engine", icon: LayoutTemplate, perms: ["templates.generate"] },
   { href: "/ai-tools/template-engine/deployments", label: "Deployed Sites", icon: Globe, perms: ["templates.deploy"] },
   { href: "/ai-tools/templates", label: "Templates", icon: Library, perms: ["templates.manage"] },
+  { href: "/ai-tools/site-studio", label: "Site Studio", icon: Wand2, perms: ["studio.manage"] },
 ];
 
 const ADMIN: NavItem[] = [
