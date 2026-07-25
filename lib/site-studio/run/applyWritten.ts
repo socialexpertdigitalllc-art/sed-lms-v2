@@ -129,6 +129,12 @@ const isOperatorOwned = (field?: FieldProvenance): boolean => field?.written_by 
  *    `includeOperatorFields` is not set (see `rerollSlot`); this function
  *    does not re-check that on its own.
  *
+ * GATE CHECK IS THE CALLER'S JOB, NOT THIS FUNCTION'S: `applyRewrite` never
+ * looks at run status. Its only current callers, `rerollPage`/`rerollSlot`,
+ * refuse off-gate via their own `requireGate` before ever calling this — a
+ * future caller that invokes `applyRewrite` directly gets ZERO protection
+ * from this layer and must implement that check itself.
+ *
  * Does not mutate its input — returns a new RunContentDoc.
  */
 export function applyRewrite(

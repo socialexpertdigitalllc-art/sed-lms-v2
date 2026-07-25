@@ -51,7 +51,7 @@ export async function finalizeRun(
   assetDeps?: ResolveAssetsDeps,
 ): Promise<FinalizeOutcome> {
   const loadAssetBytes = assetDeps?.loadAssetBytes ?? (async () => null);
-  const resolved = await resolveAssets({ loadAssetBytes }, doc);
+  const resolved = await resolveAssets({ loadAssetBytes }, tpl.manifest, doc);
   if (resolved.missing.length > 0) return { ok: false, missingAssets: resolved.missing };
 
   const result = renderSite(tpl, resolved.doc);

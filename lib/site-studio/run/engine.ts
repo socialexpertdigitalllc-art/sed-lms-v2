@@ -148,6 +148,18 @@ function preciseNow(): string {
   return `${iso.slice(0, -1)}${String(claimSeq).padStart(3, "0")}Z`;
 }
 
+/**
+ * CONTRACT any writer of `studio_runs` must honour: `claimRun`'s CAS below
+ * is keyed on `updated_at`, so ANY row mutation that must be visible to an
+ * in-flight (or about-to-be-called) `runStep` — most notably flipping
+ * `paused` — MUST bump `updated_at` in the same statement. A bare
+ * `.update({paused: true})` that skips this leaves a step that already read
+ * the row (with its OLD `updated_at`) free to win its claim and run a full
+ * step (including an AI call) after the pause was requested, since the CAS
+ * predicate would still match. This function always bumps it (via
+ * `preciseNow()`) for exactly this reason; Task 9's control route (pause/
+ * resume/cancel) must go through this same path, not a raw `.update()`.
+ */
 async function persistRun(admin: SupabaseClient, id: string, patch: Record<string, unknown>): Promise<StudioRunRow> {
   const { data, error } = await admin
     .from("studio_runs")
@@ -172,7 +184,10 @@ async function persistRun(admin: SupabaseClient, id: string, patch: Record<strin
  * the meaning `nextStep`/`RUNNING_STATUS` already give the status column
  * (see the note on `nextStep`) — `updated_at` gives the same single-winner
  * guarantee without touching that. See `preciseNow` for why this doesn't
- * just call `new Date().toISOString()` directly.
+ * just call `new Date().toISOString()` directly. See `persistRun`'s own
+ * comment for the contract this CAS imposes on every OTHER writer of this
+ * row (e.g. a future pause/resume route): skip the `updated_at` bump and a
+ * stale-read step can still win this claim after the mutation.
  */
 async function claimRun(admin: SupabaseClient, row: StudioRunRow): Promise<StudioRunRow | null> {
   const { data, error } = await admin

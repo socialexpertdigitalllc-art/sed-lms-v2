@@ -190,6 +190,27 @@ describe("rerollSlot", () => {
     expect(overridden.doc.pages[0].slots.index_s1).toBe("Rerolled headline copy");
   });
 
+  it("a slot with NO provenance entry at all (never written by anyone) is re-rollable — proceeds and calls the model", async () => {
+    // A freshly seeded doc has never been through applyWritten or an
+    // operator edit at all — there is no provenance array yet, so the slot
+    // is neither AI-owned nor operator-owned; it's simply unwritten. That
+    // must not be mistaken for "protected" — the whole point of provenance
+    // gating is to protect a HUMAN'S edit, and there is no edit here yet.
+    const { doc: seeded } = seedContentDoc(manifest, dossier, selectedPages);
+    const run = freshRun({ content_doc: seeded });
+
+    const calls: string[] = [];
+    const spy: AiCall = async (s, u) => { calls.push(u); return rerollWriter()(s, u); };
+
+    const result = await rerollSlot({ aiCall: spy }, manifest, dossier, run, 0, "index_s1", {});
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(calls).toHaveLength(1); // the model WAS called — this was not refused
+    expect(result.doc.pages[0].slots.index_s1).toBe("Rerolled headline copy");
+    expect(result.doc.provenance[0].slots.index_s1.written_by).toBe("ai");
+  });
+
   it("refuses off-gate", async () => {
     const { doc: seeded } = seedContentDoc(manifest, dossier, selectedPages);
     const doc = applyWritten(seeded, 0, initialWrite);

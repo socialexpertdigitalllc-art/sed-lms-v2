@@ -1,4 +1,4 @@
-import type { ContentDoc, ContentDocPage, FileMap } from "../schema";
+import type { ContentDoc, ContentDocPage, FileMap, TemplateManifest } from "../schema";
 
 /** What a picked asset needs to become a real file in the zip — enough to
  *  choose an extension and write the bytes, nothing storage-specific (the
@@ -59,24 +59,30 @@ function relPrefix(depth: number): string {
 }
 
 /**
- * A bare, still-relative image path — the shape every template's SAMPLE
- * image value takes (e.g. `img/hero.jpg`), and the shape an `asset:` value
- * is rewritten INTO once resolved. Deliberately conservative: no scheme
- * (`https://…`), not site-absolute (`/…`), not a bare anchor (`#…`), not an
- * `asset:` reference (handled separately) — and the WHOLE value must look
- * like a file path ending in a known image extension, so an ordinary text
- * slot's prose is never mistaken for one (this is what lets `resolveAssets`
- * work from the ContentDoc alone, with no manifest/slot-type lookup: a
- * plain-text sentence essentially never matches this shape, and every
- * genuine image value in this codebase does).
+ * True for a value that must NOT be given a relative-depth prefix: empty,
+ * scheme-qualified (`https:…`, and `asset:` itself, though that's always
+ * handled separately before this check runs), site-absolute (`/…`), or a
+ * bare anchor (`#…`). Everything else reaching this check is already known
+ * — by the manifest's own declared slot type, checked by the caller, NEVER
+ * by guessing from the value's shape — to be an image slot's bare
+ * template-relative path, and gets the prefix.
+ *
+ * A prior version of this function tried to infer "is this an image value"
+ * from the STRING alone (ends in a known image extension, no scheme/anchor).
+ * That heuristic was falsified by review: an ordinary hyphenated TEXT value
+ * like "5-star-rated.svg" or "Contact-us-today.jpg" matches it just as
+ * well as a real image path, and would have been silently rewritten to
+ * "../5-star-rated.svg" in the client's visible copy on any stamped page —
+ * neither the Writer's DISALLOWED regex nor the operator-edit validator
+ * blocks a plain word ending that way. The manifest's `slot.type` is
+ * authoritative and this function is now only ever called on slots the
+ * caller has already confirmed are declared `type: "image"`.
  */
-const BARE_RELATIVE_IMAGE_PATH = /^[^\s"'<>{}]+\.(?:jpe?g|png|webp|avif|gif|svg)$/i;
-
-function isBareRelativeImagePath(value: string): boolean {
-  if (!value) return false;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return false; // any scheme, including "asset:" itself
-  if (value.startsWith("/") || value.startsWith("#")) return false;
-  return BARE_RELATIVE_IMAGE_PATH.test(value);
+function needsNoPrefix(value: string): boolean {
+  if (!value) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return true;
+  if (value.startsWith("/") || value.startsWith("#")) return true;
+  return false;
 }
 
 /**
@@ -103,14 +109,36 @@ function isBareRelativeImagePath(value: string): boolean {
  * that makes EVERY image slot value depth-correct before it ever reaches the
  * renderer, not just the ones an operator picked.
  *
+ * SLOT TYPING: both the `asset:` resolution and the bare-path depth
+ * adjustment touch ONLY slots the MANIFEST declares `type: "image"` for a
+ * given page — never inferred from a value's shape. A text slot can
+ * legitimately hold a value that looks like a file path (e.g. an operator
+ * or the Writer producing "5-star-rated.svg" or "Contact-us-today.jpg" as
+ * plain copy); nothing about `contentDocSchema` or the Writer's own
+ * `DISALLOWED` check would catch that, so this function must not either.
+ * `manifest` is what makes that distinction authoritative.
+ *
  * Pure apart from the injected loader (`deps.loadAssetBytes`); does not
  * mutate its input doc.
  */
-export async function resolveAssets(deps: ResolveAssetsDeps, doc: ContentDoc): Promise<ResolveAssetsResult> {
-  // Pass 1 (sync): every distinct asset id referenced anywhere in the doc.
+export async function resolveAssets(
+  deps: ResolveAssetsDeps,
+  manifest: TemplateManifest,
+  doc: ContentDoc,
+): Promise<ResolveAssetsResult> {
+  const pageDefs = new Map(manifest.pages.map((p) => [p.id, p]));
+  const imageSlotIds = (pageId: string): ReadonlySet<string> => {
+    const def = pageDefs.get(pageId);
+    return new Set(def ? def.slots.filter((s) => s.type === "image").map((s) => s.id) : []);
+  };
+
+  // Pass 1 (sync): every distinct asset id referenced by an IMAGE slot
+  // anywhere in the doc.
   const assetIds = new Set<string>();
   for (const page of doc.pages) {
-    for (const value of Object.values(page.slots)) {
+    const imageSlots = imageSlotIds(page.page_id);
+    for (const [slotId, value] of Object.entries(page.slots)) {
+      if (!imageSlots.has(slotId)) continue;
       const m = ASSET_REF.exec(value);
       if (m) assetIds.add(m[1]);
     }
@@ -136,19 +164,26 @@ export async function resolveAssets(deps: ResolveAssetsDeps, doc: ContentDoc): P
     }),
   );
 
-  // Pass 3 (sync): rewrite every page's slots to their final, depth-correct
-  // value. Never mutates the input — builds new page/slot objects throughout.
+  // Pass 3 (sync): rewrite every page's IMAGE slots to their final,
+  // depth-correct value; every other slot (including any text slot whose
+  // value merely happens to look like a path) is copied verbatim. Never
+  // mutates the input — builds new page/slot objects throughout.
   const pages: ContentDocPage[] = doc.pages.map((page) => {
+    const imageSlots = imageSlotIds(page.page_id);
     const prefix = relPrefix(depthOf(page));
     const slots: Record<string, string> = {};
     for (const [slotId, value] of Object.entries(page.slots)) {
+      if (!imageSlots.has(slotId)) {
+        slots[slotId] = value;
+        continue;
+      }
       const m = ASSET_REF.exec(value);
       if (m) {
         const relPath = relPathByAssetId.get(m[1]);
         // Missing: left exactly as it was ("asset:{uuid}") — the caller
         // (finalize.ts) is the one that turns this into a failed run.
         slots[slotId] = relPath ? prefix + relPath : value;
-      } else if (isBareRelativeImagePath(value)) {
+      } else if (!needsNoPrefix(value)) {
         slots[slotId] = prefix + value;
       } else {
         slots[slotId] = value;

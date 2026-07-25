@@ -3,7 +3,7 @@ import { resolveAssets, type LoadedAsset } from "@/lib/site-studio/run/resolveAs
 import { renderSite } from "@/lib/site-studio/render/renderer";
 import { finalizeRun } from "@/lib/site-studio/run/finalize";
 import { unzipToMap } from "@/lib/site-studio/zip";
-import type { CompiledTemplate, ContentDoc } from "@/lib/site-studio/schema";
+import type { CompiledTemplate, ContentDoc, TemplateManifest } from "@/lib/site-studio/schema";
 import { emptyFakeAdminState, makeFakeAdmin } from "./helpers/fakeStudioAdmin";
 
 const dec = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -29,14 +29,38 @@ function docWith(pages: ContentDoc["pages"]): ContentDoc {
   return { identity: {}, theme: {}, pages };
 }
 
+/** A minimal manifest for these tests: one page per entry, declaring exactly
+ *  the slot ids/types the test needs — nothing about `resolveAssets` may
+ *  ever infer a slot's "image-ness" from a value's shape, so every test that
+ *  exercises it must supply the manifest's own authoritative slot typing. */
+function manifestWith(
+  pages: { id: string; stampable?: boolean; imageSlots?: string[]; textSlots?: string[] }[],
+): TemplateManifest {
+  return {
+    engine: 3, name: "resolve-assets-test", version: 1,
+    identity: {},
+    theme: { mode: "none", roles: {} },
+    nav: [],
+    pages: pages.map((p) => ({
+      id: p.id, file: `${p.id}.html`, kind: "generic", stampable: p.stampable ?? false, title_sample: "T",
+      slots: [
+        ...(p.imageSlots ?? []).map((id) => ({ id, type: "image" as const, sample: "img/x.jpg", html: false })),
+        ...(p.textSlots ?? []).map((id) => ({ id, type: "text" as const, sample: "some text", html: false })),
+      ],
+      repeats: [],
+    })),
+  };
+}
+
 describe("resolveAssets", () => {
   it("resolves an asset: slot value to a real file at img/studio/{id}.{ext}, on a root page (no prefix)", async () => {
     const { loadAssetBytes } = makeLoader();
+    const manifest = manifestWith([{ id: "index", imageSlots: ["hero"] }]);
     const doc = docWith([
       { page_id: "index", title: "Home", slots: { hero: "asset:asset-1" }, repeats: {} },
     ]);
 
-    const result = await resolveAssets({ loadAssetBytes }, doc);
+    const result = await resolveAssets({ loadAssetBytes }, manifest, doc);
 
     expect(result.missing).toEqual([]);
     expect(result.doc.pages[0].slots.hero).toBe("img/studio/asset-1.jpg");
@@ -45,23 +69,28 @@ describe("resolveAssets", () => {
 
   it("uses a DEPTH-CORRECT relative path on a stamped page (output has one path segment -> one '../')", async () => {
     const { loadAssetBytes } = makeLoader();
+    const manifest = manifestWith([{ id: "svc", stampable: true, imageSlots: ["hero"] }]);
     const doc = docWith([
       { page_id: "svc", output: "services/drain-cleaning.html", title: "Drain Cleaning", slots: { hero: "asset:asset-1" }, repeats: {} },
     ]);
 
-    const result = await resolveAssets({ loadAssetBytes }, doc);
+    const result = await resolveAssets({ loadAssetBytes }, manifest, doc);
 
     expect(result.doc.pages[0].slots.hero).toBe("../img/studio/asset-1.jpg");
   });
 
   it("fetches a shared asset exactly ONCE even when two slots (across two different pages) pick it", async () => {
     const { loadAssetBytes, calls } = makeLoader();
+    const manifest = manifestWith([
+      { id: "index", imageSlots: ["hero"] },
+      { id: "about", imageSlots: ["photo"] },
+    ]);
     const doc = docWith([
       { page_id: "index", title: "Home", slots: { hero: "asset:asset-1" }, repeats: {} },
       { page_id: "about", title: "About", slots: { photo: "asset:asset-1" }, repeats: {} },
     ]);
 
-    const result = await resolveAssets({ loadAssetBytes }, doc);
+    const result = await resolveAssets({ loadAssetBytes }, manifest, doc);
 
     expect(calls.filter((id) => id === "asset-1")).toHaveLength(1);
     expect(Object.keys(result.files)).toEqual(["img/studio/asset-1.jpg"]);
@@ -69,28 +98,35 @@ describe("resolveAssets", () => {
     expect(result.doc.pages[1].slots.photo).toBe("img/studio/asset-1.jpg");
   });
 
-  it("leaves non-asset, non-image-shaped slot values (plain text, empty strings) completely untouched", async () => {
+  it("leaves TEXT slot values (plain text, empty strings) completely untouched, even ones a shape-based guess would mistake for an image path", async () => {
     const { loadAssetBytes } = makeLoader();
+    const manifest = manifestWith([{ id: "index", textSlots: ["headline", "blurb", "note", "review", "cta"] }]);
     const doc = docWith([
       {
         page_id: "index", title: "Home",
-        slots: { headline: "Welcome to Acme Plumbing", blurb: "", note: "Call us: never mind, no phone" },
+        slots: {
+          headline: "Welcome to Acme Plumbing", blurb: "", note: "Call us: never mind, no phone",
+          // These two are exactly the shape the OLD (deleted) shape-guessing
+          // heuristic mistook for image paths — the regression this fix closes.
+          review: "5-star-rated.svg", cta: "Contact-us-today.jpg",
+        },
         repeats: {},
       },
     ]);
 
-    const result = await resolveAssets({ loadAssetBytes }, doc);
+    const result = await resolveAssets({ loadAssetBytes }, manifest, doc);
 
     expect(result.doc.pages[0].slots).toEqual(doc.pages[0].slots);
   });
 
   it("an asset that fails to load lands in `missing`, and the slot KEEPS its asset: value", async () => {
     const { loadAssetBytes } = makeLoader({ "asset-1": null });
+    const manifest = manifestWith([{ id: "index", imageSlots: ["hero"] }]);
     const doc = docWith([
       { page_id: "index", title: "Home", slots: { hero: "asset:asset-1" }, repeats: {} },
     ]);
 
-    const result = await resolveAssets({ loadAssetBytes }, doc);
+    const result = await resolveAssets({ loadAssetBytes }, manifest, doc);
 
     expect(result.missing).toEqual(["asset-1"]);
     expect(result.doc.pages[0].slots.hero).toBe("asset:asset-1");
@@ -99,14 +135,58 @@ describe("resolveAssets", () => {
 
   it("does not mutate its input doc", async () => {
     const { loadAssetBytes } = makeLoader();
+    const manifest = manifestWith([{ id: "index", imageSlots: ["hero"] }]);
     const doc = docWith([
       { page_id: "index", title: "Home", slots: { hero: "asset:asset-1" }, repeats: {} },
     ]);
     const before = JSON.parse(JSON.stringify(doc));
 
-    await resolveAssets({ loadAssetBytes }, doc);
+    await resolveAssets({ loadAssetBytes }, manifest, doc);
 
     expect(doc).toEqual(before);
+  });
+
+  // ------------------------------------------------------- FIX 1 regression
+
+  describe("FIX 1 regression: slot typing is authoritative, never shape-guessed from the value", () => {
+    // A stamped (nested, depth 1) page with ONE text slot and ONE image slot,
+    // both holding a value in exactly the shape ("word-word.ext") that the
+    // deleted `isBareRelativeImagePath` heuristic would have matched.
+    const manifest = manifestWith([
+      { id: "svc", stampable: true, textSlots: ["svc_s1"], imageSlots: ["svc_i1"] },
+    ]);
+    const stampedDoc = (value: string): ContentDoc => ({
+      identity: {}, theme: {},
+      pages: [{
+        page_id: "svc", output: "services/drain-cleaning.html", nav_title: "Drain Cleaning",
+        title: "Drain Cleaning", slots: { svc_s1: value, svc_i1: "img/hero.jpg" }, repeats: {},
+      }],
+    });
+
+    it.each(["5-star-rated.svg", "Contact-us-today.jpg"])(
+      "a TEXT slot holding %j on a stamped (nested) page is left completely untouched",
+      async (value) => {
+        const { loadAssetBytes } = makeLoader();
+        const result = await resolveAssets({ loadAssetBytes }, manifest, stampedDoc(value));
+        expect(result.doc.pages[0].slots.svc_s1).toBe(value);
+      },
+    );
+
+    it.each(["5-star-rated.svg", "Contact-us-today.jpg"])(
+      "the SAME value %j, on an IMAGE slot on the same stamped page, IS depth-adjusted",
+      async (value) => {
+        const { loadAssetBytes } = makeLoader();
+        const doc: ContentDoc = {
+          identity: {}, theme: {},
+          pages: [{
+            page_id: "svc", output: "services/drain-cleaning.html", nav_title: "Drain Cleaning",
+            title: "Drain Cleaning", slots: { svc_s1: "ordinary copy", svc_i1: value }, repeats: {},
+          }],
+        };
+        const result = await resolveAssets({ loadAssetBytes }, manifest, doc);
+        expect(result.doc.pages[0].slots.svc_i1).toBe(`../${value}`);
+      },
+    );
   });
 
   // ---------------------------------------------------------------- probe
@@ -159,7 +239,7 @@ describe("resolveAssets", () => {
     it("FIX: running the doc through resolveAssets FIRST depth-adjusts the bare sample path before it ever reaches the renderer", async () => {
       const doc = stampedDoc("img/hero.jpg");
       const { loadAssetBytes } = makeLoader();
-      const resolved = await resolveAssets({ loadAssetBytes }, doc);
+      const resolved = await resolveAssets({ loadAssetBytes }, stampedManifest.manifest, doc);
       expect(resolved.doc.pages[0].slots.svc_i1).toBe("../img/hero.jpg");
 
       const rendered = renderSite(stampedManifest, resolved.doc);
@@ -176,7 +256,7 @@ describe("resolveAssets", () => {
         pages: [{ page_id: "svc", title: "Service", slots: { svc_s1: "Copy", svc_i1: "img/hero.jpg" }, repeats: {} }],
       };
       const { loadAssetBytes } = makeLoader();
-      const resolved = await resolveAssets({ loadAssetBytes }, rootDoc);
+      const resolved = await resolveAssets({ loadAssetBytes }, stampedManifest.manifest, rootDoc);
       expect(resolved.doc.pages[0].slots.svc_i1).toBe("img/hero.jpg");
     });
   });
