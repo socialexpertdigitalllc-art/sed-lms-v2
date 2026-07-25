@@ -12,7 +12,7 @@ describe("searchPexels", () => {
   it("calls the v1 search endpoint with the raw-key Authorization header", async () => {
     const f = vi.fn(async () => okResponse([1]));
     await searchPexels("plumber van", { apiKey: "K", perPage: 12, fetchImpl: f });
-    const [url, init] = f.mock.calls[0] as [string, RequestInit];
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toContain("https://api.pexels.com/v1/search");
     expect(url).toContain("query=plumber+van");
     expect(url).toContain("per_page=12");
