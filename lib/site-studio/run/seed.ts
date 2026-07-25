@@ -23,10 +23,15 @@ export interface SeedResult {
 const currentYear = (now: Date): string => String(now.getFullYear());
 
 /** Identity copied verbatim from the dossier — never invented, never derived.
- *  Keys the dossier lacks are simply absent (the renderer/schema treat a
- *  missing identity key as "no {{id:*}} reference to it may resolve", which
- *  is the safe default). `year` is always present: it isn't a dossier fact,
- *  it's today's date. */
+ *  Keys the dossier lacks are simply absent, and that is NOT harmless: the
+ *  renderer's completeness check refuses the WHOLE site if any compiled
+ *  skeleton references an {{id:*}} key the document lacks. That is why the
+ *  engine's `prepare` step runs the same check immediately after seeding and
+ *  fails the run there, with the missing facts named — catching it before the
+ *  writer spends a model call per page, rather than at render afterwards.
+ *  Seeding a placeholder instead would be worse: an empty email would ship
+ *  `href=""` onto a client's live site. `year` is always present: it isn't a
+ *  dossier fact, it's today's date. */
 function seedIdentity(dossier: Dossier, now: Date): Record<string, string> {
   const identity: Record<string, string> = {};
   if (dossier.business_name) identity.business_name = dossier.business_name;
