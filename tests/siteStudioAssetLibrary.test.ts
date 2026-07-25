@@ -96,7 +96,7 @@ describe("bumpUseCount", () => {
 // -------------------------------------------------------------- rehostFromUrl
 
 const jpegResponse = (bytes: Uint8Array, contentType = "image/jpeg") =>
-  new Response(bytes, { status: 200, headers: { "content-type": contentType } });
+  new Response(bytes.slice().buffer as ArrayBuffer, { status: 200, headers: { "content-type": contentType } });
 
 describe("rehostFromUrl", () => {
   it("downloads, uploads to the bucket, and inserts the row only after a successful upload", async () => {
