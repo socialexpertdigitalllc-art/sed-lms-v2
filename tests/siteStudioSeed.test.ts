@@ -100,3 +100,28 @@ describe("seedContentDoc", () => {
     expect(() => contentDocSchema.parse(doc)).not.toThrow();
   });
 });
+
+describe("seedContentDoc — injected clock (determinism)", () => {
+  it("stamps identity.year from an injected clock rather than the wall clock, so re-running prepare is genuinely idempotent", () => {
+    const pinned = new Date("2019-03-15T00:00:00.000Z");
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages, pinned);
+    expect(doc.identity.year).toBe("2019");
+  });
+
+  it("defaults to the current wall-clock year when no clock is injected", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    expect(doc.identity.year).toBe(String(new Date().getFullYear()));
+  });
+});
+
+describe("seedContentDoc — an unknown selected page id", () => {
+  it("is skipped and reported rather than thrown, and does not disturb the other pages", () => {
+    const withBogus: SelectedPage[] = [...selectedPages, { page_id: "does-not-exist" }];
+    expect(() => seedContentDoc(manifest, dossier, withBogus)).not.toThrow();
+
+    const { doc, skipped } = seedContentDoc(manifest, dossier, withBogus);
+    expect(skipped).toEqual(["does-not-exist"]);
+    expect(doc.pages).toHaveLength(3);
+    expect(doc.pages.map((p) => p.page_id)).toEqual(["index", "svc", "svc"]);
+  });
+});

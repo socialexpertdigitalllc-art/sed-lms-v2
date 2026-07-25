@@ -62,7 +62,15 @@ describe("writePage", () => {
     expect(r.repeats.index_r1).toHaveLength(2);
   });
   it("tolerates fenced JSON", async () => {
-    const call = async () => ({ text: "```json\n{\"title\":\"T\",\"slots\":{\"index_s1\":\"A\",\"index_s2\":\"B\"}}\n```" });
+    // Includes valid repeats — this page declares index_r1, and a complete
+    // repeat is now required for ok:true (see the repeat-completeness tests
+    // below), so the fixture must satisfy that to isolate what this test
+    // actually checks: fenced-JSON tolerance.
+    const call = async () => ({
+      text:
+        "```json\n{\"title\":\"T\",\"slots\":{\"index_s1\":\"A\",\"index_s2\":\"B\"}," +
+        "\"repeats\":{\"index_r1\":[{\"index_r1_s1\":\"Card A\"},{\"index_r1_s1\":\"Card B\"}]}}\n```",
+    });
     expect((await writePage(page, dossier, {}, call)).ok).toBe(true);
   });
   it("fails loudly on unparseable output — never silently blank", async () => {
@@ -72,13 +80,25 @@ describe("writePage", () => {
     expect(r.error).toMatch(/json/i);
   });
   it("rejects markup and token syntax in values", async () => {
-    const bad = async () => ({ text: JSON.stringify({ title: "T", slots: { index_s1: "<b>hi</b>", index_s2: "ok" } }) });
+    const bad = async () => ({
+      text: JSON.stringify({
+        title: "T",
+        slots: { index_s1: "<b>hi</b>", index_s2: "ok" },
+        repeats: { index_r1: [{ index_r1_s1: "Card A" }, { index_r1_s1: "Card B" }] },
+      }),
+    });
     const r = await writePage(page, dossier, {}, bad);
     expect(r.ok).toBe(false);
   });
   it("truncates an over-long value rather than failing the page", async () => {
     const long = "x".repeat(500);
-    const call = async () => ({ text: JSON.stringify({ title: "T", slots: { index_s1: long, index_s2: "ok" } }) });
+    const call = async () => ({
+      text: JSON.stringify({
+        title: "T",
+        slots: { index_s1: long, index_s2: "ok" },
+        repeats: { index_r1: [{ index_r1_s1: "Card A" }, { index_r1_s1: "Card B" }] },
+      }),
+    });
     const r = await writePage(page, dossier, {}, call);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -90,5 +110,74 @@ describe("writePage", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain("index_s2");
+  });
+
+  it("rejects markup, token syntax and URLs in a repeat row value — the real danger is {{id:*}} substituting the client's real data into a testimonial card", async () => {
+    const bad = async () => ({
+      text: JSON.stringify({
+        title: "T",
+        slots: { index_s1: "A", index_s2: "B" },
+        repeats: {
+          index_r1: [
+            { index_r1_s1: "<img src=x onerror=alert(1)> visit {{id:phone}} at {{link:contact}} " + "y".repeat(500) },
+            { index_r1_s1: "fine" },
+          ],
+        },
+      }),
+    });
+    const r = await writePage(page, dossier, {}, bad);
+    expect(r.ok).toBe(false);
+  });
+
+  it("truncates an over-long repeat row value to that repeat slot's own max_chars", async () => {
+    const long = "x".repeat(500);
+    const call = async () => ({
+      text: JSON.stringify({
+        title: "T",
+        slots: { index_s1: "A", index_s2: "B" },
+        repeats: { index_r1: [{ index_r1_s1: long }, { index_r1_s1: "fine" }] },
+      }),
+    });
+    const r = await writePage(page, dossier, {}, call);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // index_r1's own slot (index_r1_s1) declares max_chars: 40 — distinct
+    // from index_s1's 60, so this proves the row is truncated to ITS OWN
+    // slot's budget, not the top-level slot's.
+    expect(r.repeats.index_r1[0].index_r1_s1.length).toBeLessThanOrEqual(40);
+  });
+
+  it("fails when a repeat id the page declares is missing from the reply entirely — never silently blank", async () => {
+    const call = async () => ({
+      text: JSON.stringify({ title: "T", slots: { index_s1: "A", index_s2: "B" } }),
+    });
+    const r = await writePage(page, dossier, {}, call);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("index_r1");
+  });
+
+  it("fails when a repeat comes back with zero rows", async () => {
+    const call = async () => ({
+      text: JSON.stringify({ title: "T", slots: { index_s1: "A", index_s2: "B" }, repeats: { index_r1: [] } }),
+    });
+    const r = await writePage(page, dossier, {}, call);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("index_r1");
+  });
+
+  it("fails when a repeat row is missing one of its declared slot fields", async () => {
+    const call = async () => ({
+      text: JSON.stringify({
+        title: "T",
+        slots: { index_s1: "A", index_s2: "B" },
+        repeats: { index_r1: [{ index_r1_s1: "Card A" }, {}] },
+      }),
+    });
+    const r = await writePage(page, dossier, {}, call);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("index_r1");
   });
 });

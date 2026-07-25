@@ -140,9 +140,64 @@ export async function writePage(
     return { ok: false, error: `writer: missing slot(s): ${missing.join(", ")}` };
   }
 
+  // Repeats: every repeat the page declares must come back with at least one
+  // row and every field on every row present as a string — never silently
+  // blank. A missing/short repeat isn't just an incomplete page: the
+  // renderer refuses ANY repeat region below its declared minimum (typically
+  // 1), so an under-filled repeat would otherwise surface as a render
+  // failure long after this page "succeeded". Catching it here, per page, is
+  // what makes it retryable instead of a whole-run failure.
+  const rawRepeats =
+    parsed.repeats && typeof parsed.repeats === "object" ? (parsed.repeats as Record<string, unknown>) : {};
+  const missingRepeats: string[] = [];
+  const repeats: Record<string, Record<string, string>[]> = {};
+  for (const rep of page.repeats) {
+    const rowsRaw = rawRepeats[rep.id];
+    if (!Array.isArray(rowsRaw) || rowsRaw.length === 0) {
+      missingRepeats.push(rep.id);
+      continue;
+    }
+    const rows: Record<string, string>[] = [];
+    let complete = true;
+    for (const rowRaw of rowsRaw) {
+      if (typeof rowRaw !== "object" || rowRaw === null) {
+        complete = false;
+        break;
+      }
+      const row: Record<string, string> = {};
+      for (const slot of rep.slots) {
+        const v = (rowRaw as Record<string, unknown>)[slot.id];
+        if (typeof v !== "string") {
+          complete = false;
+          break;
+        }
+        row[slot.id] = v;
+      }
+      if (!complete) break;
+      rows.push(row);
+    }
+    if (!complete) {
+      missingRepeats.push(rep.id);
+      continue;
+    }
+    repeats[rep.id] = rows;
+  }
+  if (missingRepeats.length) {
+    return { ok: false, error: `writer: missing or incomplete repeat row(s): ${missingRepeats.join(", ")}` };
+  }
+
   const title = typeof parsed.title === "string" ? parsed.title : "";
 
-  const allValues = [title, ...Object.values(slots)];
+  // Markup/token/URL rejection covers EVERY value the model produced,
+  // including repeat rows — a repeat row is exactly as public-facing as any
+  // top-level slot (a testimonial card is not a lesser field than a
+  // headline), and `{{id:*}}` in a card would resolve at render time to the
+  // client's real identity data just as readily as it would in a headline.
+  const allValues = [
+    title,
+    ...Object.values(slots),
+    ...Object.values(repeats).flatMap((rows) => rows.flatMap((row) => Object.values(row))),
+  ];
   if (allValues.some((v) => DISALLOWED.test(v))) {
     return { ok: false, error: "writer: a value contained markup, a URL, or token syntax" };
   }
@@ -153,17 +208,14 @@ export async function writePage(
     }
   }
 
-  const rawRepeats =
-    parsed.repeats && typeof parsed.repeats === "object" ? (parsed.repeats as Record<string, unknown>) : {};
-  const repeats: Record<string, Record<string, string>[]> = {};
   for (const rep of page.repeats) {
-    const rowsRaw = rawRepeats[rep.id];
-    const rows: Record<string, string>[] = Array.isArray(rowsRaw)
-      ? rowsRaw
-          .filter((r): r is Record<string, unknown> => typeof r === "object" && r !== null)
-          .map((r) => Object.fromEntries(rep.slots.map((s) => [s.id, typeof r[s.id] === "string" ? (r[s.id] as string) : ""])))
-      : rep.samples.map(() => Object.fromEntries(rep.slots.map((s) => [s.id, ""])));
-    repeats[rep.id] = rows;
+    for (const row of repeats[rep.id]) {
+      for (const slot of rep.slots) {
+        if (slot.max_chars && row[slot.id].length > slot.max_chars) {
+          row[slot.id] = truncateAtWord(row[slot.id], slot.max_chars);
+        }
+      }
+    }
   }
 
   return { ok: true, title, slots, repeats };

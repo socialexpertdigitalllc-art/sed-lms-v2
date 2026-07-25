@@ -12,16 +12,22 @@ export interface PendingSlot {
 export interface SeedResult {
   doc: ContentDoc;
   pending: PendingSlot[];
+  /** `selectedPages` entries whose `page_id` isn't in the manifest — skipped
+   *  rather than thrown. In practice `selectedPages` is always sourced from
+   *  `selectPages()` against this same manifest, so this should never be
+   *  non-empty; it exists so a short, always-persist-something step never
+   *  dies on a caller mismatch instead of reporting it. */
+  skipped: string[];
 }
 
-const currentYear = (): string => String(new Date().getFullYear());
+const currentYear = (now: Date): string => String(now.getFullYear());
 
 /** Identity copied verbatim from the dossier — never invented, never derived.
  *  Keys the dossier lacks are simply absent (the renderer/schema treat a
  *  missing identity key as "no {{id:*}} reference to it may resolve", which
  *  is the safe default). `year` is always present: it isn't a dossier fact,
  *  it's today's date. */
-function seedIdentity(dossier: Dossier): Record<string, string> {
+function seedIdentity(dossier: Dossier, now: Date): Record<string, string> {
   const identity: Record<string, string> = {};
   if (dossier.business_name) identity.business_name = dossier.business_name;
   if (dossier.phone) identity.phone = dossier.phone;
@@ -31,7 +37,7 @@ function seedIdentity(dossier: Dossier): Record<string, string> {
   if (dossier.logo) identity.logo = dossier.logo;
   if (dossier.map_embed) identity.map_embed = dossier.map_embed;
   if (dossier.profile_link) identity.profile_link = dossier.profile_link;
-  identity.year = currentYear();
+  identity.year = currentYear(now);
   return identity;
 }
 
@@ -48,19 +54,29 @@ function seedIdentity(dossier: Dossier): Record<string, string> {
  *  entry per service/area, distinguished by `output`); each entry becomes
  *  its own doc-page at its own array index — the doc-page INDEX, not the
  *  page_id, is what makes stamped duplicates addressable without one
- *  clobbering another. Pure. */
+ *  clobbering another. A `selectedPages` entry whose `page_id` the manifest
+ *  doesn't have is skipped (reported in `skipped`) rather than thrown — this
+ *  is a short, always-persist-something step, so a caller mismatch must
+ *  degrade to "reported and moved on", never an uncaught exception. `now` is
+ *  an injected clock (defaults to the wall clock) so the function stays
+ *  genuinely pure/deterministic for callers that need it — e.g. re-running
+ *  `prepare` idempotently in a test. */
 export function seedContentDoc(
   manifest: TemplateManifest,
   dossier: Dossier,
   selectedPages: SelectedPage[],
+  now: Date = new Date(),
 ): SeedResult {
   const pagesById = new Map(manifest.pages.map((p) => [p.id, p]));
   const pending: PendingSlot[] = [];
+  const skipped: string[] = [];
 
-  const pages: ContentDocPage[] = selectedPages.map((sel) => {
+  const pages: ContentDocPage[] = [];
+  for (const sel of selectedPages) {
     const def = pagesById.get(sel.page_id);
     if (!def) {
-      throw new Error(`seedContentDoc: selected page id "${sel.page_id}" is not in the manifest`);
+      skipped.push(sel.page_id);
+      continue;
     }
 
     const slots: Record<string, string> = {};
@@ -81,14 +97,14 @@ export function seedContentDoc(
     };
     if (sel.output) page.output = sel.output;
     if (sel.nav_title) page.nav_title = sel.nav_title;
-    return page;
-  });
+    pages.push(page);
+  }
 
   const doc: ContentDoc = {
-    identity: seedIdentity(dossier),
+    identity: seedIdentity(dossier, now),
     theme: deriveTheme(dossier.color_scheme, manifest.theme),
     pages,
   };
 
-  return { doc, pending };
+  return { doc, pending, skipped };
 }

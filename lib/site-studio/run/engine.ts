@@ -13,11 +13,13 @@ import { applyWritten } from "./applyWritten";
 import { finalizeRun } from "./finalize";
 import { nextStep, type PageWriteState, type RunStep, type StudioRunRow } from "./types";
 
-/** Production AiCall: routes the per-page write through the task router,
- *  reusing the "template_compile" task (strict-JSON, moderate output) rather
- *  than adding a new registered task for one more site-studio call site. */
+/** Production AiCall: routes the per-page write through the task router on
+ *  its own registered task ("content_write") — kept separate from
+ *  "template_compile" so an operator retuning the compiler's model does not
+ *  silently retune the Writer too; they are different jobs with different
+ *  content-safety requirements. */
 export const productionWriterCall: AiCall = async (system, user) => {
-  const { text } = await callForTask("template_compile", system, user, { maxTokens: 8000, temperature: 0.4 });
+  const { text } = await callForTask("content_write", system, user, { maxTokens: 8000, temperature: 0.4 });
   return { text };
 };
 
@@ -138,7 +140,7 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
     fanOutAreas: row.options.fan_out_areas,
   });
 
-  const { doc } = seedContentDoc(manifest, dossier, selection.pages);
+  const { doc } = seedContentDoc(manifest, dossier, selection.pages, now());
 
   const referenced = referencedIdentityKeys(tpl);
   const missingIdentity = [...referenced].filter((k) => !(k in doc.identity));
