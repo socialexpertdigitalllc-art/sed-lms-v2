@@ -94,3 +94,50 @@ export function applyWritten(
     provenance,
   };
 }
+
+/**
+ * Merge an OPERATOR's edit into one page. Unlike `applyWritten` (which always
+ * sets every field a completed AI write touched), this only touches the
+ * fields actually supplied — an operator fixing one headline must not blank
+ * out the rest of the page. Stamps `written_by:"operator"` on every field it
+ * touches, so a later AI re-roll (spec: "re-roll only touches AI-written
+ * fields") leaves operator edits alone. Does not mutate its input.
+ */
+export function applyOperatorEdit(
+  doc: ContentDoc | RunContentDoc,
+  pageIndex: number,
+  edit: { title?: string; slots?: Record<string, string> },
+): RunContentDoc {
+  if (pageIndex < 0 || pageIndex >= doc.pages.length) {
+    throw new RangeError(`applyOperatorEdit: page index ${pageIndex} is out of range (doc has ${doc.pages.length} pages)`);
+  }
+
+  const provenanceSource: PageProvenance[] =
+    "provenance" in doc && Array.isArray((doc as RunContentDoc).provenance)
+      ? (doc as RunContentDoc).provenance
+      : emptyProvenance(doc.pages.length);
+  const provenance = provenanceSource.map(cloneProvenance);
+
+  const pages = doc.pages.map((page, i) => (i === pageIndex ? clonePage(page) : page));
+  const target = pages[pageIndex];
+  const pageProvenance = provenance[pageIndex];
+  const field: FieldProvenance = { written_by: "operator" };
+
+  if (edit.title !== undefined) {
+    target.title = edit.title;
+    pageProvenance.title = field;
+  }
+  if (edit.slots) {
+    for (const [id, value] of Object.entries(edit.slots)) {
+      target.slots[id] = value;
+      pageProvenance.slots[id] = field;
+    }
+  }
+
+  return {
+    identity: doc.identity,
+    theme: doc.theme,
+    pages,
+    provenance,
+  };
+}

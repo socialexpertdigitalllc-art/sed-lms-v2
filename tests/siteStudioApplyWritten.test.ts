@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { seedContentDoc } from "@/lib/site-studio/run/seed";
-import { applyWritten } from "@/lib/site-studio/run/applyWritten";
+import { applyWritten, applyOperatorEdit } from "@/lib/site-studio/run/applyWritten";
 import { contentDocSchema } from "@/lib/site-studio/schema";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { Dossier } from "@/lib/site-studio/run/dossier";
@@ -139,5 +139,54 @@ describe("applyWritten", () => {
   it("throws on an out-of-range page index rather than silently doing nothing", () => {
     const { doc } = seedContentDoc(manifest, dossier, selectedPages);
     expect(() => applyWritten(doc, 99, indexResult)).toThrow();
+  });
+});
+
+describe("applyOperatorEdit", () => {
+  it("touches only the fields supplied, leaving the rest of the page alone", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+
+    const edited = applyOperatorEdit(written, 0, { slots: { index_s1: "Operator's headline" } });
+    expect(edited.pages[0].slots.index_s1).toBe("Operator's headline");
+    // untouched fields survive verbatim
+    expect(edited.pages[0].title).toBe("Acme Plumbing | Home");
+    expect(edited.pages[0].repeats.index_r1).toEqual([{ index_r1_s1: "Card A" }, { index_r1_s1: "Card B" }]);
+  });
+
+  it("stamps written_by:'operator' only on the fields it touched, leaving the AI provenance on the rest", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+
+    const edited = applyOperatorEdit(written, 0, { title: "Operator's title" });
+    expect(edited.provenance[0].title?.written_by).toBe("operator");
+    expect(edited.provenance[0].slots.index_s1.written_by).toBe("ai");
+  });
+
+  it("works on a doc with no provenance yet (a fresh seed, never AI-written)", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const edited = applyOperatorEdit(doc, 1, { slots: { svc_s1: "Manual copy" } });
+    expect(edited.pages[1].slots.svc_s1).toBe("Manual copy");
+    expect(edited.provenance[1].slots.svc_s1.written_by).toBe("operator");
+    expect(edited.provenance[0].slots).toEqual({});
+  });
+
+  it("does not mutate its input", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const before = JSON.parse(JSON.stringify(doc));
+    applyOperatorEdit(doc, 0, { title: "Changed" });
+    expect(doc).toEqual(before);
+  });
+
+  it("throws on an out-of-range page index", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    expect(() => applyOperatorEdit(doc, 99, { title: "x" })).toThrow();
+  });
+
+  it("an edit result still passes contentDocSchema.parse", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const edited = applyOperatorEdit(written, 0, { slots: { index_s1: "Fixed by hand" } });
+    expect(() => contentDocSchema.parse(edited)).not.toThrow();
   });
 });
