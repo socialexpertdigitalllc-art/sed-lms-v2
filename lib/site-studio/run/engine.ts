@@ -172,6 +172,19 @@ async function persistRun(admin: SupabaseClient, id: string, patch: Record<strin
 }
 
 /**
+ * Pause/resume for the control route (Task 9). Goes through `persistRun` —
+ * never a bare `.update({paused})` — for exactly the reason documented on
+ * `persistRun` above: the claim CAS is keyed on `updated_at`, so flipping
+ * `paused` without bumping it would leave a step that already read the OLD
+ * row free to win `claimRun` and execute a full step (including an AI call)
+ * after the pause was requested. This is the one and only sanctioned way to
+ * change `paused` outside of `runStep` itself.
+ */
+export async function setRunPaused(admin: SupabaseClient, row: StudioRunRow, paused: boolean): Promise<StudioRunRow> {
+  return persistRun(admin, row.id, { paused });
+}
+
+/**
  * Optimistic claim: before doing any work (and before making any AI call),
  * atomically re-touch the row's `updated_at`, guarded by the exact value
  * this caller read it at. Postgres only lets ONE concurrent `UPDATE ...

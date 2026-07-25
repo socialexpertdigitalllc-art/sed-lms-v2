@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { searchLibrary, insertAsset, bumpUseCount } from "@/lib/site-studio/assets/library";
-import { rehostFromUrl, STUDIO_ASSETS_BUCKET } from "@/lib/site-studio/assets/rehost";
+import { rehostFromUrl, STUDIO_ASSETS_BUCKET, probeImageDimensions } from "@/lib/site-studio/assets/rehost";
 import { emptyFakeAdminState, makeFakeAdmin, type FakeAdminState } from "./helpers/fakeStudioAdmin";
 import type { AssetRow } from "@/lib/site-studio/assets/types";
 
@@ -274,5 +274,81 @@ describe("rehostFromUrl", () => {
     expect(result.ok).toBe(false);
     expect(cancel).toHaveBeenCalled();
     expect(read.mock.calls.length).toBeLessThan(chunks.length); // aborted before the last chunk
+  });
+});
+
+// ---------------------------------------------------------- probeImageDimensions
+
+function pngBytes(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(24);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0); // signature
+  bytes.set([0x00, 0x00, 0x00, 0x0d], 8); // IHDR chunk length (13)
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12); // "IHDR"
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width, false);
+  view.setUint32(20, height, false);
+  return bytes;
+}
+
+/** Minimal JPEG: SOI, one APP0 segment (16 bytes, ignored), then an SOF0
+ *  frame header naming the given width/height, 3 components. */
+function jpegBytes(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(39);
+  bytes.set([0xff, 0xd8], 0); // SOI
+  bytes.set([0xff, 0xe0], 2); // APP0 marker
+  bytes.set([0x00, 0x10], 4); // length 16 (2 length bytes + 14 payload bytes)
+  // 14 bytes of APP0 payload — content irrelevant to the probe
+  bytes.set([0xff, 0xc0], 20); // SOF0 marker
+  bytes.set([0x00, 0x11], 22); // length 17
+  bytes[24] = 0x08; // precision
+  const view = new DataView(bytes.buffer);
+  view.setUint16(25, height, false);
+  view.setUint16(27, width, false);
+  bytes[29] = 0x03; // numComponents
+  return bytes;
+}
+
+function webpVp8xBytes(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(30);
+  bytes.set([0x52, 0x49, 0x46, 0x46], 0); // "RIFF"
+  bytes.set([0x00, 0x00, 0x00, 0x00], 4); // riff size (unused by the probe)
+  bytes.set([0x57, 0x45, 0x42, 0x50], 8); // "WEBP"
+  bytes.set([0x56, 0x50, 0x38, 0x58], 12); // "VP8X"
+  bytes.set([0x0a, 0x00, 0x00, 0x00], 16); // chunk size 10
+  bytes[20] = 0x00; // flags
+  const w1 = width - 1, h1 = height - 1;
+  bytes[24] = w1 & 0xff; bytes[25] = (w1 >> 8) & 0xff; bytes[26] = (w1 >> 16) & 0xff;
+  bytes[27] = h1 & 0xff; bytes[28] = (h1 >> 8) & 0xff; bytes[29] = (h1 >> 16) & 0xff;
+  return bytes;
+}
+
+describe("probeImageDimensions — magic-bytes dimension probe (no image library)", () => {
+  it("reads PNG width/height from the IHDR chunk", () => {
+    expect(probeImageDimensions(pngBytes(800, 600), "image/png")).toEqual({ width: 800, height: 600 });
+  });
+
+  it("reads JPEG width/height from the first SOF0 segment, skipping earlier markers", () => {
+    expect(probeImageDimensions(jpegBytes(80, 60), "image/jpeg")).toEqual({ width: 80, height: 60 });
+  });
+
+  it("reads WEBP (VP8X extended format) width/height", () => {
+    expect(probeImageDimensions(webpVp8xBytes(300, 200), "image/webp")).toEqual({ width: 300, height: 200 });
+  });
+
+  it("returns null for an unrecognised content type", () => {
+    expect(probeImageDimensions(pngBytes(10, 10), "image/gif")).toBeNull();
+  });
+
+  it("returns null (never throws) on truncated/malformed bytes", () => {
+    expect(probeImageDimensions(new Uint8Array([1, 2, 3]), "image/png")).toBeNull();
+    expect(probeImageDimensions(new Uint8Array([1, 2, 3]), "image/jpeg")).toBeNull();
+    expect(probeImageDimensions(new Uint8Array([1, 2, 3]), "image/webp")).toBeNull();
+    expect(probeImageDimensions(new Uint8Array(0), "image/png")).toBeNull();
+  });
+
+  it("returns null for a PNG-content-type byte string with the wrong signature", () => {
+    const bad = pngBytes(10, 10);
+    bad[0] = 0x00; // corrupt the signature
+    expect(probeImageDimensions(bad, "image/png")).toBeNull();
   });
 });

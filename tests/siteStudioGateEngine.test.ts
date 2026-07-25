@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runStep, type RunStepDeps } from "@/lib/site-studio/run/engine";
+import { runStep, setRunPaused, type RunStepDeps } from "@/lib/site-studio/run/engine";
 import type { AiCall } from "@/lib/site-studio/run/writer";
 import type { StudioRunRow } from "@/lib/site-studio/run/types";
 import { canCancel } from "@/lib/site-studio/run/types";
@@ -264,6 +264,22 @@ describe("Gate 1 — pause short-circuits before any claim or AI call", () => {
     expect(result.claimed).toBe(false);
     expect(calls).toBe(0);
     expect((state.runs["run1"] as unknown as StudioRunRow).updated_at).toBe(untouchedUpdatedAt);
+  });
+});
+
+describe("setRunPaused — bumps updated_at (contract: claimRun's CAS depends on this)", () => {
+  it("pausing changes updated_at, so a stale-read step cannot win a claim after the pause", async () => {
+    const { state, admin } = await seedOnePageAdmin();
+    const row = state.runs["run1"] as unknown as StudioRunRow;
+    const before = row.updated_at;
+
+    const paused = await setRunPaused(admin, row, true);
+    expect(paused.paused).toBe(true);
+    expect(paused.updated_at).not.toBe(before);
+
+    const resumed = await setRunPaused(admin, paused, false);
+    expect(resumed.paused).toBe(false);
+    expect(resumed.updated_at).not.toBe(paused.updated_at);
   });
 });
 
