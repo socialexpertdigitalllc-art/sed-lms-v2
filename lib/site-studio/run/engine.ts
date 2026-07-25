@@ -14,6 +14,7 @@ import { finalizeRun } from "./finalize";
 import { nextStep, type PageWriteState, type RunStep, type RunStatus, type SlotImageState, type StudioRunRow } from "./types";
 import { sourceImages } from "./imageSource";
 import { searchPexels as pexelsSearch, type PexelsResult } from "../assets/pexels";
+import { STUDIO_ASSETS_BUCKET } from "../assets/rehost";
 
 /** Production AiCall: routes the per-page write through the task router on
  *  its own registered task ("content_write") — kept separate from
@@ -449,19 +450,41 @@ async function runRender(admin: SupabaseClient, row: StudioRunRow): Promise<Stud
   return updated;
 }
 
+/** Loads a picked asset's bytes for `resolveAssets`, straight from the
+ *  `studio_assets` row + the `studio-assets` bucket (assets/rehost.ts's
+ *  private bucket). Returns null (never throws) on any failure — a missing
+ *  row, a download error — exactly what `resolveAssets` treats as "this
+ *  asset failed to resolve" and reports in `missing`. */
+async function loadAssetBytes(admin: SupabaseClient, assetId: string): Promise<import("./resolveAssets").LoadedAsset | null> {
+  const { data: row, error: rowError } = await admin.from("studio_assets").select("*").eq("id", assetId).single();
+  if (rowError || !row) return null;
+  const storagePath = (row as { storage_path: string }).storage_path;
+  const contentType = (row as { content_type: string }).content_type;
+  const { data, error } = await admin.storage.from(STUDIO_ASSETS_BUCKET).download(storagePath);
+  if (error || !data) return null;
+  const bytes = new Uint8Array(await data.arrayBuffer());
+  return { bytes, contentType, storagePath };
+}
+
 /** Re-renders from scratch (never trusts `render`'s prior output — see
- *  finalize.ts), zips, and uploads. */
+ *  finalize.ts), resolving every picked `asset:` slot into a real file along
+ *  the way (see finalize.ts's own doc comment), zips, and uploads. */
 async function runFinalize(admin: SupabaseClient, row: StudioRunRow, now: () => Date): Promise<StudioRunRow> {
   if (!row.content_doc) throw new Error("engine: finalize step reached before prepare completed");
 
   const manifest = await loadManifest(admin, row.template_id);
   const tpl = await loadPackage(admin, row.template_id, manifest);
-  const outcome = await finalizeRun(admin, tpl, row.content_doc, row.id);
+  const outcome = await finalizeRun(admin, tpl, row.content_doc, row.id, {
+    loadAssetBytes: (assetId) => loadAssetBytes(admin, assetId),
+  });
 
   if (!outcome.ok) {
-    const message = `Render refused: missing ${outcome.missing.map((m) => `${m.page_id}/${m.slot_id}`).join(", ")}`;
+    const message =
+      "missingAssets" in outcome
+        ? `Finalize refused: picked image(s) failed to resolve — missing asset(s): ${outcome.missingAssets.join(", ")}`
+        : `Render refused: missing ${outcome.missing.map((m) => `${m.page_id}/${m.slot_id}`).join(", ")}`;
     const updated = await persistRun(admin, row.id, { status: "failed", error: message });
-    await logEvent(admin, row.id, "finalize", "error", "Finalize's re-render was refused.", { missing: outcome.missing });
+    await logEvent(admin, row.id, "finalize", "error", "Finalize's re-render was refused.", { outcome });
     return updated;
   }
 
