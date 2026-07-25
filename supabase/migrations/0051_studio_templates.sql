@@ -5,7 +5,7 @@
 -- eventual old-engine teardown is a grep. Spec:
 -- docs/superpowers/specs/2026-07-23-site-studio-design.md §10.
 --
--- A row is a TEMPLATE PACKAGE in one of six states:
+-- A row is a TEMPLATE PACKAGE in one of five states:
 --   uploaded      source.zip stored; not yet compiled (or last compile hit
 --                 blocker diagnostics — the diagnostics column says which)
 --   needs_review  compiled clean; awaiting human review / AI enrichment
