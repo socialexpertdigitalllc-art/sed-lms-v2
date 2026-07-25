@@ -8,11 +8,26 @@ export interface SearchLibraryOpts {
   limit?: number;
 }
 
+// postgrest-js does ZERO escaping of `.or()` filter strings — it's raw
+// PostgREST syntax, split on unquoted commas. A `leadId` that isn't
+// strictly a UUID could smuggle in an extra clause (e.g.
+// "<uuid>,kind.eq.client") and OR in every client's private photos the
+// moment a route exposes `leadId` to a query param. Validating the shape
+// HERE, at the one place the fence is built, is what keeps it a fence
+// instead of a suggestion.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Rows this lead is allowed to see: shared stock, plus this lead's OWN client
  *  photos — never another client's. `leadId` absent means stock-only (no
  *  run context, e.g. the standalone library management surface). This is the
- *  client fence (spec §8) and must be enforced here, not upstream. */
+ *  client fence (spec §8) and must be enforced here, not upstream.
+ *
+ *  A malformed `leadId` (anything that isn't a plain UUID) fails CLOSED —
+ *  returns no rows at all — rather than falling back to a wider query. The
+ *  fence must never be the thing that widens under bad input. */
 export async function searchLibrary(admin: SupabaseClient, opts: SearchLibraryOpts = {}): Promise<AssetRow[]> {
+  if (opts.leadId && !UUID_RE.test(opts.leadId)) return [];
+
   let query = admin.from("studio_assets").select("*");
   query = opts.leadId ? query.or(`kind.eq.stock,lead_id.eq.${opts.leadId}`) : query.eq("kind", "stock");
   if (opts.subject) query = query.ilike("subject", `%${opts.subject}%`);

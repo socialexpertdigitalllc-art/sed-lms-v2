@@ -265,6 +265,10 @@ export function makeFakeAdmin(state: FakeAdminState): SupabaseClient {
             const copy = bytes.slice();
             return { data: { arrayBuffer: async () => copy.buffer }, error: null };
           },
+          remove: async (paths: string[]) => {
+            for (const p of paths) delete state.storage[`${bucket}/${p}`];
+            return { data: paths.map((name) => ({ name })), error: null };
+          },
         };
       },
     },

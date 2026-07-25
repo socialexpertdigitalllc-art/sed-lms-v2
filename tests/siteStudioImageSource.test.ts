@@ -7,9 +7,12 @@ import type { Dossier } from "@/lib/site-studio/run/dossier";
 import type { PexelsResult } from "@/lib/site-studio/assets/pexels";
 import type { AssetRow } from "@/lib/site-studio/assets/types";
 
+const LEAD1 = "44444444-4444-4444-4444-444444444444";
+const LEAD_OTHER = "55555555-5555-5555-5555-555555555555";
+
 function dossier(over: Partial<Dossier> = {}): Dossier {
   return {
-    lead_id: "lead1",
+    lead_id: LEAD1,
     business_name: "Acme Plumbing",
     no_email: false,
     services: ["Drain Cleaning"],
@@ -85,6 +88,42 @@ describe("imageSlotQueries", () => {
     expect(a).toEqual(b);
     expect(a.map((q) => q.key)).toEqual(["0:index_i1", "1:about_i1"]);
   });
+
+  // -------- garbage-subject hardening (camera-dump filenames, data URIs, etc.) --------
+
+  function oneImageSlotManifest(sample: string): TemplateManifest {
+    return {
+      engine: 3, name: "garbage-subject-test", version: 1,
+      identity: {}, theme: { mode: "none", roles: {} }, nav: [],
+      pages: [{
+        id: "p", file: "p.html", kind: "generic", stampable: false, title_sample: "P",
+        slots: [{ id: "p_i1", type: "image", sample, html: false }],
+        repeats: [],
+      }],
+    };
+  }
+  const oneImageSlotDoc: ContentDoc = {
+    identity: {}, theme: {},
+    pages: [{ page_id: "p", title: "P", slots: {}, repeats: {} }],
+  };
+  const queryFor = (sample: string) =>
+    imageSlotQueries(oneImageSlotManifest(sample), oneImageSlotDoc, dossier({ site_type: "plumbing" }))[0].query;
+
+  it("a camera-dump filename (img/IMG_4032.JPG) contributes nothing — query is trade-only", () => {
+    expect(queryFor("img/IMG_4032.JPG")).toBe("plumbing");
+  });
+
+  it("a data: URI contributes nothing — query is trade-only", () => {
+    expect(queryFor("data:image/png;base64,AAAABBBBCCCC")).toBe("plumbing");
+  });
+
+  it("strips query/fragment before deriving the subject (cdn URL with a cache-buster)", () => {
+    expect(queryFor("https://cdn.example.com/photos/hero.jpg?w=1200")).toBe("hero plumbing");
+  });
+
+  it("a descriptive multi-word filename is unaffected", () => {
+    expect(queryFor("assets/photos/team/staff-photo-final-v2.png")).toBe("staff photo final v2 plumbing");
+  });
 });
 
 // -------------------------------------------------------------- sourceImages
@@ -111,7 +150,7 @@ describe("sourceImages", () => {
     const log = vi.fn();
     const searchPexels = vi.fn(async (): Promise<PexelsResult> => ({ ok: false, error: "pexels down" }));
 
-    const result = await sourceImages({ admin, searchPexels, log }, manifest, doc, dossier(), "lead1");
+    const result = await sourceImages({ admin, searchPexels, log }, manifest, doc, dossier(), LEAD1);
 
     expect(Object.keys(result).sort()).toEqual(["0:index_i1", "1:about_i1"]);
     expect(result["0:index_i1"].candidates).toEqual([]);
@@ -127,7 +166,7 @@ describe("sourceImages", () => {
     const searchPexels = vi.fn(async (): Promise<PexelsResult> => {
       throw new Error("boom");
     });
-    await expect(sourceImages({ admin, searchPexels }, manifest, doc, dossier(), "lead1")).resolves.toBeTruthy();
+    await expect(sourceImages({ admin, searchPexels }, manifest, doc, dossier(), LEAD1)).resolves.toBeTruthy();
   });
 
   it("library candidates come first; Pexels is not called when the library already has >= 4", async () => {
@@ -141,7 +180,7 @@ describe("sourceImages", () => {
     }
     const searchPexels = vi.fn(async (): Promise<PexelsResult> => ({ ok: true, candidates: [pexelsCandidate(1)] }));
 
-    const result = await sourceImages({ admin, searchPexels }, manifest, doc, dossier(), "lead1");
+    const result = await sourceImages({ admin, searchPexels }, manifest, doc, dossier(), LEAD1);
 
     expect(result["0:index_i1"].candidates).toHaveLength(4);
     expect(result["0:index_i1"].candidates.every((c) => c.kind === "library")).toBe(true);
@@ -163,7 +202,7 @@ describe("sourceImages", () => {
       ],
     }));
 
-    const result = await sourceImages({ admin, searchPexels }, manifest, doc, dossier(), "lead1");
+    const result = await sourceImages({ admin, searchPexels }, manifest, doc, dossier(), LEAD1);
 
     const candidates = result["0:index_i1"].candidates;
     expect(candidates.length).toBeLessThanOrEqual(9);
@@ -179,7 +218,7 @@ describe("sourceImages", () => {
       candidates: [pexelsCandidate(42)],
     }));
 
-    const result = await sourceImages({ admin, searchPexels }, manifest, doc, dossier(), "lead1");
+    const result = await sourceImages({ admin, searchPexels }, manifest, doc, dossier(), LEAD1);
 
     const allPexelsIds = Object.values(result).flatMap((s) =>
       s.candidates.filter((c) => c.kind === "pexels").map((c) => (c as { pexels_id: number }).pexels_id),
@@ -190,13 +229,13 @@ describe("sourceImages", () => {
   it("scopes library candidates to this lead's own client photos plus shared stock (the fence)", async () => {
     const { admin } = makeAdmin();
     await insertAsset(admin, {
-      kind: "client", lead_id: "lead-other", subject: "team photo drain cleaning", niche_tags: [],
+      kind: "client", lead_id: LEAD_OTHER, subject: "team photo drain cleaning", niche_tags: [],
       width: 2000, height: 1500, source: "client_link", pexels_id: null, photographer: null,
       storage_path: "other.jpg", content_type: "image/jpeg",
     } as Omit<AssetRow, "id" | "created_at" | "use_count">);
     const searchPexels = vi.fn(async (): Promise<PexelsResult> => ({ ok: false, error: "n/a" }));
 
-    const result = await sourceImages({ admin, searchPexels }, manifest, doc, dossier(), "lead1");
+    const result = await sourceImages({ admin, searchPexels }, manifest, doc, dossier(), LEAD1);
 
     expect(result["0:index_i1"].candidates).toEqual([]); // lead-other's client photo never leaks to lead1
   });

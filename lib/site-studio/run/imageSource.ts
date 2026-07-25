@@ -13,13 +13,32 @@ export interface SlotQuery {
   query: string;
 }
 
+// A stem that's nothing but a camera/screenshot's auto-generated counter
+// ("IMG_4032", "DSC00123", "Screenshot123") or pure digits carries zero
+// actual subject information — searching Pexels for "img 4032" finds
+// nothing useful. Contributing "" here just means the query falls back to
+// the trade noun alone (`[subject, trade].filter(Boolean)`), which is
+// strictly better than polluting it with camera-dump noise.
+const GARBAGE_STEM_RE = /^(img|dsc|image|screenshot)[\s_-]*\d*$/i;
+const PURE_DIGITS_RE = /^\d+$/;
+
 /** `img/team-photo.jpg` -> "team photo": the basename, minus extension, with
  *  separators turned into spaces. This is the fallback subject when the
- *  template's slot carries no `subject_hint`. */
+ *  template's slot carries no `subject_hint`. Query/fragment are stripped
+ *  first (a CDN cache-buster like `?w=1200` is not part of the subject);
+ *  `data:` URIs and camera/screenshot auto-names contribute nothing (see
+ *  GARBAGE_STEM_RE above) — both degrade to the trade noun alone rather than
+ *  polluting the search with noise. */
 function subjectFromSample(sample: string): string {
-  const base = sample.split("/").pop() ?? sample;
-  const withoutExt = base.replace(/\.[a-zA-Z0-9]+$/, "");
-  return withoutExt.replace(/[-_]+/g, " ").trim().toLowerCase();
+  const withoutQueryOrFragment = sample.split(/[?#]/)[0];
+  if (/^data:/i.test(withoutQueryOrFragment.trim())) return "";
+
+  const base = withoutQueryOrFragment.split("/").pop() ?? withoutQueryOrFragment;
+  const stem = base.replace(/\.[a-zA-Z0-9]+$/, "");
+  if (!stem) return "";
+  if (PURE_DIGITS_RE.test(stem) || GARBAGE_STEM_RE.test(stem)) return "";
+
+  return stem.replace(/[-_]+/g, " ").trim().toLowerCase();
 }
 
 /** The client's own trade noun, taken verbatim from what they told us —
