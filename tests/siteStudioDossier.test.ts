@@ -59,4 +59,33 @@ describe("normalisePhone", () => {
     expect(normalisePhone("+1 303.555.1234")).toEqual({ display: "+1 303.555.1234", href: "tel:+13035551234" });
     expect(normalisePhone(null)).toBeNull();
   });
+
+  it("truncates at an extension marker for the href, but keeps it in display", () => {
+    expect(normalisePhone("(303) 555-1234 ext 2")).toEqual({
+      display: "(303) 555-1234 ext 2",
+      href: "tel:3035551234",
+    });
+    expect(normalisePhone("303-555-1234 x99")).toEqual({
+      display: "303-555-1234 x99",
+      href: "tel:3035551234",
+    });
+    expect(normalisePhone("303-555-1234 #5")).toEqual({
+      display: "303-555-1234 #5",
+      href: "tel:3035551234",
+    });
+  });
+
+  it("keeps the display text but withholds an href for a non-dialable number", () => {
+    expect(normalisePhone("555-1234")).toEqual({ display: "555-1234", href: null });
+    expect(normalisePhone("1234567")).toEqual({ display: "1234567", href: null });
+    expect(normalisePhone("TBD 000-0000")).toEqual({ display: "TBD 000-0000", href: null });
+  });
+
+  it("accepts exactly 10 digits, 11 digits leading with 1, or international with a leading +", () => {
+    expect(normalisePhone("(303) 555-1234")?.href).toBe("tel:3035551234");
+    expect(normalisePhone("+44 20 7946 0958")).toEqual({
+      display: "+44 20 7946 0958",
+      href: "tel:+442079460958",
+    });
+  });
 });

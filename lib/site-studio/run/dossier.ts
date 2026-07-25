@@ -1,7 +1,12 @@
 /** Everything a generated website may know about the client. Built ONCE from a
- *  lead row; nothing downstream reads the lead again. Commercial and internal
- *  fields (price_quoted, yearly_price, rating, comments, platform) are absent
- *  BY CONSTRUCTION — they must never reach a public page. */
+ *  lead row by `buildDossier` — nothing downstream reads the lead again.
+ *  `buildDossier` constructs a fresh object naming only the allowed keys, so
+ *  commercial and internal fields (price_quoted, yearly_price, rating,
+ *  comments, platform) never appear in a value it returns. That guarantee
+ *  holds only through `buildDossier` itself: `Dossier` is a structural
+ *  interface, so a cast like `{...lead} as Dossier` would defeat it. Callers
+ *  must never cast a raw lead into a `Dossier` — always go through
+ *  `buildDossier`, the ONE place lead columns are read. */
 export interface Dossier {
   lead_id: string;
   business_name: string;
@@ -34,11 +39,31 @@ const str = (v: unknown): string | undefined => {
   return s.length ? s : undefined;
 };
 
-export function normalisePhone(raw: unknown): { display: string; href: string } | null {
+// Extension markers: "ext", "ext.", "extension" as whole words; a lone "x"
+// either as its own word ("x 2") or immediately glued to digits ("x99"); or
+// "#". Anything from the marker onward is dropped before deriving the dial
+// string — it is never part of a number a `tel:` link should include.
+const EXTENSION_RE = /\b(ext\.?|extension|x)\b|\bx(?=\d)|#/i;
+
+function isDialable(digits: string): boolean {
+  if (digits.startsWith("+")) return digits.length - 1 >= 8; // international
+  return digits.length === 10 || (digits.length === 11 && digits[0] === "1");
+}
+
+/** Builds a `tel:` href from a free-text phone number, WITHOUT ever guessing
+ *  past what the digits actually support. `display` is always the full
+ *  original text (an extension like "ext 2" still shows to the reader).
+ *  `href` is derived only from the portion before any extension marker, and
+ *  is null when what's left doesn't look like a real, dialable number —
+ *  otherwise a placeholder like "555-1234" or "TBD 000-0000" would render as
+ *  a confident, wrong click-to-call link on a live client site. */
+export function normalisePhone(raw: unknown): { display: string; href: string | null } | null {
   const display = str(raw);
   if (!display) return null;
-  const digits = display.replace(/[^\d+]/g, "");
-  return digits.length >= 7 ? { display, href: `tel:${digits}` } : null;
+  const cut = display.search(EXTENSION_RE);
+  const trunk = cut >= 0 ? display.slice(0, cut) : display;
+  const digits = trunk.replace(/[^\d+]/g, "");
+  return { display, href: isDialable(digits) ? `tel:${digits}` : null };
 }
 
 /** Shape-loose on purpose: the caller passes a raw lead row. */
@@ -51,7 +76,7 @@ export function buildDossier(lead: Record<string, unknown>): Dossier {
     lead_id: String(lead.id),
     business_name: String(lead.business_name ?? "").trim(),
     phone: phone?.display,
-    phone_href: phone?.href,
+    phone_href: phone?.href ?? undefined,
     email: str(lead.business_email),
     no_email: lead.no_email === true,
     profile_link: str(lead.business_profile_link),

@@ -23,6 +23,28 @@ describe("pageKindForName", () => {
     expect(pageKindForName("Gallery")).toBe("gallery");
     expect(pageKindForName("Something Odd")).toBeNull();
   });
+
+  it("maps the reviews/testimonials synonym group", () => {
+    expect(pageKindForName("Testimonials")).toBe("reviews");
+    expect(pageKindForName("Reviews")).toBe("reviews");
+    expect(pageKindForName("Customer Reviews")).toBe("reviews");
+    expect(pageKindForName("What Our Customers Say")).toBe("reviews");
+    expect(pageKindForName("Feedback")).toBe("reviews");
+  });
+
+  it("still matches a canonical phrase embedded in extra words", () => {
+    expect(pageKindForName("Areas We Serve")).toBe("areas_hub");
+  });
+
+  it("never builds a plausible-but-wrong page from a short or garbled name", () => {
+    // Previously matched via a reverse "canonical phrase contains input"
+    // fallback: "Us" -> about, "Get" -> contact, "Do" -> services_hub,
+    // "Work" -> gallery. That's worse than not matching at all.
+    expect(pageKindForName("Us")).toBeNull();
+    expect(pageKindForName("Get")).toBeNull();
+    expect(pageKindForName("Do")).toBeNull();
+    expect(pageKindForName("Work")).toBeNull();
+  });
 });
 
 describe("selectPages", () => {
@@ -56,5 +78,16 @@ describe("selectPages", () => {
       .pages.some((p) => p.page_id === "svc")).toBe(false);
     expect(selectPages(manifest, { requested: ["Home"], services: [], areas: [], fanOutServices: true })
       .pages.some((p) => p.page_id === "svc")).toBe(false);
+  });
+  it("never lets two services collide on the same stamped output - the loser is surfaced, not dropped", () => {
+    const r = selectPages(manifest, {
+      requested: ["Home"], services: ["Drain Cleaning", "drain  cleaning!"], areas: [],
+      fanOutServices: true,
+    });
+    const stamped = r.pages.filter((p) => p.page_id === "svc");
+    expect(stamped).toHaveLength(1);
+    expect(stamped[0].output).toBe("services/drain-cleaning.html");
+    expect(stamped[0].stamp_value).toBe("Drain Cleaning");
+    expect(r.skipped).toEqual(["drain  cleaning!"]);
   });
 });

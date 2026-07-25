@@ -35,6 +35,7 @@ const SYNONYMS: [PageKind, string[]][] = [
   ["areas_hub", ["areas", "service areas", "locations", "cities we serve"]],
   ["gallery", ["gallery", "portfolio", "our work", "projects"]],
   ["contact", ["contact", "contact us", "get in touch", "quote"]],
+  ["reviews", ["testimonials", "reviews", "customer reviews", "what our customers say", "feedback"]],
 ];
 
 const normalise = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -46,7 +47,12 @@ for (const [kind, phrases] of SYNONYMS) {
 
 /** Maps a free-text page name (as sales actually types it) to a PageKind, or
  *  null when nothing recognisable matches. Exact match first, then a
- *  contains-fallback for phrases sales tacks extra words onto. */
+ *  contains-fallback for phrases sales tacks extra words onto (e.g. "Areas We
+ *  Serve" contains the canonical "areas"). Deliberately one-directional: the
+ *  reverse (a canonical phrase containing the input) would let short or
+ *  garbled input like "Us" or "Do" match "about"/"what we do" — building a
+ *  plausible-but-wrong page is worse than not matching, so an unrecognised
+ *  name is surfaced via `skipped` instead. */
 export function pageKindForName(name: string): PageKind | null {
   const n = normalise(name);
   if (!n) return null;
@@ -57,7 +63,7 @@ export function pageKindForName(name: string): PageKind | null {
   for (const [kind, phrases] of SYNONYMS) {
     for (const phrase of phrases) {
       const p = normalise(phrase);
-      if (n.includes(p) || p.includes(n)) return kind;
+      if (n.includes(p)) return kind;
     }
   }
   return null;
@@ -127,10 +133,22 @@ export function selectPages(manifest: TemplateManifest, opts: SelectPagesOptions
   if (fanOutServices && services.length) {
     const svcPage = manifest.pages.find((p) => p.stampable && p.kind === "service");
     if (svcPage) {
+      // Distinct services can slugify to the same output path (e.g. "Drain
+      // Cleaning" and "drain  cleaning!"); the renderer has no duplicate-
+      // output guard, so a collision here would silently overwrite one
+      // stamped page with another. Catch it: keep the first, surface the
+      // rest via `skipped` rather than losing them.
+      const usedOutputs = new Set<string>();
       for (const service of services) {
+        const output = `services/${slugify(service)}.html`;
+        if (usedOutputs.has(output)) {
+          skipped.push(service);
+          continue;
+        }
+        usedOutputs.add(output);
         selected.push({
           page_id: svcPage.id,
-          output: `services/${slugify(service)}.html`,
+          output,
           stamp_value: service,
           nav_title: service,
         });
@@ -141,10 +159,17 @@ export function selectPages(manifest: TemplateManifest, opts: SelectPagesOptions
   if (fanOutAreas && areas.length) {
     const areaPage = manifest.pages.find((p) => p.stampable && p.kind === "area");
     if (areaPage) {
+      const usedOutputs = new Set<string>();
       for (const area of areas) {
+        const output = `areas/${slugify(area)}.html`;
+        if (usedOutputs.has(output)) {
+          skipped.push(area);
+          continue;
+        }
+        usedOutputs.add(output);
         selected.push({
           page_id: areaPage.id,
-          output: `areas/${slugify(area)}.html`,
+          output,
           stamp_value: area,
           nav_title: area,
         });
