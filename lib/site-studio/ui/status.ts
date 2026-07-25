@@ -1,5 +1,6 @@
 import type { Diagnostic } from "../schema";
 import type { StudioTemplateStatus } from "../service/types";
+import type { RunStatus } from "../run/types";
 
 export type PillTone = "ready" | "notready" | "dropped" | "accent" | "neutral";
 
@@ -11,6 +12,22 @@ export function statusPill(status: StudioTemplateStatus): { tone: PillTone; labe
     case "certified": return { tone: "ready", label: "Certified" };
     case "rejected": return { tone: "dropped", label: "Rejected" };
     case "disabled": return { tone: "neutral", label: "Disabled" };
+  }
+}
+
+/** Run status → pill presentation for the cockpit (Phase 3b). Mirrors
+ *  `statusPill`'s pattern exactly so the two families never diverge in style,
+ *  even though they cover disjoint status sets. */
+export function runStatusPill(status: RunStatus): { tone: PillTone; label: string } {
+  switch (status) {
+    case "queued": return { tone: "neutral", label: "Queued" };
+    case "preparing": return { tone: "accent", label: "Preparing" };
+    case "reviewing": return { tone: "notready", label: "Awaiting review" };
+    case "approved": return { tone: "accent", label: "Approved" };
+    case "rendering": return { tone: "accent", label: "Rendering" };
+    case "ready": return { tone: "ready", label: "Ready" };
+    case "failed": return { tone: "dropped", label: "Failed" };
+    case "cancelled": return { tone: "neutral", label: "Cancelled" };
   }
 }
 

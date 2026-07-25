@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { SiteStudioBoard } from "@/components/site-studio/SiteStudioBoard";
 import { StudioTabs } from "@/components/site-studio/StudioTabs";
+import { RunsBoard } from "@/components/site-studio/RunsBoard";
 
 export const dynamic = "force-dynamic";
 
-export default async function SiteStudioPage() {
+export default async function SiteStudioRunsPage() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -19,7 +19,7 @@ export default async function SiteStudioPage() {
   return (
     <div className="space-y-4">
       <StudioTabs />
-      <SiteStudioBoard />
+      <RunsBoard />
     </div>
   );
 }
