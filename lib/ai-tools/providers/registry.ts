@@ -159,7 +159,7 @@ export function getModel(providerKey: string, modelId: string): AiModelDescripto
 
 /* ----------------------------------------------------------------- tasks */
 
-export type AiTaskKey = "content_plan" | "file_regen" | "image_vision" | "legacy_v1" | "template_compile";
+export type AiTaskKey = "content_plan" | "file_regen" | "image_vision" | "legacy_v1" | "template_compile" | "content_write";
 
 export interface AiTaskDescriptor {
   key: AiTaskKey;
@@ -249,7 +249,19 @@ const templateCompile: AiTaskDescriptor = {
   routable: true,
 };
 
-export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [contentPlan, fileRegen, imageVision, legacyV1, templateCompile];
+const contentWrite: AiTaskDescriptor = {
+  key: "content_write",
+  label: "Website copy (Site Studio)",
+  description:
+    "One call per page, every page written in parallel. Returns strict JSON of plain strings only — no markup, no URLs, no tokens — and is never shown identity fields (name, phone, email, logo, map), which are injected deterministically instead.",
+  where: "lib/site-studio/run/writer.ts",
+  requires: { vision: false, minOutputTokens: 8000 },
+  defaultProvider: "gemini",
+  defaultModel: "gemini-3.1-pro-preview",
+  routable: true,
+};
+
+export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [contentPlan, fileRegen, imageVision, legacyV1, templateCompile, contentWrite];
 
 export function getTask(key: string): AiTaskDescriptor | undefined {
   return AI_TASK_REGISTRY.find((t) => t.key === key);

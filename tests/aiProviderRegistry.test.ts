@@ -60,8 +60,8 @@ describe("AI provider registry", () => {
 });
 
 describe("AI task registry", () => {
-  it("describes exactly the five AI tasks", () => {
-    expect(AI_TASK_REGISTRY.map((t) => t.key)).toEqual(["content_plan", "file_regen", "image_vision", "legacy_v1", "template_compile"]);
+  it("describes exactly the six AI tasks", () => {
+    expect(AI_TASK_REGISTRY.map((t) => t.key)).toEqual(["content_plan", "file_regen", "image_vision", "legacy_v1", "template_compile", "content_write"]);
     expect(isAiTaskKey("file_regen")).toBe(true);
     expect(isAiTaskKey("nope")).toBe(false);
   });
