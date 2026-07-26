@@ -5,7 +5,18 @@ const DOM_WRITE_RE = /innerHTML|outerHTML\s*=|document\.write|customElements\.de
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Pass 6 (Phase-1 subset): flag JS that renders DOM and identity echoes in assets. Baking lands in Phase 2. */
+/**
+ * Pass 6: flag JS that renders DOM, and catch any demo identity value that
+ * survives `compiler/assetIdentity.ts`'s tokenization pass inside a text
+ * asset. By the time this runs, compile.ts has already tokenized every
+ * literal occurrence it could find — so a match here means the value
+ * appears in some form that pass's literal-substring search couldn't
+ * safely rewrite (inside a regex literal, split across string
+ * concatenation, minified beyond recognition). That is a residual leak: a
+ * client's deployed site would render the template author's own business
+ * name/phone/email. This cannot be a warning — it's a BLOCKER, the same as
+ * any other certification-blocking defect.
+ */
 export function flagJs(inv: Inventory, identity: Record<string, string>): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
 
@@ -55,7 +66,10 @@ export function flagJs(inv: Inventory, identity: Record<string, string>): Diagno
 
       if (matched && !flaggedKeys.has(key)) {
         flaggedKeys.add(key);
-        diagnostics.push({ level: "warn", code: "asset_identity_echo", message: `${path} contains demo ${key} ("${value}"); asset tokenization lands in Phase 2 — review.` });
+        diagnostics.push({
+          level: "blocker", code: "asset_identity_echo",
+          message: `${path} still contains demo ${key} ("${value}") after asset-identity tokenization; this form survived the pass's literal-text rewrite (e.g. a regex literal, split concatenation, or minified bundle) and would ship the template author's own ${key} to every client site — this must be fixed in the source template and re-uploaded, it cannot be certified as-is.`,
+        });
       }
     }
   }

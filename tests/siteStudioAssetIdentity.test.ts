@@ -3,6 +3,7 @@ import { parse } from "node-html-parser";
 import { isTextAsset, tokenizeAssetIdentity } from "@/lib/site-studio/compiler/assetIdentity";
 import { Inventory } from "@/lib/site-studio/compiler/inventory";
 import { compileTemplate } from "@/lib/site-studio/compiler/compile";
+import { zipFromMap } from "@/lib/site-studio/zip";
 import { fixtureZip } from "./helpers/siteStudioFixtures";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -118,5 +119,22 @@ describe("asset identity tokenization end to end (gearhead fixture)", () => {
 
   it("asset_identity_echo does not fire once tokenization has handled the occurrence", () => {
     expect(result.diagnostics.some((d) => d.code === "asset_identity_echo")).toBe(false);
+  });
+});
+
+describe("a residual identity leak that tokenization cannot rewrite fails closed as a blocker", () => {
+  it("a phone number embedded in a text asset with different punctuation than the detected value is caught by flagJs's fuzzy match and blocks certification", () => {
+    const result = compileTemplate(zipFromMap({
+      "index.html": enc(`<html><head><title>Test Biz</title></head><body><p>Call (512) 555-0147 for Test Biz service.</p></body></html>`),
+      // Different punctuation than "(512) 555-0147" — the tokenizer's exact-literal
+      // match can't find/rewrite this form, so it survives compile-time tokenization.
+      "app.js": enc(`var phone = "512.555.0147";`),
+    }), "leak-fixture");
+
+    expect(result.ok).toBe(false);
+    const blocker = result.diagnostics.find((d) => d.level === "blocker" && d.code === "asset_identity_echo");
+    expect(blocker).toBeDefined();
+    expect(blocker!.message).not.toMatch(/Phase 2/);
+    expect(blocker!.message).toMatch(/app\.js/);
   });
 });
