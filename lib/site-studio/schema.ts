@@ -47,6 +47,15 @@ export const slotDefSchema = z.object({
   semantic: z.string().optional(),
   subject_hint: z.string().optional(),
   aspect: z.string().optional(),
+  // Set when this "text" slot's token is substituted into an HTML ATTRIBUTE
+  // value rather than element content (today, only an <img>'s alt text —
+  // see compiler/slots.ts) — the name of that attribute. A slot carrying
+  // this must be rendered with attribute-safe escaping (& < > " '), never
+  // the element-text escape (& < > only): the same string that's safe
+  // inside `<p>...</p>` can close an attribute's quote early or inject a
+  // new attribute entirely if placed unescaped into `alt="..."`. See
+  // tokens.ts's `fillSlotValue`, the single call site this fans out from.
+  attr: z.string().optional(),
 });
 export type SlotDef = z.infer<typeof slotDefSchema>;
 

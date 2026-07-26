@@ -96,7 +96,10 @@ export function extractSlots(page: PageSource): { slots: SlotDef[]; titleSample:
       const alt = el.getAttribute("alt");
       if (alt && findTokens(alt).length === 0) {
         const altId = `${id}_alt`;
-        slots.push({ id: altId, type: "text", sample: alt, html: false, max_chars: Math.max(40, Math.ceil(alt.length * 1.5)) });
+        // attr:"alt" — this token lands inside an HTML ATTRIBUTE value, not
+        // element content, so it must render with attribute-safe escaping
+        // (see schema.ts's slotDefSchema and tokens.ts's fillSlotValue).
+        slots.push({ id: altId, type: "text", sample: alt, html: false, max_chars: Math.max(40, Math.ceil(alt.length * 1.5)), attr: "alt" });
         el.setAttribute("alt", slotToken(altId));
       } else if (!el.hasAttribute("alt")) {
         diagnostics.push({

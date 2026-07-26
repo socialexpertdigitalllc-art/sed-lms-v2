@@ -1,5 +1,5 @@
 import { CompiledTemplate, ContentDoc, ContentDocPage, FileMap, RenderResult } from "../schema";
-import { escapeHtml, fillSlot, findTokens, navMarker, repeatMarker, NAV_HREF, NAV_TITLE } from "../tokens";
+import { escapeHtml, fillSlotValue, findTokens, navMarker, repeatMarker, NAV_HREF, NAV_TITLE } from "../tokens";
 import { applyTheme } from "./theme";
 import { annotatePageHtml, RenderOptions } from "./annotate";
 
@@ -98,7 +98,7 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
       const rows = (b.page.repeats[r.id] ?? []).slice(0, r.max);
       const rendered = rows.map((row: Record<string, string>) => {
         let f = frag;
-        for (const s of r.slots) f = f.split(`{{slot:${s.id}}}`).join(fillSlot(row[s.id], s.sample, s.html));
+        for (const s of r.slots) f = f.split(`{{slot:${s.id}}}`).join(fillSlotValue(s, row[s.id]));
         return f;
       }).join("");
       html = html.split(repeatMarker(r.id)).join(rendered);
@@ -114,7 +114,7 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
     } else {
       for (const s of b.def.slots) {
         const token = s.type === "image" ? `{{img:${s.id}}}` : `{{slot:${s.id}}}`;
-        const value = s.type === "image" ? escapeHtml(b.page.slots[s.id]) : fillSlot(b.page.slots[s.id], s.sample, s.html);
+        const value = s.type === "image" ? escapeHtml(b.page.slots[s.id]) : fillSlotValue(s, b.page.slots[s.id]);
         html = html.split(token).join(value);
       }
     }
