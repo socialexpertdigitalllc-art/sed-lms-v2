@@ -32,6 +32,11 @@ export const SOPS: SopEntry[] = [
     title: "Troubleshooting",
     path: "docs/sops/site-studio/03-troubleshooting.md",
   },
+  {
+    slug: "04-authoring-a-template",
+    title: "Authoring a template",
+    path: "docs/sops/site-studio/04-authoring-a-template.md",
+  },
 ];
 
 /** Rejects any shape that could smuggle a path outside `docs/sops/site-studio/`
