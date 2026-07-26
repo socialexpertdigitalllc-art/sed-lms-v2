@@ -20,6 +20,18 @@ export interface PageProvenance {
   title?: FieldProvenance;
   slots: Record<string, FieldProvenance>;
   repeats: Record<string, FieldProvenance>;
+  /** The AI's value for a field, captured the FIRST time that field flips
+   *  ai -> operator (see `applyOperatorEdit`) — never overwritten by a later
+   *  operator edit of the same field, so a field edited, reverted, and
+   *  edited again still restores the ORIGINAL AI text (Phase 4a revert,
+   *  run/revert.ts). Only title/slots carry a backup — repeats have no
+   *  revert-to-AI story in this phase. Cleared by `revertField` once it has
+   *  restored the value, so a field's presence here doubles as "this field
+   *  currently holds an operator edit that can be reverted." */
+  ai_backup?: {
+    title?: string;
+    slots?: Record<string, string>;
+  };
 }
 
 /** A ContentDoc with a parallel, per-doc-page provenance array riding
@@ -40,10 +52,14 @@ const clonePage = (page: ContentDocPage): ContentDocPage => ({
   repeats: Object.fromEntries(Object.entries(page.repeats).map(([id, rows]) => [id, rows.map((r) => ({ ...r }))])),
 });
 
+const cloneAiBackup = (b?: PageProvenance["ai_backup"]): PageProvenance["ai_backup"] | undefined =>
+  b ? { ...(b.title !== undefined ? { title: b.title } : {}), slots: { ...(b.slots ?? {}) } } : undefined;
+
 const cloneProvenance = (p: PageProvenance): PageProvenance => ({
   ...(p.title ? { title: { ...p.title } } : {}),
   slots: { ...p.slots },
   repeats: { ...p.repeats },
+  ...(p.ai_backup ? { ai_backup: cloneAiBackup(p.ai_backup) } : {}),
 });
 
 /**
@@ -239,6 +255,17 @@ export function findDisallowedEditField(edit: OperatorEdit): string | null {
  * fields") leaves operator edits alone. Does not mutate its input. Callers
  * should run `findDisallowedEditField` first (this function does not
  * validate content on its own — it is a pure merge, same as `applyWritten`).
+ *
+ * REVERT BACKUP: the first time a field's provenance is about to flip away
+ * from "operator" — i.e. it currently reads anything else (`"ai"`, or no
+ * entry yet on a fresh doc) — its CURRENT value is copied into
+ * `provenance.ai_backup` before being overwritten. That backup is never
+ * touched again by this function: a second, third, ... operator edit of the
+ * same field finds it already provenance:"operator" and skips the capture
+ * entirely, so `ai_backup` always holds the ORIGINAL AI value, never the
+ * most recent one. `revert.ts`'s `revertField` is the only thing that ever
+ * clears it (after restoring it), which is what makes an edit -> revert ->
+ * edit cycle back up the same original value both times.
  */
 export function applyOperatorEdit(
   doc: ContentDoc | RunContentDoc,
@@ -260,12 +287,26 @@ export function applyOperatorEdit(
   const pageProvenance = provenance[pageIndex];
   const field: FieldProvenance = { written_by: "operator" };
 
+  const backup = (): NonNullable<PageProvenance["ai_backup"]> => {
+    if (!pageProvenance.ai_backup) pageProvenance.ai_backup = { slots: {} };
+    if (!pageProvenance.ai_backup.slots) pageProvenance.ai_backup.slots = {};
+    return pageProvenance.ai_backup;
+  };
+
   if (edit.title !== undefined) {
+    if (!isOperatorOwned(pageProvenance.title)) {
+      const b = backup();
+      if (b.title === undefined) b.title = target.title;
+    }
     target.title = edit.title;
     pageProvenance.title = field;
   }
   if (edit.slots) {
     for (const [id, value] of Object.entries(edit.slots)) {
+      if (!isOperatorOwned(pageProvenance.slots[id])) {
+        const b = backup();
+        if (b.slots![id] === undefined) b.slots![id] = target.slots[id];
+      }
       target.slots[id] = value;
       pageProvenance.slots[id] = field;
     }
