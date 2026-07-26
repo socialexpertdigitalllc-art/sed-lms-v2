@@ -201,7 +201,22 @@ describe("Site Studio generation E2E — a real client site from the plumberpro 
     expect(wholeSite).toContain("img/team.jpg");
   });
 
-  it("fails fast on a sparse lead — missing identity is named and the model is never called", async () => {
+  // RETARGETED (Phase 4b): this case used to assert a sparse lead was
+  // REFUSED outright — the run never wrote a single page, because the
+  // engine's `prepare` step failed the whole run the instant it found an
+  // identity key (here: email/email_href/map_embed) the lead's dossier
+  // couldn't supply. That was the wrong response — "add it to the lead" is
+  // not always actionable (an AI-invented key like `neighborhood` has no
+  // lead column to add it to at all), and a missing fact is recoverable by
+  // an operator at Gate 1, not a reason to kill the run. The new contract
+  // (proven here at the pure-function level, since this describe block has
+  // no engine/DB in play): every referenced key the dossier can't supply is
+  // seeded into `identity` as "" (present, not omitted — this is exactly
+  // what keeps the renderer's own `key in doc.identity` completeness check
+  // satisfied), the Writer runs normally for every page, and the site
+  // renders successfully with those facts simply blank wherever the
+  // template referenced them.
+  it("a sparse lead proceeds: its missing identity is seeded blank, the model IS called, and the site still renders", async () => {
     const sparseLead = {
       id: "lead-e2e-sparse",
       business_name: "Sparse Electric",
@@ -213,32 +228,47 @@ describe("Site Studio generation E2E — a real client site from the plumberpro 
       services: sparseDossier.services,
       areas: sparseDossier.service_areas,
     });
-    const { doc: sparseDoc } = seedContentDoc(tpl.manifest, sparseDossier, sparseSelection.pages);
+    const { doc: sparseSeeded } = seedContentDoc(tpl.manifest, sparseDossier, sparseSelection.pages);
 
     const referenced = referencedIdentityKeys(tpl);
-    const missing = [...referenced]
-      .filter((k) => !(k in sparseDoc.identity))
-      .map((k) => `id:${k}`)
-      .sort();
+    const pending = [...referenced].filter((k) => !(k in sparseSeeded.identity)).sort();
+    expect(pending).toEqual(["email", "email_href", "map_embed"]);
 
-    expect(missing).toEqual(["id:email", "id:email_href", "id:map_embed"]);
+    // What `prepare` now does instead of failing: seed each pending key as
+    // "" (present-but-empty), never omit it.
+    for (const key of pending) sparseSeeded.identity[key] = "";
+    for (const key of pending) expect(key in sparseSeeded.identity).toBe(true);
 
-    // The identity-completeness gate runs BEFORE any page write — prove the
-    // model is never invoked by only calling it when the gate passes, then
-    // asserting on this run (which must not pass it) that it never did.
+    // The model IS called for every page — proceeding past a sparse lead
+    // means paying for the writes, unlike the old fail-fast contract.
+    const pagesById = new Map(tpl.manifest.pages.map((p) => [p.id, p]));
     let modelCalls = 0;
     const spyWriter: AiCall = async (system, user) => {
       modelCalls += 1;
       return makeStubWriter(sparseDossier)(system, user);
     };
 
-    if (missing.length === 0) {
-      // unreachable for this lead, but keeps the gate logic exercised for real
-      const def = tpl.manifest.pages[0];
-      await writePage(def, sparseDossier, {}, spyWriter);
+    let doc: ContentDoc = sparseSeeded;
+    for (let i = 0; i < sparseSelection.pages.length; i++) {
+      const sel = sparseSelection.pages[i];
+      const def = pagesById.get(sel.page_id)!;
+      const result = await writePage(def, sparseDossier, { stampValue: sel.stamp_value }, spyWriter);
+      if (!result.ok) throw new Error(`writer failed on ${sel.page_id}: ${result.error}`);
+      doc = applyWritten(doc, i, result);
     }
+    expect(modelCalls).toBe(sparseSelection.pages.length);
+    expect(modelCalls).toBeGreaterThan(0);
 
-    expect(modelCalls).toBe(0);
+    // The site renders successfully — no refusal — with the pending facts
+    // simply blank wherever the template referenced them (an empty mailto:
+    // href, an empty map embed src, no "Sparse Electric" email text).
+    const rendered = renderSite(tpl, doc);
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    const contactHtml = dec(rendered.files["contact.html"]);
+    expect(contactHtml).toContain('href=""'); // email_href seeded blank — no mailto: link
+    expect(contactHtml).toContain('<iframe src="" title="Map">'); // map_embed seeded blank
+    expect(contactHtml).not.toMatch(/\{\{|<!--@/);
   });
 });
 

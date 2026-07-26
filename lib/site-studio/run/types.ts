@@ -95,7 +95,24 @@ export interface SlotImageState {
 }
 
 export interface RunSteps {
-  prepare?: { at: string; pages: number };
+  prepare?: {
+    at: string;
+    pages: number;
+    /** Identity keys the compiled template references that this run's
+     *  dossier could not supply (Phase 4b) — seeded into `content_doc.
+     *  identity` as `""` (present but empty) so the renderer's completeness
+     *  check is satisfied, and listed here so Gate 1's "Site facts" panel can
+     *  ask the operator to fill each one in, or explicitly leave it blank.
+     *  Absent (not an empty array) when every referenced key was supplied.
+     *  Replaces the old behavior of failing the run outright — see
+     *  `runPrepare` in run/engine.ts and `PATCH .../runs/[id]/identity`. */
+    pending_identity?: string[];
+    /** Per-key usage for everything named in `pending_identity`: how many
+     *  `{{id:key}}` occurrences the compiled package has, and which manifest
+     *  page ids reference it — purely informational, for the operator to
+     *  understand what filling (or skipping) a fact actually affects. */
+    pending_identity_usage?: Record<string, { count: number; pages: string[] }>;
+  };
   write?: { pages: Record<string, PageWriteState> };
   images?: { slots: Record<string, SlotImageState> };
   render?: { at: string; files: number };

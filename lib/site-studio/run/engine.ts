@@ -95,16 +95,70 @@ function humanizeMissingIdentity(keys: string[]): string {
 }
 
 /** Every `{{id:*}}` key the compiled package can actually reference — pages,
- *  fragments, and nav item labels. Same method `renderSite` uses for its own
- *  completeness check; `prepare` runs it BEFORE `write` so a lead missing
- *  something the template needs is refused before a single AI call is paid
- *  for, instead of failing at `render` after every page has been written. */
+ *  fragments, nav item labels, AND tokenized text assets (.js/.css; see
+ *  compiler/assetIdentity.ts). Mirrors `renderSite`'s own completeness check
+ *  EXACTLY (including the asset scan — a template's identity manifest can
+ *  include AI-invented keys tokenized into a .js/.css file just as easily as
+ *  into an HTML skeleton, and missing that source here would let a key slip
+ *  past `prepare` only to surface as a render-time surprise after Gate 1 was
+ *  already approved). `prepare` runs this BEFORE `write` so every fact the
+ *  template needs — supplied by the dossier or not — is known and (for the
+ *  ones the dossier can't supply) surfaced to the operator before a single AI
+ *  call is paid for, instead of only failing at `render` after every page has
+ *  been written. */
 function referencedIdentityKeys(tpl: CompiledTemplate): Set<string> {
   const navLabels = tpl.manifest.nav.flatMap((r) => (r.items ?? []).map((it) => it.label));
-  const haystacks = [...Object.values(tpl.pages), ...Object.values(tpl.fragments), ...navLabels];
+  const tokenizedAssetPaths = tpl.manifest.tokenizedAssets ?? [];
+  const assetTexts = tokenizedAssetPaths.map((p) => new TextDecoder().decode(tpl.assets[p] ?? new Uint8Array()));
+  const haystacks = [...Object.values(tpl.pages), ...Object.values(tpl.fragments), ...navLabels, ...assetTexts];
   const keys = new Set<string>();
   for (const s of haystacks) for (const t of findTokens(s)) if (t.kind === "id") keys.add(t.key);
   return keys;
+}
+
+/** Where a pending identity key showed up in the compiled package: total
+ *  `{{id:key}}` occurrence count, and which manifest page ids reference it —
+ *  purely so Gate 1's "Site facts" panel can show the operator something more
+ *  useful than a bare key name ("this shows up in 3 places, on Home and
+ *  Contact"). A key found directly in one page's own skeleton is credited
+ *  only to that page; a key found in a shared fragment, a nav item label, or
+ *  a tokenized text asset is credited to EVERY page in the manifest, since
+ *  all three render on every built page (nav/footer fragments are included
+ *  site-wide; a tokenized .js/.css asset ships unchanged to every page that
+ *  loads it, which in practice is all of them). */
+function identityUsage(tpl: CompiledTemplate, keys: string[]): Record<string, { count: number; pages: string[] }> {
+  const usage: Record<string, { count: number; pages: string[] }> = {};
+  for (const key of keys) usage[key] = { count: 0, pages: [] };
+  if (keys.length === 0) return usage;
+
+  const countOf = (key: string, text: string): number =>
+    findTokens(text).filter((t) => t.kind === "id" && t.key === key).length;
+  const addPages = (key: string, pageIds: string[]) => {
+    const set = new Set(usage[key].pages);
+    for (const id of pageIds) set.add(id);
+    usage[key].pages = [...set];
+  };
+
+  for (const def of tpl.manifest.pages) {
+    const html = tpl.pages[def.file] ?? "";
+    for (const key of keys) {
+      const n = countOf(key, html);
+      if (n > 0) { usage[key].count += n; addPages(key, [def.id]); }
+    }
+  }
+
+  const allPageIds = tpl.manifest.pages.map((p) => p.id);
+  const navLabels = tpl.manifest.nav.flatMap((r) => (r.items ?? []).map((it) => it.label));
+  const tokenizedAssetPaths = tpl.manifest.tokenizedAssets ?? [];
+  const assetTexts = tokenizedAssetPaths.map((p) => new TextDecoder().decode(tpl.assets[p] ?? new Uint8Array()));
+  const sharedTexts = [...Object.values(tpl.fragments), ...navLabels, ...assetTexts];
+  for (const key of keys) {
+    for (const text of sharedTexts) {
+      const n = countOf(key, text);
+      if (n > 0) { usage[key].count += n; addPages(key, allPageIds); }
+    }
+  }
+  return usage;
 }
 
 function randomBase36(len: number): string {
@@ -263,11 +317,25 @@ async function logEvent(
 }
 
 /** Deterministic prepare: lead -> dossier -> pages -> theme -> seeded doc.
- *  Fails FAST (before any AI call) if the template references an identity
- *  key this lead cannot supply — `renderSite`'s own completeness check is
- *  global (one missing key refuses the whole site), so catching it here
- *  means the operator never pays for a full round of page writes only to
- *  have `render` refuse at the end. */
+ *
+ *  IDENTITY (Phase 4b revision): a template's `{{id:*}}` vocabulary is not
+ *  closed — the AI identity pass (compiler/ai/identityAi.ts) deliberately
+ *  mints ARBITRARY keys (`owner_name`, `city_2`, `neighborhood`, ...) for
+ *  whatever the demo site's copy actually names, and the dossier this run is
+ *  built from only ever supplies a fixed, closed set of nine. A template
+ *  asking for a fact no lead column can ever hold used to be a hard, un-
+ *  fixable dead run ("add it to the lead" is not actionable when there is no
+ *  such lead field). Instead: every referenced key the dossier can't supply
+ *  is seeded into `content_doc.identity` as `""` — present, so the
+ *  renderer's own completeness check (`key in doc.identity`) is satisfied and
+ *  `write`/`render` proceed normally — and recorded in `steps.prepare.
+ *  pending_identity` (with per-key usage in `pending_identity_usage`) so
+ *  Gate 1 can ask the operator to fill each one in, or explicitly leave it
+ *  blank (a legitimate "skip" — the site simply renders with that spot
+ *  blank). See `PATCH /api/site-studio/runs/[id]/identity` for how those
+ *  facts get filled in after this step. The renderer's completeness check
+ *  itself is UNCHANGED — it remains the real backstop against a key that
+ *  somehow ends up absent from `identity` entirely. */
 async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => Date): Promise<StudioRunRow> {
   if (!row.lead_id) {
     const updated = await persistRun(
@@ -296,25 +364,20 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
   const { doc } = seedContentDoc(manifest, dossier, selection.pages, now());
 
   const referenced = referencedIdentityKeys(tpl);
-  const missingIdentity = [...referenced].filter((k) => !(k in doc.identity));
-  if (missingIdentity.length > 0) {
-    const message =
-      `This template needs ${humanizeMissingIdentity(missingIdentity)}, which this lead doesn't have. ` +
-      `Add them to the lead and start a new run.`;
-    const updated = await persistRun(
-      admin, row.id,
-      { status: "failed", error: message },
-      { expectStatus: row.status, step: "prepare" },
-    );
-    await logEvent(
-      admin, row.id, "prepare", "error",
-      "Prepare refused: lead is missing identity data the template requires.",
-      { missing: missingIdentity },
-    );
-    return updated;
-  }
+  const pendingIdentity = [...referenced].filter((k) => !(k in doc.identity)).sort();
+  // Present-but-empty, not omitted: `"" in doc.identity` reads true, which is
+  // exactly what both this render check and the renderer's own rely on.
+  for (const key of pendingIdentity) doc.identity[key] = "";
 
   const siteSlug = `${slugify(dossier.business_name) || "site"}-${randomBase36(6)}`;
+
+  const prepareStep: NonNullable<StudioRunRow["steps"]["prepare"]> = {
+    at: now().toISOString(),
+    pages: doc.pages.length,
+    ...(pendingIdentity.length > 0
+      ? { pending_identity: pendingIdentity, pending_identity_usage: identityUsage(tpl, pendingIdentity) }
+      : {}),
+  };
 
   const updated = await persistRun(
     admin, row.id,
@@ -322,15 +385,19 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
       content_doc: doc,
       client_photos: dossier.client_photos,
       site_slug: siteSlug,
-      steps: { ...row.steps, prepare: { at: now().toISOString(), pages: doc.pages.length } },
+      steps: { ...row.steps, prepare: prepareStep },
       status: "preparing",
     },
     { expectStatus: row.status, step: "prepare" },
   );
+  const pendingNote =
+    pendingIdentity.length > 0
+      ? ` This lead doesn't have ${humanizeMissingIdentity(pendingIdentity)} the template asks for — fill it in at Gate 1, or leave it blank to skip.`
+      : "";
   await logEvent(
     admin, row.id, "prepare", "info",
-    `Prepared ${doc.pages.length} page(s)${selection.skipped.length ? `; skipped: ${selection.skipped.join(", ")}` : ""}.`,
-    { skipped: selection.skipped },
+    `Prepared ${doc.pages.length} page(s)${selection.skipped.length ? `; skipped: ${selection.skipped.join(", ")}` : ""}.${pendingNote}`,
+    { skipped: selection.skipped, pending_identity: pendingIdentity },
   );
   return updated;
 }

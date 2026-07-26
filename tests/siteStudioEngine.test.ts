@@ -259,8 +259,21 @@ describe("runStep — render: a refusal fails the run with the missing list", ()
   });
 });
 
-describe("runStep — prepare fails fast on an identity key the lead can't supply", () => {
-  it("refuses before any AI call is made, naming what's missing in plain terms", async () => {
+describe("runStep — prepare seeds a lead's missing identity facts as pending, rather than failing the run", () => {
+  // RETARGETED (Phase 4b): this case used to assert the run was REFUSED at
+  // `prepare` — status "failed", zero AI calls — the instant a lead couldn't
+  // supply an identity key the template referenced. That was the wrong
+  // response: the fix it told the operator to perform ("add them to the
+  // lead and start a new run") is unfollowable whenever the missing key is
+  // one the AI identity pass minted (city, neighborhood, owner_name, ...) —
+  // there is no lead column to add it to. A missing fact is
+  // operator-recoverable (fill it in at Gate 1, or explicitly skip it), so
+  // failing the whole run was punishing a recoverable situation as if it
+  // were fatal. The new contract: `prepare` always proceeds, seeding every
+  // key the dossier can't supply as `""` (present, not omitted — see the
+  // renderer-completeness assertion below) and recording it as pending so
+  // Gate 1 can ask for it.
+  it("proceeds past prepare instead of failing, seeding each missing key as \"\" and recording it as pending", async () => {
     const compiled = compileTemplate(fixtureZip("plumberpro"), "plumberpro").template;
     const state = emptyFakeAdminState();
     const admin = makeFakeAdmin(state);
@@ -271,20 +284,32 @@ describe("runStep — prepare fails fast on an identity key the lead can't suppl
     state.leads["lead-sparse"] = { id: "lead-sparse", business_name: "Sparse Plumbing", business_phone: "(512) 555-0000" };
     state.runs["run-sparse"] = freshRow({ id: "run-sparse", lead_id: "lead-sparse", template_id: "tpl-pp" }) as unknown as Record<string, unknown>;
 
-    const calls: string[] = [];
-    const spyAiCall: AiCall = async (_s, u) => {
-      calls.push(u);
-      return { text: "{}" };
-    };
-
     const row = state.runs["run-sparse"] as unknown as StudioRunRow;
-    const result = await runStep(admin, row, { aiCall: spyAiCall, now: NOW });
+    const result = await runStep(admin, row, { aiCall: genericAiCall, now: NOW });
 
-    expect(result.row.status).toBe("failed");
-    expect(result.row.error).toMatch(/email/i);
-    expect(result.row.error).toMatch(/map/i);
-    expect(calls).toHaveLength(0); // the whole point: no AI call was ever made
-    expect(state.events.some((e) => e.step === "prepare" && e.level === "error")).toBe(true);
+    expect(result.row.status).toBe("preparing"); // proceeds — never "failed"
+    expect(result.row.steps.prepare?.pending_identity).toEqual(["email", "email_href", "map_embed"]);
+    // Present-but-EMPTY, not omitted: this is what keeps the renderer's own
+    // `key in doc.identity` completeness check satisfied downstream.
+    expect(result.row.content_doc?.identity).toMatchObject({ email: "", email_href: "", map_embed: "" });
+    expect("email" in (result.row.content_doc?.identity ?? {})).toBe(true);
+    expect(state.events.some((e) => e.step === "prepare" && e.level === "info" && /email/i.test(String(e.message)))).toBe(true);
+    // No error-level "prepare refused" event fires anymore for this case.
+    expect(state.events.some((e) => e.step === "prepare" && e.level === "error")).toBe(false);
+
+    // Driven onward with a normal writer stub (no AI-call assertions here —
+    // that guarantee mattered for the OLD "refuse before spending" contract;
+    // the new contract's guarantee is "reaches the gate", proven below), the
+    // sparse lead reaches Gate 1 exactly like a complete one would, with its
+    // pending facts still attached for the operator to fill in or skip.
+    let current = result.row;
+    for (let i = 0; i < 6; i++) {
+      const next = await runStep(admin, current, { aiCall: genericAiCall, now: NOW });
+      current = next.row;
+      if (next.done) break;
+    }
+    expect(current.status).toBe("reviewing");
+    expect(current.steps.prepare?.pending_identity).toEqual(["email", "email_href", "map_embed"]);
   });
 });
 
