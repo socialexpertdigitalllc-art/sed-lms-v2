@@ -18,15 +18,36 @@ export interface FakeAdminState {
   events: Record<string, unknown>[];
   storage: Record<string, Uint8Array>;
   studio_assets: Record<string, Record<string, unknown>>;
+  /** One row per deployed client site (migration 0055), keyed by row id.
+   *  `subdomain` is the real table's unique index — deployRun.ts's upsert
+   *  path matches on it, same as `ON CONFLICT (subdomain)` would. */
+  studio_deployments: Record<string, Record<string, unknown>>;
+  /** Append-only, matching the real `activity_log` table's role everywhere
+   *  else in this codebase: a plain insert, never read back by app code. */
+  activity_log: Record<string, unknown>[];
   /** Test hook: when set and it returns a message for a given bucket/path,
    *  storage.upload() fails with that message instead of writing bytes —
    *  used to prove rehostFromUrl never leaves an orphan studio_assets row
    *  when the bucket upload fails. Unset (default) means uploads succeed. */
   uploadShouldFail?: (bucket: string, path: string) => string | null;
+  /** Same shape, for `storage.download()` — used by deployRun.ts's tests to
+   *  prove a storage failure is caught BEFORE any destructive DirectAdmin
+   *  call (clearDocroot) runs, even though the bytes were seeded and would
+   *  otherwise download fine. */
+  downloadShouldFail?: (bucket: string, path: string) => string | null;
 }
 
 export function emptyFakeAdminState(): FakeAdminState {
-  return { templates: {}, leads: {}, runs: {}, events: [], storage: {}, studio_assets: {} };
+  return {
+    templates: {},
+    leads: {},
+    runs: {},
+    events: [],
+    storage: {},
+    studio_assets: {},
+    studio_deployments: {},
+    activity_log: [],
+  };
 }
 
 type Row = Record<string, unknown>;
@@ -188,6 +209,113 @@ function assetsTable(state: FakeAdminState) {
   };
 }
 
+/**
+ * A minimal in-memory `studio_deployments` table shaped to what
+ * `lib/site-studio/deploy/deployRun.ts` needs: `.select().eq(...)`
+ * (`.maybeSingle()`/`.single()`/thenable-array), `.update(patch).eq(...)`
+ * (closing out a stale sibling live row), and `.upsert(row, { onConflict:
+ * "subdomain" }).select().single()` — matching ON CONFLICT (subdomain) DO
+ * UPDATE against the real unique index migration 0055 creates, which is
+ * exactly what makes a redeploy update the existing row instead of erroring
+ * on the duplicate key.
+ *
+ * The upsert ALSO models the partial unique index
+ * `studio_deployments_one_live_per_lead (lead_id) WHERE status = 'live' AND
+ * lead_id IS NOT NULL`: writing a `status: 'live'` row for a lead that
+ * already has a DIFFERENT live row is rejected with a `23505`, exactly like
+ * real Postgres would reject it. Without this, a bug in deployRun.ts that
+ * fails to retire a lead's old live row before writing the new one would
+ * pass every test silently instead of surfacing as the constraint violation
+ * it really is in production.
+ */
+function deploymentsTable(state: FakeAdminState) {
+  const rows = () => state.studio_deployments;
+
+  function selectBuilder() {
+    const eqs: [string, unknown][] = [];
+    const builder = {
+      eq(col: string, val: unknown) {
+        eqs.push([col, val]);
+        return builder;
+      },
+      maybeSingle: async () => {
+        const found = Object.values(rows()).find((r) => eqs.every(([c, v]) => r[c] === v));
+        return { data: found ?? null, error: null };
+      },
+      single: async () => {
+        const found = Object.values(rows()).find((r) => eqs.every(([c, v]) => r[c] === v));
+        return found ? { data: found, error: null } : { data: null, error: { message: "not found" } };
+      },
+      then(resolve: (v: { data: Row[]; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        const found = Object.values(rows()).filter((r) => eqs.every(([c, v]) => r[c] === v));
+        return Promise.resolve({ data: found, error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  return {
+    select: (_cols?: string) => selectBuilder(),
+    update: (patch: Row) => {
+      const eqs: [string, unknown][] = [];
+      const chain = {
+        eq(col: string, val: unknown) {
+          eqs.push([col, val]);
+          return chain;
+        },
+        then(resolve: (v: { data: null; error: null | { message: string } }) => unknown, reject?: (e: unknown) => unknown) {
+          const target = Object.entries(rows()).find(([, r]) => eqs.every(([c, v]) => r[c] === v));
+          if (!target) return Promise.resolve({ data: null, error: { message: "not found" } }).then(resolve, reject);
+          state.studio_deployments[target[0]] = { ...target[1], ...patch };
+          return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+        },
+      };
+      return chain;
+    },
+    upsert: (row: Row, opts?: { onConflict?: string }) => {
+      const conflictCol = opts?.onConflict ?? "id";
+      return {
+        select: () => ({
+          single: async () => {
+            const existing = Object.entries(rows()).find(([, r]) => r[conflictCol] === row[conflictCol]);
+            if (row.status === "live" && row.lead_id != null) {
+              const conflictingLive = Object.entries(rows()).find(
+                ([id, r]) =>
+                  r.status === "live" &&
+                  r.lead_id === row.lead_id &&
+                  r[conflictCol] !== row[conflictCol] &&
+                  (!existing || id !== existing[0]),
+              );
+              if (conflictingLive) {
+                return {
+                  data: null,
+                  error: {
+                    message: `duplicate key value violates unique constraint "studio_deployments_one_live_per_lead"`,
+                    code: "23505",
+                  },
+                };
+              }
+            }
+            const now = new Date().toISOString();
+            const id = existing ? existing[0] : (row.id as string) ?? `deploy_${Object.keys(rows()).length + 1}`;
+            // Deliberately does NOT force `updated_at`/`deployed_at` the way
+            // an earlier version of this fake did — that masked a real bug
+            // (FIX 8, review): those columns only move in real Postgres when
+            // the CALLER's row payload includes them. If deployRun.ts ever
+            // stops setting them explicitly, this fake must go stale right
+            // along with it, not paper over the omission.
+            const merged: Row = existing
+              ? { ...existing[1], ...row }
+              : { created_at: now, taken_down_at: null, ...row, id };
+            state.studio_deployments[id] = merged;
+            return { data: merged, error: null };
+          },
+        }),
+      };
+    },
+  };
+}
+
 export function makeFakeAdmin(state: FakeAdminState): SupabaseClient {
   const single = (get: () => Record<string, unknown> | undefined) => ({
     single: async () => {
@@ -202,7 +330,39 @@ export function makeFakeAdmin(state: FakeAdminState): SupabaseClient {
         return { select: () => ({ eq: (_c: string, val: string) => single(() => state.templates[val]) }) };
       }
       if (table === "leads") {
-        return { select: () => ({ eq: (_c: string, val: string) => single(() => state.leads[val]) }) };
+        return {
+          select: () => ({ eq: (_c: string, val: string) => single(() => state.leads[val]) }),
+          // deployRun.ts sets `website_link` after a successful deploy — a
+          // plain `.update(patch).eq("id", val)` thenable, no CAS (leads
+          // aren't optimistically-locked anywhere else in this codebase).
+          update: (patch: Row) => {
+            const eqs: [string, unknown][] = [];
+            const chain = {
+              eq(col: string, val: unknown) {
+                eqs.push([col, val]);
+                return chain;
+              },
+              then(resolve: (v: { data: null; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+                for (const [id, row] of Object.entries(state.leads)) {
+                  if (eqs.every(([c, v]) => row[c] === v)) state.leads[id] = { ...row, ...patch };
+                }
+                return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+              },
+            };
+            return chain;
+          },
+        };
+      }
+      if (table === "studio_deployments") {
+        return deploymentsTable(state);
+      }
+      if (table === "activity_log") {
+        return {
+          insert: async (row: Row) => {
+            state.activity_log.push(row);
+            return { data: null, error: null };
+          },
+        };
       }
       if (table === "studio_runs") {
         return {
@@ -260,6 +420,8 @@ export function makeFakeAdmin(state: FakeAdminState): SupabaseClient {
             return { data: { path }, error: null };
           },
           download: async (path: string) => {
+            const failMessage = state.downloadShouldFail?.(bucket, path);
+            if (failMessage) return { data: null, error: { message: failMessage } };
             const bytes = state.storage[`${bucket}/${path}`];
             if (!bytes) return { data: null, error: { message: `not found: ${bucket}/${path}` } };
             const copy = bytes.slice();

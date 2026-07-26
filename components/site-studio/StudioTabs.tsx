@@ -8,12 +8,14 @@ const TABS = [
   { href: "/ai-tools/site-studio", label: "Templates" },
   { href: "/ai-tools/site-studio/runs", label: "Runs" },
   { href: "/ai-tools/site-studio/library", label: "Library" },
+  { href: "/ai-tools/site-studio/deployments", label: "Deployments" },
 ] as const;
 
-/** Templates | Runs | Library — mounted at the top of all three Site Studio
- *  server pages. Active state is pathname-aware; the Templates tab only
- *  matches the exact root path (it would otherwise stay "active" while
- *  looking at Runs/Library too, since every studio path starts with it). */
+/** Templates | Runs | Library | Deployments — mounted at the top of all four
+ *  Site Studio server pages. Active state is pathname-aware; the Templates
+ *  tab only matches the exact root path (it would otherwise stay "active"
+ *  while looking at any of the others too, since every studio path starts
+ *  with it). */
 export function StudioTabs() {
   const pathname = usePathname() ?? "";
 

@@ -269,3 +269,63 @@ describe("renderSite nav href prefixing", () => {
     expect(sub).not.toContain(`../javascript:`);
   });
 });
+
+/**
+ * Regression coverage for a real latent bug: a "text" slot whose token lands
+ * inside an HTML ATTRIBUTE (compiler/slots.ts's <img alt="{{slot:...}}">,
+ * marked with SlotDef.attr = "alt") went through fillSlot/escapeText, which
+ * only escapes & < > — safe for element text, not for an attribute value.
+ * An alt value containing a bare `"` broke out of the attribute; one
+ * shaped like `foo" onmouseover="..."` injected a live attribute. Neither
+ * was ever exploited (no Site Studio site had shipped), but Phase 4a starts
+ * deploying, so this closes it before that happens. Fixed by tokens.ts's
+ * `fillSlotValue`, which routes any slot with `.attr` set through
+ * `escapeHtml` (attribute-safe: & < > " ') instead.
+ */
+describe("renderSite escapes attribute-bound slots (alt text) safely", () => {
+  const altTpl: CompiledTemplate = {
+    manifest: {
+      engine: 3, name: "alt-mini", version: 1,
+      identity: {},
+      theme: { mode: "none", roles: {} },
+      nav: [],
+      pages: [{
+        id: "index", file: "index.html", kind: "home", stampable: false, title_sample: "Index",
+        slots: [
+          { id: "hero", type: "image", sample: "img/hero.jpg", html: false },
+          { id: "hero_alt", type: "text", sample: "A hero image", html: false, max_chars: 60, attr: "alt" },
+        ],
+        repeats: [],
+      }],
+    },
+    pages: {
+      "index.html": `<html><head><title>{{title}}</title></head><body><img src="{{img:hero}}" alt="{{slot:hero_alt}}"></body></html>`,
+    },
+    fragments: {},
+    assets: {},
+  };
+  const docWithAlt = (altText: string): ContentDoc => ({
+    identity: {},
+    theme: {},
+    pages: [{ page_id: "index", title: "Index", slots: { hero: "img/hero.jpg", hero_alt: altText }, repeats: {} }],
+  });
+
+  it("escapes a quote-bearing alt value instead of corrupting the tag", () => {
+    const r = renderSite(altTpl, docWithAlt(`Fish & Chips, "the best" in town`));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const html = dec(r.files["index.html"]);
+    expect(html).toContain(`alt="Fish &amp; Chips, &quot;the best&quot; in town"`);
+    // exactly one alt attribute survives — the value never broke out of its quotes
+    expect(html.match(/ alt="/g)).toHaveLength(1);
+  });
+
+  it("does not let an alt value inject a live attribute", () => {
+    const r = renderSite(altTpl, docWithAlt(`foo" onmouseover="alert(1)`));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const html = dec(r.files["index.html"]);
+    expect(html).not.toContain(`onmouseover="alert(1)"`);
+    expect(html).toContain(`alt="foo&quot; onmouseover=&quot;alert(1)"`);
+  });
+});

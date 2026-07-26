@@ -5,8 +5,11 @@ import { buildDossier, type Dossier } from "@/lib/site-studio/run/dossier";
 import { selectPages } from "@/lib/site-studio/run/pageSelect";
 import { seedContentDoc } from "@/lib/site-studio/run/seed";
 import { writePage, type AiCall } from "@/lib/site-studio/run/writer";
-import { applyWritten, applyOperatorEdit } from "@/lib/site-studio/run/applyWritten";
+import { applyWritten, applyOperatorEdit, getPageProvenance, type RunContentDoc } from "@/lib/site-studio/run/applyWritten";
+import { revertField } from "@/lib/site-studio/run/revert";
 import { renderSite } from "@/lib/site-studio/render/renderer";
+import { SLOT_ATTR, PAGE_ATTR, IMAGE_ATTR, ALT_ATTR } from "@/lib/site-studio/render/annotate";
+import { buildPreview } from "@/lib/site-studio/preview/buildPreview";
 import { contentDocSchema, type CompiledTemplate, type ContentDoc, type TemplateManifest } from "@/lib/site-studio/schema";
 import { findTokens } from "@/lib/site-studio/tokens";
 import { runStep, type RunStepDeps } from "@/lib/site-studio/run/engine";
@@ -79,6 +82,35 @@ function makeStubWriter(dossier: Dossier): AiCall {
         repeats,
       }),
     };
+  };
+}
+
+/** The Gate 2 re-roll's own stub: wraps `makeStubWriter`'s output (so it
+ *  reuses the exact same field-name discovery from the prompt) but marks
+ *  every value it produces with a "REROLLED" tag distinct from the first
+ *  write's plain dossier-derived copy. This is what lets the Gate 2 E2E case
+ *  prove a re-roll actually ran (an AI-owned field visibly changes) rather
+ *  than merely asserting an operator-owned field didn't change, which would
+ *  be true even if the re-roll silently no-op'd. */
+function makeRerollStubWriter(dossier: Dossier): AiCall {
+  const base = makeStubWriter(dossier);
+  return async (system, user) => {
+    const { text } = await base(system, user);
+    const parsed = JSON.parse(text) as {
+      title: string;
+      slots: Record<string, string>;
+      repeats: Record<string, Record<string, string>[]>;
+    };
+    parsed.title = `REROLLED ${parsed.title}`;
+    for (const k of Object.keys(parsed.slots)) parsed.slots[k] = `REROLLED: ${parsed.slots[k]}`;
+    for (const k of Object.keys(parsed.repeats)) {
+      parsed.repeats[k] = parsed.repeats[k].map((row) => {
+        const out: Record<string, string> = {};
+        for (const [f, v] of Object.entries(row)) out[f] = `REROLLED: ${v}`;
+        return out;
+      });
+    }
+    return { text: JSON.stringify(parsed) };
   };
 }
 
@@ -487,5 +519,197 @@ describe("Phase 3b acceptance — auto mode never parks", () => {
     expect(state.events.some((e) => e.message === "gate_opened")).toBe(false);
     expect(state.events.some((e) => e.message === "gate_closed")).toBe(false);
     expect(state.events.some((e) => e.message === "gate_skipped_auto")).toBe(true);
+  });
+});
+
+// ===========================================================================
+// Phase 4a acceptance: Gate 2 — the annotated, click-to-edit preview and the
+// production-build safety guarantee it must never break. Driven against a
+// REAL run reached via the engine (auto mode, no DB, no network — same fakes
+// as the Phase 3b block above). Proves the whole editable-preview loop end to
+// end: every text slot on a page — INCLUDING a repeat row, since repeat
+// regions are the bulk of a real site's editable content and a proof that
+// skips them proves little — is addressable by its documented
+// "{{docIndex}}:{{slotId}}" / "{{docIndex}}:{{repeatId}}#{{rowIndex}}:{{slotId}}"
+// key; an operator edit to both shapes round-trips through the preview and a
+// revert; and a re-roll that is NOT told to override operator fields leaves
+// the still-edited one alone while an AI-owned field the SAME re-roll
+// touches visibly changes — so the provenance protection is proven, not
+// merely asserted vacuously. Finally locks down the one property none of
+// this may ever touch: the production build of the doc used throughout this
+// test carries no annotation attributes and renders BYTE-IDENTICAL bytes
+// before and after all of the preview/edit/revert/re-roll work above ran in
+// the same process — proof that none of it mutated the doc or left behind
+// any shared state that could corrupt a deployed site.
+// ===========================================================================
+
+describe("Phase 4a acceptance — Gate 2 preview, edit, revert, and re-roll's provenance protection", () => {
+  it("annotates every slot (incl. a repeat row), round-trips an operator edit through preview + revert, and a re-roll leaves the still-edited slot alone while AI fields change — production build stays annotation-free and byte-identical throughout", async () => {
+    const { template: gate2Tpl } = compileTemplate(fixtureZip("plumberpro"), "plumberpro");
+
+    const state = emptyFakeAdminState();
+    const admin = makeFakeAdmin(state);
+    await savePackage(admin, "tpl-e2e-gate2", gate2Tpl);
+    state.templates["tpl-e2e-gate2"] = { manifest: gate2Tpl.manifest };
+    state.leads[CLIENT_LEAD.id as string] = CLIENT_LEAD;
+
+    const runId = "run-e2e-gate2";
+    const row0: StudioRunRow = {
+      id: runId,
+      lead_id: CLIENT_LEAD.id as string,
+      template_id: "tpl-e2e-gate2",
+      template_version: 1,
+      status: "queued",
+      options: { auto: true },
+      content_doc: null,
+      steps: {},
+      client_photos: [],
+      site_slug: null,
+      zip_path: null,
+      deployed_url: null,
+      error: null,
+      paused: false,
+      created_by: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    state.runs[runId] = row0 as unknown as Record<string, unknown>;
+
+    const gate2Dossier = buildDossier(CLIENT_LEAD);
+    const deps: RunStepDeps = {
+      aiCall: makeStubWriter(gate2Dossier),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      searchPexels: noPexels,
+    };
+
+    // ---- drive the run to "ready" through the real engine, auto mode -------
+    let row = row0;
+    for (let i = 0; i < 8; i++) {
+      const result = await runStep(admin, row, deps);
+      row = result.row;
+      if (result.done) break;
+    }
+    expect(row.status).toBe("ready");
+
+    const doc0 = row.content_doc as RunContentDoc;
+    const indexDocIndex = doc0.pages.findIndex((p) => p.page_id === "index");
+    expect(indexDocIndex).toBeGreaterThanOrEqual(0);
+    const indexDef = gate2Tpl.manifest.pages.find((p) => p.id === "index")!;
+    const repeatDef = indexDef.repeats[0];
+    expect(repeatDef).toBeTruthy();
+
+    // ---- production render, taken BEFORE any preview work in this test ----
+    const prodBefore = renderSite(gate2Tpl, doc0);
+    expect(prodBefore.ok).toBe(true);
+
+    // ---- build the annotated preview: every slot addressable by its key,
+    // including at least one REPEAT ROW key ---------------------------------
+    const preview0 = buildPreview(gate2Tpl, doc0, indexDocIndex, runId);
+    expect(preview0.ok).toBe(true);
+    if (!preview0.ok) throw new Error(`preview refused: ${JSON.stringify(preview0.missing)}`);
+
+    expect(preview0.html).toContain(`${PAGE_ATTR}="${indexDocIndex}"`);
+    for (const slot of indexDef.slots) {
+      if (slot.attr) {
+        // attribute-bound (an <img>'s alt text) — marked with ALT_ATTR, not SLOT_ATTR
+        expect(preview0.html).toContain(`${ALT_ATTR}="${indexDocIndex}:${slot.id}"`);
+      } else {
+        expect(preview0.html).toContain(`${SLOT_ATTR}="${indexDocIndex}:${slot.id}"`);
+      }
+      if (slot.type === "image") expect(preview0.html).toContain(IMAGE_ATTR);
+    }
+    const repeatRows = doc0.pages[indexDocIndex].repeats[repeatDef.id];
+    expect(repeatRows.length).toBeGreaterThan(0);
+    repeatRows.forEach((_row, rowIdx) => {
+      for (const slot of repeatDef.slots) {
+        expect(preview0.html).toContain(`${SLOT_ATTR}="${indexDocIndex}:${repeatDef.id}#${rowIdx}:${slot.id}"`);
+      }
+    });
+
+    // ---- operator-edit a plain slot AND a repeat-row slot, through the same
+    // applyOperatorEdit path the routes use -----------------------------------
+    const plainSlot = indexDef.slots.find((s) => s.type === "text" && !s.attr)!;
+    const repeatRowIdx = 0;
+    const repeatSlot = repeatDef.slots[0];
+    const AI_PLAIN_BEFORE = doc0.pages[indexDocIndex].slots[plainSlot.id];
+    const AI_REPEAT_BEFORE = doc0.pages[indexDocIndex].repeats[repeatDef.id][repeatRowIdx][repeatSlot.id];
+
+    const OPERATOR_PLAIN = "Hand-typed by the operator — Gate 2 preview edit.";
+    const OPERATOR_REPEAT = "Hand-typed row edit by the operator — Gate 2 preview.";
+
+    const edited = applyOperatorEdit(doc0, indexDocIndex, {
+      slots: { [plainSlot.id]: OPERATOR_PLAIN },
+      repeats: { [repeatDef.id]: { [String(repeatRowIdx)]: { [repeatSlot.id]: OPERATOR_REPEAT } } },
+    });
+
+    const provAfterEdit = getPageProvenance(edited, indexDocIndex);
+    expect(provAfterEdit.slots[plainSlot.id].written_by).toBe("operator");
+    expect(provAfterEdit.repeats[repeatDef.id][String(repeatRowIdx)][repeatSlot.id].written_by).toBe("operator");
+
+    // rebuild the preview: both new values appear
+    const preview1 = buildPreview(gate2Tpl, edited, indexDocIndex, runId);
+    expect(preview1.ok).toBe(true);
+    if (!preview1.ok) throw new Error(`preview refused: ${JSON.stringify(preview1.missing)}`);
+    expect(preview1.html).toContain(OPERATOR_PLAIN);
+    expect(preview1.html).toContain(OPERATOR_REPEAT);
+
+    // ---- revert both: the AI values are back, provenance is "ai" again -----
+    const revertedPlain = revertField(edited, indexDocIndex, { slotId: plainSlot.id });
+    expect(revertedPlain.ok).toBe(true);
+    if (!revertedPlain.ok) throw new Error(revertedPlain.error);
+
+    const revertedBoth = revertField(revertedPlain.doc, indexDocIndex, {
+      repeat: { repeatId: repeatDef.id, rowIndex: repeatRowIdx, slotId: repeatSlot.id },
+    });
+    expect(revertedBoth.ok).toBe(true);
+    if (!revertedBoth.ok) throw new Error(revertedBoth.error);
+
+    expect(revertedBoth.doc.pages[indexDocIndex].slots[plainSlot.id]).toBe(AI_PLAIN_BEFORE);
+    expect(revertedBoth.doc.pages[indexDocIndex].repeats[repeatDef.id][repeatRowIdx][repeatSlot.id]).toBe(AI_REPEAT_BEFORE);
+    const provAfterRevert = getPageProvenance(revertedBoth.doc, indexDocIndex);
+    expect(provAfterRevert.slots[plainSlot.id].written_by).toBe("ai");
+    expect(provAfterRevert.repeats[repeatDef.id][String(repeatRowIdx)][repeatSlot.id].written_by).toBe("ai");
+
+    // ---- re-roll the page with includeOperatorFields:false while ONE slot
+    // is STILL operator-edited: only the plain slot was reverted above, so
+    // the repeat-row slot going into this re-roll is still "operator" -------
+    const rerollWriter = makeRerollStubWriter(gate2Dossier);
+    const rerollRow: StudioRunRow = { ...row, status: "reviewing", content_doc: revertedPlain.doc };
+    const reroll = await rerollPage(
+      { aiCall: rerollWriter },
+      gate2Tpl.manifest,
+      gate2Dossier,
+      rerollRow,
+      indexDocIndex,
+      { includeOperatorFields: false },
+    );
+    expect(reroll.ok).toBe(true);
+    if (!reroll.ok) throw new Error(reroll.error);
+
+    // The still-operator-owned repeat slot survived the re-roll, untouched...
+    expect(reroll.doc.pages[indexDocIndex].repeats[repeatDef.id][repeatRowIdx][repeatSlot.id]).toBe(OPERATOR_REPEAT);
+    // ...while the AI-owned plain slot (reverted, so back to "ai") DID get
+    // fresh copy from the re-roll — the protection isn't proven vacuously.
+    expect(reroll.doc.pages[indexDocIndex].slots[plainSlot.id]).not.toBe(AI_PLAIN_BEFORE);
+    expect(reroll.doc.pages[indexDocIndex].slots[plainSlot.id]).toContain("REROLLED");
+    expect(reroll.doc.pages[indexDocIndex].title).toContain("REROLLED");
+
+    // ---- the production render of doc0 — untouched by any pure function
+    // above, none of which mutate their input — is annotation-free and
+    // byte-identical to the render taken before any of this preview work ----
+    const prodAfter = renderSite(gate2Tpl, doc0);
+    expect(prodAfter.ok).toBe(true);
+    if (!prodBefore.ok || !prodAfter.ok) return;
+    for (const path of Object.keys(prodBefore.files)) {
+      expect(prodAfter.files[path]).toEqual(prodBefore.files[path]);
+    }
+    for (const [path, bytes] of Object.entries(prodAfter.files)) {
+      if (!path.endsWith(".html")) continue;
+      const html = dec(bytes);
+      expect(html).not.toContain(SLOT_ATTR);
+      expect(html).not.toContain(PAGE_ATTR);
+      expect(html).not.toContain(IMAGE_ATTR);
+      expect(html).not.toContain(ALT_ATTR);
+    }
   });
 });

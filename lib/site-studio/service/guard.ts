@@ -16,6 +16,33 @@ export function guardError(status: 401 | 403) {
   return NextResponse.json({ error: status === 401 ? "Unauthorized" : "Forbidden" }, { status });
 }
 
+export interface UntrustedContentOptions {
+  /** CROSS-REFERENCE — read together with `RunPreview.tsx`'s own note on its
+   *  iframe `sandbox` attribute before touching either side. Bare CSP
+   *  `sandbox` (the default here) and an iframe's `sandbox` ATTRIBUTE combine
+   *  RESTRICTIVELY: whichever side omits a token wins, so a bare `sandbox`
+   *  response forces an opaque origin even when the consuming iframe carries
+   *  `sandbox="allow-same-origin"`. That is exactly what made Gate 2's
+   *  click-to-edit dead in every real browser (`frame.contentDocument` was
+   *  `null`, confirmed in real Chromium) — a bug FIX 1 (Phase 4a review)
+   *  corrects by adding this opt-in. Pass `allowSameOrigin: true` ONLY for a
+   *  route whose consuming iframe ALSO carries `sandbox="allow-same-origin"`
+   *  (today: only `RunPreview`'s `?page=` response, via
+   *  `app/api/site-studio/runs/[id]/preview/route.ts`). Every other
+   *  directive is untouched either way — `allow-scripts` is never granted,
+   *  so an uploaded/generated `<script>` still never executes; only the
+   *  framed document's ORIGIN (not its script privileges) is affected. The
+   *  Phase 2a template preview/original routes deliberately do NOT set this:
+   *  their consuming iframe (`ReviewDrawer.tsx`) uses a plain empty
+   *  `sandbox=""` with no `allow-same-origin` of its own, no code there ever
+   *  needs `contentDocument` access, and those routes serve completely raw,
+   *  unmodified third-party markup (not even Site Studio's own rendering) —
+   *  loosening their origin isolation would buy nothing and would remove a
+   *  defense-in-depth layer that protects a different feature than the one
+   *  that needed the loosening. */
+  allowSameOrigin?: boolean;
+}
+
 /** Headers for serving UNTRUSTED uploaded template content. The LMS session is
  *  same-origin, so an uploaded <script> would otherwise run with the viewing
  *  operator's cookies. CSP `sandbox` (without allow-same-origin) strips script
@@ -24,11 +51,18 @@ export function guardError(status: 401 | 403) {
  *  (not DENY) because Phase 2b's review drawer deliberately iframes this
  *  /preview route from the LMS origin itself; the sandbox CSP still applies
  *  inside that iframe, so the embedded content stays inert. nosniff stops
- *  content-type confusion attacks. */
-export function untrustedContentHeaders(contentType: string): HeadersInit {
+ *  content-type confusion attacks.
+ *
+ *  See `UntrustedContentOptions.allowSameOrigin` for when/why a caller opts
+ *  into `sandbox allow-same-origin` instead of the strict bare `sandbox`
+ *  default — script execution stays blocked either way (verified in real
+ *  Chromium: an inline `<script>` in the framed document does not run under
+ *  `sandbox allow-same-origin`), only the framed document's origin changes. */
+export function untrustedContentHeaders(contentType: string, opts: UntrustedContentOptions = {}): HeadersInit {
+  const sandbox = opts.allowSameOrigin ? "sandbox allow-same-origin" : "sandbox";
   return {
     "Content-Type": contentType,
-    "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline' 'self'; font-src 'self' data:",
+    "Content-Security-Policy": `${sandbox}; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline' 'self'; font-src 'self' data:`,
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "SAMEORIGIN",
     "Cache-Control": "private, max-age=0, must-revalidate",
