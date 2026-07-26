@@ -11,6 +11,19 @@ export type RunStep = (typeof STEP_ORDER)[number];
 const TERMINAL: RunStatus[] = ["ready","failed","cancelled"];
 export const isTerminal = (s: RunStatus): boolean => TERMINAL.includes(s);
 
+/** A run whose Content Document may still be edited by an operator: at Gate 1
+ *  (reviewing) or at Gate 2 (ready). NOT failed/cancelled — those are dead — and
+ *  not the machine-owned statuses in between, where a step is mid-flight.
+ *
+ *  This is deliberately NOT `!isTerminal(s)`: `isTerminal` also excludes
+ *  "ready" (a run's normal RESTING state, reached once and never left again
+ *  outside deploy bookkeeping), while an edit at Gate 2 must be ALLOWED at
+ *  "ready" — that's the whole point of Gate 2. Conflating the two predicates
+ *  is exactly the bug this type was added to fix: `content`, `revert`,
+ *  `theme`, and `reroll` each refused every edit once a run reached "ready"
+ *  because they checked `isTerminal` instead of this. */
+export const isEditable = (s: RunStatus): boolean => s === "reviewing" || s === "ready";
+
 /**
  * Which step a run in this status should execute next, or null when done.
  *

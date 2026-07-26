@@ -591,6 +591,111 @@ async function runFinalize(admin: SupabaseClient, row: StudioRunRow, now: () => 
   return updated;
 }
 
+export type RefreshZipOutcome = { ok: true } | { ok: false; warning: string };
+
+/**
+ * Re-finalizes a `ready` run's zip after a Gate 2 edit (content, theme,
+ * revert, reroll, or an image pick) — the `content`/`theme`/`revert`/
+ * `reroll`/`images` routes all call this, once, right after their own
+ * successful `content_doc` write, whenever the row they just persisted has
+ * `status === "ready"`.
+ *
+ * WHY THIS EXISTS: `finalize` (see `runFinalize` above / `finalizeRun` in
+ * `./finalize`) writes `zip_path` once, the FIRST time a run reaches
+ * "ready". Gate 2 exists specifically so an operator can keep editing AFTER
+ * that point — but nothing re-ran finalize, so every Gate 2 edit landed in
+ * `content_doc` while the deployed/downloadable zip at `zip_path` silently
+ * kept serving the PRE-edit bytes. An operator who edits, then deploys,
+ * would get their old content back with no error — the same "never trust a
+ * stale artifact" lesson `finalize` itself embodies (see that file's own doc
+ * comment on why it always re-renders from scratch rather than trusting a
+ * prior `render` step). Calling `finalizeRun` again is exactly what fixes
+ * this, and is safe to do on every edit: `finalizeRun` is pure render + zip
+ * + `upsert:true` upload, so calling it once or five times on the same
+ * `content_doc` produces the same bytes either way.
+ *
+ * RE-READS the run FROM THE DATABASE rather than trusting a row the caller
+ * already has in hand — the caller's own write may have raced another editor
+ * (both are running under this same discipline), so the freshest
+ * `content_doc` is whatever is actually in the table right now, not
+ * necessarily what the caller's own CAS write just returned.
+ *
+ * DOES NOT bump `updated_at`: the zip is a DERIVED artifact, not the source
+ * of truth the CAS check in `content`/`theme`/`revert`/`reroll`/`images` is
+ * protecting — bumping it here would invalidate the `updated_at` token the
+ * client just received from ITS OWN write, making that client's very next
+ * edit fail its CAS for no reason (a self-inflicted 409 on every second Gate
+ * 2 edit). A plain `.update(...)` that never sets `updated_at` leaves the
+ * column exactly as the content write left it, matching real Postgres (no
+ * trigger touches it — see migration 0053) and keeping the CAS token the
+ * client is holding valid.
+ *
+ * NEVER THROWS. A render refusal (missing slot) or a missing picked asset is
+ * NOT this call's failure to report as a 500 — the operator's edit already
+ * persisted successfully, and the ONLY thing wrong is that the deployable
+ * build is now stale until whatever's missing is fixed. Returns
+ * `{ok:false, warning}` for that case (and for any other unexpected
+ * failure — a bad manifest, storage being down) so the calling route can
+ * still answer 200 for the edit itself while surfacing the warning
+ * verbatim; the caller must never treat `{ok:false}` here as reason to
+ * discard the edit or answer anything but success for the request the
+ * operator actually made.
+ */
+export async function refreshFinalizedZip(admin: SupabaseClient, runId: string): Promise<RefreshZipOutcome> {
+  try {
+    const { data: row, error } = await admin.from("studio_runs").select("*").eq("id", runId).single();
+    if (error || !row) {
+      return { ok: false, warning: "Could not reload this run to refresh its deployable build." };
+    }
+    const run = row as StudioRunRow;
+    // Nothing to refresh: either the edit that triggered this call raced a
+    // status change away from "ready", or there is no content yet.
+    if (run.status !== "ready" || !run.content_doc) return { ok: true };
+
+    const manifest = await loadManifest(admin, run.template_id);
+    const tpl = await loadPackage(admin, run.template_id, manifest);
+    const outcome = await finalizeRun(admin, tpl, run.content_doc, run.id, {
+      loadAssetBytes: (assetId) => loadAssetBytes(admin, assetId),
+    });
+
+    if (!outcome.ok) {
+      const detail =
+        "missingAssets" in outcome
+          ? `missing image asset(s): ${outcome.missingAssets.join(", ")}`
+          : `missing ${outcome.missing.map((m) => `${m.page_id}/${m.slot_id}`).join(", ")}`;
+      await logEvent(
+        admin, runId, "finalize", "warn",
+        `Gate 2 edit saved, but re-finalizing the deployable zip was refused: ${detail}`,
+        { outcome },
+      );
+      return {
+        ok: false,
+        warning: `Your edit was saved, but the deployable/downloadable build is now stale (${detail}) until this is fixed.`,
+      };
+    }
+
+    const { error: updateError } = await admin
+      .from("studio_runs")
+      .update({
+        zip_path: outcome.zipPath,
+        steps: { ...run.steps, finalize: { at: new Date().toISOString(), zip_bytes: outcome.zipBytes } },
+      })
+      .eq("id", runId)
+      .select("id")
+      .single();
+    if (updateError) {
+      return { ok: false, warning: `Your edit was saved, but recording the refreshed build failed: ${updateError.message}` };
+    }
+
+    await logEvent(admin, runId, "finalize", "info", `Refreshed the deployable zip after a Gate 2 edit (${outcome.zipBytes} bytes).`);
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    await logEvent(admin, runId, "finalize", "warn", `Gate 2 edit saved, but refreshing the deployable zip failed: ${message}`);
+    return { ok: false, warning: `Your edit was saved, but the deployable build could not be refreshed (${message}).` };
+  }
+}
+
 /**
  * Advances a run by exactly ONE step. Reads `nextStep(row.status)`: null
  * means the run is already terminal (or has nothing left to do), so this is

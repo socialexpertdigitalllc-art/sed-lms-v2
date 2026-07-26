@@ -4,7 +4,8 @@ import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { applyOperatorEdit } from "@/lib/site-studio/run/applyWritten";
 import { loadManifest } from "@/lib/site-studio/run/engine";
 import { contentDocSchema, type ContentDoc } from "@/lib/site-studio/schema";
-import type { SlotImageState } from "@/lib/site-studio/run/types";
+import { isEditable, type SlotImageState } from "@/lib/site-studio/run/types";
+import { refreshFinalizedZip } from "@/lib/site-studio/run/engine";
 import type { ImageCandidate, PickChoice } from "@/lib/site-studio/assets/types";
 import { bumpUseCount } from "@/lib/site-studio/assets/library";
 import { rehostFromUrl, STUDIO_ASSETS_BUCKET } from "@/lib/site-studio/assets/rehost";
@@ -69,7 +70,11 @@ function rehostStatus(error: string): number {
 
 /**
  * POST: pick an image for one slot. `key` is `"${docPageIndex}:${slotId}"`
- * (types.ts's `SlotImageState` doc comment).
+ * (types.ts's `SlotImageState` doc comment). Allowed at Gate 1 ("reviewing")
+ * and Gate 2 ("ready") — `ImagePicker` is reachable from `RunPreview`, which
+ * only mounts once a run is "ready", so this must accept that status too
+ * (see `isEditable`'s own doc comment). A Gate 2 pick re-finalizes the zip
+ * after persisting — see `refreshFinalizedZip`'s own doc comment.
  *
  * SECURITY: nothing in `choice` is trusted at face value, but the three
  * kinds are NOT held to the same check — each is checked against whatever
@@ -146,8 +151,11 @@ export async function POST(req: Request, ctx: Ctx) {
   const admin = createAdminClient();
   const { data: row, error: fetchErr } = await admin.from("studio_runs").select("*").eq("id", id).single();
   if (fetchErr || !row) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (row.status !== "reviewing") {
-    return NextResponse.json({ error: `Cannot pick an image: this run is "${row.status}", not at the gate.` }, { status: 409 });
+  // Allowed at Gate 1 ("reviewing") and Gate 2 ("ready") — same discipline as
+  // `/content`, `/theme`, `/revert`, and `/reroll` (see `isEditable`'s own
+  // doc comment).
+  if (!isEditable(row.status)) {
+    return NextResponse.json({ error: `Cannot pick an image: this run is "${row.status}", not at a gate.` }, { status: 409 });
   }
   if (!row.content_doc) return NextResponse.json({ error: "This run has no content yet" }, { status: 422 });
 
@@ -291,5 +299,13 @@ export async function POST(req: Request, ctx: Ctx) {
     new_value: { key: body.key, asset_id: assetId },
   });
 
-  return NextResponse.json({ run: updated, asset_id: assetId });
+  // Gate 2 pick (status "ready"): keep the deployable zip in sync — see
+  // `refreshFinalizedZip`'s own doc comment (same discipline as `/content`).
+  let warning: string | undefined;
+  if (updated.status === "ready") {
+    const refreshed = await refreshFinalizedZip(admin, id);
+    if (!refreshed.ok) warning = refreshed.warning;
+  }
+
+  return NextResponse.json({ run: updated, asset_id: assetId, ...(warning ? { warning } : {}) });
 }

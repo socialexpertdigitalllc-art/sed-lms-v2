@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { isTerminal } from "@/lib/site-studio/run/types";
-import { loadManifest } from "@/lib/site-studio/run/engine";
+import { isEditable } from "@/lib/site-studio/run/types";
+import { loadManifest, refreshFinalizedZip } from "@/lib/site-studio/run/engine";
 import { revertField, type RevertTarget } from "@/lib/site-studio/run/revert";
 import type { RunContentDoc } from "@/lib/site-studio/run/applyWritten";
 import { contentDocSchema } from "@/lib/site-studio/schema";
@@ -19,9 +19,10 @@ type Ctx = { params: Promise<{ id: string }> };
  *  (`repeat_id`/`row_index`/`slot_id` there are `repeats: { [repeatId]:
  *  { [rowIndex]: { [slotId]: value } } }`; here they're a single named
  *  triple since a revert only ever targets ONE field, not a batch of edits).
- *  Refused once the run is terminal, same discipline as `/content` and
- *  `/theme`: there is nothing left downstream that would pick a revert up
- *  once a run is done. A field with no AI backup (never operator-edited, or
+ *  Allowed at Gate 1 ("reviewing") and Gate 2 ("ready"), same discipline as
+ *  `/content` and `/theme` (see `isEditable`'s own doc comment) — refused for
+ *  every other status, since there is nothing left downstream that would
+ *  pick a revert up once a run is dead or mid-step. A field with no AI backup (never operator-edited, or
  *  already reverted once) is a 422 naming the field, never a silent no-op —
  *  `revertField`'s own error text is surfaced verbatim. */
 export async function POST(req: Request, ctx: Ctx) {
@@ -85,8 +86,8 @@ export async function POST(req: Request, ctx: Ctx) {
   const admin = createAdminClient();
   const { data: row, error: fetchErr } = await admin.from("studio_runs").select("*").eq("id", id).single();
   if (fetchErr || !row) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (isTerminal(row.status)) {
-    return NextResponse.json({ error: `Cannot revert content: this run is ${row.status}.` }, { status: 409 });
+  if (!isEditable(row.status)) {
+    return NextResponse.json({ error: `Cannot revert content: this run is "${row.status}", not at a gate.` }, { status: 409 });
   }
   if (!row.content_doc) return NextResponse.json({ error: "This run has no content yet" }, { status: 422 });
 
@@ -184,5 +185,13 @@ export async function POST(req: Request, ctx: Ctx) {
     new_value: { page_index: pageIndex, ...target },
   });
 
-  return NextResponse.json({ run: updated });
+  // Gate 2 edit (status "ready"): keep the deployable zip in sync — see
+  // `refreshFinalizedZip`'s own doc comment (same discipline as `/content`).
+  let warning: string | undefined;
+  if (updated.status === "ready") {
+    const refreshed = await refreshFinalizedZip(admin, id);
+    if (!refreshed.ok) warning = refreshed.warning;
+  }
+
+  return NextResponse.json({ run: updated, ...(warning ? { warning } : {}) });
 }

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { isTerminal } from "@/lib/site-studio/run/types";
+import { isEditable } from "@/lib/site-studio/run/types";
 import { applyOperatorEdit, findDisallowedEditField } from "@/lib/site-studio/run/applyWritten";
 import { contentDocSchema, type ContentDoc } from "@/lib/site-studio/schema";
+import { refreshFinalizedZip } from "@/lib/site-studio/run/engine";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -40,8 +41,12 @@ function invalidRepeatsShape(repeats: Record<string, unknown>): string | null {
  *  are touched (an edit to one headline must not blank the rest of the
  *  page), and every touched field is stamped provenance "operator" so a
  *  later AI re-roll (which only ever touches AI-written fields) leaves it
- *  alone. Refused once the run is terminal (ready/failed/cancelled) — there
- *  is nothing left downstream that would pick the edit up.
+ *  alone. Allowed at Gate 1 ("reviewing") and Gate 2 ("ready") — see
+ *  `isEditable`'s own doc comment for why this is NOT `!isTerminal`. Refused
+ *  for every other status: `failed`/`cancelled` are dead, and the
+ *  machine-owned statuses in between have nothing downstream that would pick
+ *  the edit up. A Gate 2 edit (status "ready") also re-finalizes the zip
+ *  after persisting, via `refreshFinalizedZip` — see its own doc comment.
  *
  *  REPEAT ROWS (Phase 4a): `repeats` names a repeat-row target — the SAME
  *  row-aware shape `applyOperatorEdit`'s `OperatorEdit.repeats` and
@@ -102,8 +107,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const admin = createAdminClient();
   const { data: row, error: fetchErr } = await admin.from("studio_runs").select("*").eq("id", id).single();
   if (fetchErr || !row) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (isTerminal(row.status)) {
-    return NextResponse.json({ error: `Cannot edit content: this run is ${row.status}.` }, { status: 409 });
+  if (!isEditable(row.status)) {
+    return NextResponse.json({ error: `Cannot edit content: this run is "${row.status}", not at a gate.` }, { status: 409 });
   }
   if (!row.content_doc) return NextResponse.json({ error: "This run has no content yet" }, { status: 422 });
 
@@ -153,5 +158,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
     );
   }
 
-  return NextResponse.json({ run: updated });
+  // Gate 2 edit (status "ready"): the deployed/downloadable zip was written
+  // by `finalize` BEFORE this edit and must not silently go stale — see
+  // `refreshFinalizedZip`'s own doc comment. A Gate 1 edit ("reviewing") has
+  // no zip yet, so this is a no-op there.
+  let warning: string | undefined;
+  if (updated.status === "ready") {
+    const refreshed = await refreshFinalizedZip(admin, id);
+    if (!refreshed.ok) warning = refreshed.warning;
+  }
+
+  return NextResponse.json({ run: updated, ...(warning ? { warning } : {}) });
 }

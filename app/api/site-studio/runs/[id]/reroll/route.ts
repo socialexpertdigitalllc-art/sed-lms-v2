@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { productionWriterCall, loadManifest } from "@/lib/site-studio/run/engine";
+import { productionWriterCall, loadManifest, refreshFinalizedZip } from "@/lib/site-studio/run/engine";
 import { rerollPage, rerollSlot } from "@/lib/site-studio/run/reroll";
 import { buildDossier } from "@/lib/site-studio/run/dossier";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
-import type { StudioRunRow } from "@/lib/site-studio/run/types";
+import { isEditable, type StudioRunRow } from "@/lib/site-studio/run/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -32,12 +32,17 @@ async function loadLeadRow(admin: SupabaseClient, leadId: string): Promise<Recor
 }
 
 /**
- * Re-roll is a Gate 1 activity (spec §7): checked here, BEFORE ever loading
- * the template/lead or spending an AI call, so an off-gate call is cheap to
- * refuse. `reroll.ts`'s own `requireGate` re-asserts the same check
- * internally — belt-and-braces, not redundant: this route's check is what
- * keeps a stale/deleted lead or template from even being loaded for a run
- * that isn't at the gate anyway.
+ * Re-roll is a Gate 1 AND Gate 2 activity (spec §7, §9): allowed at
+ * "reviewing" and "ready" (see `isEditable`'s own doc comment), checked here
+ * BEFORE ever loading the template/lead or spending an AI call, so an
+ * off-gate call is cheap to refuse. `reroll.ts`'s own `requireGate` re-
+ * asserts the same check internally — belt-and-braces, not redundant: this
+ * route's check is what keeps a stale/deleted lead or template from even
+ * being loaded for a run that isn't at either gate anyway.
+ *
+ * A re-roll at Gate 2 ("ready") re-finalizes the zip after persisting, same
+ * as `/content`, `/theme`, and `/revert` — see `refreshFinalizedZip`'s own
+ * doc comment.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const auth = await guard();
@@ -57,8 +62,8 @@ export async function POST(req: Request, ctx: Ctx) {
   const { data: row, error: fetchErr } = await admin.from("studio_runs").select("*").eq("id", id).single();
   if (fetchErr || !row) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const run = row as StudioRunRow;
-  if (run.status !== "reviewing") {
-    return NextResponse.json({ error: `Cannot re-roll: this run is "${run.status}", not at the gate.` }, { status: 409 });
+  if (!isEditable(run.status)) {
+    return NextResponse.json({ error: `Cannot re-roll: this run is "${run.status}", not at a gate.` }, { status: 409 });
   }
   if (!run.lead_id) return NextResponse.json({ error: "This run has no lead" }, { status: 422 });
 
@@ -108,5 +113,13 @@ export async function POST(req: Request, ctx: Ctx) {
     new_value: { page_index: body.page_index, slot_id: slotId ?? null },
   });
 
-  return NextResponse.json({ run: updated });
+  // Gate 2 re-roll (status "ready"): keep the deployable zip in sync — see
+  // `refreshFinalizedZip`'s own doc comment (same discipline as `/content`).
+  let warning: string | undefined;
+  if (updated.status === "ready") {
+    const refreshed = await refreshFinalizedZip(admin, id);
+    if (!refreshed.ok) warning = refreshed.warning;
+  }
+
+  return NextResponse.json({ run: updated, ...(warning ? { warning } : {}) });
 }

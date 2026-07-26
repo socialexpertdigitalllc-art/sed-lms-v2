@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { isTerminal } from "@/lib/site-studio/run/types";
-import { loadManifest } from "@/lib/site-studio/run/engine";
+import { isEditable } from "@/lib/site-studio/run/types";
+import { loadManifest, refreshFinalizedZip } from "@/lib/site-studio/run/engine";
 import { hexColor, type ContentDoc, type TemplateManifest } from "@/lib/site-studio/schema";
 
 export const runtime = "nodejs";
@@ -19,7 +19,8 @@ type Ctx = { params: Promise<{ id: string }> };
  *  renderer's `applyTheme` (render/theme.ts) never consumes would otherwise
  *  be accepted, persisted, and silently do nothing — the same "why refuse
  *  instead of no-op" reasoning the images route's slot-type check documents.
- *  Refused once the run is terminal, same as `/content`. */
+ *  Allowed at Gate 1 ("reviewing") and Gate 2 ("ready"), same as `/content`
+ *  (see `isEditable`'s own doc comment); refused for every other status. */
 export async function PATCH(req: Request, ctx: Ctx) {
   const auth = await guard();
   if ("error" in auth) return guardError(auth.error);
@@ -43,8 +44,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const admin = createAdminClient();
   const { data: row, error: fetchErr } = await admin.from("studio_runs").select("*").eq("id", id).single();
   if (fetchErr || !row) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (isTerminal(row.status)) {
-    return NextResponse.json({ error: `Cannot edit theme: this run is ${row.status}.` }, { status: 409 });
+  if (!isEditable(row.status)) {
+    return NextResponse.json({ error: `Cannot edit theme: this run is "${row.status}", not at a gate.` }, { status: 409 });
   }
   if (!row.content_doc) return NextResponse.json({ error: "This run has no content yet" }, { status: 422 });
 
@@ -96,5 +97,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
     new_value: { roles: values },
   });
 
-  return NextResponse.json({ run: updated });
+  // Gate 2 edit (status "ready"): keep the deployable zip in sync — see
+  // `refreshFinalizedZip`'s own doc comment (same discipline as `/content`).
+  let warning: string | undefined;
+  if (updated.status === "ready") {
+    const refreshed = await refreshFinalizedZip(admin, id);
+    if (!refreshed.ok) warning = refreshed.warning;
+  }
+
+  return NextResponse.json({ run: updated, ...(warning ? { warning } : {}) });
 }

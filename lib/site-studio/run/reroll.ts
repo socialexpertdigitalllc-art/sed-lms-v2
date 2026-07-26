@@ -1,6 +1,6 @@
 import type { TemplateManifest } from "../schema";
 import type { Dossier } from "./dossier";
-import type { StudioRunRow } from "./types";
+import { isEditable, type StudioRunRow } from "./types";
 import { writePage, type AiCall } from "./writer";
 import { applyRewrite, getPageProvenance, type RunContentDoc } from "./applyWritten";
 
@@ -22,11 +22,13 @@ export type RerollOutcome =
   | { ok: true; doc: RunContentDoc }
   | { ok: false; error: string };
 
-/** Re-roll is a Gate 1 activity in 3b — refuse anywhere else in the machine,
- *  before ever touching the model. */
+/** Re-roll is a Gate 1 AND Gate 2 activity (spec §7, §9) — allowed at
+ *  "reviewing" or "ready", refused anywhere else in the machine (dead or
+ *  mid-step), before ever touching the model. See `isEditable`'s own doc
+ *  comment for why this is not simply `!isTerminal`. */
 function requireGate(run: StudioRunRow): string | null {
-  if (run.status !== "reviewing") {
-    return `re-roll refused: the run is not at the gate (status is "${run.status}", not "reviewing")`;
+  if (!isEditable(run.status)) {
+    return `re-roll refused: the run is not at a gate (status is "${run.status}")`;
   }
   return null;
 }
