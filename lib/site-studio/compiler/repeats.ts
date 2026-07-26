@@ -10,8 +10,27 @@ const signature = (el: HTMLElement) =>
 const elementChildren = (el: HTMLElement): HTMLElement[] =>
   el.childNodes.filter((n): n is HTMLElement => n.nodeType === NodeType.ELEMENT_NODE);
 
+/** Attribute fingerprint: every attribute name=value, order-independent.
+ *
+ *  Congruence MUST include attributes. A repeat region is stored as ONE
+ *  fragment built from row 0 plus per-row TEXT samples — nothing carries
+ *  per-row attribute values. So if rows differ in an attribute, collapsing
+ *  them silently republishes row 0's attributes for every row: a real
+ *  template lost `color:var(--accent)` on its second stat card, a
+ *  `border-bottom` on one FAQ panel, and — worst — an entire
+ *  `onclick="…area-cherry-creek.html"` that made one area card clickable.
+ *  Rows that differ in attributes are therefore NOT a repeat; they fall
+ *  through to flat content, where each text leaf becomes its own slot and
+ *  every attribute survives verbatim. */
+const attrFingerprint = (el: HTMLElement): string =>
+  Object.entries(el.attributes ?? {})
+    .map(([k, v]) => `${k}=${v}`)
+    .sort()
+    .join("");
+
 function congruent(a: HTMLElement, b: HTMLElement): boolean {
   if (a.rawTagName?.toLowerCase() !== b.rawTagName?.toLowerCase()) return false;
+  if (attrFingerprint(a) !== attrFingerprint(b)) return false;
   const ac = elementChildren(a);
   const bc = elementChildren(b);
   if (ac.length !== bc.length) return false;
