@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { RunPreview, SlotEditor } from "@/components/site-studio/RunPreview";
 import { ThemePanel } from "@/components/site-studio/ThemePanel";
+import { ToastProvider } from "@/components/common/Toast";
 import { DeploymentsBoard, type DeploymentRow } from "@/components/site-studio/DeploymentsBoard";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { StudioRunRow } from "@/lib/site-studio/run/types";
@@ -98,14 +99,146 @@ describe("RunPreview", () => {
     expect(wrap).toHaveStyle({ width: "100%" });
   });
 
-  it("shows a disabled Deploy button (Task 9 not shipped yet) only when the run is ready", () => {
+  it("shows the Deploy button only when the run is ready", () => {
     const { rerender } = render(<RunPreview run={runFixture({ status: "ready" })} onRunUpdated={() => {}} />);
-    const deployBtn = screen.getByRole("button", { name: /deploy/i });
-    expect(deployBtn).toBeDisabled();
-    expect(deployBtn).toHaveAttribute("title", "Deploy lands in Task 9");
+    expect(screen.getByRole("button", { name: /deploy/i })).toBeEnabled();
 
     rerender(<RunPreview run={runFixture({ status: "rendering" })} onRunUpdated={() => {}} />);
     expect(screen.queryByRole("button", { name: /deploy/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Task 9 shipped `POST /api/site-studio/runs/[id]/deploy` a while ago, but
+   * this button stayed a permanently-disabled stub with a stale "Task 9
+   * hasn't shipped" comment until now — the whole deploy feature was
+   * unreachable from the UI even though the backend worked. These replace
+   * the old "is disabled" test with real behaviour: confirm -> POST -> button
+   * disabled in flight -> success shows the URL / failure toasts verbatim.
+   * No live DirectAdmin call — `fetch` is stubbed throughout.
+   */
+  describe("Deploy button", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function stubConfirm(result = true) {
+      const confirmSpy = vi.fn(() => result);
+      vi.stubGlobal("confirm", confirmSpy);
+      return confirmSpy;
+    }
+
+    it("does nothing (no fetch) when the operator declines the confirmation", async () => {
+      const confirmSpy = stubConfirm(false);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      render(<RunPreview run={runFixture({ status: "ready" })} onRunUpdated={() => {}} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /deploy/i }));
+
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("disables the button while the deploy request is in flight, and re-enables on completion", async () => {
+      stubConfirm(true);
+      let resolveFetch: (v: unknown) => void = () => {};
+      const pending = new Promise((resolve) => { resolveFetch = resolve; });
+      vi.stubGlobal("fetch", vi.fn(() => pending));
+      render(<RunPreview run={runFixture({ status: "ready" })} onRunUpdated={() => {}} />);
+
+      const deployBtn = screen.getByRole("button", { name: /deploy/i });
+      fireEvent.click(deployBtn);
+      await waitFor(() => expect(deployBtn).toBeDisabled());
+
+      resolveFetch({ ok: true, json: async () => ({ url: "https://ace-plumbing.dmviral.com", clearWarning: null }) });
+      await waitFor(() => expect(deployBtn).toBeEnabled());
+    });
+
+    it("on success, shows the returned URL as an external link", async () => {
+      stubConfirm(true);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({
+          ok: true,
+          json: async () => ({ url: "https://ace-plumbing.dmviral.com", sub: "ace-plumbing", reused: false, clearWarning: null }),
+        })),
+      );
+      render(<RunPreview run={runFixture({ status: "ready" })} onRunUpdated={() => {}} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /deploy/i }));
+
+      const link = await screen.findByRole("link", { name: /ace-plumbing\.dmviral\.com/ });
+      expect(link).toHaveAttribute("href", "https://ace-plumbing.dmviral.com");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noreferrer");
+    });
+
+    it("on failure, toasts the server's message verbatim (e.g. the 409 cross-lead guard)", async () => {
+      stubConfirm(true);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({
+          ok: false,
+          json: async () => ({ error: "This subdomain is already live under a different lead (lead-9)." }),
+        })),
+      );
+      render(
+        <ToastProvider>
+          <RunPreview run={runFixture({ status: "ready" })} onRunUpdated={() => {}} />
+        </ToastProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /deploy/i }));
+
+      expect(await screen.findByText("This subdomain is already live under a different lead (lead-9).")).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("surfaces a 502 upstream failure verbatim, distinct from a 409", async () => {
+      stubConfirm(true);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({
+          ok: false,
+          json: async () => ({ error: "DirectAdmin upload failed: disk full" }),
+        })),
+      );
+      render(
+        <ToastProvider>
+          <RunPreview run={runFixture({ status: "ready" })} onRunUpdated={() => {}} />
+        </ToastProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /deploy/i }));
+
+      expect(await screen.findByText("DirectAdmin upload failed: disk full")).toBeInTheDocument();
+    });
+
+    it("surfaces clearWarning as its own toast alongside a successful deploy", async () => {
+      stubConfirm(true);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({
+          ok: true,
+          json: async () => ({
+            url: "https://ace-plumbing.dmviral.com",
+            clearWarning: "clearing the old docroot failed: permission denied — the live site may mix two builds",
+          }),
+        })),
+      );
+      render(
+        <ToastProvider>
+          <RunPreview run={runFixture({ status: "ready" })} onRunUpdated={() => {}} />
+        </ToastProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /deploy/i }));
+
+      expect(
+        await screen.findByText("clearing the old docroot failed: permission denied — the live site may mix two builds"),
+      ).toBeInTheDocument();
+      expect(await screen.findByRole("link", { name: /ace-plumbing\.dmviral\.com/ })).toBeInTheDocument();
+    });
   });
 });
 

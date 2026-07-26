@@ -218,6 +218,8 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
   const [width, setWidth] = useState<"mobile" | "desktop">("desktop");
   const [edit, setEdit] = useState<EditState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deploying, setDeploying] = useState(false);
+  const [deployedUrl, setDeployedUrl] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Cheap insurance against an out-of-range `?page=` if the doc were ever
@@ -429,6 +431,46 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
     await saveSlot(edit.pageIndex, edit.altSlotId, value);
   }
 
+  /**
+   * Publishes the run's current build to its live subdomain (Task 9's
+   * `POST /deploy`, wired up here — see this file's own history: the button
+   * used to be a permanently-disabled stub left over from before that route
+   * existed). Confirmed first — this is a REAL, irreversible-in-effect
+   * publish to a live client-facing URL, not a preview action — and disabled
+   * for the duration of the call so a double-click can't fire two overlapping
+   * requests; the route itself also CAS-claims the run, but the button
+   * should not invite the race in the first place.
+   *
+   * The route's response deliberately distinguishes 409 (e.g. the cross-lead
+   * subdomain guard) from 502 (an upstream DirectAdmin failure) — both are
+   * surfaced to the operator VERBATIM (never re-worded), because the two
+   * failure classes call for different next actions and only the server
+   * knows which one happened. `clearWarning`, when present, means the live
+   * docroot may now hold a MIX of two site generations (an old-file cleanup
+   * step failed but the new upload still went through) — surfaced as its own
+   * toast rather than folded into the success message, since it needs the
+   * operator's attention even though the deploy itself is reported "ok".
+   */
+  async function deploy() {
+    if (!confirm("This publishes a real client site to a live subdomain. Continue?")) return;
+    setDeploying(true);
+    try {
+      const res = await fetch(`/api/site-studio/runs/${runId}/deploy`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ kind: "error", title: body.error ?? "Deploy failed" });
+        return;
+      }
+      setDeployedUrl(body.url as string);
+      toast({ kind: "success", title: `Deployed to ${body.url}` });
+      if (body.clearWarning) {
+        toast({ kind: "info", title: body.clearWarning });
+      }
+    } finally {
+      setDeploying(false);
+    }
+  }
+
   const pages = doc.pages;
 
   return (
@@ -469,12 +511,24 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
             <Monitor className="h-3.5 w-3.5" />
           </button>
           {run.status === "ready" ? (
-            // The deploy route doesn't exist yet (Task 9) — rendered
-            // disabled with an explanatory title rather than stubbed with a
-            // fake call, per this task's own instructions.
-            <button type="button" className={btnPrimary} title="Deploy lands in Task 9" disabled>
-              <UploadCloud className="h-4 w-4" /> Deploy
+            <button
+              type="button"
+              className={btnPrimary}
+              onClick={() => void deploy()}
+              disabled={deploying}
+            >
+              {deploying ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />} Deploy
             </button>
+          ) : null}
+          {deployedUrl ? (
+            <a
+              href={deployedUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="max-w-[14rem] truncate text-xs text-accent underline"
+            >
+              {deployedUrl}
+            </a>
           ) : null}
         </div>
       </div>

@@ -24,11 +24,9 @@ A closely related failure is `Finalize refused: picked image(s) failed to resolv
 - **Cancel** is available on any non-terminal run and is final — a cancelled run cannot be resumed; start a new one.
 - Both buttons disappear once a run reaches `ready`, `failed`, or `cancelled` — there's nothing left to pause or cancel at that point.
 
-## A deploy failed, or there's no Deploy button at all
+## A deploy failed
 
-**Known gap, as of this writing:** the Deploy button shown on the Gate 2 preview (`components/site-studio/RunPreview.tsx`) is permanently disabled with the tooltip "Deploy lands in Task 9" — a leftover from before the deploy backend (`lib/site-studio/deploy/deployRun.ts`, `app/api/site-studio/runs/[id]/deploy/route.ts`) actually shipped. The backend itself is complete and tested; nothing in the UI currently calls it. Until an operator-facing control is wired up, deploying a `ready` run requires a developer to call `POST /api/site-studio/runs/{id}/deploy` directly. Ask engineering if a client's site needs to go live.
-
-If a deploy attempt does fail (via that direct call), the error tells you exactly where it stopped:
+The Deploy button on the Gate 2 preview (`components/site-studio/RunPreview.tsx`) is enabled once a run is `ready`. Clicking it asks you to confirm (this publishes a real client site to a live subdomain), then calls `POST /api/site-studio/runs/{id}/deploy` and disables itself until that call finishes, so a double-click can't fire two overlapping deploys. On success the returned URL is shown as a clickable link; on failure the server's message is shown verbatim, distinguishing a 409 (something about this request/run) from a 502 (the upstream DirectAdmin host itself failed) — the message tells you exactly where it stopped:
 
 - **"Deployment is not configured"** — the host isn't configured in this environment (`DA_HOST`/`DA_USERNAME`/`DA_LOGIN_KEY`/`DA_DOMAIN`); this is an environment problem, not a per-run one.
 - **"Subdomain ... is already live for a different lead"** — a naming collision with another live site. Take the other one down from the Deployments board first (SOP 02 §6), then retry.
@@ -36,10 +34,13 @@ If a deploy attempt does fail (via that direct call), the error tells you exactl
 - **"Site zip not found in storage — the live site (if any) was not touched"** — the zip couldn't be fetched; nothing was changed on the live site. Safe to retry once the run has a valid zip.
 - **"Deployment failed at upload: ..." / "at extract: ..."** — the upload to the host itself failed partway. The site may be left half-updated; retry the deploy once the underlying issue (usually transient) is resolved.
 - Any message that says **"The site IS live"** — the site went live successfully, but some bookkeeping step after that failed (recording it, updating the lead's link, retiring a stale record, writing the activity log). The site is genuinely up; whoever sees this message should check `studio_deployments` manually and fix the bookkeeping rather than re-deploying blind.
+- A success toast that also mentions **clearing the old docroot failed** — the deploy completed, but the live docroot may now hold a **mix of the old and new build** (the cleanup-before-upload step failed, though the new upload still went through). Resolve the underlying issue (usually a host-side permissions hiccup) and redeploy to clear it.
 
-## Editing at Gate 2 (the "ready" preview) may be refused
+## Editing at Gate 2 (the "ready" preview)
 
-**Known gap, as of this writing:** the Gate 2 preview's click-to-edit, its per-field revert, and the theme color panel are fully built and wired on the frontend, but their backend routes (`PATCH /api/site-studio/runs/{id}/content`, `POST /api/site-studio/runs/{id}/revert`, `PATCH /api/site-studio/runs/{id}/theme`) each refuse with a 409 ("Cannot edit content/theme: this run is ready") whenever the run's status is `ready` — which is the **only** time Gate 2 is ever shown. This is because all three routes refuse edits on any "terminal" status, and `ready` is classified as terminal (correctly, for the machine's own step-chain — there's no more machine work to do once a run is `ready`) but that classification was never revisited for the edit routes when Gate 2 was added on top of it. If you hit a "this run is ready" error while trying to edit at Gate 2, this is why — it is not something to work around per-run; it needs a backend fix (loosening those three routes' refusal to allow edits specifically while `ready`, not just pre-`ready`). Flag it to engineering rather than assuming your edit didn't take for some lead-specific reason.
+Click-to-edit, per-field revert, re-roll, the theme color panel, and image picks all work at Gate 2, exactly as they do at Gate 1 — `content`, `revert`, `theme`, `reroll`, and `images` all accept a run whose status is `reviewing` **or** `ready` (see `isEditable` in `lib/site-studio/run/types.ts`). If you ever see a 409 saying a run "is not at a gate," check the run's actual status (`Site Studio → Runs`) — it means the run is `failed`, `cancelled`, or mid-step (`queued`/`preparing`/`approved`/`rendering`), not that Gate 2 editing is broken.
+
+Every edit at Gate 2 also re-finalizes the deployable/downloadable zip so it never drifts from what the preview shows (see SOP 02 §5). If a toast says the build is **stale** after an edit, the edit itself still saved — only the re-finalize step was refused (usually a picked image whose asset failed to resolve, same as the "Render refused" entry above). Fix whatever's named in the warning, then make any further edit (or re-pick the image) to trigger another re-finalize attempt before deploying.
 
 ## Asset library upkeep
 
@@ -57,7 +58,7 @@ See SOP 01 §6 — re-compile is deterministic against the original immutable zi
 Once a site is live and the client asks for a change:
 
 1. Open the run's page from **Site Studio → Runs** — a `ready` run keeps its Gate 2 preview available indefinitely, it isn't a one-time view.
-2. Edit the changed field(s) in the preview (subject to the known Gate 2 editing gap above — if edits are currently refused, this step is blocked until that's fixed).
+2. Edit the changed field(s) in the preview — each edit re-finalizes the build automatically (SOP 02 §5).
 3. Re-deploy. Because deploy resolves to the lead's existing subdomain whenever one exists, this **overwrites the live site in place at the same URL** — it does not create a second site or require any DNS change.
 
 Source of truth for this SOP: `lib/site-studio/run/engine.ts`, `lib/site-studio/deploy/deployRun.ts`, and the error messages in `app/api/site-studio/runs/[id]/{step,control,content,theme,revert,images,reroll,deploy}/route.ts`.

@@ -39,22 +39,27 @@ Review each page card:
   - **Upload** tab: upload a new image directly, which lands as shared stock and is picked immediately.
   - Whichever you pick, **the image is rehosted into our own storage bucket** before it's written into the slot — a chosen photo is never hot-linked to Pexels or a client's external URL, so it can't later break (URL rot, an expired link) once the site is live.
   - Alt text for the image is edited right in the same dialog.
-- [ ] **Re-roll** — per-slot (the refresh icon next to a text field) or per-page (button at the bottom of the card). **Operator-edited fields are protected by default**: a slot re-roll refuses outright if that slot is operator-owned unless you explicitly confirm overwriting it; a page re-roll silently skips operator-owned fields unless you confirm "overwrite them too." Re-roll is only available at Gate 1.
+- [ ] **Re-roll** — per-slot (the refresh icon next to a text field) or per-page (button at the bottom of the card). **Operator-edited fields are protected by default**: a slot re-roll refuses outright if that slot is operator-owned unless you explicitly confirm overwriting it; a page re-roll silently skips operator-owned fields unless you confirm "overwrite them too." Re-roll is also available later at Gate 2, not just here.
 - [ ] Pause/Resume/Cancel are available at any non-terminal point via the buttons at the top of the cockpit, if you need to step away or abandon a run.
 - [ ] When everything looks right, click **Approve & render** at the bottom of the screen. This is a one-shot action — approving twice, or approving a run someone/something already advanced, is refused with a 409 rather than silently no-opping.
 
 ## 5. Gate 2 — editable preview
 
-After render + finalize complete, the run reaches **Ready**. This opens the navigable, click-to-edit preview:
+After render + finalize complete, the run reaches **Ready**. This opens the navigable, click-to-edit preview — and, unlike Gate 1, every edit here also refreshes the build that Download/Deploy will actually serve:
 
 - [ ] Click through pages using the tabs at the top; click any text or image directly in the preview to edit it in place (same click-to-edit behavior as Gate 1, now including repeat rows — e.g. one card in a services grid — individually).
 - [ ] **Revert to AI** is offered for any operator-edited field, restoring the AI-written value that was there before your edit.
+- [ ] **Re-roll** works here too, the same as at Gate 1.
 - [ ] Theme colors are adjustable from the panel above the preview.
 - [ ] **Download site** gives you the finished zip at any time from this screen.
+- [ ] Every edit at this stage (text, image, theme, revert, re-roll) automatically re-finalizes the deployable/downloadable zip so it always matches what you see in the preview — you never need to do anything extra to make an edit "stick" for deploy. In the rare case a re-finalize itself can't complete (e.g. a picked image failed to resolve), your edit is still saved, but a toast tells you the build is stale until that's fixed — don't deploy until it clears.
 
 ## 6. Deploy
 
-- [ ] Deploy is triggered by `POST /api/site-studio/runs/{id}/deploy` once a run is `ready`. **As of this writing there is no working button for this in the cockpit** — the Deploy button shown on the Gate 2 preview is present but permanently disabled (a leftover control from before the deploy backend shipped; see SOP 03 for the exact spot). Until that's wired up, deploying requires a developer to call the endpoint directly (e.g. with a REST client), passing your session's auth. Ask engineering if you need a site deployed.
+- [ ] Click **Deploy** on the Gate 2 preview (only enabled once the run is `ready`). You'll be asked to confirm first — **this publishes a real client site to a live subdomain**, so make sure the preview looks right before confirming.
+- [ ] The button disables itself for the duration of the request so a double-click can't fire two overlapping deploys; on success it shows the live URL as a clickable link.
+- [ ] A failure is shown verbatim as reported by the server — a 409 (e.g. the cross-lead subdomain guard below) reads differently from a 502 (an upstream DirectAdmin failure), and which one you got tells you what to do next.
+- [ ] If the deploy succeeds but shows a warning about clearing the old docroot, the live site may currently hold a **mix of the old and new build** — redeploy once the underlying issue (usually a permissions/host hiccup) is resolved.
 - [ ] **One live site per lead.** If the lead's current `website_link` already points at one of our subdomains, a deploy redeploys **onto that exact same subdomain, in place** — it does not create a second site. A lead with no existing subdomain gets a fresh one derived from the run's own generated slug.
 - [ ] A deploy refuses (409) if the target subdomain is already live for a **different** lead — this protects against two similarly-named businesses colliding on the same subdomain. If that happens, take the other deployment down first (next bullet) before retrying.
 - [ ] **Takedown** — from **Site Studio → Deployments**, filter to **Live**, click the trash icon next to a row, confirm. This deletes the subdomain on the host and marks the record `taken_down` immediately; it is not reversible from the board (you'd need to deploy again from a ready run to bring the site back).
