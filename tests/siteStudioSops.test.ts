@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { SOPS, loadSop } from "@/lib/site-studio/sops";
 
 describe("SOPS", () => {
-  it("declares the three documents in order", () => {
+  it("declares every document in order", () => {
     expect(SOPS.map((s) => s.slug)).toEqual([
       "01-adding-a-template",
       "02-generating-a-website",
       "03-troubleshooting",
+      "04-authoring-a-template",
     ]);
   });
 
