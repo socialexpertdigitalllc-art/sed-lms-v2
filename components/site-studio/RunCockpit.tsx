@@ -12,6 +12,8 @@ import { awaitingGate, isTerminal, type StudioRunRow } from "@/lib/site-studio/r
 import type { RunContentDoc } from "@/lib/site-studio/run/applyWritten";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import { RunPageCard } from "@/components/site-studio/RunPageCard";
+import { RunPreview } from "@/components/site-studio/RunPreview";
+import { ThemePanel } from "@/components/site-studio/ThemePanel";
 
 interface TemplateDetail { manifest: TemplateManifest | null; }
 
@@ -368,7 +370,7 @@ export function RunCockpit({ runId }: { runId: string }) {
         </div>
       ) : null}
 
-      {doc ? (
+      {doc && run.status !== "ready" ? (
         <div className="space-y-3">
           {doc.pages.map((page, index) => (
             <RunPageCard
@@ -392,6 +394,16 @@ export function RunCockpit({ runId }: { runId: string }) {
               onImagePicked={applyRun}
             />
           ))}
+        </div>
+      ) : null}
+
+      {/* Gate 2: the editable preview + live theme replace Gate 1's page
+       *  cards once the run is ready — see Task 7. `manifest` gates the
+       *  panel too since ThemePanel needs the template's declared roles. */}
+      {doc && run.status === "ready" && manifest ? (
+        <div className="space-y-4">
+          <ThemePanel runId={runId} manifest={manifest} theme={doc.theme} onRunUpdated={applyRun} />
+          <RunPreview run={run} onRunUpdated={applyRun} />
         </div>
       ) : null}
 
