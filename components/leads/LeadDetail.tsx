@@ -83,7 +83,7 @@ export function LeadDetail({
   const canWebcraft = has("ai_tools.webcraft");
   const canDeepseek = has("ai_tools.deepseek");
   const canQueue = canWebcraft || canDeepseek;
-  const canTemplateGen = has("templates.generate");
+  const canTemplateGen = has("studio.manage");
   const router = useRouter();
   const { toast } = useToast();
 
@@ -202,7 +202,7 @@ export function LeadDetail({
               </button>
             )}
             {canTemplateGen && (
-              <Link href={`/ai-tools/template-engine?lead=${lead.id}`} className={btn + " inline-flex items-center gap-1.5"}>
+              <Link href={`/ai-tools/site-studio/runs?lead=${lead.id}`} className={btn + " inline-flex items-center gap-1.5"}>
                 <LayoutTemplate size={14} /> Generate from template
               </Link>
             )}

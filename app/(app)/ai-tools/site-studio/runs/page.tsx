@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
@@ -19,7 +20,9 @@ export default async function SiteStudioRunsPage() {
   return (
     <div className="space-y-4">
       <StudioTabs />
-      <RunsBoard />
+      <Suspense fallback={null}>
+        <RunsBoard />
+      </Suspense>
     </div>
   );
 }

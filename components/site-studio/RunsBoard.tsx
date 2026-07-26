@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, Plus, Rocket } from "lucide-react";
 import { EmptyPanel, PageHeader, Pill } from "@/components/common/Panel";
 import { btnPrimary } from "@/components/common/buttons";
@@ -25,10 +25,13 @@ interface TemplateOption { id: string; name: string; }
 
 export function RunsBoard() {
   const router = useRouter();
+  // Arriving here via a lead's "Generate from template" link (?lead=<id>)
+  // opens the launcher straight away, preselected — see RunLaunch.
+  const leadParam = useSearchParams().get("lead");
   const [rows, setRows] = useState<RunListRow[]>([]);
   const [templateNames, setTemplateNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [launching, setLaunching] = useState(false);
+  const [launching, setLaunching] = useState(() => Boolean(leadParam));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,6 +113,7 @@ export function RunsBoard() {
 
       {launching ? (
         <RunLaunch
+          initialLeadId={leadParam}
           onClose={() => setLaunching(false)}
           onCreated={(id) => {
             setLaunching(false);

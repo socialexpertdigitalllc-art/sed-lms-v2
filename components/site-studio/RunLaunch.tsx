@@ -35,7 +35,18 @@ interface TemplateOption {
  * "certified only" rules are applied here, client-side, matching the exact
  * idiom the rest of the app already uses for these two endpoints.
  */
-export function RunLaunch({ onClose, onCreated }: { onClose: () => void; onCreated: (runId: string) => void }) {
+export function RunLaunch({
+  onClose,
+  onCreated,
+  initialLeadId,
+}: {
+  onClose: () => void;
+  onCreated: (runId: string) => void;
+  /** Preselects this lead once the leads list loads — e.g. arriving here via
+   *  `?lead=<id>` from a lead's own page. Silently ignored if the lead isn't
+   *  in the "Not Ready" eligible list (same rule as picking one by hand). */
+  initialLeadId?: string | null;
+}) {
   const { toast } = useToast();
 
   const [leads, setLeads] = useState<LeadOption[] | null>(null);
@@ -97,6 +108,14 @@ export function RunLaunch({ onClose, onCreated }: { onClose: () => void; onCreat
     const pages = lead.specify_pages ?? [];
     setCheckedPages(Object.fromEntries(pages.map((p) => [p, true])));
   }
+
+  // Preselect the lead passed in via ?lead=<id> once the eligible list is in —
+  // runs once per dialog open (bails out as soon as something is selected).
+  useEffect(() => {
+    if (!initialLeadId || selectedLeadId) return;
+    const match = eligibleLeads.find((l) => l.id === initialLeadId);
+    if (match) selectLead(match);
+  }, [initialLeadId, eligibleLeads, selectedLeadId]);
 
   async function submit() {
     if (!selectedLead) {
