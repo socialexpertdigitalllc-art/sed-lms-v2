@@ -21,7 +21,11 @@ describe("normalizeHtml", () => {
 });
 
 describe("round-trip property: render(compile(zip), samples) ≈ original", () => {
-  for (const name of ["plumberpro", "bakery"] as const) {
+  // gearhead is the only fixture with tokenized text assets (js/css carrying
+  // demo identity baked in by a runtime-built header widget) — it's the one
+  // that actually exercises verifyTemplate's asset round-trip check below;
+  // plumberpro/bakery have no text assets identity ever touches.
+  for (const name of ["plumberpro", "bakery", "gearhead"] as const) {
     it(`${name} round-trips with zero blockers`, () => {
       const result = compileTemplate(fixtureZip(name), name);
       expect(result.ok).toBe(true);
@@ -45,5 +49,23 @@ describe("verifyTemplate catches corruption", () => {
     // ever reaches the normalizeHtml comparison that would otherwise report roundtrip_mismatch.
     // Either code represents "corruption was caught as a blocker" — accept both.
     expect(diags.some((d) => d.level === "blocker" && (d.code === "roundtrip_mismatch" || d.code === "roundtrip_render_refused"))).toBe(true);
+  });
+
+  it("a tokenized asset whose skeleton bytes got corrupted fails verification too — manifest.pages alone would never have looked at it", () => {
+    const result = compileTemplate(fixtureZip("gearhead"), "gearhead");
+    expect(result.template.manifest.tokenizedAssets).toContain("js/site.js");
+    const broken = {
+      ...result.template,
+      assets: {
+        ...result.template.assets,
+        // corrupt the tokenized asset's skeleton so it can no longer
+        // reproduce the original bytes once re-rendered from samples
+        "js/site.js": new TextEncoder().encode(
+          new TextDecoder().decode(result.template.assets["js/site.js"]).replace("{{id:business_name}}", "{{id:business_name}}_CORRUPTED"),
+        ),
+      },
+    };
+    const diags = verifyTemplate(broken, unzipToMap(fixtureZip("gearhead")));
+    expect(diags.some((d) => d.level === "blocker" && d.code === "roundtrip_mismatch" && d.page === "js/site.js")).toBe(true);
   });
 });
