@@ -83,7 +83,10 @@ export const navRegionSchema = z.object({
 });
 export type NavRegionDef = z.infer<typeof navRegionSchema>;
 
-const hexColor = z.string().regex(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+// Exported so anything validating a hex value OUTSIDE a full ContentDoc parse
+// (e.g. the theme route's PATCH body, app/api/site-studio/runs/[id]/theme)
+// checks against this SAME regex rather than drifting from it.
+export const hexColor = z.string().regex(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
 
 export const themeDefSchema = z.object({
   mode: z.enum(["css_vars", "literal_remap", "none"]),
