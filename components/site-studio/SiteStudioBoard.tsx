@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { LayoutTemplate, Loader2, Search, Upload } from "lucide-react";
+import Link from "next/link";
+import { BookOpen, LayoutTemplate, Loader2, Search, Upload } from "lucide-react";
 import { EmptyPanel, PageHeader } from "@/components/common/Panel";
 import { btnPrimary, btnSecondary } from "@/components/common/buttons";
 import { inputCls } from "@/components/forms/Field";
@@ -174,6 +175,14 @@ export function SiteStudioBoard() {
       <PageHeader
         title="Site Studio"
         description="Compile a website template once, certify it, then generate client sites from it forever."
+        action={
+          <Link
+            href="/ai-tools/site-studio/sops?doc=01-adding-a-template"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-text-muted hover:text-text"
+          >
+            <BookOpen className="h-3.5 w-3.5" /> SOP: Adding a template
+          </Link>
+        }
       />
 
       {/* upload */}

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
-  AlertTriangle, ChevronDown, ChevronRight, Download, Loader2, Pause, Play, ShieldCheck, X,
+  AlertTriangle, BookOpen, ChevronDown, ChevronRight, Download, Loader2, Pause, Play, ShieldCheck, X,
 } from "lucide-react";
 import { PageHeader, Pill } from "@/components/common/Panel";
 import { btnPrimary, btnSecondarySm } from "@/components/common/buttons";
@@ -317,6 +318,14 @@ export function RunCockpit({ runId }: { runId: string }) {
       <PageHeader
         title="Generation run"
         description={run.error ? undefined : "Live progress, Gate 1 review, and download."}
+        action={
+          <Link
+            href="/ai-tools/site-studio/sops?doc=02-generating-a-website"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-text-muted hover:text-text"
+          >
+            <BookOpen className="h-3.5 w-3.5" /> SOP
+          </Link>
+        }
       />
 
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
@@ -366,7 +375,15 @@ export function RunCockpit({ runId }: { runId: string }) {
         <div className="rounded-lg border border-dropped-bg bg-dropped-bg/40 p-4">
           <p className="flex items-center gap-2 font-medium text-dropped-fg"><AlertTriangle className="h-4 w-4" /> This run failed.</p>
           <p className="mt-1 text-sm text-dropped-fg">{run.error}</p>
-          <p className="mt-2 text-xs text-text-muted">Start a new run for this lead — this one cannot be resumed.</p>
+          <p className="mt-2 flex items-center gap-3 text-xs text-text-muted">
+            Start a new run for this lead — this one cannot be resumed.
+            <Link
+              href="/ai-tools/site-studio/sops?doc=03-troubleshooting"
+              className="inline-flex items-center gap-1 font-medium text-accent-ink hover:underline"
+            >
+              <BookOpen className="h-3.5 w-3.5" /> Troubleshooting SOP
+            </Link>
+          </p>
         </div>
       ) : null}
 

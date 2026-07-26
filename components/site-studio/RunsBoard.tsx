@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Loader2, Plus, Rocket } from "lucide-react";
+import Link from "next/link";
+import { BookOpen, Loader2, Plus, Rocket } from "lucide-react";
 import { EmptyPanel, PageHeader, Pill } from "@/components/common/Panel";
 import { btnPrimary } from "@/components/common/buttons";
 import { RelativeTime } from "@/components/common/RelativeTime";
@@ -61,9 +62,17 @@ export function RunsBoard() {
         title="Generation runs"
         description="Launch a certified template against a lead, review Gate 1, and download the finished site."
         action={
-          <button className={btnPrimary} onClick={() => setLaunching(true)}>
-            <Plus className="h-4 w-4" /> New run
-          </button>
+          <>
+            <Link
+              href="/ai-tools/site-studio/sops?doc=02-generating-a-website"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-text-muted hover:text-text"
+            >
+              <BookOpen className="h-3.5 w-3.5" /> SOP: Generating a website
+            </Link>
+            <button className={btnPrimary} onClick={() => setLaunching(true)}>
+              <Plus className="h-4 w-4" /> New run
+            </button>
+          </>
         }
       />
 

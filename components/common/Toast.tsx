@@ -9,10 +9,23 @@ type Toast = { id: number; kind: ToastKind; title: string; body?: string };
 type ToastCtx = { toast: (t: { kind?: ToastKind; title: string; body?: string }) => void };
 const Ctx = createContext<ToastCtx | null>(null);
 
+// Module-level singleton (never recreated) — see useToast's own note on why
+// this must be referentially stable across calls, not just behaviorally a
+// no-op.
+const NOOP_TOAST_CTX: ToastCtx = { toast: () => {} };
+
 export function useToast(): ToastCtx {
   const c = useContext(Ctx);
-  // Safe no-op if used outside a provider (never throws in render).
-  return c ?? { toast: () => {} };
+  // Safe no-op if used outside a provider (never throws in render). Returns
+  // the SAME object every time (not a fresh `{ toast: () => {} }` literal per
+  // call) — a caller's own `useCallback(fn, [toast])`/`useEffect(fn, [toast])`
+  // relies on this being referentially stable. A fresh object/function each
+  // render would make `toast` change identity on every call, which cascades:
+  // any memoized callback depending on it never stabilizes, and any effect
+  // depending on THAT callback re-fires every render — an infinite loop in
+  // exactly the case this fallback exists for (no provider in the tree, e.g.
+  // an unwrapped component mounted directly in a test).
+  return c ?? NOOP_TOAST_CTX;
 }
 
 const ICON = { success: CheckCircle2, error: AlertTriangle, info: Info };
