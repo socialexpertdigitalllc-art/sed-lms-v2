@@ -31,6 +31,18 @@ export function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// Plain text-node escaping: & < > only. Slot values land inside element text
+// content (not attributes), so quotes/apostrophes need no escaping there —
+// unlike escapeHtml above, which also escapes them for attribute-safety and
+// is used for identity/title/image-src/attribute contexts.
+export const escapeText = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Shared by the production renderer and the annotated-build path (see
+ *  render/annotate.ts) so both compute a slot's rendered value identically. */
+export const fillSlot = (value: string, sample: string, html: boolean): string =>
+  html ? (value === sample ? value : sanitizeInline(value)) : escapeText(value);
+
 const INLINE_ALLOWED = new Set(["b", "i", "em", "strong", "br", "span", "small"]);
 
 /** Strip all markup except harmless inline formatting; text is preserved. */

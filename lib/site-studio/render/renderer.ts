@@ -1,15 +1,7 @@
 import { CompiledTemplate, ContentDoc, ContentDocPage, FileMap, RenderResult } from "../schema";
-import { escapeHtml, findTokens, navMarker, repeatMarker, sanitizeInline, NAV_HREF, NAV_TITLE } from "../tokens";
+import { escapeHtml, fillSlot, findTokens, navMarker, repeatMarker, NAV_HREF, NAV_TITLE } from "../tokens";
 import { applyTheme } from "./theme";
-
-// Plain text-node escaping: & < > only. Slot values land inside element text
-// content (not attributes), so quotes/apostrophes need no escaping there —
-// unlike tokens.ts's escapeHtml, which also escapes them for attribute-safety
-// and is used elsewhere in this file for identity/title/attribute contexts.
-const escapeText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-const fillSlot = (value: string, sample: string, html: boolean): string =>
-  html ? (value === sample ? value : sanitizeInline(value)) : escapeText(value);
+import { annotatePageHtml, RenderOptions } from "./annotate";
 
 const renderNavLi = (frag: string, href: string, label: string): string =>
   frag.split(NAV_HREF).join(href).split(NAV_TITLE).join(escapeHtml(label));
@@ -23,7 +15,7 @@ const relPrefix = (from: string) => "../".repeat(from.split("/").length - 1);
 const prefixHref = (prefix: string, href: string): string =>
   /^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(href) ? href : prefix + href;
 
-export function renderSite(tpl: CompiledTemplate, doc: ContentDoc): RenderResult {
+export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: RenderOptions): RenderResult {
   const missing: { page_id: string; slot_id: string }[] = [];
   const defs = new Map(tpl.manifest.pages.map((p) => [p.id, p]));
 
@@ -60,7 +52,8 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc): RenderResult
   const themed = applyTheme(tpl.assets, tpl.manifest.theme, doc.theme);
   const files: FileMap = { ...themed.assets };
 
-  for (const b of built) {
+  for (let docPageIndex = 0; docPageIndex < built.length; docPageIndex++) {
+    const b = built[docPageIndex];
     let html = tpl.pages[b.def.file];
     const prefix = relPrefix(b.output);
 
@@ -111,10 +104,19 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc): RenderResult
       html = html.split(repeatMarker(r.id)).join(rendered);
     }
 
-    for (const s of b.def.slots) {
-      const token = s.type === "image" ? `{{img:${s.id}}}` : `{{slot:${s.id}}}`;
-      const value = s.type === "image" ? escapeHtml(b.page.slots[s.id]) : fillSlot(b.page.slots[s.id], s.sample, s.html);
-      html = html.split(token).join(value);
+    // Annotation (preview-only; see annotate.ts) takes over slot substitution
+    // AND page marking here so it can locate each token's enclosing element
+    // before it disappears. `opts?.annotate` defaults to falsy, so the
+    // production path below is byte-for-byte what this function has always
+    // produced — annotatePageHtml() is never even imported into that path.
+    if (opts?.annotate) {
+      html = annotatePageHtml(html, b.def, b.page, docPageIndex);
+    } else {
+      for (const s of b.def.slots) {
+        const token = s.type === "image" ? `{{img:${s.id}}}` : `{{slot:${s.id}}}`;
+        const value = s.type === "image" ? escapeHtml(b.page.slots[s.id]) : fillSlot(b.page.slots[s.id], s.sample, s.html);
+        html = html.split(token).join(value);
+      }
     }
 
     html = html.split("{{title}}").join(escapeHtml(b.page.title));
