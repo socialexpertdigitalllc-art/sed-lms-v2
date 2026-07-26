@@ -10,12 +10,15 @@
 - [ ] "Skip content review" (`auto`) sends the run straight past Gate 1 into rendering — content still stays fully editable at Gate 2. Leave this unchecked for a normal review flow.
 - [ ] **Start run.** A lead can only have one active run at a time — starting a second while one is still in progress (`queued`/`preparing`/`reviewing`/`approved`/`rendering`) is refused with a 409; finish or cancel the first one.
 
-## 2. Why a run can stop immediately, before any AI spend
+## 2. When a template asks for a fact the lead record doesn't have
 
-The very first machine step (`prepare`) checks whether the lead can actually supply everything the template's identity tokens need — a phone number, an email, a map embed link, etc. — **before** a single AI call is made. If something's missing, the run goes straight to `failed` with a message naming exactly what's missing (e.g. *"This template needs an email address and a map link, which this lead doesn't have. Add them to the lead and start a new run."*).
+The very first machine step (`prepare`) checks whether the lead can actually supply everything the template's identity tokens need — a phone number, an email, a map embed link, and (since templates aren't limited to a fixed vocabulary) sometimes something more specific like a neighborhood, an owner's name, or a social handle a lead record simply has no column for. Prepare never fails the run over this: every fact the lead can't supply is seeded in blank and the run proceeds normally into writing.
 
-- [ ] This is not a bug and not something to retry — the fix is to add the missing field(s) to the lead record and **start a brand-new run**. A failed run cannot be resumed.
-- [ ] A lead with no email at all is fine as long as it's explicitly marked "no email" on the lead — a template that needs one will still refuse, but an absent, unmarked email is treated as "not captured yet," which is a different (still-refusing) case from "this business genuinely has none."
+- [ ] At Gate 1, if the template needed anything the lead couldn't supply, a **Site facts** panel appears above the page cards — one labelled input per missing fact, showing how many places it's used and on which pages. Fill in what you know.
+- [ ] **Leaving a field blank is a legitimate choice.** The site simply renders with that spot blank (an empty href, an empty map embed, no text where the fact would have gone) — it is not an error, and it does not block approval. The approve footer mentions how many facts are still unfilled, purely as information.
+- [ ] The panel never shows the template's own demo value for a fact — that's the template author's own business detail, not the operator's, and it would be too easy to accept it as-is and ship a leak onto a client's live site.
+- [ ] You can also fill (or change) a site fact later, from the same **Site facts** panel, at Gate 2 (the `ready` preview) — it isn't a one-time, Gate-1-only action.
+- [ ] A lead with no email at all is fine as long as it's explicitly marked "no email" on the lead — that's still treated as "genuinely has none," distinct from a fact the template needs that simply isn't a lead field at all.
 
 ## 3. While it's writing
 
@@ -27,6 +30,8 @@ The cockpit drives itself: each page gets one AI write call, and image candidate
 ## 4. Gate 1 — content + image review
 
 Once every page is written and images are sourced, the run parks at **Awaiting review** (status `reviewing`). **This is the gate working as designed, not a stuck run** — the background advancer that finishes abandoned steps for you deliberately cannot cross this status; only a human clicking **Approve & render** releases it.
+
+If this run's template needed a fact the lead couldn't supply, the **Site facts** panel appears above the page cards first — see §2. Filling it in (or explicitly leaving a field blank) is independent of reviewing the page cards below; do either in whichever order makes sense to you.
 
 Review each page card:
 
@@ -65,4 +70,4 @@ After render + finalize complete, the run reaches **Ready**. This opens the navi
 - [ ] **Takedown** — from **Site Studio → Deployments**, filter to **Live**, click the trash icon next to a row, confirm. This deletes the subdomain on the host and marks the record `taken_down` immediately; it is not reversible from the board (you'd need to deploy again from a ready run to bring the site back).
 - [ ] The **Deployments** board lists every live/former site, Site Studio-generated and legacy v2 alike (the origin badge tells them apart) — this is the one place to look up a client's current URL, status, and history.
 
-Source of truth for this SOP: `lib/site-studio/run/*`, `lib/site-studio/deploy/*`, `components/site-studio/{RunLaunch,RunCockpit,RunPageCard,ImagePicker,RunPreview,DeploymentsBoard}.tsx`, `app/api/site-studio/runs/[id]/*`.
+Source of truth for this SOP: `lib/site-studio/run/*`, `lib/site-studio/deploy/*`, `components/site-studio/{RunLaunch,RunCockpit,RunPageCard,SiteFactsPanel,ImagePicker,RunPreview,DeploymentsBoard}.tsx`, `app/api/site-studio/runs/[id]/*`.

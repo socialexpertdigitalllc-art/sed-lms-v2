@@ -86,6 +86,10 @@ Scattered hex literals still work (a weaker `literal_remap` mode); no consistent
 1. **Link and button labels are not editable.** `<a>` elements are never text slots, so a CTA's own text is fixed at whatever the template ships. Write CTA copy that suits any business — "Get a free estimate", "See our work" — never anything trade-specific.
 2. **Fan-out pages need a labelling pass.** Filenames alone can't mark a page as a *single* service or area page (the kind that gets stamped once per client service). Ship one representative `service-*.html` and one `area-*.html`, then run the AI page-kind pass after upload to enable fan-out.
 
+## Identity facts beyond the lead's own fields are fine
+
+A template isn't limited to the fixed set of facts a lead record holds (business name, phone, email, map link, ...). Anything else the compiler's identity passes find in the demo copy — a neighborhood name, an owner's name, a social handle — becomes its own `{{id:*}}` fact just the same, even though no lead column will ever supply it automatically. That's expected, not a compile error: at run time the operator fills each such fact in (or explicitly leaves it blank) at Gate 1's "Site facts" panel, per run — see SOP 02 §2. Nothing about authoring a template needs to change to accommodate this; it's handled entirely on the generation side.
+
 ---
 
 ## Paste this into your template-generating AI

@@ -8,9 +8,11 @@ Status `reviewing` **is Gate 1, working as designed** — it is not a hang, and 
 
 Each page gets up to **2** write attempts. A page card showing **Failed** has a **Retry** button — click it and the cockpit resumes driving. If a page **exhausts both attempts**, the whole run is failed (not just that page), and the run's error names the stuck page(s) and the last error each hit. This is deliberate: retrying forever would leave the run wedged at `preparing` permanently with no way out. There's no retry-a-failed-run action — start a new run against the same lead once whatever caused the failures (usually a transient model/API error) has passed.
 
-## A run failed at `prepare`, before any content was written
+## A template asked for a fact the lead couldn't supply — this is not a failure
 
-The message names exactly which lead field is missing (business name, phone, email, map link, etc.) — see SOP 02 §2. The fix is always the same: add the missing field to the lead record and **start a new run**; a failed run cannot be resumed or repaired in place.
+`prepare` no longer fails the run over a missing identity fact (a phone/email/map link the lead lacks, or something more specific like a neighborhood or an owner's name a lead record has no column for at all). It seeds the fact in blank and the run proceeds normally — see SOP 02 §2. If you're looking at a run that reached Gate 1 with a **Site facts** panel showing one or more inputs, that's this working as designed, not a partial failure: fill in what you know, and leave the rest blank if you don't have it. There's no run-level error to chase here, and nothing to restart.
+
+If you instead see a run in `failed` with the identity-style wording from an OLDER run (started before this behavior shipped), the historical fix still applies to that one artifact: it can't be resumed or repaired in place — start a new run for that lead.
 
 ## Render refused with a list of missing slots
 
@@ -38,7 +40,7 @@ The Deploy button on the Gate 2 preview (`components/site-studio/RunPreview.tsx`
 
 ## Editing at Gate 2 (the "ready" preview)
 
-Click-to-edit, per-field revert, re-roll, the theme color panel, and image picks all work at Gate 2, exactly as they do at Gate 1 — `content`, `revert`, `theme`, `reroll`, and `images` all accept a run whose status is `reviewing` **or** `ready` (see `isEditable` in `lib/site-studio/run/types.ts`). If you ever see a 409 saying a run "is not at a gate," check the run's actual status (`Site Studio → Runs`) — it means the run is `failed`, `cancelled`, or mid-step (`queued`/`preparing`/`approved`/`rendering`), not that Gate 2 editing is broken.
+Click-to-edit, per-field revert, re-roll, the theme color panel, image picks, and the Site facts panel all work at Gate 2, exactly as they do at Gate 1 — `content`, `revert`, `theme`, `reroll`, `images`, and `identity` all accept a run whose status is `reviewing` **or** `ready` (see `isEditable` in `lib/site-studio/run/types.ts`). If you ever see a 409 saying a run "is not at a gate," check the run's actual status (`Site Studio → Runs`) — it means the run is `failed`, `cancelled`, or mid-step (`queued`/`preparing`/`approved`/`rendering`), not that Gate 2 editing is broken.
 
 Every edit at Gate 2 also re-finalizes the deployable/downloadable zip so it never drifts from what the preview shows (see SOP 02 §5). If a toast says the build is **stale** after an edit, the edit itself still saved — only the re-finalize step was refused (usually a picked image whose asset failed to resolve, same as the "Render refused" entry above). Fix whatever's named in the warning, then make any further edit (or re-pick the image) to trigger another re-finalize attempt before deploying.
 
@@ -61,4 +63,4 @@ Once a site is live and the client asks for a change:
 2. Edit the changed field(s) in the preview — each edit re-finalizes the build automatically (SOP 02 §5).
 3. Re-deploy. Because deploy resolves to the lead's existing subdomain whenever one exists, this **overwrites the live site in place at the same URL** — it does not create a second site or require any DNS change.
 
-Source of truth for this SOP: `lib/site-studio/run/engine.ts`, `lib/site-studio/deploy/deployRun.ts`, and the error messages in `app/api/site-studio/runs/[id]/{step,control,content,theme,revert,images,reroll,deploy}/route.ts`.
+Source of truth for this SOP: `lib/site-studio/run/engine.ts`, `lib/site-studio/deploy/deployRun.ts`, and the error messages in `app/api/site-studio/runs/[id]/{step,control,content,theme,revert,images,reroll,identity,deploy}/route.ts`.
