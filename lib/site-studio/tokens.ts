@@ -68,6 +68,66 @@ export const fillSlot = (value: string, sample: string, html: boolean): string =
 export const fillSlotValue = (slot: Pick<SlotDef, "attr" | "sample" | "html">, value: string): string =>
   slot.attr ? escapeHtml(value) : fillSlot(value, slot.sample, slot.html);
 
+/**
+ * JS-string-context escape, for an identity value substituted into a text
+ * asset (.js) at a point the compiler's asset-tokenization pass found it —
+ * always inside a JS string literal in the original source (single-,
+ * double-, or backtick-quoted; the compiler does blind text substitution and
+ * doesn't know which quote style surrounds a given occurrence). Mirrors the
+ * lesson `escapeHtml`/`fillSlotValue` already learned for HTML attributes:
+ * a value dropped in unescaped can corrupt the syntax around it rather than
+ * just misrender. `Bob's Plumbing & Sons` substituted unescaped into
+ * `const NAME = '…'` closes the string early on the apostrophe and throws a
+ * syntax error that breaks the whole deployed site — not just a cosmetic
+ * glitch.
+ *
+ * Order matters: backslash must be escaped FIRST, before any escape below
+ * introduces new backslashes of its own.
+ *   - `\`            -> `\\`   (else a later inserted `\` would double up)
+ *   - `'`, `"`, `` ` `` -> escaped, since the surrounding quote style is unknown
+ *   - CR/LF            -> `\n` (a raw newline inside a JS string is a syntax error)
+ *   - U+2028/U+2029    -> the six-char sequences "\\u2028"/"\\u2029" (literal JS line terminators even
+ *     inside a string literal — unescaped, they terminate the statement)
+ *   - `</script`       -> `<\/script` (defense in depth if this text is ever
+ *     inlined inside an HTML <script> block rather than shipped as an
+ *     external .js file)
+ */
+export function escapeJsString(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/`/g, "\\`")
+    .replace(/\r\n/g, "\\n")
+    .replace(/\r/g, "\\n")
+    .replace(/\n/g, "\\n")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029")
+    .replace(/<\/script/gi, "<\\/script");
+}
+
+/**
+ * CSS-string-context escape, for an identity value substituted into a text
+ * asset (.css) at a point the compiler found it inside a CSS string (e.g.
+ * `content: "…"`). Same reasoning as `escapeJsString`: an unescaped quote
+ * breaks out of the CSS string and corrupts the rule (or the whole
+ * stylesheet, depending on what follows), rather than just misrendering.
+ *   - `\` -> `\\` (escaped first, same reason as above)
+ *   - `'`, `"` -> escaped, since the surrounding quote style is unknown
+ *   - CR/LF -> `\A ` (the CSS escape for a literal newline inside a string;
+ *     a raw, unescaped newline inside a CSS string is invalid and breaks
+ *     the rule)
+ */
+export function escapeCssString(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\r\n/g, "\\A ")
+    .replace(/\r/g, "\\A ")
+    .replace(/\n/g, "\\A ");
+}
+
 const INLINE_ALLOWED = new Set(["b", "i", "em", "strong", "br", "span", "small"]);
 
 /** Strip all markup except harmless inline formatting; text is preserved. */

@@ -329,3 +329,76 @@ describe("renderSite escapes attribute-bound slots (alt text) safely", () => {
     expect(html).toContain(`alt="foo&quot; onmouseover=&quot;alert(1)"`);
   });
 });
+
+/**
+ * Render-time substitution of {{id:*}} tokens inside tokenized text assets
+ * (compiler/assetIdentity.ts marks which asset paths carry them via
+ * manifest.tokenizedAssets). The critical property under test: the
+ * substituted value must be escaped for the ASSET'S context (JS string vs
+ * CSS string) — not HTML-escaped, and not dropped in raw — or a hostile
+ * business name breaks the asset's syntax and takes down the whole
+ * deployed site.
+ */
+describe("renderSite substitutes identity tokens inside tokenized assets", () => {
+  const assetTpl: CompiledTemplate = {
+    manifest: {
+      engine: 3, name: "asset-mini", version: 1,
+      identity: { business_name: "Demo Co", phone: "(111) 111-1111" },
+      theme: { mode: "none", roles: {} },
+      nav: [],
+      pages: [{ id: "index", file: "index.html", kind: "home", stampable: false, title_sample: "Demo Co", slots: [], repeats: [] }],
+      tokenizedAssets: ["js/site.js", "css/site.css"],
+    },
+    pages: { "index.html": `<html><head><title>{{title}}</title></head><body></body></html>` },
+    fragments: {},
+    assets: {
+      "js/site.js": new TextEncoder().encode(`var NAME = "{{id:business_name}}"; var PHONE = "{{id:phone}}";`),
+      "css/site.css": new TextEncoder().encode(`.badge::before { content: "{{id:business_name}}"; }`),
+      "img/logo.png": new TextEncoder().encode("not-really-a-png-but-untouched"),
+    },
+  };
+  const docFor = (identity: Record<string, string>): ContentDoc => ({
+    identity, theme: {},
+    pages: [{ page_id: "index", title: "Demo Co", slots: {}, repeats: {} }],
+  });
+
+  it("substitutes a clean value into the JS asset", () => {
+    const r = renderSite(assetTpl, docFor({ business_name: "Acme Co", phone: "(303) 555-9999" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(dec(r.files["js/site.js"])).toBe(`var NAME = "Acme Co"; var PHONE = "(303) 555-9999";`);
+  });
+
+  it("JS-escapes a hostile business name instead of producing a syntax error", () => {
+    const r = renderSite(assetTpl, docFor({ business_name: `Bob's Plumbing & Sons`, phone: "(303) 555-9999" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const js = dec(r.files["js/site.js"]);
+    expect(js).toBe(`var NAME = "Bob\\'s Plumbing & Sons"; var PHONE = "(303) 555-9999";`);
+    // and the escaped output is actually valid, evaluable JS
+    // eslint-disable-next-line no-new-func
+    const fn = new Function(`${js} return NAME;`);
+    expect(fn()).toBe(`Bob's Plumbing & Sons`);
+  });
+
+  it("CSS-escapes the same hostile value in the CSS asset", () => {
+    const r = renderSite(assetTpl, docFor({ business_name: `Bob's Plumbing & Sons`, phone: "(303) 555-9999" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(dec(r.files["css/site.css"])).toBe(`.badge::before { content: "Bob\\'s Plumbing & Sons"; }`);
+  });
+
+  it("leaves an asset not listed in tokenizedAssets untouched", () => {
+    const r = renderSite(assetTpl, docFor({ business_name: "Acme Co", phone: "(303) 555-9999" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(dec(r.files["img/logo.png"])).toBe("not-really-a-png-but-untouched");
+  });
+
+  it("refuses when an identity key referenced only inside a tokenized asset is missing from the Content Doc", () => {
+    const r = renderSite(assetTpl, docFor({ business_name: "Acme Co" })); // phone missing
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.missing.some((m) => m.slot_id === "id:phone")).toBe(true);
+  });
+});

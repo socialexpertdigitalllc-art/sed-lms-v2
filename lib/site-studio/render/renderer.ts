@@ -1,7 +1,51 @@
 import { CompiledTemplate, ContentDoc, ContentDocPage, FileMap, RenderResult } from "../schema";
-import { escapeHtml, fillSlotValue, findTokens, navMarker, repeatMarker, NAV_HREF, NAV_TITLE } from "../tokens";
+import {
+  escapeCssString, escapeHtml, escapeJsString, fillSlotValue, findTokens,
+  navMarker, repeatMarker, NAV_HREF, NAV_TITLE,
+} from "../tokens";
 import { applyTheme } from "./theme";
 import { annotatePageHtml, annotateRepeatRow, RenderOptions } from "./annotate";
+
+// Context-aware escape for an identity value substituted into a tokenized
+// text asset, keyed by file extension — mirrors compiler/assetIdentity.ts's
+// TEXT_ASSET_RE scope (.js/.css only; see that file for why other text
+// types are deliberately out of scope). A value dropped in unescaped can
+// break the asset's syntax outright (a business name with an apostrophe
+// closing a JS string early) rather than just misrender — see
+// escapeJsString/escapeCssString in ../tokens.ts for the exact rules.
+function assetEscapeFor(path: string): (s: string) => string {
+  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+  if (ext === "js" || ext === "mjs" || ext === "cjs") return escapeJsString;
+  if (ext === "css") return escapeCssString;
+  return (s) => s;
+}
+
+/** Substitute {{id:*}} tokens in every manifest-recorded tokenized asset,
+ *  context-escaping each value for the asset's file type. Assets not listed
+ *  are copied through untouched (unchanged behavior). */
+function substituteAssetIdentity(
+  assets: FileMap, tokenizedAssets: string[], identity: Record<string, string>,
+): { files: FileMap; leftover: { path: string; key: string }[] } {
+  const files: FileMap = { ...assets };
+  const leftover: { path: string; key: string }[] = [];
+
+  for (const path of tokenizedAssets) {
+    const bytes = files[path];
+    if (!bytes) continue;
+    const escape = assetEscapeFor(path);
+    let text = new TextDecoder().decode(bytes);
+    for (const t of findTokens(text)) {
+      if (t.kind !== "id") continue;
+      const value = identity[t.key];
+      if (value === undefined) continue; // caught by the referenced-key completeness check below
+      text = text.split(t.raw).join(escape(value));
+    }
+    for (const t of findTokens(text)) if (t.kind === "id") leftover.push({ path, key: t.key });
+    files[path] = new TextEncoder().encode(text);
+  }
+
+  return { files, leftover };
+}
 
 const renderNavLi = (frag: string, href: string, label: string): string =>
   frag.split(NAV_HREF).join(href).split(NAV_TITLE).join(escapeHtml(label));
@@ -35,10 +79,13 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
 
   // completeness: identity keys the skeletons actually reference (including
   // nav labels captured on region.items, which live in the manifest, not the
-  // page/fragment skeletons)
+  // page/fragment skeletons; and identity tokens inside tokenized text
+  // assets, which live in tpl.assets' bytes, not tpl.pages/tpl.fragments)
   const navLabels = tpl.manifest.nav.flatMap((r) => (r.items ?? []).map((it) => it.label));
+  const tokenizedAssetPaths = tpl.manifest.tokenizedAssets ?? [];
+  const assetTexts = tokenizedAssetPaths.map((p) => new TextDecoder().decode(tpl.assets[p] ?? new Uint8Array()));
   const referenced = new Set(
-    Object.values(tpl.pages).concat(Object.values(tpl.fragments)).concat(navLabels)
+    Object.values(tpl.pages).concat(Object.values(tpl.fragments)).concat(navLabels).concat(assetTexts)
       .flatMap((html) => findTokens(html)).filter((t) => t.kind === "id").map((t) => t.key),
   );
   for (const key of referenced) if (!(key in doc.identity)) missing.push({ page_id: "(site)", slot_id: `id:${key}` });
@@ -50,7 +97,14 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
   for (const b of built) if (!outputOf.has(b.def.id)) outputOf.set(b.def.id, b.output);
 
   const themed = applyTheme(tpl.assets, tpl.manifest.theme, doc.theme);
-  const files: FileMap = { ...themed.assets };
+  const assetSub = substituteAssetIdentity(themed.assets, tokenizedAssetPaths, doc.identity);
+  if (assetSub.leftover.length > 0) {
+    return {
+      ok: false,
+      missing: assetSub.leftover.map((l) => ({ page_id: "(site)", slot_id: `asset:${l.path}:id:${l.key}` })),
+    };
+  }
+  const files: FileMap = { ...assetSub.files };
 
   for (let docPageIndex = 0; docPageIndex < built.length; docPageIndex++) {
     const b = built[docPageIndex];
