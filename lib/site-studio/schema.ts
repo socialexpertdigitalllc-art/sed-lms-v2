@@ -111,6 +111,15 @@ export const manifestSchema = z.object({
   theme: themeDefSchema,
   nav: z.array(navRegionSchema),
   pages: z.array(pageDefSchema).min(1),
+  // Asset paths (relative, matching CompiledTemplate.assets' keys) whose
+  // bytes contain {{id:*}} tokens the compiler's asset-identity pass
+  // (compiler/assetIdentity.ts) substituted in place of a literal demo
+  // identity value. A bare FileMap of bytes gives the renderer no other way
+  // to know which assets need identity substitution at render time versus
+  // which should be copied through untouched — see render/renderer.ts.
+  // Optional (not defaulted) so existing hand-written manifests/fixtures
+  // throughout the test suite that predate this field remain valid.
+  tokenizedAssets: z.array(z.string()).optional(),
 }).superRefine((m, ctx) => {
   const ids = new Set<string>();
   const files = new Set<string>();
