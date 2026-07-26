@@ -1,17 +1,20 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { callForTask } from "@/lib/ai-tools/providers/run";
-import type { CompiledTemplate, TemplateManifest } from "../schema";
+import type { CompiledTemplate, ContentDoc, TemplateManifest } from "../schema";
 import { manifestSchema } from "../schema";
 import { findTokens } from "../tokens";
 import { renderSite } from "../render/renderer";
 import { loadPackage } from "../service/templates";
-import { buildDossier } from "./dossier";
+import { buildDossier, type Dossier } from "./dossier";
 import { selectPages, slugify } from "./pageSelect";
 import { seedContentDoc } from "./seed";
 import { writePage, type AiCall, type WriteResult } from "./writer";
 import { applyWritten } from "./applyWritten";
 import { finalizeRun } from "./finalize";
-import { nextStep, type PageWriteState, type RunStep, type StudioRunRow } from "./types";
+import { nextStep, type PageWriteState, type RunStep, type RunStatus, type SlotImageState, type StudioRunRow } from "./types";
+import { sourceImages } from "./imageSource";
+import { searchPexels as pexelsSearch, type PexelsResult } from "../assets/pexels";
+import { STUDIO_ASSETS_BUCKET } from "../assets/rehost";
 
 /** Production AiCall: routes the per-page write through the task router on
  *  its own registered task ("content_write") — kept separate from
@@ -23,10 +26,32 @@ export const productionWriterCall: AiCall = async (system, user) => {
   return { text };
 };
 
+/** Production image search: the real Pexels client (reads PEXELS_API_KEY
+ *  from the environment on its own). Routes wire this in explicitly, same
+ *  pattern as `productionWriterCall` — kept as an explicit opt-in rather
+ *  than `runWrite`'s own default so nothing here ever depends on whatever
+ *  happens to be in `process.env` at test time (see the hermetic default on
+ *  `RunStepDeps.searchPexels` below). */
+export const productionSearchPexels = (query: string): Promise<PexelsResult> => pexelsSearch(query);
+
+/** The hermetic default when a caller supplies no `searchPexels`: no
+ *  candidates, no network, ever. Sourcing is an enhancement (spec §8) — a
+ *  run must reach the gate with empty candidate lists rather than depend on
+ *  an implicit environment default making a live call. */
+const noPexelsConfigured = async (): Promise<PexelsResult> => ({
+  ok: false,
+  error: "no searchPexels configured for this run",
+});
+
 export interface RunStepDeps {
   aiCall: AiCall;
   /** Injectable clock — tests pin it; production omits it. */
   now?: () => Date;
+  /** Image search for the write phase's parallel sourcing step. Production
+   *  routes pass `productionSearchPexels`; omitting it (as most tests do,
+   *  and as any test not exercising sourcing may) is safe and hermetic —
+   *  see `noPexelsConfigured`. */
+  searchPexels?: (query: string) => Promise<PexelsResult>;
 }
 
 export interface RunStepResult {
@@ -37,8 +62,12 @@ export interface RunStepResult {
    *  claim attempt. When false, `row` is simply the row as it was passed in:
    *  no work was done and, critically, no AI call was made. Always true for
    *  the done:true no-op case (nothing to claim) and for every step that
-   *  actually ran. */
+   *  actually ran. Also true (nothing to "lose") for the paused short-circuit
+   *  below, since that never even attempts a claim. */
   claimed: boolean;
+  /** True when this call did nothing because the run is paused — checked
+   *  BEFORE the claim, so a paused run makes no claim and no AI call. */
+  paused?: boolean;
 }
 
 const MAX_WRITE_ATTEMPTS = 2;
@@ -82,7 +111,10 @@ function randomBase36(len: number): string {
   return Math.random().toString(36).slice(2, 2 + len).padEnd(len, "0");
 }
 
-async function loadManifest(admin: SupabaseClient, templateId: string): Promise<TemplateManifest> {
+/** Exported so routes that need the compiled manifest (Task 9's `reroll` and
+ *  `images` routes) load it exactly this way, rather than triplicating this
+ *  five-line fetch-and-parse per route. */
+export async function loadManifest(admin: SupabaseClient, templateId: string): Promise<TemplateManifest> {
   const { data, error } = await admin.from("studio_templates").select("manifest").eq("id", templateId).single();
   if (error || !data?.manifest) {
     throw new Error(`engine: template "${templateId}" has no compiled manifest (${error?.message ?? "not found"})`);
@@ -119,15 +151,74 @@ function preciseNow(): string {
   return `${iso.slice(0, -1)}${String(claimSeq).padStart(3, "0")}Z`;
 }
 
-async function persistRun(admin: SupabaseClient, id: string, patch: Record<string, unknown>): Promise<StudioRunRow> {
-  const { data, error } = await admin
-    .from("studio_runs")
-    .update({ ...patch, updated_at: preciseNow() })
-    .eq("id", id)
-    .select("*")
-    .single();
+/**
+ * CONTRACT any writer of `studio_runs` must honour: `claimRun`'s CAS below
+ * is keyed on `updated_at`, so ANY row mutation that must be visible to an
+ * in-flight (or about-to-be-called) `runStep` — most notably flipping
+ * `paused` — MUST bump `updated_at` in the same statement. A bare
+ * `.update({paused: true})` that skips this leaves a step that already read
+ * the row (with its OLD `updated_at`) free to win its claim and run a full
+ * step (including an AI call) after the pause was requested, since the CAS
+ * predicate would still match. This function always bumps it (via
+ * `preciseNow()`) for exactly this reason; Task 9's control route (pause/
+ * resume/cancel) must go through this same path, not a raw `.update()`.
+ *
+ * `guard`, when supplied, adds `.eq("status", guard.expectStatus)` to the
+ * update — the SAME optimistic-concurrency shape `claimRun` uses below, but
+ * keyed on `status` instead of `updated_at` for exactly the scenario
+ * `claimRun`'s own claim can't cover: a run that was CANCELLED (or otherwise
+ * changed) by a concurrent actor (the control route) AFTER this step already
+ * won its claim. Without this, a step's own FINAL persist — e.g.
+ * `runFinalize` deciding "ready" — would unconditionally overwrite whatever
+ * `status` the row holds NOW, silently resurrecting a run the operator just
+ * cancelled mid-step. Every step's terminal persist (the one that decides
+ * the run's new `status`) must pass `guard: { expectStatus: <the status this
+ * step read at claim time>, step: <this step> }`. A zero-row update (someone
+ * else already changed `status`) is NOT an error: this function re-fetches
+ * the CURRENT row, logs one `studio_run_events` note explaining the
+ * abandonment, and returns that current row untouched by this call's patch —
+ * "abandon my status write" rather than clobber a status a human explicitly
+ * set.
+ */
+async function persistRun(
+  admin: SupabaseClient,
+  id: string,
+  patch: Record<string, unknown>,
+  guard?: { expectStatus: RunStatus; step: RunStep },
+): Promise<StudioRunRow> {
+  let query = admin.from("studio_runs").update({ ...patch, updated_at: preciseNow() }).eq("id", id);
+  if (guard) query = query.eq("status", guard.expectStatus);
+  const { data, error } = await query.select("*").single();
+
+  if (guard && (error || !data)) {
+    const { data: current, error: currentErr } = await admin.from("studio_runs").select("*").eq("id", id).single();
+    if (currentErr || !current) {
+      throw new Error(
+        `engine: failed to persist run "${id}" (${error?.message ?? "no data"}) and could not re-fetch it either (${currentErr?.message ?? "no data"})`,
+      );
+    }
+    await logEvent(
+      admin, id, guard.step, "warn",
+      `Abandoned this step's terminal write: expected status "${guard.expectStatus}" but the run is now "${(current as StudioRunRow).status}" — someone else (a cancel, a concurrent step) changed it first.`,
+    );
+    return current as StudioRunRow;
+  }
+
   if (error || !data) throw new Error(`engine: failed to persist run "${id}" (${error?.message ?? "no data"})`);
   return data as StudioRunRow;
+}
+
+/**
+ * Pause/resume for the control route (Task 9). Goes through `persistRun` —
+ * never a bare `.update({paused})` — for exactly the reason documented on
+ * `persistRun` above: the claim CAS is keyed on `updated_at`, so flipping
+ * `paused` without bumping it would leave a step that already read the OLD
+ * row free to win `claimRun` and execute a full step (including an AI call)
+ * after the pause was requested. This is the one and only sanctioned way to
+ * change `paused` outside of `runStep` itself.
+ */
+export async function setRunPaused(admin: SupabaseClient, row: StudioRunRow, paused: boolean): Promise<StudioRunRow> {
+  return persistRun(admin, row.id, { paused });
 }
 
 /**
@@ -143,7 +234,10 @@ async function persistRun(admin: SupabaseClient, id: string, patch: Record<strin
  * the meaning `nextStep`/`RUNNING_STATUS` already give the status column
  * (see the note on `nextStep`) — `updated_at` gives the same single-winner
  * guarantee without touching that. See `preciseNow` for why this doesn't
- * just call `new Date().toISOString()` directly.
+ * just call `new Date().toISOString()` directly. See `persistRun`'s own
+ * comment for the contract this CAS imposes on every OTHER writer of this
+ * row (e.g. a future pause/resume route): skip the `updated_at` bump and a
+ * stale-read step can still win this claim after the mutation.
  */
 async function claimRun(admin: SupabaseClient, row: StudioRunRow): Promise<StudioRunRow | null> {
   const { data, error } = await admin
@@ -176,10 +270,11 @@ async function logEvent(
  *  have `render` refuse at the end. */
 async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => Date): Promise<StudioRunRow> {
   if (!row.lead_id) {
-    const updated = await persistRun(admin, row.id, {
-      status: "failed",
-      error: "This run has no lead (it may have been deleted). Start a new run against a live lead.",
-    });
+    const updated = await persistRun(
+      admin, row.id,
+      { status: "failed", error: "This run has no lead (it may have been deleted). Start a new run against a live lead." },
+      { expectStatus: row.status, step: "prepare" },
+    );
     await logEvent(admin, row.id, "prepare", "error", "Prepare refused: run has no lead.");
     return updated;
   }
@@ -206,7 +301,11 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
     const message =
       `This template needs ${humanizeMissingIdentity(missingIdentity)}, which this lead doesn't have. ` +
       `Add them to the lead and start a new run.`;
-    const updated = await persistRun(admin, row.id, { status: "failed", error: message });
+    const updated = await persistRun(
+      admin, row.id,
+      { status: "failed", error: message },
+      { expectStatus: row.status, step: "prepare" },
+    );
     await logEvent(
       admin, row.id, "prepare", "error",
       "Prepare refused: lead is missing identity data the template requires.",
@@ -217,13 +316,17 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
 
   const siteSlug = `${slugify(dossier.business_name) || "site"}-${randomBase36(6)}`;
 
-  const updated = await persistRun(admin, row.id, {
-    content_doc: doc,
-    client_photos: dossier.client_photos,
-    site_slug: siteSlug,
-    steps: { ...row.steps, prepare: { at: now().toISOString(), pages: doc.pages.length } },
-    status: "preparing",
-  });
+  const updated = await persistRun(
+    admin, row.id,
+    {
+      content_doc: doc,
+      client_photos: dossier.client_photos,
+      site_slug: siteSlug,
+      steps: { ...row.steps, prepare: { at: now().toISOString(), pages: doc.pages.length } },
+      status: "preparing",
+    },
+    { expectStatus: row.status, step: "prepare" },
+  );
   await logEvent(
     admin, row.id, "prepare", "info",
     `Prepared ${doc.pages.length} page(s)${selection.skipped.length ? `; skipped: ${selection.skipped.join(", ")}` : ""}.`,
@@ -232,20 +335,65 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
   return updated;
 }
 
+/** Sources image candidates for every image slot exactly ONCE per run. If
+ *  `row.steps.images` is already present, this is a pure no-op returning the
+ *  existing slots unchanged — a crash-retry of the write step (which always
+ *  re-checks `row.steps.images` fresh from what was last persisted) must
+ *  never re-query Pexels for slots that were already sourced. Never throws
+ *  and never fails the run: `sourceImages` itself already degrades a Pexels
+ *  outage to library-only candidates; this wrapper just also decides
+ *  whether to call it at all, and carries its one-per-call warning out so
+ *  the caller can log it through the run's own event stream (`sourceImages`'s
+ *  `log` hook is synchronous; `logEvent` is not, so it can't be called
+ *  directly from inside that hook). */
+async function sourceImagesOnce(
+  admin: SupabaseClient,
+  row: StudioRunRow,
+  manifest: TemplateManifest,
+  doc: ContentDoc,
+  dossier: Dossier,
+  deps: RunStepDeps,
+): Promise<{ slots: Record<string, SlotImageState>; warnings: string[] }> {
+  if (row.steps.images?.slots) return { slots: row.steps.images.slots, warnings: [] };
+
+  const warnings: string[] = [];
+  const searchPexels = deps.searchPexels ?? noPexelsConfigured;
+  try {
+    const slots = await sourceImages(
+      { admin, searchPexels, log: (_level, message) => warnings.push(message) },
+      manifest, doc, dossier, row.lead_id,
+    );
+    return { slots, warnings };
+  } catch (e) {
+    // Belt-and-braces: sourceImages is documented to never throw, but
+    // sourcing is an enhancement, never a cause of run failure — a bug here
+    // must still degrade to "no candidates", not fail the whole write step.
+    warnings.push(`image sourcing crashed unexpectedly: ${e instanceof Error ? e.message : String(e)}`);
+    return { slots: {}, warnings };
+  }
+}
+
 /** Writes every PENDING doc-page in parallel (one AI call each, via
  *  `Promise.allSettled` so one page's failure can never block another's
- *  result from landing). "Pending" = not yet `written`, and under the
- *  2-attempt cap — so re-running this step (status stays unchanged while any
- *  page remains incomplete, letting `nextStep` route back here) naturally
- *  retries ONLY the pages that still need it; an already-written page is
- *  never re-called. Status only advances to "writing" once every doc-page is
- *  `written`. A page that has now EXHAUSTED its attempts and still isn't
- *  written can never become written by retrying — retrying it forever would
- *  wedge the run at this status permanently (every `POST /step` a no-op
- *  forever, silently), which is exactly the orphaned-run class the
- *  short-step design exists to prevent. So once at least one unwritten page
- *  has hit the cap, the RUN itself fails, naming the stuck page(s) and their
- *  last error — never a silent, endless "will retry" that no longer will. */
+ *  result from landing), alongside image sourcing for every image slot
+ *  (`Promise.all` — sourcing never depends on the write outcome and must
+ *  never gate on it, or vice versa). "Pending" = not yet `written`, and
+ *  under the 2-attempt cap — so re-running this step (status stays unchanged
+ *  while any page remains incomplete, letting `nextStep` route back here)
+ *  naturally retries ONLY the pages that still need it; an already-written
+ *  page is never re-called, and `sourceImagesOnce` never re-sources an
+ *  already-sourced slot either.
+ *
+ *  GATE 1: once every doc-page is `written` AND images are sourced, the run
+ *  parks at "reviewing" (or skips straight to "approved" when
+ *  `options.auto` is set) — never "writing", which is dead (see types.ts).
+ *  A page that has now EXHAUSTED its attempts and still isn't written can
+ *  never become written by retrying — retrying it forever would wedge the
+ *  run at this status permanently (every `POST /step` a no-op forever,
+ *  silently), which is exactly the orphaned-run class the short-step design
+ *  exists to prevent. So once at least one unwritten page has hit the cap,
+ *  the RUN itself fails, naming the stuck page(s) and their last error —
+ *  never a silent, endless "will retry" that no longer will. */
 async function runWrite(admin: SupabaseClient, row: StudioRunRow, deps: RunStepDeps): Promise<StudioRunRow> {
   if (!row.content_doc) throw new Error("engine: write step reached before prepare completed");
   if (!row.lead_id) throw new Error("engine: write step has no lead");
@@ -264,22 +412,25 @@ async function runWrite(admin: SupabaseClient, row: StudioRunRow, deps: RunStepD
     if (!st || (st.status !== "written" && st.attempts < MAX_WRITE_ATTEMPTS)) eligible.push(i);
   });
 
-  const settled = await Promise.allSettled(
-    eligible.map((i) => {
-      const page = doc.pages[i];
-      const def = pagesById.get(page.page_id);
-      if (!def) {
-        return Promise.resolve<WriteResult>({
-          ok: false,
-          error: `engine: page "${page.page_id}" is not in the template manifest`,
-        });
-      }
-      // A stamped fan-out page's stamp value rides along as its own
-      // nav_title (seedContentDoc/selectPages set it to the same string) —
-      // no separate storage needed to recover it here.
-      return writePage(def, dossier, { stampValue: page.nav_title }, deps.aiCall);
-    }),
-  );
+  const [settled, imagesOutcome] = await Promise.all([
+    Promise.allSettled(
+      eligible.map((i) => {
+        const page = doc.pages[i];
+        const def = pagesById.get(page.page_id);
+        if (!def) {
+          return Promise.resolve<WriteResult>({
+            ok: false,
+            error: `engine: page "${page.page_id}" is not in the template manifest`,
+          });
+        }
+        // A stamped fan-out page's stamp value rides along as its own
+        // nav_title (seedContentDoc/selectPages set it to the same string) —
+        // no separate storage needed to recover it here.
+        return writePage(def, dossier, { stampValue: page.nav_title }, deps.aiCall);
+      }),
+    ),
+    sourceImagesOnce(admin, row, manifest, doc, dossier, deps),
+  ]);
 
   let workingDoc = doc;
   const pages: Record<string, PageWriteState> = { ...existing };
@@ -302,15 +453,17 @@ async function runWrite(admin: SupabaseClient, row: StudioRunRow, deps: RunStepD
   const allWritten = notWritten.length === 0;
   const stuck = notWritten.filter((i) => (pages[String(i)]?.attempts ?? 0) >= MAX_WRITE_ATTEMPTS);
 
-  let status: string = row.status; // default: unchanged, still retryable
+  let status: RunStatus = row.status; // default: unchanged, still retryable
   let runError: string | undefined;
   let level: "info" | "warn" | "error" = "warn";
   let message: string;
+  let gateEvent: "gate_opened" | "gate_skipped_auto" | null = null;
 
   if (allWritten) {
-    status = "writing";
+    status = row.options.auto ? "approved" : "reviewing";
     level = "info";
     message = `All ${doc.pages.length} page(s) written.`;
+    gateEvent = row.options.auto ? "gate_skipped_auto" : "gate_opened";
   } else if (stuck.length > 0) {
     // At least one page can never become "written" by retrying — fail the
     // RUN rather than leaving it retryable forever (see the doc comment
@@ -327,14 +480,24 @@ async function runWrite(admin: SupabaseClient, row: StudioRunRow, deps: RunStepD
     message = `${notWritten.length} page(s) not yet written; will retry on the next step call.`;
   }
 
-  const updated = await persistRun(admin, row.id, {
-    content_doc: workingDoc,
-    steps: { ...row.steps, write: { pages } },
-    status,
-    ...(runError !== undefined ? { error: runError } : {}),
-  });
+  const updated = await persistRun(
+    admin, row.id,
+    {
+      content_doc: workingDoc,
+      steps: { ...row.steps, write: { pages }, images: { slots: imagesOutcome.slots } },
+      status,
+      ...(runError !== undefined ? { error: runError } : {}),
+    },
+    { expectStatus: row.status, step: "write" },
+  );
 
   await logEvent(admin, row.id, "write", level, message, { pages });
+  for (const warning of imagesOutcome.warnings) {
+    await logEvent(admin, row.id, "write", "warn", warning);
+  }
+  if (gateEvent) {
+    await logEvent(admin, row.id, "write", "info", gateEvent);
+  }
 
   return updated;
 }
@@ -352,40 +515,78 @@ async function runRender(admin: SupabaseClient, row: StudioRunRow): Promise<Stud
 
   if (!result.ok) {
     const message = `Render refused: missing ${result.missing.map((m) => `${m.page_id}/${m.slot_id}`).join(", ")}`;
-    const updated = await persistRun(admin, row.id, { status: "failed", error: message });
+    const updated = await persistRun(
+      admin, row.id,
+      { status: "failed", error: message },
+      { expectStatus: row.status, step: "render" },
+    );
     await logEvent(admin, row.id, "render", "error", "Render refused: content is incomplete.", { missing: result.missing });
     return updated;
   }
 
-  const updated = await persistRun(admin, row.id, {
-    steps: { ...row.steps, render: { at: new Date().toISOString(), files: Object.keys(result.files).length } },
-    status: "rendering",
-  });
+  const updated = await persistRun(
+    admin, row.id,
+    {
+      steps: { ...row.steps, render: { at: new Date().toISOString(), files: Object.keys(result.files).length } },
+      status: "rendering",
+    },
+    { expectStatus: row.status, step: "render" },
+  );
   await logEvent(admin, row.id, "render", "info", `Rendered ${Object.keys(result.files).length} file(s).`);
   return updated;
 }
 
+/** Loads a picked asset's bytes for `resolveAssets`, straight from the
+ *  `studio_assets` row + the `studio-assets` bucket (assets/rehost.ts's
+ *  private bucket). Returns null (never throws) on any failure — a missing
+ *  row, a download error — exactly what `resolveAssets` treats as "this
+ *  asset failed to resolve" and reports in `missing`. */
+async function loadAssetBytes(admin: SupabaseClient, assetId: string): Promise<import("./resolveAssets").LoadedAsset | null> {
+  const { data: row, error: rowError } = await admin.from("studio_assets").select("*").eq("id", assetId).single();
+  if (rowError || !row) return null;
+  const storagePath = (row as { storage_path: string }).storage_path;
+  const contentType = (row as { content_type: string }).content_type;
+  const { data, error } = await admin.storage.from(STUDIO_ASSETS_BUCKET).download(storagePath);
+  if (error || !data) return null;
+  const bytes = new Uint8Array(await data.arrayBuffer());
+  return { bytes, contentType, storagePath };
+}
+
 /** Re-renders from scratch (never trusts `render`'s prior output — see
- *  finalize.ts), zips, and uploads. */
+ *  finalize.ts), resolving every picked `asset:` slot into a real file along
+ *  the way (see finalize.ts's own doc comment), zips, and uploads. */
 async function runFinalize(admin: SupabaseClient, row: StudioRunRow, now: () => Date): Promise<StudioRunRow> {
   if (!row.content_doc) throw new Error("engine: finalize step reached before prepare completed");
 
   const manifest = await loadManifest(admin, row.template_id);
   const tpl = await loadPackage(admin, row.template_id, manifest);
-  const outcome = await finalizeRun(admin, tpl, row.content_doc, row.id);
+  const outcome = await finalizeRun(admin, tpl, row.content_doc, row.id, {
+    loadAssetBytes: (assetId) => loadAssetBytes(admin, assetId),
+  });
 
   if (!outcome.ok) {
-    const message = `Render refused: missing ${outcome.missing.map((m) => `${m.page_id}/${m.slot_id}`).join(", ")}`;
-    const updated = await persistRun(admin, row.id, { status: "failed", error: message });
-    await logEvent(admin, row.id, "finalize", "error", "Finalize's re-render was refused.", { missing: outcome.missing });
+    const message =
+      "missingAssets" in outcome
+        ? `Finalize refused: picked image(s) failed to resolve — missing asset(s): ${outcome.missingAssets.join(", ")}`
+        : `Render refused: missing ${outcome.missing.map((m) => `${m.page_id}/${m.slot_id}`).join(", ")}`;
+    const updated = await persistRun(
+      admin, row.id,
+      { status: "failed", error: message },
+      { expectStatus: row.status, step: "finalize" },
+    );
+    await logEvent(admin, row.id, "finalize", "error", "Finalize's re-render was refused.", { outcome });
     return updated;
   }
 
-  const updated = await persistRun(admin, row.id, {
-    zip_path: outcome.zipPath,
-    steps: { ...row.steps, finalize: { at: now().toISOString(), zip_bytes: outcome.zipBytes } },
-    status: "ready",
-  });
+  const updated = await persistRun(
+    admin, row.id,
+    {
+      zip_path: outcome.zipPath,
+      steps: { ...row.steps, finalize: { at: now().toISOString(), zip_bytes: outcome.zipBytes } },
+      status: "ready",
+    },
+    { expectStatus: row.status, step: "finalize" },
+  );
   await logEvent(admin, row.id, "finalize", "info", `Finalized: ${outcome.zipBytes} byte zip.`);
   return updated;
 }
@@ -406,8 +607,17 @@ async function runFinalize(admin: SupabaseClient, row: StudioRunRow, now: () => 
  *
  * Every step is safe to call again: prepare/render/finalize recompute from
  * durable inputs, and write only retries pages that are not yet `written`.
+ *
+ * PAUSE: checked FIRST, before `nextStep` even matters and before any claim
+ * is attempted — a paused run makes no claim and no AI call, full stop. This
+ * is deliberately a plain boolean flag on the row, not a status (see
+ * types.ts): Stop/Pause/Resume must remember exactly where the run was, and
+ * a transitional "paused" status would corrupt the meaning `nextStep` and
+ * `RUNNING_STATUS` already give the status column.
  */
 export async function runStep(admin: SupabaseClient, row: StudioRunRow, deps: RunStepDeps): Promise<RunStepResult> {
+  if (row.paused) return { done: false, row, claimed: false, paused: true };
+
   const step = nextStep(row.status);
   if (!step) return { done: true, row, claimed: true };
   const now = deps.now ?? (() => new Date());

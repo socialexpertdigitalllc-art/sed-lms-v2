@@ -83,13 +83,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: `Edit rejected: ${check.error.issues[0]?.message ?? "invalid content"}` }, { status: 422 });
   }
 
+  // CAS on `updated_at` (same shape as the engine's own `persistRun`/
+  // `claimRun`, see engine.ts's doc comment on that contract): without this,
+  // two near-simultaneous operator actions on the same run — e.g. a text
+  // edit here landing while an image pick's read->merge->write is also in
+  // flight — silently drop whichever finishes last. Zero rows back means
+  // someone else wrote this run since `row` was read; refuse rather than
+  // overwrite, and tell the operator to redo the edit against fresh state.
   const { data: updated, error } = await admin
     .from("studio_runs")
     .update({ content_doc: merged, updated_at: new Date().toISOString() })
     .eq("id", id)
+    .eq("updated_at", row.updated_at)
     .select("*")
     .single();
-  if (error || !updated) return NextResponse.json({ error: error?.message ?? "Update failed" }, { status: 400 });
+  if (error || !updated) {
+    return NextResponse.json(
+      { error: "This run changed while you were editing — your view has been refreshed, please redo that change" },
+      { status: 409 },
+    );
+  }
 
   return NextResponse.json({ run: updated });
 }
