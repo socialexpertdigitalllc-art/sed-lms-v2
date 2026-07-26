@@ -30,6 +30,11 @@ export interface FakeAdminState {
    *  used to prove rehostFromUrl never leaves an orphan studio_assets row
    *  when the bucket upload fails. Unset (default) means uploads succeed. */
   uploadShouldFail?: (bucket: string, path: string) => string | null;
+  /** Same shape, for `storage.download()` — used by deployRun.ts's tests to
+   *  prove a storage failure is caught BEFORE any destructive DirectAdmin
+   *  call (clearDocroot) runs, even though the bytes were seeded and would
+   *  otherwise download fine. */
+  downloadShouldFail?: (bucket: string, path: string) => string | null;
 }
 
 export function emptyFakeAdminState(): FakeAdminState {
@@ -206,12 +211,22 @@ function assetsTable(state: FakeAdminState) {
 
 /**
  * A minimal in-memory `studio_deployments` table shaped to what
- * `lib/site-studio/deploy/deployRun.ts` needs: `.select().eq("subdomain",
- * val).maybeSingle()` (the cross-lead conflict guard's lookup) and
- * `.upsert(row, { onConflict: "subdomain" }).select().single()` — matching
- * ON CONFLICT (subdomain) DO UPDATE against the real unique index migration
- * 0055 creates, which is exactly what makes a redeploy update the existing
- * row instead of erroring on the duplicate key.
+ * `lib/site-studio/deploy/deployRun.ts` needs: `.select().eq(...)`
+ * (`.maybeSingle()`/`.single()`/thenable-array), `.update(patch).eq(...)`
+ * (closing out a stale sibling live row), and `.upsert(row, { onConflict:
+ * "subdomain" }).select().single()` — matching ON CONFLICT (subdomain) DO
+ * UPDATE against the real unique index migration 0055 creates, which is
+ * exactly what makes a redeploy update the existing row instead of erroring
+ * on the duplicate key.
+ *
+ * The upsert ALSO models the partial unique index
+ * `studio_deployments_one_live_per_lead (lead_id) WHERE status = 'live' AND
+ * lead_id IS NOT NULL`: writing a `status: 'live'` row for a lead that
+ * already has a DIFFERENT live row is rejected with a `23505`, exactly like
+ * real Postgres would reject it. Without this, a bug in deployRun.ts that
+ * fails to retire a lead's old live row before writing the new one would
+ * pass every test silently instead of surfacing as the constraint violation
+ * it really is in production.
  */
 function deploymentsTable(state: FakeAdminState) {
   const rows = () => state.studio_deployments;
@@ -241,17 +256,57 @@ function deploymentsTable(state: FakeAdminState) {
 
   return {
     select: (_cols?: string) => selectBuilder(),
+    update: (patch: Row) => {
+      const eqs: [string, unknown][] = [];
+      const chain = {
+        eq(col: string, val: unknown) {
+          eqs.push([col, val]);
+          return chain;
+        },
+        then(resolve: (v: { data: null; error: null | { message: string } }) => unknown, reject?: (e: unknown) => unknown) {
+          const target = Object.entries(rows()).find(([, r]) => eqs.every(([c, v]) => r[c] === v));
+          if (!target) return Promise.resolve({ data: null, error: { message: "not found" } }).then(resolve, reject);
+          state.studio_deployments[target[0]] = { ...target[1], ...patch };
+          return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+        },
+      };
+      return chain;
+    },
     upsert: (row: Row, opts?: { onConflict?: string }) => {
       const conflictCol = opts?.onConflict ?? "id";
       return {
         select: () => ({
           single: async () => {
             const existing = Object.entries(rows()).find(([, r]) => r[conflictCol] === row[conflictCol]);
+            if (row.status === "live" && row.lead_id != null) {
+              const conflictingLive = Object.entries(rows()).find(
+                ([id, r]) =>
+                  r.status === "live" &&
+                  r.lead_id === row.lead_id &&
+                  r[conflictCol] !== row[conflictCol] &&
+                  (!existing || id !== existing[0]),
+              );
+              if (conflictingLive) {
+                return {
+                  data: null,
+                  error: {
+                    message: `duplicate key value violates unique constraint "studio_deployments_one_live_per_lead"`,
+                    code: "23505",
+                  },
+                };
+              }
+            }
             const now = new Date().toISOString();
             const id = existing ? existing[0] : (row.id as string) ?? `deploy_${Object.keys(rows()).length + 1}`;
+            // Deliberately does NOT force `updated_at`/`deployed_at` the way
+            // an earlier version of this fake did — that masked a real bug
+            // (FIX 8, review): those columns only move in real Postgres when
+            // the CALLER's row payload includes them. If deployRun.ts ever
+            // stops setting them explicitly, this fake must go stale right
+            // along with it, not paper over the omission.
             const merged: Row = existing
-              ? { ...existing[1], ...row, updated_at: now }
-              : { deployed_at: now, created_at: now, taken_down_at: null, ...row, id, updated_at: now };
+              ? { ...existing[1], ...row }
+              : { created_at: now, taken_down_at: null, ...row, id };
             state.studio_deployments[id] = merged;
             return { data: merged, error: null };
           },
@@ -365,6 +420,8 @@ export function makeFakeAdmin(state: FakeAdminState): SupabaseClient {
             return { data: { path }, error: null };
           },
           download: async (path: string) => {
+            const failMessage = state.downloadShouldFail?.(bucket, path);
+            if (failMessage) return { data: null, error: { message: failMessage } };
             const bytes = state.storage[`${bucket}/${path}`];
             if (!bytes) return { data: null, error: { message: `not found: ${bucket}/${path}` } };
             const copy = bytes.slice();

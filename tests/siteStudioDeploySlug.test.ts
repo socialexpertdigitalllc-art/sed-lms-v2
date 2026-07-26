@@ -91,4 +91,51 @@ describe("resolveSubdomain — one live site per lead", () => {
     });
     expect(result).toEqual({ sub: "acme-plumbing-x1y2z3", reused: false });
   });
+
+  // FIX 7 (review): a schemeless or protocol-relative website_link must still
+  // be recognised as this lead's live subdomain — `new URL()` throws on both
+  // forms, which is why the kept `subFromWebsiteLink` alone would silently
+  // strand the lead's real site at its old URL on redeploy.
+  it("recognises a BARE (schemeless) website_link as the lead's existing subdomain", () => {
+    const result = resolveSubdomain({
+      leadWebsiteLink: `acme-plumbing.${DA_DOMAIN}`,
+      siteSlug: "totally-different-slug-abc123",
+      daDomain: DA_DOMAIN,
+    });
+    expect(result).toEqual({ sub: "acme-plumbing", reused: true });
+  });
+
+  it("recognises a PROTOCOL-RELATIVE (//host) website_link as the lead's existing subdomain", () => {
+    const result = resolveSubdomain({
+      leadWebsiteLink: `//acme-plumbing.${DA_DOMAIN}/some/path`,
+      siteSlug: "totally-different-slug-abc123",
+      daDomain: DA_DOMAIN,
+    });
+    expect(result).toEqual({ sub: "acme-plumbing", reused: true });
+  });
+
+  it("a bare unrelated domain is still correctly ignored after normalisation", () => {
+    const result = resolveSubdomain({
+      leadWebsiteLink: "www.acmeplumbing.com",
+      siteSlug: "acme-plumbing-x1y2z3",
+      daDomain: DA_DOMAIN,
+    });
+    expect(result).toEqual({ sub: "acme-plumbing-x1y2z3", reused: false });
+  });
+
+  // FIX 8 (review): the disambiguating suffix (`-${randomBase36(6)}` per
+  // run/engine.ts) must survive truncation — otherwise two long, similarly
+  // prefixed business names collapse onto the SAME 63-char label.
+  it("preserves the full disambiguating suffix when truncating a long slug, so two long similar names never collide", () => {
+    const longBusinessPrefix = "the-greater-metropolitan-area-plumbing-and-drain-service-company";
+    const slugA = `${longBusinessPrefix}-aaaaaa`;
+    const slugB = `${longBusinessPrefix}-bbbbbb`;
+    const resultA = resolveSubdomain({ leadWebsiteLink: null, siteSlug: slugA, daDomain: DA_DOMAIN });
+    const resultB = resolveSubdomain({ leadWebsiteLink: null, siteSlug: slugB, daDomain: DA_DOMAIN });
+    expect(resultA.sub.length).toBeLessThanOrEqual(63);
+    expect(resultB.sub.length).toBeLessThanOrEqual(63);
+    expect(resultA.sub).not.toBe(resultB.sub);
+    expect(resultA.sub.endsWith("aaaaaa")).toBe(true);
+    expect(resultB.sub.endsWith("bbbbbb")).toBe(true);
+  });
 });

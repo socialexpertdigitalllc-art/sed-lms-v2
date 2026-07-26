@@ -61,10 +61,15 @@ export async function POST(_req: Request, ctx: Ctx) {
   await admin.from("studio_run_events").insert({
     run_id: id,
     step: "deploy",
-    level: "info",
-    message: `deployed to ${outcome.url}${outcome.reused ? " (redeploy, in place)" : ""}`,
-    detail: { sub: outcome.sub, reused: outcome.reused, existed: outcome.existed },
+    level: outcome.clearWarning ? "warn" : "info",
+    message: `deployed to ${outcome.url}${outcome.reused ? " (redeploy, in place)" : ""}${outcome.clearWarning ? ` — ${outcome.clearWarning}` : ""}`,
+    detail: { sub: outcome.sub, reused: outcome.reused, existed: outcome.existed, clearWarning: outcome.clearWarning ?? null },
   });
 
-  return NextResponse.json({ url: outcome.url, sub: outcome.sub, reused: outcome.reused });
+  return NextResponse.json({
+    url: outcome.url,
+    sub: outcome.sub,
+    reused: outcome.reused,
+    clearWarning: outcome.clearWarning ?? null,
+  });
 }

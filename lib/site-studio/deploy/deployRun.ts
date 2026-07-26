@@ -25,7 +25,7 @@ export interface DeployRunDeps {
 }
 
 export type DeployRunOutcome =
-  | { ok: true; url: string; sub: string; reused: boolean; existed: boolean }
+  | { ok: true; url: string; sub: string; reused: boolean; existed: boolean; clearWarning?: string }
   | { ok: false; status: number; error: string };
 
 const fail = (status: number, error: string): DeployRunOutcome => ({ ok: false, status, error });
@@ -70,6 +70,26 @@ export async function deployRun(
     }
     if (!run.lead_id) return fail(422, "This run has no lead");
 
+    // Transient claim (review FIX 5) — a single-winner CAS on `updated_at`,
+    // the same shape `engine.ts`'s (unexported) `claimRun` uses for step
+    // claims. Two deploy clicks (or an impatient double-submit) both read
+    // this row at the same `updated_at`; only the first `.eq("updated_at",
+    // …)` UPDATE actually matches, so the second gets zero rows back and is
+    // told a deploy is already running rather than racing clearDocroot +
+    // upload against itself on the SAME docroot. No separate release step is
+    // needed: the next legitimate deploy (after this one finishes, success
+    // or failure) simply reads the fresh `updated_at` this bump left behind.
+    const { data: claimed, error: claimErr } = await admin
+      .from("studio_runs")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", runId)
+      .eq("updated_at", run.updated_at)
+      .select("*")
+      .single();
+    if (claimErr || !claimed) {
+      return fail(409, "A deploy is already running for this run. Wait for it to finish, then try again.");
+    }
+
     const { data: leadData, error: leadErr } = await admin.from("leads").select("*").eq("id", run.lead_id).single();
     if (leadErr || !leadData) return fail(404, "Lead not found");
     const lead = leadData as Record<string, unknown>;
@@ -89,69 +109,77 @@ export async function deployRun(
     // Cross-lead conflict guard — BEFORE any DirectAdmin call. Two leads
     // whose business names slugify alike would otherwise land on the same
     // subdomain and physically overwrite each other's live site the moment
-    // clearDocroot+upload runs. A LIVE row under a different lead is the
-    // only case that blocks: taken_down/failed rows are history and may be
-    // reclaimed by a new lead reusing the same slugified name.
+    // clearDocroot+upload runs. A LIVE row blocks whenever its `lead_id` is
+    // NULL (an orphaned row via `on delete set null`, or an unlinked
+    // `v2_import` row Phase 4b will seed) OR belongs to a different lead
+    // (review FIX 3) — a null lead_id is not "nobody's site", it's "we don't
+    // know whose site this is", and the safe default is to refuse and point
+    // the operator at the deployments board rather than risk clobbering a
+    // possibly-live v2 client site. Taken_down/failed rows are history and
+    // may be reclaimed freely.
     const { data: existingDeployment } = await admin
       .from("studio_deployments")
       .select("*")
       .eq("subdomain", sub)
       .maybeSingle();
-    if (
-      existingDeployment &&
-      existingDeployment.status === "live" &&
-      existingDeployment.lead_id &&
-      existingDeployment.lead_id !== run.lead_id
-    ) {
+    if (existingDeployment && existingDeployment.status === "live" && existingDeployment.lead_id !== run.lead_id) {
+      const owner = existingDeployment.lead_id ? `a different lead (${existingDeployment.lead_id})` : "an unlinked deployment";
       return fail(
         409,
-        `Subdomain "${sub}" is already live for a different lead (${existingDeployment.lead_id}). ` +
-          `Refusing to deploy — this would overwrite that lead's site.`,
+        `Subdomain "${sub}" is already live for ${owner}. Refusing to deploy — this would overwrite that site. ` +
+          `Take the existing deployment down from the deployments board first, then retry.`,
       );
     }
 
-    // deploy:subdomain ---------------------------------------------------
-    let existed: boolean;
-    if (reused) {
-      // One live site per lead: the lead's website_link already resolved to
-      // THIS subdomain, so it exists by construction — no creation call.
-      existed = true;
-    } else {
-      existed = await deps.subdomainExists(sub);
-      if (!existed) {
-        const created = await deps.createSubdomain(sub);
-        if (created.error) {
-          if (!isAlreadyExistsError(created)) {
-            const message = created.text || created.details || "subdomain creation failed";
-            return fail(502, `Could not create subdomain: ${message}`);
-          }
-          existed = true; // race: it appeared between our check and the create
+    // deploy:subdomain — always check-then-create, for BOTH resolution paths
+    // (review FIX 6): `reused` only means "this sub came from the lead's own
+    // website_link", not "it definitely still exists on DirectAdmin" — it
+    // can have been removed out-of-band. Checking uniformly means a vanished
+    // reused subdomain is simply recreated instead of failing confusingly
+    // deeper in clear/upload.
+    let existed = await deps.subdomainExists(sub);
+    if (!existed) {
+      const created = await deps.createSubdomain(sub);
+      if (created.error) {
+        if (!isAlreadyExistsError(created)) {
+          const message = created.text || created.details || "subdomain creation failed";
+          return fail(502, `Could not create subdomain: ${message}`);
         }
+        existed = true; // race: it appeared between our check and the create
       }
     }
 
-    // On a redeploy, clear stale files FIRST so a regeneration that dropped
-    // pages never leaves them lingering — this must happen before upload,
-    // never after (see this module's own doc comment / Task 9 spec). Clear
-    // failure is reported but non-fatal: extraction overwrites same-named
-    // files regardless, matching the v2 route's own tradeoff.
-    let clearNote = "";
-    if (existed) {
-      const cleared = await deps.clearDocroot(sub);
-      if (!cleared.ok) clearNote = ` (stale files kept: ${cleared.message ?? "clear failed"})`;
-    }
-    void clearNote; // surfaced only in the (currently unused) step-log path; kept for parity with v2's messaging
-
-    // deploy:upload --------------------------------------------------------
+    // deploy:fetch — download and validate the zip BEFORE touching the live
+    // docroot (review FIX 1, CRITICAL). The old ordering cleared the docroot
+    // first and only then reached for the zip: a download or upload failure
+    // after that point left a client's real site wiped at its real URL with
+    // nothing to replace it, while the DB merely said "failed". Fetching
+    // first means the worst a storage failure can do is refuse the deploy
+    // with the live site UNTOUCHED.
     const url = `https://${sub}.${deps.daDomain}`;
     const docroot = deps.docrootFor(sub);
-
     const { data: zipBlob, error: zipErr } = await admin.storage.from(SITES_BUCKET).download(run.zip_path);
     if (zipErr || !zipBlob) {
       await upsertDeployment(admin, { sub, docroot, url, status: "failed", runId, leadId: run.lead_id });
-      return fail(500, "Site zip not found in storage");
+      return fail(500, "Site zip not found in storage — the live site (if any) was not touched.");
     }
     const zipBytes = new Uint8Array(await zipBlob.arrayBuffer());
+
+    // deploy:clear — only now, holding the bytes we're about to upload, is
+    // it safe to empty a pre-existing docroot so a regeneration that dropped
+    // pages doesn't leave them lingering. Best-effort: extraction overwrites
+    // same-named files regardless, matching the v2 route's own tradeoff, but
+    // the operator is told (review FIX 4) so a mixed-generation site is
+    // never silently mistaken for a clean deploy.
+    let clearWarning: string | undefined;
+    if (existed) {
+      const cleared = await deps.clearDocroot(sub);
+      if (!cleared.ok) {
+        clearWarning = `Could not clear the previous site's files before uploading (${cleared.message ?? "clear failed"}) — the live site may now be a mix of the old and new generation.`;
+      }
+    }
+
+    // deploy:upload --------------------------------------------------------
     const uploaded = await deps.uploadZipAndExtract(sub, zipBytes, "site.zip");
     if (!uploaded.ok && uploaded.failedStep !== "delete") {
       // failedStep "delete" means the site IS live and only zip cleanup
@@ -163,24 +191,77 @@ export async function deployRun(
     }
 
     // deploy:record ----------------------------------------------------------
-    await upsertDeployment(admin, { sub, docroot, url, status: "live", runId, leadId: run.lead_id });
+    // Retire any OTHER live row for this lead FIRST (review FIX 2a). The
+    // partial unique index `studio_deployments_one_live_per_lead` allows only
+    // one status='live' row per lead_id, so a drifted `website_link` (this
+    // deploy resolving to a DIFFERENT subdomain than the lead's last known
+    // live one) must close the old row out before the new one can be
+    // upserted live, or the real constraint would reject this write outright
+    // — and reject it AFTER the site is already live on DirectAdmin, which
+    // is exactly the "silent success, wrong bookkeeping" failure mode this
+    // whole fix list exists to close.
+    const { data: siblings, error: siblingsErr } = await admin
+      .from("studio_deployments")
+      .select("*")
+      .eq("lead_id", run.lead_id);
+    if (siblingsErr) {
+      return fail(
+        500,
+        `Deployed to ${url}, but could not check for a stale live record to retire: ${siblingsErr.message}. ` +
+          `The site IS live — please check studio_deployments manually.`,
+      );
+    }
+    const staleLive = (siblings ?? []).filter((d) => d.status === "live" && d.subdomain !== sub);
+    for (const stale of staleLive) {
+      const { error: closeErr } = await admin
+        .from("studio_deployments")
+        .update({ status: "taken_down", taken_down_at: new Date().toISOString() })
+        .eq("id", stale.id as string);
+      if (closeErr) {
+        return fail(
+          500,
+          `Deployed to ${url}, but could not retire the stale live record at "${stale.subdomain}": ${closeErr.message}. ` +
+            `The site IS live — please check studio_deployments manually.`,
+        );
+      }
+    }
 
-    await admin
+    const { error: upsertErr } = await upsertDeployment(admin, { sub, docroot, url, status: "live", runId, leadId: run.lead_id });
+    if (upsertErr) {
+      return fail(
+        500,
+        `Deployed to ${url}, but recording it in studio_deployments failed: ${upsertErr.message}. ` +
+          `The site IS live — please check studio_deployments manually.`,
+      );
+    }
+
+    const { error: runUpdErr } = await admin
       .from("studio_runs")
       .update({ deployed_url: url, updated_at: new Date().toISOString() })
       .eq("id", runId)
       .select("*")
       .single();
-    await admin.from("leads").update({ website_link: url }).eq("id", run.lead_id);
-    await admin.from("activity_log").insert({
+    if (runUpdErr) {
+      return fail(500, `Deployed to ${url}, but could not record it on the run: ${runUpdErr.message}. The site IS live.`);
+    }
+
+    const { error: leadUpdErr } = await admin.from("leads").update({ website_link: url }).eq("id", run.lead_id);
+    if (leadUpdErr) {
+      return fail(500, `Deployed to ${url}, but could not update the lead's website_link: ${leadUpdErr.message}. The site IS live.`);
+    }
+
+    const { error: logErr } = await admin.from("activity_log").insert({
       user_id: actorUserId,
       action: "studio.run.deployed",
       entity_type: "studio_run",
       entity_id: runId,
       new_value: { url, subdomain: sub, lead_id: run.lead_id },
     });
+    if (logErr) {
+      return fail(500, `Deployed to ${url}, but could not write the activity log entry: ${logErr.message}. The site IS live.`);
+    }
 
-    return { ok: true, url, sub, reused, existed };
+    return { ok: true, url, sub, reused, existed, clearWarning };
   } catch (e) {
     return fail(500, e instanceof Error ? e.message : "Deploy failed unexpectedly");
   }
@@ -189,8 +270,9 @@ export async function deployRun(
 async function upsertDeployment(
   admin: SupabaseClient,
   args: { sub: string; docroot: string; url: string; status: "live" | "failed"; runId: string; leadId: string | null },
-): Promise<void> {
-  await admin
+): Promise<{ error: { message: string } | null }> {
+  const now = new Date().toISOString();
+  const { error } = await admin
     .from("studio_deployments")
     .upsert(
       {
@@ -202,9 +284,16 @@ async function upsertDeployment(
         status: args.status,
         origin: "studio",
         taken_down_at: null,
+        // Explicit on EVERY successful upsert (review FIX 8) — an ON
+        // CONFLICT DO UPDATE that omits a column leaves it FROZEN at
+        // whatever it was on first insert in real Postgres; a redeploy must
+        // move both, not just whatever the fake happened to force before.
+        deployed_at: now,
+        updated_at: now,
       },
       { onConflict: "subdomain" },
     )
     .select()
     .single();
+  return { error: error ?? null };
 }

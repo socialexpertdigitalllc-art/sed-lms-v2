@@ -127,19 +127,46 @@ describe("deployRun", () => {
     ]);
   });
 
-  it("reused: true (redeploy onto the lead's existing subdomain) calls clearDocroot BEFORE upload, and never creates", async () => {
+  it("reused: true (redeploy onto the lead's existing subdomain, still present on DA) calls clearDocroot BEFORE upload, and never creates", async () => {
     const { state, admin } = setup();
     state.runs["run-1"] = baseRun();
     state.leads["lead-1"] = baseLead({ website_link: `https://acme-plumbing.${DA_DOMAIN}/` });
-    const { deps, calls } = makeDeps();
+    // FIX 6: the reused path now confirms via subdomainExists rather than
+    // assuming — the common case is it's still there, so createSubdomain
+    // must never be called.
+    const { deps, calls } = makeDeps({
+      subdomainExists: vi.fn(async (sub: string) => {
+        calls.push(`subdomainExists:${sub}`);
+        return true;
+      }),
+    });
     const outcome = await deployRun(admin, "run-1", deps, "user-1");
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.reused).toBe(true);
     expect(outcome.sub).toBe("acme-plumbing");
-    expect(calls).toEqual(["clearDocroot:acme-plumbing", "upload:acme-plumbing"]);
+    expect(calls).toEqual(["subdomainExists:acme-plumbing", "clearDocroot:acme-plumbing", "upload:acme-plumbing"]);
     expect(deps.createSubdomain).not.toHaveBeenCalled();
     expect(calls.indexOf("clearDocroot:acme-plumbing")).toBeLessThan(calls.indexOf("upload:acme-plumbing"));
+  });
+
+  it("reused: true but the subdomain vanished out-of-band (FIX 6) recreates it instead of failing, and skips clearDocroot", async () => {
+    const { state, admin } = setup();
+    state.runs["run-1"] = baseRun();
+    state.leads["lead-1"] = baseLead({ website_link: `https://acme-plumbing.${DA_DOMAIN}/` });
+    const { deps, calls } = makeDeps({
+      subdomainExists: vi.fn(async (sub: string) => {
+        calls.push(`subdomainExists:${sub}`);
+        return false; // gone — removed out of band
+      }),
+    });
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.reused).toBe(true);
+    expect(deps.createSubdomain).toHaveBeenCalledWith("acme-plumbing");
+    expect(calls).toEqual(["subdomainExists:acme-plumbing", "createSubdomain:acme-plumbing", "upload:acme-plumbing"]);
+    expect(deps.clearDocroot).not.toHaveBeenCalled(); // nothing to clear on a freshly (re)created sub
   });
 
   it("subdomainExists true + not reused: does NOT create, still clears and uploads (idempotent redeploy)", async () => {
@@ -349,5 +376,201 @@ describe("deployRun", () => {
     const { deps } = makeDeps();
     const outcome = await deployRun(admin, "does-not-exist", deps, "user-1");
     expect(outcome.ok).toBe(false);
+  });
+
+  // FIX 1 (CRITICAL, review): a redeploy must never clear the live docroot
+  // before it holds the bytes it's about to upload — otherwise a storage
+  // failure after the clear leaves the client's real site wiped at its real
+  // URL with nothing to replace it.
+  it("FIX 1: a storage download failure on a REUSED (existing, live) deploy never calls clearDocroot — the live site is untouched", async () => {
+    const { state, admin } = setup();
+    state.runs["run-1"] = baseRun();
+    state.leads["lead-1"] = baseLead({ website_link: `https://acme-plumbing.${DA_DOMAIN}/` });
+    state.downloadShouldFail = () => "storage is down";
+    const { deps } = makeDeps({ subdomainExists: vi.fn(async () => true) });
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toMatch(/zip/i);
+    expect(deps.clearDocroot).not.toHaveBeenCalled();
+    expect(deps.uploadZipAndExtract).not.toHaveBeenCalled();
+    // still recorded as a failed attempt, so the operator sees it happened
+    const rows = Object.values(state.studio_deployments);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("failed");
+  });
+
+  // FIX 3 (IMPORTANT, review): a NULL lead_id on the existing live row must
+  // ALSO block — it's an orphaned or unlinked (v2_import) row, not "nobody's
+  // site", and the safe default is to refuse rather than risk clobbering a
+  // possibly-live client site.
+  it("FIX 3: refuses when the existing live row for this subdomain has a NULL lead_id (orphaned/unlinked)", async () => {
+    const { state, admin } = setup();
+    state.runs["run-1"] = baseRun({ lead_id: "lead-2" });
+    state.leads["lead-2"] = baseLead({ id: "lead-2", business_name: "Acme Plumbing Two" });
+    state.studio_deployments["dep-1"] = {
+      id: "dep-1",
+      lead_id: null,
+      run_id: null,
+      subdomain: "acme-plumbing-ab12cd",
+      docroot: "x",
+      url: "y",
+      status: "live",
+      origin: "v2_import",
+    };
+    const { deps, calls } = makeDeps();
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toMatch(/deployments board/i);
+    expect(calls).toEqual([]); // refused before any DirectAdmin call
+  });
+
+  // FIX 2 (CRITICAL, review): a lead whose website_link drifted from its true
+  // live subdomain (so this deploy resolves to a DIFFERENT sub) must retire
+  // the OLD live row before writing the new one, so the partial unique index
+  // `studio_deployments_one_live_per_lead` never sees two live rows for one
+  // lead — proven here via the fake's own modeling of that constraint.
+  it("FIX 2: a drifted website_link (redeploy resolves to a NEW subdomain) closes out the lead's old live row — exactly one live row remains", async () => {
+    const { state, admin } = setup();
+    // The lead's true live site is sub-A, but website_link now points
+    // somewhere unrelated (drifted) — so resolution falls through to the
+    // run's OWN site_slug, landing on a DIFFERENT subdomain (sub-B).
+    state.runs["run-1"] = baseRun({ site_slug: "acme-plumbing-sub-b" });
+    state.leads["lead-1"] = baseLead({ website_link: "https://www.acmeplumbing-their-own-domain.com/" });
+    state.studio_deployments["dep-a"] = {
+      id: "dep-a",
+      lead_id: "lead-1",
+      run_id: "run-0",
+      subdomain: "acme-plumbing-sub-a",
+      docroot: "/domains/acme-plumbing-sub-a.da900.is.cc/public_html",
+      url: "https://acme-plumbing-sub-a.da900.is.cc",
+      status: "live",
+      origin: "studio",
+    };
+    const { deps } = makeDeps();
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.sub).toBe("acme-plumbing-sub-b");
+
+    const rows = Object.values(state.studio_deployments);
+    const live = rows.filter((r) => r.status === "live");
+    expect(live).toHaveLength(1); // the invariant: exactly one live row for this lead
+    expect(live[0].subdomain).toBe("acme-plumbing-sub-b");
+
+    const closedOut = rows.find((r) => r.subdomain === "acme-plumbing-sub-a")!;
+    expect(closedOut.status).toBe("taken_down");
+    expect(closedOut.taken_down_at).toBeTruthy();
+  });
+
+  it("FIX 2 (fake modeling): the fake's studio_deployments upsert itself rejects a second live row for the same lead_id", async () => {
+    const { state, admin } = setup();
+    state.studio_deployments["dep-a"] = {
+      id: "dep-a",
+      lead_id: "lead-1",
+      subdomain: "sub-a",
+      docroot: "x",
+      url: "y",
+      status: "live",
+      origin: "studio",
+    };
+    const { error } = await admin
+      .from("studio_deployments")
+      .upsert(
+        { lead_id: "lead-1", subdomain: "sub-b", docroot: "x", url: "y", status: "live", origin: "studio" },
+        { onConflict: "subdomain" },
+      )
+      .select()
+      .single();
+    expect(error).toBeTruthy();
+    expect(String((error as { message?: string }).message)).toMatch(/one_live_per_lead|unique/i);
+    expect(state.studio_deployments["dep-a"].status).toBe("live"); // untouched by the rejected write
+  });
+
+  // FIX 4 (IMPORTANT, review): a clearDocroot failure must be surfaced to the
+  // operator, not silently discarded — the live site may now mix two builds.
+  it("FIX 4: a clearDocroot failure is surfaced on the outcome as clearWarning, but the deploy still completes", async () => {
+    const { state, admin } = setup();
+    state.runs["run-1"] = baseRun();
+    state.leads["lead-1"] = baseLead({ website_link: `https://acme-plumbing.${DA_DOMAIN}/` });
+    const { deps } = makeDeps({
+      subdomainExists: vi.fn(async () => true),
+      clearDocroot: vi.fn(async () => ({ ok: false, message: "permission denied" })),
+    });
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.clearWarning).toMatch(/permission denied/);
+    expect(deps.uploadZipAndExtract).toHaveBeenCalled(); // clear failure is non-fatal, matching v2
+    void state;
+  });
+
+  // FIX 5 (IMPORTANT, review): two deploy calls for the same run must not
+  // race clearDocroot+upload against the same docroot. Rather than a real
+  // Promise.all race — this codebase's own engine tests explicitly avoid
+  // that as flaky under full-suite scheduling (see
+  // siteStudioEngine.test.ts's "concurrent calls" describe block) — this
+  // deterministically reproduces the ACTUAL race outcome: the run's
+  // `updated_at` changes between deployRun's initial read and its own claim
+  // attempt, exactly as a second caller's claim committing in between would
+  // cause. The claim is a CAS on `updated_at` (same shape as engine.ts's
+  // `claimRun`), so this is a faithful, non-flaky proof of the mechanism.
+  it("FIX 5: refuses with 'already running' when the run's updated_at moved between read and claim (a concurrent deploy won the race)", async () => {
+    const { state, admin } = setup();
+    state.runs["run-1"] = baseRun();
+    state.leads["lead-1"] = baseLead();
+
+    // Patch the studio_runs SELECT this run's own deployRun call uses: right
+    // after it reads the row (but before it can act on it), simulate a
+    // concurrent caller's claim having already landed by bumping
+    // `updated_at` in the underlying state — the same effect a real second
+    // `deployRun` call winning the claim race would have. Loosely typed
+    // (`any`) deliberately: this is a one-off test-only instrumentation of
+    // the fake's chain shape, not a contract worth fighting Supabase's deep
+    // generics for.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawAdmin = admin as any;
+    const realFrom = rawAdmin.from.bind(rawAdmin);
+    let patched = false;
+    rawAdmin.from = (table: string) => {
+      const real = realFrom(table);
+      if (table !== "studio_runs" || patched) return real;
+      return {
+        ...real,
+        select: (cols?: string) => {
+          const chain = real.select(cols);
+          return {
+            ...chain,
+            eq: (col: string, val: unknown) => {
+              const inner = chain.eq(col, val);
+              return {
+                ...inner,
+                single: async () => {
+                  const result = await inner.single();
+                  if (!patched) {
+                    patched = true;
+                    state.runs["run-1"] = {
+                      ...state.runs["run-1"],
+                      updated_at: new Date(Date.parse(state.runs["run-1"].updated_at as string) + 1000).toISOString(),
+                    };
+                  }
+                  return result;
+                },
+              };
+            },
+          };
+        },
+      };
+    };
+
+    const { deps } = makeDeps();
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toMatch(/already running/i);
+    expect(deps.uploadZipAndExtract).not.toHaveBeenCalled();
+    expect(deps.clearDocroot).not.toHaveBeenCalled();
+    expect(deps.subdomainExists).not.toHaveBeenCalled(); // refused before ever reaching subdomain resolution
   });
 });
