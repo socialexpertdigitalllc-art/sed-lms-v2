@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { RunPreview, SlotEditor } from "@/components/site-studio/RunPreview";
 import { ThemePanel } from "@/components/site-studio/ThemePanel";
+import { DeploymentsBoard, type DeploymentRow } from "@/components/site-studio/DeploymentsBoard";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { StudioRunRow } from "@/lib/site-studio/run/types";
 
@@ -168,5 +169,95 @@ describe("ThemePanel", () => {
       <ThemePanel runId="run-1" manifest={noRoles} theme={{}} onRunUpdated={() => {}} />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+/**
+ * DeploymentsBoard mount-smoke (Phase 4a Task 10, 2b/3b precedent per
+ * tests/siteStudioBoard.test.tsx / siteStudioCockpit.test.tsx): fetch is
+ * stubbed per URL/query, no real network. Covers rendering canned rows, the
+ * status filter re-requesting with the right `?status=`, and that a
+ * `v2_import` row (the shape Phase 4b's cutover seeds) shows its own badge
+ * rather than being mistaken for a studio-authored deployment.
+ */
+function deploymentFixture(overrides: Partial<DeploymentRow> = {}): DeploymentRow {
+  return {
+    id: "dep-1",
+    lead_id: "lead-1",
+    run_id: "run-1",
+    subdomain: "ace-plumbing",
+    docroot: "/domains/ace-plumbing.dmviral.com/public_html",
+    url: "https://ace-plumbing.dmviral.com",
+    status: "live",
+    origin: "studio",
+    deployed_at: "2026-07-26T00:00:00.000Z",
+    taken_down_at: null,
+    deployed_by: null,
+    created_at: "2026-07-25T00:00:00.000Z",
+    updated_at: "2026-07-26T00:00:00.000Z",
+    leads: { business_name: "Ace Plumbing" },
+    ...overrides,
+  };
+}
+
+function stubDeploymentsFetch(handler: (url: string) => { deployments: DeploymentRow[] }) {
+  const calls: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push(url);
+      return { ok: true, json: async () => handler(url) } as Response;
+    }),
+  );
+  return calls;
+}
+
+describe("DeploymentsBoard", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders rows from canned data — business name, URL, status, and deployed time", async () => {
+    stubDeploymentsFetch(() => ({ deployments: [deploymentFixture()] }));
+    render(<DeploymentsBoard />);
+
+    expect(await screen.findByText("Ace Plumbing")).toBeInTheDocument();
+    expect(screen.getByText("ace-plumbing.dmviral.com")).toBeInTheDocument();
+    expect(screen.getByText("live")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /ace-plumbing\.dmviral\.com/ })).toHaveAttribute(
+      "href",
+      "https://ace-plumbing.dmviral.com",
+    );
+  });
+
+  it("the status filter re-requests with the matching ?status= and swaps the rows shown", async () => {
+    const calls = stubDeploymentsFetch((url) => {
+      if (url.includes("status=taken_down")) {
+        return { deployments: [deploymentFixture({ id: "dep-2", status: "taken_down", leads: { business_name: "Old Roofing" } })] };
+      }
+      return { deployments: [deploymentFixture()] };
+    });
+    render(<DeploymentsBoard />);
+    expect(await screen.findByText("Ace Plumbing")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Taken down" }));
+
+    await waitFor(() => expect(screen.getByText("Old Roofing")).toBeInTheDocument());
+    expect(screen.queryByText("Ace Plumbing")).not.toBeInTheDocument();
+    expect(calls.some((u) => u.includes("status=taken_down"))).toBe(true);
+  });
+
+  it("shows a v2_import row's origin badge, distinct from a studio-authored row", async () => {
+    stubDeploymentsFetch(() => ({
+      deployments: [
+        deploymentFixture({ id: "dep-3", origin: "v2_import", leads: { business_name: "Legacy Diner" } }),
+      ],
+    }));
+    render(<DeploymentsBoard />);
+
+    expect(await screen.findByText("Legacy Diner")).toBeInTheDocument();
+    expect(screen.getByText("v2 import")).toBeInTheDocument();
+    expect(screen.queryByText("studio")).not.toBeInTheDocument();
   });
 });
