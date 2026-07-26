@@ -160,6 +160,43 @@ describe("RunCockpit", () => {
     expect(await screen.findByRole("button", { name: /approve & render/i })).toBeInTheDocument();
   });
 
+  it("shows the Site facts panel for pending identity, starting blank (never prefilled with the template's demo value), and mentions it in the gate footer", async () => {
+    stubRunAndTemplate(
+      runFixture({
+        content_doc: {
+          identity: { business_name: "Ace Plumbing", neighborhood: "" },
+          theme: {},
+          pages: [
+            {
+              page_id: "index", output: "index.html", title: "Welcome to Ace Plumbing",
+              slots: { hero_text: "We fix pipes fast.", hero_image: "img/hero.jpg", hero_image_alt: "A plumber at work" },
+              repeats: {},
+            },
+          ],
+          provenance: [{ title: { written_by: "ai" }, slots: { hero_text: { written_by: "ai" } }, repeats: {} }],
+        },
+        steps: {
+          prepare: {
+            at: "2026-07-25T00:00:00.000Z",
+            pages: 1,
+            pending_identity: ["neighborhood"],
+            pending_identity_usage: { neighborhood: { count: 2, pages: ["index"] } },
+          },
+          write: { pages: { "0": { status: "written", attempts: 1 } } },
+        },
+      }),
+    );
+    render(<RunCockpit runId="run-1" />);
+
+    expect(await screen.findByText("Site facts")).toBeInTheDocument();
+    expect(screen.getByText("Neighborhood")).toBeInTheDocument();
+    const input = screen.getByLabelText("Neighborhood") as HTMLInputElement;
+    // Never prefilled with the template's own demo value for this key —
+    // only what the operator has already saved (nothing, here).
+    expect(input.value).toBe("");
+    expect(screen.getByText(/1 site fact\(s\) unfilled/)).toBeInTheDocument();
+  });
+
   it("does not show the gate footer for a terminal (ready) run", async () => {
     stubRunAndTemplate(runFixture({ status: "ready", zip_path: "runs/run-1/site.zip" }));
     render(<RunCockpit runId="run-1" />);

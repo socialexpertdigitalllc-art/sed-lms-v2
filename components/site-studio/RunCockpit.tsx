@@ -15,6 +15,7 @@ import type { TemplateManifest } from "@/lib/site-studio/schema";
 import { RunPageCard } from "@/components/site-studio/RunPageCard";
 import { RunPreview } from "@/components/site-studio/RunPreview";
 import { ThemePanel } from "@/components/site-studio/ThemePanel";
+import { SiteFactsPanel } from "@/components/site-studio/SiteFactsPanel";
 
 interface TemplateDetail { manifest: TemplateManifest | null; }
 
@@ -40,6 +41,17 @@ function timelineEntries(run: StudioRunRow): { label: string; tone: "neutral" | 
   if (run.steps.finalize) entries.push({ label: `Finalized: ${run.steps.finalize.zip_bytes} byte zip.`, tone: "ready" });
   if (run.error) entries.push({ label: run.error, tone: "dropped" });
   return entries;
+}
+
+/** Gate 1's approve-footer note: purely informational (approval is allowed
+ *  either way; `render` is the real backstop) — see the "Site facts" panel
+ *  above for where `unfilledIdentityCount` comes from. */
+function gateFooterNote(emptySlotCount: number, unfilledIdentityCount: number): string {
+  const parts: string[] = [];
+  if (emptySlotCount > 0) parts.push(`${emptySlotCount} slot(s) still look empty`);
+  if (unfilledIdentityCount > 0) parts.push(`${unfilledIdentityCount} site fact(s) unfilled`);
+  if (parts.length === 0) return "Everything looks filled in.";
+  return `${parts.join(" and ")} — approval is allowed either way; the render step is the hard guard.`;
 }
 
 export function RunCockpit({ runId }: { runId: string }) {
@@ -301,6 +313,16 @@ export function RunCockpit({ runId }: { runId: string }) {
     return count;
   }, [run]);
 
+  // Identity facts `prepare` couldn't seed from the lead's dossier (Phase
+  // 4b) — see the "Site facts" panel below. `unfilledIdentityCount` only
+  // counts what's STILL blank right now, so the footer note updates live as
+  // the operator fills each one in via the panel.
+  const pendingIdentity = useMemo(() => run?.steps.prepare?.pending_identity ?? [], [run]);
+  const unfilledIdentityCount = useMemo(() => {
+    const identity = run?.content_doc?.identity ?? {};
+    return pendingIdentity.filter((k) => !identity[k] || identity[k].trim() === "").length;
+  }, [run, pendingIdentity]);
+
   if (loading || !run) {
     return (
       <div className="flex items-center gap-2 py-12 text-sm text-text-muted">
@@ -387,6 +409,17 @@ export function RunCockpit({ runId }: { runId: string }) {
         </div>
       ) : null}
 
+      {doc && gate && pendingIdentity.length > 0 ? (
+        <SiteFactsPanel
+          runId={runId}
+          pendingIdentity={pendingIdentity}
+          pendingUsage={run.steps.prepare?.pending_identity_usage}
+          identity={doc.identity}
+          manifest={manifest}
+          onRunUpdated={applyRun}
+        />
+      ) : null}
+
       {doc && run.status !== "ready" ? (
         <div className="space-y-3">
           {doc.pages.map((page, index) => (
@@ -438,9 +471,7 @@ export function RunCockpit({ runId }: { runId: string }) {
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface p-3">
           <div className="mx-auto flex max-w-5xl items-center gap-3">
             <p className="flex-1 text-xs text-text-muted">
-              {emptySlotCount > 0
-                ? `${emptySlotCount} slot(s) still look empty — approval is allowed either way; the render step is the hard guard.`
-                : "Everything looks filled in."}
+              {gateFooterNote(emptySlotCount, unfilledIdentityCount)}
             </p>
             <button className={btnPrimary} onClick={() => void approve()} disabled={approving}>
               {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
