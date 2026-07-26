@@ -241,7 +241,13 @@ export async function POST(req: Request, ctx: Ctx) {
 
   let merged;
   try {
-    merged = applyOperatorEdit(doc, pageIndex, { slots: { [slotId]: `asset:${assetId}` } });
+    // imageSlotIds: this route already confirmed `slotDef.type === "image"`
+    // above — passing it stops applyOperatorEdit from backing up an image
+    // slot's value at all (review fix, Phase 4a: an image slot's pre-pick
+    // value is the template's own demo sample, never an AI-written value, so
+    // backing it up would let a later revert reinstate a vendor stock photo
+    // on a client's live site, mislabelled "ai").
+    merged = applyOperatorEdit(doc, pageIndex, { slots: { [slotId]: `asset:${assetId}` } }, new Set([slotId]));
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Invalid pick" }, { status: 422 });
   }

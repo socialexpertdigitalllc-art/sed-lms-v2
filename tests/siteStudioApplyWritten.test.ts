@@ -191,6 +191,42 @@ describe("applyOperatorEdit", () => {
   });
 });
 
+describe("applyOperatorEdit never backs up an IMAGE slot when told which ones are images (FIX 3)", () => {
+  it("does not capture ai_backup for an image slot pick, even on its first operator edit", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    // index_i1 is an IMAGE slot — before any pick it holds the template's own
+    // demo sample ("img/hero.jpg"), never something the AI wrote.
+    expect(written.pages[0].slots.index_i1).toBe("img/hero.jpg");
+
+    const edited = applyOperatorEdit(written, 0, { slots: { index_i1: "asset:abc-123" } }, new Set(["index_i1"]));
+    expect(edited.pages[0].slots.index_i1).toBe("asset:abc-123");
+    expect(edited.provenance[0].slots.index_i1.written_by).toBe("operator");
+    // the fix: no backup captured at all for this slot
+    expect(edited.provenance[0].ai_backup?.slots?.index_i1).toBeUndefined();
+  });
+
+  it("demonstrates why a caller MUST pass imageSlotIds: omitting it falls back to capturing the template's demo sample as if it were an AI value", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const edited = applyOperatorEdit(written, 0, { slots: { index_i1: "asset:abc-123" } });
+    expect(edited.provenance[0].ai_backup?.slots?.index_i1).toBe("img/hero.jpg");
+  });
+
+  it("excluding the image slot does not affect backup capture for a sibling TEXT slot in the same call", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const edited = applyOperatorEdit(
+      written,
+      0,
+      { slots: { index_i1: "asset:abc-123", index_s1: "operator text" } },
+      new Set(["index_i1"]),
+    );
+    expect(edited.provenance[0].ai_backup?.slots?.index_i1).toBeUndefined();
+    expect(edited.provenance[0].ai_backup?.slots?.index_s1).toBe("Welcome to Acme Plumbing");
+  });
+});
+
 describe("findDisallowedEditField", () => {
   it("passes a clean edit", () => {
     expect(findDisallowedEditField({ title: "A fine title", slots: { s1: "Plain copy." } })).toBeNull();

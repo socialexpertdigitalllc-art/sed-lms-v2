@@ -175,19 +175,39 @@ export function applyRewrite(
   const field: FieldProvenance = opts.model ? { written_by: "ai", model: opts.model } : { written_by: "ai" };
   const includeOperator = opts.includeOperatorFields === true;
 
+  // FIX (review, Phase 4a): `includeOperatorFields` is a SECOND way a field's
+  // provenance flips operator -> ai (the first is a plain AI write, which
+  // never has a backup to worry about). Clearing an operator-owned field's
+  // `ai_backup` here — ONLY when this call is the one doing the overriding —
+  // is what stops a stale pre-re-roll value from resurfacing: without this,
+  // a field written "v1" (ai) -> "v2" (operator, backup="v1") -> "v3"
+  // (override re-roll, provenance flips to ai, backup left at stale "v1") ->
+  // "v4" (operator again — the capture-once rule skips it because a backup
+  // already exists) -> revert would restore "v1", text the CURRENT ai pass
+  // never produced. Clearing it here means a later operator edit re-captures
+  // the CURRENT (re-rolled) value instead.
+  const clearBackupIfOverriding = (kind: "title" | "slot", id?: string) => {
+    if (!includeOperator || !pageProvenance.ai_backup) return;
+    if (kind === "title") delete pageProvenance.ai_backup.title;
+    else if (id !== undefined) delete pageProvenance.ai_backup.slots?.[id];
+  };
+
   if (opts.onlySlot) {
     const value = result.slots[opts.onlySlot];
     if (value !== undefined) {
+      clearBackupIfOverriding("slot", opts.onlySlot);
       target.slots[opts.onlySlot] = value;
       pageProvenance.slots[opts.onlySlot] = field;
     }
   } else {
     if (includeOperator || !isOperatorOwned(pageProvenance.title)) {
+      clearBackupIfOverriding("title");
       target.title = result.title;
       pageProvenance.title = field;
     }
     for (const [id, value] of Object.entries(result.slots)) {
       if (includeOperator || !isOperatorOwned(pageProvenance.slots[id])) {
+        clearBackupIfOverriding("slot", id);
         target.slots[id] = value;
         pageProvenance.slots[id] = field;
       }
@@ -266,11 +286,26 @@ export function findDisallowedEditField(edit: OperatorEdit): string | null {
  * most recent one. `revert.ts`'s `revertField` is the only thing that ever
  * clears it (after restoring it), which is what makes an edit -> revert ->
  * edit cycle back up the same original value both times.
+ *
+ * IMAGE SLOTS ARE NEVER BACKED UP (review fix, Phase 4a): an image slot's
+ * value BEFORE any pick is the TEMPLATE'S OWN DEMO SAMPLE (seed.ts seeds
+ * every image slot from `slot.sample`, never from an AI write — the Writer
+ * is never even asked about images). Backing that up and letting a later
+ * `revertField` restore it would reinstate the vendor's stock placeholder
+ * photo on a client's live site, labelled `written_by:"ai"` as if the model
+ * had produced it. `imageSlotIds` — the set of this PAGE's slot ids the
+ * template manifest declares `type:"image"` — is how this function tells
+ * those apart from text slots; the caller (the images route, which already
+ * loads the manifest to validate the pick itself) is the one that computes
+ * it. Omitting it entirely (as `/content`, a text-only editor, does) leaves
+ * old behaviour unchanged — it is on the CALLER to pass it whenever `edit`
+ * might touch an image slot.
  */
 export function applyOperatorEdit(
   doc: ContentDoc | RunContentDoc,
   pageIndex: number,
   edit: OperatorEdit,
+  imageSlotIds?: ReadonlySet<string>,
 ): RunContentDoc {
   if (pageIndex < 0 || pageIndex >= doc.pages.length) {
     throw new RangeError(`applyOperatorEdit: page index ${pageIndex} is out of range (doc has ${doc.pages.length} pages)`);
@@ -303,7 +338,8 @@ export function applyOperatorEdit(
   }
   if (edit.slots) {
     for (const [id, value] of Object.entries(edit.slots)) {
-      if (!isOperatorOwned(pageProvenance.slots[id])) {
+      const isImageSlot = imageSlotIds?.has(id) === true;
+      if (!isImageSlot && !isOperatorOwned(pageProvenance.slots[id])) {
         const b = backup();
         if (b.slots![id] === undefined) b.slots![id] = target.slots[id];
       }

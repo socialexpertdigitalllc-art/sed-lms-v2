@@ -107,28 +107,84 @@ export function buildPreview(
 
   const root = parse(html);
 
+  // Shared by every attribute-shape below (a single URL, a srcset's
+  // candidate list, an inline style's url(...)): resolves ONE reference and
+  // returns its replacement, or null when it must be left exactly as
+  // rendered (external/scheme-qualified/anchor, or a reference this render
+  // simply didn't produce — a broken template link, or an unresolved
+  // asset: scheme, which `isExternal` already treats as external).
+  const resolveRef = (value: string): string | null => {
+    if (!value || isExternal(value)) return null;
+    const resolved = resolveRelative(baseDir, value);
+    const targetIndex = pageOutputs.indexOf(resolved);
+    if (targetIndex !== -1) return `#ss-page-${targetIndex}`;
+    if (resolved in rendered.files) return `/api/site-studio/runs/${runId}/preview?asset=${resolved}`;
+    return null;
+  };
+
   const rewrite = (el: ReturnType<typeof root.querySelector>, attr: string) => {
     if (!el) return;
     const value = el.getAttribute(attr);
-    if (!value || isExternal(value)) return;
-    const resolved = resolveRelative(baseDir, value);
+    if (!value) return;
+    const next = resolveRef(value);
+    if (next) el.setAttribute(attr, next);
+  };
 
-    const targetIndex = pageOutputs.indexOf(resolved);
-    if (targetIndex !== -1) {
-      el.setAttribute(attr, `#ss-page-${targetIndex}`);
-      return;
-    }
-    if (resolved in rendered.files) {
-      el.setAttribute(attr, `/api/site-studio/runs/${runId}/preview?asset=${resolved}`);
-    }
-    // Otherwise: a reference this render didn't produce (broken template
-    // link, or an unresolved asset: scheme already filtered out above by
-    // isExternal). Left exactly as rendered.
+  // srcset is a COMMA-separated list of "url descriptor" candidates (e.g.
+  // `"img/a.jpg 1x, img/b.jpg 2x"` or `"img/a.jpg 320w, img/b.jpg 640w"`) — a
+  // browser picks whichever candidate it likes and fetches that URL
+  // directly, bypassing `src` entirely. Rewriting `src` alone left srcset's
+  // raw template-relative paths for the sandboxed iframe to fail to load
+  // (probe-confirmed by review): each candidate's URL is rewritten the same
+  // way a plain `src`/`href` is, and its descriptor (the "1x"/"320w" part,
+  // including its leading whitespace) is preserved verbatim.
+  const rewriteSrcset = (el: ReturnType<typeof root.querySelector>) => {
+    if (!el) return;
+    const value = el.getAttribute("srcset");
+    if (!value) return;
+    const next = value
+      .split(",")
+      .map((candidate) => {
+        const trimmed = candidate.trim();
+        if (!trimmed) return trimmed;
+        const spaceIdx = trimmed.search(/\s/);
+        const url = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+        const descriptor = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx);
+        return `${resolveRef(url) ?? url}${descriptor}`;
+      })
+      .join(", ");
+    el.setAttribute("srcset", next);
+  };
+
+  // Inline `style="...url(...)..."` (e.g. a hand-authored hero background)
+  // is the other place a relative reference hides from the href/src/srcset
+  // sweep (probe-confirmed by review) — every `url(...)` in the attribute,
+  // quoted or not, gets the SAME resolution the other shapes get, with the
+  // original quoting (or lack of it) preserved and everything else in the
+  // declaration left untouched.
+  const URL_FN_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+  const rewriteInlineStyle = (el: ReturnType<typeof root.querySelector>) => {
+    if (!el) return;
+    const value = el.getAttribute("style");
+    if (!value) return;
+    const next = value.replace(URL_FN_RE, (match, quote: string, url: string) => {
+      const rewritten = resolveRef(url);
+      return rewritten ? `url(${quote}${rewritten}${quote})` : match;
+    });
+    el.setAttribute("style", next);
   };
 
   for (const el of root.querySelectorAll("a[href]")) rewrite(el, "href");
   for (const el of root.querySelectorAll("link[href]")) rewrite(el, "href");
   for (const el of root.querySelectorAll("img[src]")) rewrite(el, "src");
+  for (const el of root.querySelectorAll("[srcset]")) rewriteSrcset(el);
+  for (const el of root.querySelectorAll("[style]")) rewriteInlineStyle(el);
+  // script[src] is DELIBERATELY left unrewritten: the preview iframe loads
+  // with `sandbox=""` (no `allow-scripts`, see service/guard.ts's
+  // `untrustedContentHeaders` and Task 7's RunPreview contract) on top of
+  // the server's own CSP `sandbox` directive, so no script — same-origin-
+  // routed or not — ever executes inside it. Rewriting its `src` would add
+  // surface area for zero behavioural benefit.
 
   // Unresolved asset: picks — checked against the DOC's own image slot
   // values (never re-derived from the rewritten HTML, which has already had

@@ -31,8 +31,8 @@ const tpl: CompiledTemplate = {
     ],
   },
   pages: {
-    "index.html": `<html><head><title>{{title}}</title><link rel="stylesheet" href="css/style.css"></head><body><ul><!--@nav:nav_header--></ul><h1>{{slot:index_s1}}</h1><img src="{{img:index_i1}}"><a href="{{link:svc}}">Our service</a><a href="https://example.com">External</a></body></html>`,
-    "service.html": `<html><head><title>{{title}}</title><link rel="stylesheet" href="../css/style.css"></head><body><ul><!--@nav:nav_header--></ul><p>{{slot:svc_s1}}</p><img src="{{img:svc_i1}}"><a href="{{link:index}}">Home</a></body></html>`,
+    "index.html": `<html><head><title>{{title}}</title><link rel="stylesheet" href="css/style.css"></head><body><ul><!--@nav:nav_header--></ul><h1>{{slot:index_s1}}</h1><img src="{{img:index_i1}}"><a href="{{link:svc}}">Our service</a><a href="https://example.com">External</a><img id="responsive" src="img/a.jpg" srcset="img/a.jpg 1x, img/hero-2x.jpg 2x, https://cdn.example.com/x.jpg 3x"><div id="hero" style="background-image:url('img/a.jpg'); color:red"></div><script src="js/site.js"></script></body></html>`,
+    "service.html": `<html><head><title>{{title}}</title><link rel="stylesheet" href="../css/style.css"></head><body><ul><!--@nav:nav_header--></ul><p>{{slot:svc_s1}}</p><img src="{{img:svc_i1}}"><a href="{{link:index}}">Home</a><img id="responsive" srcset="../img/a.jpg 320w, ../img/hero-2x.jpg 640w"></body></html>`,
   },
   fragments: {
     nav_header: `<li><a href="{{nav:href}}">{{nav:title}}</a></li>`,
@@ -40,6 +40,8 @@ const tpl: CompiledTemplate = {
   assets: {
     "css/style.css": new TextEncoder().encode("body{color:#000}"),
     "img/a.jpg": new TextEncoder().encode("fake-bytes-a"),
+    "img/hero-2x.jpg": new TextEncoder().encode("fake-bytes-2x"),
+    "js/site.js": new TextEncoder().encode("console.log('hi')"),
   },
 };
 
@@ -138,5 +140,44 @@ describe("buildPreview", () => {
 
   it("throws on an out-of-range page index rather than silently doing nothing", () => {
     expect(() => buildPreview(tpl, doc, 99, "run-1")).toThrow();
+  });
+});
+
+describe("buildPreview (FIX 2: srcset, inline style url(), and script[src])", () => {
+  it("rewrites every candidate URL in a srcset, preserving each descriptor verbatim", () => {
+    const r = buildPreview(tpl, doc, 0, "run-1");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.html).toContain(
+      `srcset="/api/site-studio/runs/run-1/preview?asset=img/a.jpg 1x, ` +
+      `/api/site-studio/runs/run-1/preview?asset=img/hero-2x.jpg 2x, ` +
+      `https://cdn.example.com/x.jpg 3x"`,
+    );
+  });
+
+  it("depth-adjusts a srcset's relative URLs on a stamped page the same way plain src is adjusted", () => {
+    const r = buildPreview(tpl, doc, 1, "run-1");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.html).toContain(
+      `srcset="/api/site-studio/runs/run-1/preview?asset=img/a.jpg 320w, ` +
+      `/api/site-studio/runs/run-1/preview?asset=img/hero-2x.jpg 640w"`,
+    );
+  });
+
+  it("rewrites a url(...) reference inside an inline style attribute, leaving the rest of the declaration alone", () => {
+    const r = buildPreview(tpl, doc, 0, "run-1");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.html).toContain(
+      `style="background-image:url('/api/site-studio/runs/run-1/preview?asset=img/a.jpg'); color:red"`,
+    );
+  });
+
+  it("leaves script[src] untouched — the preview iframe is sandbox=\"\", so scripts never execute regardless", () => {
+    const r = buildPreview(tpl, doc, 0, "run-1");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.html).toContain(`<script src="js/site.js"></script>`);
   });
 });

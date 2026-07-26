@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { isTerminal } from "@/lib/site-studio/run/types";
+import { loadManifest } from "@/lib/site-studio/run/engine";
 import { revertField, type RevertTarget } from "@/lib/site-studio/run/revert";
 import type { RunContentDoc } from "@/lib/site-studio/run/applyWritten";
+import { contentDocSchema } from "@/lib/site-studio/schema";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -57,11 +59,46 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: `page_index out of range (doc has ${doc.pages.length} page(s))` }, { status: 422 });
   }
 
+  // Images have no AI-written value to revert to (review fix, Phase 4a): an
+  // image slot's pre-pick value is the TEMPLATE'S own demo sample, seeded
+  // long before any Writer call — `applyOperatorEdit` no longer even backs
+  // one up (see its own doc comment), but this check names the refusal
+  // clearly rather than letting the caller see a generic "no AI backup"
+  // message that reads like a fixable timing issue instead of a category
+  // that will never have a backup.
+  if (hasSlot) {
+    const docPage = doc.pages[pageIndex];
+    let manifest;
+    try {
+      manifest = await loadManifest(admin, row.template_id);
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : "Could not load template" }, { status: 500 });
+    }
+    const pageDef = manifest.pages.find((p) => p.id === docPage.page_id);
+    const slotDef = pageDef?.slots.find((s) => s.id === body.slot_id);
+    if (slotDef?.type === "image") {
+      return NextResponse.json(
+        { error: "Images have no AI-written value to revert to — pick a different image instead." },
+        { status: 422 },
+      );
+    }
+  }
+
   const reverted = revertField(doc, pageIndex, target);
   if (!reverted.ok) {
     return NextResponse.json({ error: reverted.error }, { status: 422 });
   }
   const merged = reverted.doc;
+
+  // Validation gate only — contentDocSchema.parse strips the provenance key
+  // (it only describes the renderer-facing shape), so the value PERSISTED
+  // below is `merged` itself, never the parsed/stripped result. Matches the
+  // same defense-in-depth check `/content` and `/images` run before their
+  // own CAS write.
+  const check = contentDocSchema.safeParse(merged);
+  if (!check.success) {
+    return NextResponse.json({ error: `Revert rejected: ${check.error.issues[0]?.message ?? "invalid content"}` }, { status: 422 });
+  }
 
   // CAS on `updated_at` — same discipline as `/content`, `/theme`, and
   // `/images`: a revert landing near-simultaneously with another edit on the

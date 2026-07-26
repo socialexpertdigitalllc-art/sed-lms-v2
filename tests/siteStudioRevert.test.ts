@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { seedContentDoc } from "@/lib/site-studio/run/seed";
-import { applyWritten, applyOperatorEdit } from "@/lib/site-studio/run/applyWritten";
+import { applyWritten, applyOperatorEdit, applyRewrite } from "@/lib/site-studio/run/applyWritten";
 import { revertField } from "@/lib/site-studio/run/revert";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { Dossier } from "@/lib/site-studio/run/dossier";
@@ -180,5 +180,85 @@ describe("revertField", () => {
   it("throws on an out-of-range page index", () => {
     const { doc } = seedContentDoc(manifest, dossier, selectedPages);
     expect(() => revertField(doc, 99, { title: true })).toThrow();
+  });
+});
+
+describe("FIX 1: a re-roll must invalidate a stale ai_backup (reproduces the review's 5-step sequence)", () => {
+  it("AI writes v1 -> operator edits to v2 -> override re-roll writes v3 (ai) -> operator edits to v4 -> revert restores v3, never the pre-re-roll v1", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+
+    // 1. AI writes "v1" (applyWritten's own merge, via the shared `indexResult` fixture)
+    let d = applyWritten(doc, 0, indexResult);
+    expect(d.pages[0].slots.index_s1).toBe("Welcome to Acme Plumbing"); // "v1"
+
+    // 2. operator edits to "v2" -> backup captures "v1"
+    d = applyOperatorEdit(d, 0, { slots: { index_s1: "v2" } });
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBe("Welcome to Acme Plumbing");
+
+    // 3. an OVERRIDE re-roll writes "v3" and flips provenance back to "ai".
+    // Before the fix, the stale "v1" backup survives this untouched.
+    const rerollResult = okResult({ ok: true, title: "Acme Plumbing | Home", slots: { index_s1: "v3" }, repeats: {} });
+    d = applyRewrite(d, 0, rerollResult, { includeOperatorFields: true });
+    expect(d.pages[0].slots.index_s1).toBe("v3");
+    expect(d.provenance[0].slots.index_s1.written_by).toBe("ai");
+    // FIX 1(a): the override re-roll must clear the now-stale backup
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBeUndefined();
+
+    // FIX 1(b): a direct revert attempt immediately after the re-roll must be
+    // refused — the field reads "ai" provenance, so there is nothing an
+    // operator-revert makes sense against, regardless of any leftover backup.
+    const immediateRevert = revertField(d, 0, { slotId: "index_s1" });
+    expect(immediateRevert.ok).toBe(false);
+
+    // 4. operator edits again to "v4" -> backup is captured FRESH, from the
+    // CURRENT ai value ("v3"), never resurrecting the old "v1".
+    d = applyOperatorEdit(d, 0, { slots: { index_s1: "v4" } });
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBe("v3");
+    expect(d.pages[0].slots.index_s1).toBe("v4");
+
+    // 5. revert restores "v3" — content the current AI pass actually
+    // produced — never the pre-re-roll "v1".
+    const reverted = revertField(d, 0, { slotId: "index_s1" });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    expect(reverted.doc.pages[0].slots.index_s1).toBe("v3");
+    expect(reverted.doc.pages[0].slots.index_s1).not.toBe("Welcome to Acme Plumbing");
+  });
+
+  it("a direct revert right after a NORMAL (non-override) re-roll also refuses — the field was never operator-owned to begin with", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResult);
+    const rerollResult = okResult({ ok: true, title: "New Title", slots: { index_s1: "rerolled" }, repeats: {} });
+    d = applyRewrite(d, 0, rerollResult); // no includeOperatorFields
+    expect(revertField(d, 0, { slotId: "index_s1" }).ok).toBe(false);
+  });
+
+  it("an override re-roll of the TITLE also clears a stale title backup, and blocks the immediate direct revert", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResult);
+    d = applyOperatorEdit(d, 0, { title: "Operator title" });
+    expect(d.provenance[0].ai_backup?.title).toBe("Acme Plumbing | Home");
+
+    const rerollResult = okResult({
+      ok: true, title: "Rerolled Title", slots: { index_s1: "Welcome to Acme Plumbing" }, repeats: {},
+    });
+    d = applyRewrite(d, 0, rerollResult, { includeOperatorFields: true });
+    expect(d.provenance[0].ai_backup?.title).toBeUndefined();
+    expect(revertField(d, 0, { title: true }).ok).toBe(false);
+  });
+
+  it("an override SLOT re-roll (onlySlot) also clears that slot's stale backup", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResult);
+    d = applyOperatorEdit(d, 0, { slots: { index_s1: "operator value" } });
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBe("Welcome to Acme Plumbing");
+
+    const rerollResult = okResult({
+      ok: true, title: "Acme Plumbing | Home", slots: { index_s1: "rerolled slot" }, repeats: {},
+    });
+    d = applyRewrite(d, 0, rerollResult, { onlySlot: "index_s1", includeOperatorFields: true });
+    expect(d.pages[0].slots.index_s1).toBe("rerolled slot");
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBeUndefined();
+    expect(revertField(d, 0, { slotId: "index_s1" }).ok).toBe(false);
   });
 });

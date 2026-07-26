@@ -37,10 +37,21 @@ const cloneProvenance = (p: PageProvenance): PageProvenance => ({
  * edit had never happened, and a SECOND revert attempt correctly reports
  * there is nothing left to restore.
  *
- * Returns `{ok:false}` — never a silent no-op — when there is no backup for
- * the requested field: either it was never operator-edited, or it already
- * was reverted once. A caller (the `/revert` route) turns that into a 422,
- * not a 200 that pretends something happened.
+ * REFUSES UNLESS THE FIELD'S CURRENT PROVENANCE IS "operator" (review fix,
+ * Phase 4a) — checking backup-existence alone is not enough: `applyRewrite`'s
+ * `includeOperatorFields` override is a SECOND way a field flips
+ * operator -> ai (the first is `revertField` itself), and immediately after
+ * that override the field reads "ai" while its `ai_backup` may still (bug)
+ * or may no longer (fixed) hold a value from BEFORE the re-roll. Gating on
+ * current provenance, not merely on backup presence, means a revert can
+ * never fire against a field the operator does not currently own — a direct
+ * `POST /revert` right after a re-roll is refused even if some backup
+ * happened to survive, rather than silently resurrecting pre-re-roll text.
+ *
+ * Returns `{ok:false}` — never a silent no-op — when the field isn't
+ * currently an operator edit, or (the ordinary case) has no backup at all:
+ * never operator-edited, or already reverted once. A caller (the `/revert`
+ * route) turns that into a 422, not a 200 that pretends something happened.
  *
  * Pure: does not mutate `doc`; a revert of one field never touches any other
  * field, any other page, or any other part of provenance (including a
@@ -66,6 +77,9 @@ export function revertField(
   const page = pages[pageIndex];
 
   if ("title" in target) {
+    if (pageProvenance.title?.written_by !== "operator") {
+      return { ok: false, error: `revert refused: page ${pageIndex}'s title is not currently an operator edit` };
+    }
     const value = pageProvenance.ai_backup?.title;
     if (value === undefined) {
       return { ok: false, error: `revert refused: page ${pageIndex}'s title has no AI backup to restore` };
@@ -75,6 +89,9 @@ export function revertField(
     delete pageProvenance.ai_backup!.title;
   } else {
     const { slotId } = target;
+    if (pageProvenance.slots[slotId]?.written_by !== "operator") {
+      return { ok: false, error: `revert refused: slot "${slotId}" on page ${pageIndex} is not currently an operator edit` };
+    }
     const value = pageProvenance.ai_backup?.slots?.[slotId];
     if (value === undefined) {
       return { ok: false, error: `revert refused: slot "${slotId}" on page ${pageIndex} has no AI backup to restore` };
