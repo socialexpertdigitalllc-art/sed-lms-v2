@@ -123,7 +123,10 @@ describe("applyWritten", () => {
     const after = applyWritten(doc, 0, indexResult);
     expect(after.provenance[0].title?.written_by).toBe("ai");
     expect(after.provenance[0].slots.index_s1.written_by).toBe("ai");
-    expect(after.provenance[0].repeats.index_r1.written_by).toBe("ai");
+    // repeats are row-aware (Phase 4a): every row's every slot is stamped,
+    // not the repeat id as a whole (see PageProvenance's own doc comment).
+    expect(after.provenance[0].repeats.index_r1["0"].index_r1_s1.written_by).toBe("ai");
+    expect(after.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("ai");
     // an untouched page has no provenance entries yet
     expect(after.provenance[1].slots).toEqual({});
   });
@@ -227,6 +230,104 @@ describe("applyOperatorEdit never backs up an IMAGE slot when told which ones ar
   });
 });
 
+const indexResultWithThreeCards = okResult({
+  ok: true,
+  title: "Acme Plumbing | Home",
+  slots: { index_s1: "Welcome to Acme Plumbing" },
+  repeats: {
+    index_r1: [{ index_r1_s1: "Card A" }, { index_r1_s1: "Card B" }, { index_r1_s1: "Card C" }],
+  },
+});
+
+describe("applyOperatorEdit for repeat rows (Phase 4a)", () => {
+  it("edits one row's slot, leaving the other rows in the same repeat untouched", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithThreeCards);
+
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "1": { index_r1_s1: "Operator's card 2" } } },
+    });
+
+    expect(edited.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "Card A" },
+      { index_r1_s1: "Operator's card 2" },
+      { index_r1_s1: "Card C" },
+    ]);
+  });
+
+  it("stamps provenance operator only on the edited row+slot, leaving sibling rows ai", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithThreeCards);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "1": { index_r1_s1: "Operator's card 2" } } },
+    });
+
+    expect(edited.provenance[0].repeats.index_r1["0"].index_r1_s1.written_by).toBe("ai");
+    expect(edited.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("operator");
+    expect(edited.provenance[0].repeats.index_r1["2"].index_r1_s1.written_by).toBe("ai");
+  });
+
+  it("two rows of the same repeat are independently addressable in one call", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithThreeCards);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "0": { index_r1_s1: "Edited A" }, "2": { index_r1_s1: "Edited C" } } },
+    });
+
+    expect(edited.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "Edited A" },
+      { index_r1_s1: "Card B" },
+      { index_r1_s1: "Edited C" },
+    ]);
+    expect(edited.provenance[0].repeats.index_r1["0"].index_r1_s1.written_by).toBe("operator");
+    expect(edited.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("ai");
+    expect(edited.provenance[0].repeats.index_r1["2"].index_r1_s1.written_by).toBe("operator");
+  });
+
+  it("backs up the row's prior AI value the first time it's operator-edited", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithThreeCards);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "1": { index_r1_s1: "Operator's card 2" } } },
+    });
+    expect(edited.provenance[0].ai_backup?.repeats?.index_r1?.["1"]?.index_r1_s1).toBe("Card B");
+  });
+
+  it("does NOT overwrite an existing row backup on a second operator edit of the same field", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithThreeCards);
+    let edited = applyOperatorEdit(written, 0, { repeats: { index_r1: { "1": { index_r1_s1: "First edit" } } } });
+    edited = applyOperatorEdit(edited, 0, { repeats: { index_r1: { "1": { index_r1_s1: "Second edit" } } } });
+    expect(edited.pages[0].repeats.index_r1[1].index_r1_s1).toBe("Second edit");
+    expect(edited.provenance[0].ai_backup?.repeats?.index_r1?.["1"]?.index_r1_s1).toBe("Card B");
+  });
+
+  it("a repeat-row edit round-trips through contentDocSchema", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithThreeCards);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "1": { index_r1_s1: "Operator's card 2" } } },
+    });
+    expect(() => contentDocSchema.parse(edited)).not.toThrow();
+  });
+
+  it("does not mutate its input", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithThreeCards);
+    const before = JSON.parse(JSON.stringify(written));
+    applyOperatorEdit(written, 0, { repeats: { index_r1: { "1": { index_r1_s1: "Changed" } } } });
+    expect(written).toEqual(before);
+  });
+
+  it("throws on an out-of-range row index", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithThreeCards);
+    expect(() =>
+      applyOperatorEdit(written, 0, { repeats: { index_r1: { "99": { index_r1_s1: "x" } } } }),
+    ).toThrow();
+  });
+});
+
 describe("findDisallowedEditField", () => {
   it("passes a clean edit", () => {
     expect(findDisallowedEditField({ title: "A fine title", slots: { s1: "Plain copy." } })).toBeNull();
@@ -255,5 +356,17 @@ describe("findDisallowedEditField", () => {
   it("ignores fields that were not part of the edit", () => {
     expect(findDisallowedEditField({})).toBeNull();
     expect(findDisallowedEditField({ slots: {} })).toBeNull();
+  });
+
+  it("catches markup in a repeat-row field, naming the repeat, row, and slot", () => {
+    expect(
+      findDisallowedEditField({ repeats: { index_r1: { "1": { index_r1_s1: "<b>bad</b>" } } } }),
+    ).toBe('repeat "index_r1" row 1 slot "index_r1_s1"');
+  });
+
+  it("passes a clean repeat-row edit", () => {
+    expect(
+      findDisallowedEditField({ repeats: { index_r1: { "1": { index_r1_s1: "Clean copy" } } } }),
+    ).toBeNull();
   });
 });

@@ -139,7 +139,17 @@ export function SlotEditor({ title, value, operatorOwned, busy, onSave, onRevert
 }
 
 type EditState =
-  | { kind: "text"; pageIndex: number; slotId: string; value: string; operatorOwned: boolean }
+  | {
+      kind: "text";
+      pageIndex: number;
+      slotId: string;
+      value: string;
+      operatorOwned: boolean;
+      /** Present only for a repeat-row click — see `parseSlotKey`/`SLOT_ATTR`.
+       *  Absent for a plain page-level slot, which is the existing (Gate 1
+       *  and pre-4a Gate 2) shape. */
+      repeat?: { repeatId: string; rowIndex: number };
+    }
   | { kind: "image"; pageIndex: number; slotId: string; altSlotId?: string; altValue: string };
 
 export interface RunPreviewProps {
@@ -174,13 +184,16 @@ export interface RunPreviewProps {
  * runs. The server's own `untrustedContentHeaders` CSP (`sandbox` directive
  * with no exceptions) is defense-in-depth on top of this either way.
  *
- * REPEAT-ROW KEYS: `PATCH /runs/[id]/content` only accepts a flat
- * `{ page_index, slots: { [slotId]: value } }` body — there is no way to
- * name a repeat id or row index in that shape today, so a repeat-row key
- * (`"idx:repeatId#row:slotId"`, see `parseSlotKey`) cannot be round-tripped
- * to it. Rather than inventing a shape the route doesn't understand, a
- * click on a repeat-row slot or image is reported to the operator as
- * unsupported and no request is sent.
+ * REPEAT-ROW KEYS (Phase 4a): a click on a repeat-row TEXT slot (see
+ * `parseSlotKey`'s `"idx:repeatId#row:slotId"` shape) opens the same
+ * `SlotEditor` a plain slot does, and saves/reverts through the row-aware
+ * `repeats: { [repeatId]: { [rowIndex]: { [slotId]: value } } }` body
+ * `PATCH /content` and `POST /revert` now both understand (see those
+ * routes' own doc comments). A repeat-row IMAGE click is left unsupported —
+ * same posture as before this task, and this file's own note on why the
+ * image-click path is untouched: `ImagePicker` only knows a flat
+ * `pageIndex`/`slotId`, and wiring a repeat-row image edit through it is a
+ * separate piece of work this task doesn't cover.
  */
 export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
   const { toast } = useToast();
@@ -232,6 +245,26 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
     onRunUpdated(body.run as StudioRunRow);
   }, [runId, toast, handleStaleWrite, onRunUpdated]);
 
+  /** The repeat-row sibling of `saveSlot` — same route, the row-aware
+   *  `repeats` shape instead of `slots` (see `PATCH /content`'s own doc
+   *  comment). `rowIndex` is sent as an object key, so it round-trips
+   *  through JSON as a string; the route/`applyOperatorEdit` are what parse
+   *  it back into a number and validate it against the row count. */
+  const saveRepeatSlot = useCallback(async (idx: number, repeatId: string, rowIndex: number, slotId: string, value: string) => {
+    const res = await fetch(`/api/site-studio/runs/${runId}/content`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page_index: idx, repeats: { [repeatId]: { [rowIndex]: { [slotId]: value } } } }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 409) { await handleStaleWrite(body); return; }
+    if (!res.ok) {
+      toast({ kind: "error", title: body.error ?? "Edit rejected" });
+      throw new Error(body.error ?? "Edit rejected");
+    }
+    onRunUpdated(body.run as StudioRunRow);
+  }, [runId, toast, handleStaleWrite, onRunUpdated]);
+
   const revertSlot = useCallback(async (idx: number, slotId: string) => {
     setBusy(true);
     try {
@@ -251,22 +284,60 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
     }
   }, [runId, toast, handleStaleWrite, onRunUpdated]);
 
+  /** The repeat-row sibling of `revertSlot` — same route, the `repeat`
+   *  target shape `POST /revert` now understands alongside `slot_id`/
+   *  `title` (see that route's own doc comment). */
+  const revertRepeatSlot = useCallback(async (idx: number, repeatId: string, rowIndex: number, slotId: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/site-studio/runs/${runId}/revert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page_index: idx, repeat: { repeat_id: repeatId, row_index: rowIndex, slot_id: slotId } }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409) { await handleStaleWrite(body); return; }
+      if (!res.ok) { toast({ kind: "error", title: body.error ?? "Revert failed" }); return; }
+      toast({ kind: "success", title: "Reverted to the AI value" });
+      onRunUpdated(body.run as StudioRunRow);
+      setEdit(null);
+    } finally {
+      setBusy(false);
+    }
+  }, [runId, toast, handleStaleWrite, onRunUpdated]);
+
   const openSlotFromKey = useCallback((key: string, isImage: boolean, altKey: string | null) => {
     const parsed = parseSlotKey(key);
     if (!parsed) return;
-    if (parsed.repeat) {
-      // See this file's own note: `/content` has no shape for a repeat row
-      // today, so this is refused here rather than sent as a guess.
-      toast({
-        kind: "info",
-        title: `Editing items inside "${parsed.repeat.repeatId}" isn't supported from this preview yet`,
-        body: "Repeat rows aren't addressable by PATCH /content yet — download the site to hand-edit this, or ask for repeat-row editing to be added.",
-      });
-      return;
-    }
     const { pageIndex: idx, slotId } = parsed;
     const page = doc.pages[idx];
     if (!page) return;
+
+    if (parsed.repeat) {
+      const { repeatId, rowIndex } = parsed.repeat;
+      if (isImage) {
+        // Repeat-row image edits aren't wired up yet — see this file's own
+        // note on why the image-click path is untouched by this task.
+        toast({
+          kind: "info",
+          title: `Editing images inside "${repeatId}" isn't supported from this preview yet`,
+        });
+        return;
+      }
+      const row = page.repeats[repeatId]?.[rowIndex];
+      if (!row) return;
+      const owned = doc.provenance?.[idx]?.repeats?.[repeatId]?.[String(rowIndex)]?.[slotId]?.written_by === "operator";
+      setEdit({
+        kind: "text",
+        pageIndex: idx,
+        slotId,
+        value: row[slotId] ?? "",
+        operatorOwned: owned,
+        repeat: { repeatId, rowIndex },
+      });
+      return;
+    }
+
     if (isImage) {
       const altParsed = altKey ? parseSlotKey(altKey) : null;
       const altSlotId = altParsed && !altParsed.repeat ? altParsed.slotId : undefined;
@@ -328,7 +399,11 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
     if (!edit || edit.kind !== "text") return;
     setBusy(true);
     try {
-      await saveSlot(edit.pageIndex, edit.slotId, value);
+      if (edit.repeat) {
+        await saveRepeatSlot(edit.pageIndex, edit.repeat.repeatId, edit.repeat.rowIndex, edit.slotId, value);
+      } else {
+        await saveSlot(edit.pageIndex, edit.slotId, value);
+      }
       setEdit(null);
     } finally {
       setBusy(false);
@@ -407,12 +482,18 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
 
       {edit?.kind === "text" ? (
         <SlotEditor
-          title={edit.slotId}
+          title={edit.repeat ? `${edit.repeat.repeatId}[${edit.repeat.rowIndex}] · ${edit.slotId}` : edit.slotId}
           value={edit.value}
           operatorOwned={edit.operatorOwned}
           busy={busy}
           onSave={saveEdit}
-          onRevert={edit.operatorOwned ? () => revertSlot(edit.pageIndex, edit.slotId) : undefined}
+          onRevert={
+            edit.operatorOwned
+              ? edit.repeat
+                ? () => revertRepeatSlot(edit.pageIndex, edit.repeat!.repeatId, edit.repeat!.rowIndex, edit.slotId)
+                : () => revertSlot(edit.pageIndex, edit.slotId)
+              : undefined
+          }
           onClose={() => setEdit(null)}
         />
       ) : null}

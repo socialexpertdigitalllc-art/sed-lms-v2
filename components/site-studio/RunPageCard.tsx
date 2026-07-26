@@ -13,6 +13,15 @@ import type { StudioRunRow } from "@/lib/site-studio/run/types";
 
 const isOperator = (field?: { written_by: "ai" | "operator" }) => field?.written_by === "operator";
 
+/** `PageProvenance.repeats` is row-aware (Phase 4a):
+ *  `repeats[repeatId][rowIndex][slotId]`, not one entry per repeat id — so
+ *  "does this page have ANY operator-owned field" has to walk all three
+ *  levels rather than reading `written_by` straight off the repeat id. */
+const repeatsHaveOperatorField = (repeats?: PageProvenance["repeats"]): boolean =>
+  Object.values(repeats ?? {}).some((rows) =>
+    Object.values(rows).some((slots) => Object.values(slots).some(isOperator)),
+  );
+
 export interface RunPageCardProps {
   index: number;
   page: ContentDocPage;
@@ -58,7 +67,7 @@ export function RunPageCard({
   const pageHasOperatorFields =
     isOperator(provenance?.title) ||
     Object.values(provenance?.slots ?? {}).some(isOperator) ||
-    Object.values(provenance?.repeats ?? {}).some(isOperator);
+    repeatsHaveOperatorField(provenance?.repeats);
 
   async function saveTitle() {
     setBusy(true);

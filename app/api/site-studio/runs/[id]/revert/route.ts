@@ -13,37 +13,74 @@ export const maxDuration = 60;
 type Ctx = { params: Promise<{ id: string }> };
 
 /** POST: revert one field on one doc page back to its AI-written value
- *  (Task 4's `revertField`). Body is `{ page_index, slot_id? , title?: true }`
- *  — exactly one of `slot_id`/`title` — mirroring the `/content` PATCH body
- *  shape. Refused once the run is terminal, same discipline as `/content`
- *  and `/theme`: there is nothing left downstream that would pick a revert
- *  up once a run is done. A field with no AI backup (never operator-edited,
- *  or already reverted once) is a 422 naming the field, never a silent
- *  no-op — `revertField`'s own error text is surfaced verbatim. */
+ *  (Task 4's `revertField`). Body is `{ page_index, slot_id?, title?: true,
+ *  repeat?: { repeat_id, row_index, slot_id } }` — exactly one of
+ *  `slot_id`/`title`/`repeat` — mirroring the `/content` PATCH body shape
+ *  (`repeat_id`/`row_index`/`slot_id` there are `repeats: { [repeatId]:
+ *  { [rowIndex]: { [slotId]: value } } }`; here they're a single named
+ *  triple since a revert only ever targets ONE field, not a batch of edits).
+ *  Refused once the run is terminal, same discipline as `/content` and
+ *  `/theme`: there is nothing left downstream that would pick a revert up
+ *  once a run is done. A field with no AI backup (never operator-edited, or
+ *  already reverted once) is a 422 naming the field, never a silent no-op —
+ *  `revertField`'s own error text is surfaced verbatim. */
 export async function POST(req: Request, ctx: Ctx) {
   const auth = await guard();
   if ("error" in auth) return guardError(auth.error);
   const { id } = await ctx.params;
 
   const body = (await req.json().catch(() => null)) as
-    | { page_index?: unknown; slot_id?: unknown; title?: unknown }
+    | {
+        page_index?: unknown;
+        slot_id?: unknown;
+        title?: unknown;
+        repeat?: { repeat_id?: unknown; row_index?: unknown; slot_id?: unknown };
+      }
     | null;
   if (!body || typeof body.page_index !== "number" || !Number.isInteger(body.page_index)) {
     return NextResponse.json({ error: "page_index (integer) is required" }, { status: 422 });
   }
   const hasSlot = body.slot_id !== undefined;
   const hasTitle = body.title !== undefined;
+  const hasRepeat = body.repeat !== undefined;
   if (hasSlot && typeof body.slot_id !== "string") {
     return NextResponse.json({ error: "slot_id must be a string" }, { status: 422 });
   }
   if (hasTitle && body.title !== true) {
     return NextResponse.json({ error: "title must be true" }, { status: 422 });
   }
-  if (hasSlot === hasTitle) {
-    // both present or both absent: exactly one of slot_id/title is required
-    return NextResponse.json({ error: "Provide exactly one of slot_id or title" }, { status: 422 });
+  if (hasRepeat) {
+    const r = body.repeat;
+    if (
+      typeof r !== "object" ||
+      r === null ||
+      typeof r.repeat_id !== "string" ||
+      typeof r.row_index !== "number" ||
+      !Number.isInteger(r.row_index) ||
+      r.row_index < 0 ||
+      typeof r.slot_id !== "string"
+    ) {
+      return NextResponse.json(
+        { error: "repeat must be { repeat_id: string, row_index: non-negative integer, slot_id: string }" },
+        { status: 422 },
+      );
+    }
   }
-  const target: RevertTarget = hasTitle ? { title: true } : { slotId: body.slot_id as string };
+  if ([hasSlot, hasTitle, hasRepeat].filter(Boolean).length !== 1) {
+    // none, or more than one, of slot_id/title/repeat present
+    return NextResponse.json({ error: "Provide exactly one of slot_id, title, or repeat" }, { status: 422 });
+  }
+  const target: RevertTarget = hasTitle
+    ? { title: true }
+    : hasRepeat
+      ? {
+          repeat: {
+            repeatId: body.repeat!.repeat_id as string,
+            rowIndex: body.repeat!.row_index as number,
+            slotId: body.repeat!.slot_id as string,
+          },
+        }
+      : { slotId: body.slot_id as string };
 
   const admin = createAdminClient();
   const { data: row, error: fetchErr } = await admin.from("studio_runs").select("*").eq("id", id).single();
@@ -65,8 +102,10 @@ export async function POST(req: Request, ctx: Ctx) {
   // one up (see its own doc comment), but this check names the refusal
   // clearly rather than letting the caller see a generic "no AI backup"
   // message that reads like a fixable timing issue instead of a category
-  // that will never have a backup.
-  if (hasSlot) {
+  // that will never have a backup. Checked for a repeat-row target too — a
+  // repeat can declare an image slot per row (e.g. a team grid's photo)
+  // exactly like a page-level slot can.
+  if (hasSlot || hasRepeat) {
     const docPage = doc.pages[pageIndex];
     let manifest;
     try {
@@ -75,7 +114,12 @@ export async function POST(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: e instanceof Error ? e.message : "Could not load template" }, { status: 500 });
     }
     const pageDef = manifest.pages.find((p) => p.id === docPage.page_id);
-    const slotDef = pageDef?.slots.find((s) => s.id === body.slot_id);
+    const slotDef =
+      hasSlot && "slotId" in target
+        ? pageDef?.slots.find((s) => s.id === target.slotId)
+        : "repeat" in target
+          ? pageDef?.repeats.find((r) => r.id === target.repeat.repeatId)?.slots.find((s) => s.id === target.repeat.slotId)
+          : undefined;
     if (slotDef?.type === "image") {
       return NextResponse.json(
         { error: "Images have no AI-written value to revert to — pick a different image instead." },
@@ -120,7 +164,11 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  const fieldLabel = hasTitle ? "title" : `slot "${body.slot_id}"`;
+  const fieldLabel = hasTitle
+    ? "title"
+    : hasRepeat
+      ? `repeat "${body.repeat!.repeat_id}" row ${body.repeat!.row_index} slot "${body.repeat!.slot_id}"`
+      : `slot "${body.slot_id}"`;
   await admin.from("studio_run_events").insert({
     run_id: id,
     step: "revert",

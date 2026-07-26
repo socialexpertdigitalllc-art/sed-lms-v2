@@ -51,6 +51,15 @@ const indexResult = okResult({
   repeats: {},
 });
 
+const indexResultWithRepeats = okResult({
+  ok: true,
+  title: "Acme Plumbing | Home",
+  slots: { index_s1: "Welcome to Acme Plumbing" },
+  repeats: {
+    index_r1: [{ index_r1_s1: "Card A" }, { index_r1_s1: "Card B" }, { index_r1_s1: "Card C" }],
+  },
+});
+
 describe("applyOperatorEdit records an ai_backup on the first ai->operator flip", () => {
   it("backs up the title's prior AI value the first time it's operator-edited", () => {
     const { doc } = seedContentDoc(manifest, dossier, selectedPages);
@@ -180,6 +189,98 @@ describe("revertField", () => {
   it("throws on an out-of-range page index", () => {
     const { doc } = seedContentDoc(manifest, dossier, selectedPages);
     expect(() => revertField(doc, 99, { title: true })).toThrow();
+  });
+});
+
+describe("revertField for repeat rows (Phase 4a)", () => {
+  it("restores only the reverted row+slot, leaving sibling rows in the same repeat untouched", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "1": { index_r1_s1: "Operator's card 2" } } },
+    });
+
+    const reverted = revertField(edited, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    expect(reverted.doc.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "Card A" },
+      { index_r1_s1: "Card B" },
+      { index_r1_s1: "Card C" },
+    ]);
+    expect(reverted.doc.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("ai");
+    expect(reverted.doc.provenance[0].ai_backup?.repeats?.index_r1?.["1"]?.index_r1_s1).toBeUndefined();
+  });
+
+  it("refuses when that row+slot isn't currently an operator edit", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+    const reverted = revertField(written, 0, { repeat: { repeatId: "index_r1", rowIndex: 0, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(false);
+  });
+
+  it("two rows of the same repeat are independently revertible: reverting row 1 leaves row 0's operator edit alone", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "0": { index_r1_s1: "Edited A" }, "1": { index_r1_s1: "Edited B" } } },
+    });
+
+    const reverted = revertField(edited, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    expect(reverted.doc.pages[0].repeats.index_r1[0].index_r1_s1).toBe("Edited A");
+    expect(reverted.doc.pages[0].repeats.index_r1[1].index_r1_s1).toBe("Card B");
+    expect(reverted.doc.provenance[0].repeats.index_r1["0"].index_r1_s1.written_by).toBe("operator");
+    expect(reverted.doc.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("ai");
+  });
+
+  it("a revert on one repeat-row field leaves every other field, page, and repeat alone", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResultWithRepeats);
+    d = applyOperatorEdit(d, 0, {
+      title: "Operator's title",
+      repeats: { index_r1: { "1": { index_r1_s1: "Edited B" } } },
+    });
+
+    const reverted = revertField(d, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    // the title edit is untouched by reverting the repeat row
+    expect(reverted.doc.pages[0].title).toBe("Operator's title");
+    expect(reverted.doc.provenance[0].title?.written_by).toBe("operator");
+    // page 1 is completely undisturbed
+    expect(reverted.doc.pages[1]).toEqual(d.pages[1]);
+    expect(reverted.doc.provenance[1]).toEqual(d.provenance[1]);
+  });
+
+  it("is pure: does not mutate its input", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "1": { index_r1_s1: "Edited B" } } },
+    });
+    const before = JSON.parse(JSON.stringify(edited));
+    revertField(edited, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(edited).toEqual(before);
+  });
+
+  it("a repeat-row field edited, reverted, and edited again backs up the ORIGINAL AI value both times", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+
+    let d = applyOperatorEdit(written, 0, { repeats: { index_r1: { "1": { index_r1_s1: "First edit" } } } });
+    expect(d.provenance[0].ai_backup?.repeats?.index_r1?.["1"]?.index_r1_s1).toBe("Card B");
+
+    const reverted = revertField(d, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    d = reverted.doc;
+    expect(d.pages[0].repeats.index_r1[1].index_r1_s1).toBe("Card B");
+
+    d = applyOperatorEdit(d, 0, { repeats: { index_r1: { "1": { index_r1_s1: "Second edit" } } } });
+    expect(d.provenance[0].ai_backup?.repeats?.index_r1?.["1"]?.index_r1_s1).toBe("Card B");
+    expect(d.pages[0].repeats.index_r1[1].index_r1_s1).toBe("Second edit");
   });
 });
 
