@@ -29,6 +29,21 @@ const GOLDEN: Record<string, string> = {
   "bakery/index.html": "10dfb5923a0eae1e",
   "bakery/menu.html": "9488fe64ec1c965a",
   "bakery/style.css": "52ce633f8c96be9d",
+  // plumberpro was compiled and rendered by this test all along, but never
+  // asserted — the GOLDEN map only ever covered half of what this file's
+  // header claims. These hashes were computed AFTER the fix in
+  // tokens.ts's fillSlotValue (attribute-bound slots — plumberpro's <img
+  // alt="…"> — now escape via escapeHtml, not escapeText); they happen to
+  // be byte-identical to what shipped before that fix, because plumberpro's
+  // demo alt-text sample ("Plumber fixing a sink") contains none of the
+  // characters (" ') the two escape functions treat differently. See
+  // tests/siteStudioRenderer.test.ts's "escapes attribute-bound slots"
+  // suite for coverage of a value that DOES differ.
+  "plumberpro/index.html": "65dad52e82ce5440",
+  "plumberpro/about.html": "c89f5196d73a2e27",
+  "plumberpro/contact.html": "a97fd0e60d10daa7",
+  "plumberpro/services.html": "71977d0a46ff94ac",
+  "plumberpro/css/style.css": "88eda6cba827514a",
 };
 
 describe("production render output is pinned", () => {

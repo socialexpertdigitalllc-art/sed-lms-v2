@@ -1,7 +1,7 @@
 import { CompiledTemplate, ContentDoc, ContentDocPage, FileMap, RenderResult } from "../schema";
 import { escapeHtml, fillSlotValue, findTokens, navMarker, repeatMarker, NAV_HREF, NAV_TITLE } from "../tokens";
 import { applyTheme } from "./theme";
-import { annotatePageHtml, RenderOptions } from "./annotate";
+import { annotatePageHtml, annotateRepeatRow, RenderOptions } from "./annotate";
 
 const renderNavLi = (frag: string, href: string, label: string): string =>
   frag.split(NAV_HREF).join(href).split(NAV_TITLE).join(escapeHtml(label));
@@ -93,10 +93,23 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
       html = html.split(navMarker(region.id)).join(parts.join(""));
     }
 
+    // Annotation (preview-only; see annotate.ts) takes over BOTH repeat-row
+    // and page-level slot substitution here so it can locate each token's
+    // enclosing element before it disappears — repeat rows are resolved to
+    // plain values first (this is whole-site, string-based rendering, and a
+    // row's tokens are gone the moment the fragment is substituted), so if
+    // that resolution didn't ALSO annotate, repeat content (services lists,
+    // testimonials, team grids — anything the compiler auto-detects as ≥3
+    // congruent siblings) would be entirely unreachable from Gate 2's
+    // preview. `opts?.annotate` defaults to falsy, so the production path in
+    // both branches below is byte-for-byte what this function has always
+    // produced — annotatePageHtml()/annotateRepeatRow() are never even
+    // imported into that path.
     for (const r of b.def.repeats) {
       const frag = tpl.fragments[r.fragment];
       const rows = (b.page.repeats[r.id] ?? []).slice(0, r.max);
-      const rendered = rows.map((row: Record<string, string>) => {
+      const rendered = rows.map((row: Record<string, string>, rowIndex: number) => {
+        if (opts?.annotate) return annotateRepeatRow(frag, r.slots, row, docPageIndex, r.id, rowIndex);
         let f = frag;
         for (const s of r.slots) f = f.split(`{{slot:${s.id}}}`).join(fillSlotValue(s, row[s.id]));
         return f;
@@ -104,11 +117,6 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
       html = html.split(repeatMarker(r.id)).join(rendered);
     }
 
-    // Annotation (preview-only; see annotate.ts) takes over slot substitution
-    // AND page marking here so it can locate each token's enclosing element
-    // before it disappears. `opts?.annotate` defaults to falsy, so the
-    // production path below is byte-for-byte what this function has always
-    // produced — annotatePageHtml() is never even imported into that path.
     if (opts?.annotate) {
       html = annotatePageHtml(html, b.def, b.page, docPageIndex);
     } else {
