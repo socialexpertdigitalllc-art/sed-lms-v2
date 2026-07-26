@@ -228,13 +228,15 @@ export function applyRewrite(
   // already exists) -> revert would restore "v1", text the CURRENT ai pass
   // never produced. Clearing it here means a later operator edit re-captures
   // the CURRENT (re-rolled) value instead.
-  const clearBackupIfOverriding = (kind: "title" | "slot" | "repeat", id?: string, rowKey?: string, slotId?: string) => {
+  // (Repeats are NOT handled through this helper — see the repeat-merge
+  // block below, which rebuilds each repeat id's whole `ai_backup` map from
+  // scratch instead, precisely so a row that disappears from the merge can
+  // never leave an orphaned backup entry behind. See FIX 2's doc comment
+  // there for why a per-key `delete` here isn't enough for repeats.)
+  const clearBackupIfOverriding = (kind: "title" | "slot", id?: string) => {
     if (!includeOperator || !pageProvenance.ai_backup) return;
     if (kind === "title") delete pageProvenance.ai_backup.title;
     else if (kind === "slot" && id !== undefined) delete pageProvenance.ai_backup.slots?.[id];
-    else if (kind === "repeat" && id !== undefined && rowKey !== undefined && slotId !== undefined) {
-      delete pageProvenance.ai_backup.repeats?.[id]?.[rowKey]?.[slotId];
-    }
   };
 
   if (opts.onlySlot) {
@@ -262,17 +264,57 @@ export function applyRewrite(
     // rows/slots in a mixed group while leaving an operator-owned row/slot
     // exactly as it was, the same protection `applyOperatorEdit`'s own
     // fields already get.
+    //
+    // FIX 2 (Phase 4a review) — SHRINK MUST NOT DESTROY AN OPERATOR ROW: the
+    // loop below only ever walked `rows` (the NEW write result), so when a
+    // re-roll returns FEWER rows than the doc currently holds, any row at an
+    // index beyond the new length was never visited at all — its per-slot
+    // operator-ownership check never ran, `target.repeats[id] = mergedRows`
+    // (a full replace) simply dropped it, and `ai_backup` for that row was
+    // untouched by the old code (it was only ever cleared per-key via
+    // `clearBackupIfOverriding`, which nothing beyond the new length ever
+    // called). Confirmed end-to-end: shrink 3 rows -> 2 -> regrow -> operator
+    // edits row 3 again -> revert restored a value from TWO generations
+    // earlier, because the orphaned backup outlived the row it belonged to
+    // and `applyOperatorEdit`'s capture-once rule trusted it as still valid.
+    //
+    // The fix has two parts, both below: (1) any row beyond the new result's
+    // length that carries an operator-owned field is APPENDED BACK after the
+    // new rows, so the operator's work survives a shrink instead of vanishing
+    // silently; a row beyond the new length with no operator-owned field is
+    // still dropped — that IS the AI's intended shrink, nothing to protect.
+    // (2) `pageProvenance.repeats[id]` and `ai_backup.repeats[id]` are both
+    // REBUILT FROM SCRATCH from the final merged rows (not mutated key-by-
+    // key), so a dropped row's backup can never linger under a stale index —
+    // and a row that IS preserved but ends up at a new array position (its
+    // old index may no longer be free) has its provenance/backup carried to
+    // the SAME new position as its content, since every later revert
+    // addresses a row by its CURRENT index.
     for (const [id, rows] of Object.entries(result.repeats)) {
       const currentRows = target.repeats[id] ?? [];
       const currentRowsProv = pageProvenance.repeats[id] ?? {};
-      const newRowsProv: Record<string, Record<string, FieldProvenance>> = {};
+      const currentRowsBackup = pageProvenance.ai_backup?.repeats?.[id] ?? {};
 
-      const mergedRows = rows.map((row, rowIdx) => {
+      const mergedRows: Record<string, string>[] = [];
+      const mergedProv: Record<string, Record<string, FieldProvenance>> = {};
+      const mergedBackup: Record<string, Record<string, string>> = {};
+
+      const pushRow = (row: Record<string, string>, rowProv: Record<string, FieldProvenance>, rowBackup?: Record<string, string>) => {
+        const newKey = String(mergedRows.length);
+        mergedRows.push(row);
+        mergedProv[newKey] = rowProv;
+        if (rowBackup && Object.keys(rowBackup).length > 0) mergedBackup[newKey] = rowBackup;
+      };
+
+      // 1. The new write result's rows, same per-slot protection as before.
+      rows.forEach((row, rowIdx) => {
         const rowKey = String(rowIdx);
         const existingRow = currentRows[rowIdx];
         const existingRowProv = currentRowsProv[rowKey] ?? {};
+        const existingRowBackup = currentRowsBackup[rowKey] ?? {};
         const mergedRow: Record<string, string> = {};
         const mergedRowProv: Record<string, FieldProvenance> = { ...existingRowProv };
+        const mergedRowBackup: Record<string, string> = { ...existingRowBackup };
 
         for (const [slotId, value] of Object.entries(row)) {
           if (!includeOperator && isOperatorOwned(existingRowProv[slotId])) {
@@ -280,17 +322,41 @@ export function applyRewrite(
             // operator's edit), not the fresh AI value the write returned.
             mergedRow[slotId] = existingRow?.[slotId] ?? value;
           } else {
-            clearBackupIfOverriding("repeat", id, rowKey, slotId);
+            // Overriding this slot — same "second way a field flips
+            // operator -> ai" backup-staleness fix as title/slots above,
+            // just applied to the local copy that gets rebuilt below.
+            if (includeOperator) delete mergedRowBackup[slotId];
             mergedRow[slotId] = value;
             mergedRowProv[slotId] = field;
           }
         }
-        newRowsProv[rowKey] = mergedRowProv;
-        return mergedRow;
+        pushRow(mergedRow, mergedRowProv, mergedRowBackup);
       });
 
+      // 2. Any row beyond the new result's length: preserve it (content,
+      // provenance, and backup, unchanged) if the operator owns any field on
+      // it — otherwise let it drop, which is the AI's own intended shrink.
+      for (let i = rows.length; i < currentRows.length; i++) {
+        const rowKey = String(i);
+        const rowProv = currentRowsProv[rowKey] ?? {};
+        const operatorOwnsRow = Object.values(rowProv).some((f) => isOperatorOwned(f));
+        if (operatorOwnsRow) {
+          pushRow({ ...currentRows[i] }, { ...rowProv }, { ...(currentRowsBackup[rowKey] ?? {}) });
+        }
+        // else: dropped. Its `ai_backup` entry (if any) is dropped with it —
+        // `mergedBackup` is rebuilt from scratch below, so there is nothing
+        // left to explicitly delete.
+      }
+
       target.repeats[id] = mergedRows;
-      pageProvenance.repeats[id] = newRowsProv;
+      pageProvenance.repeats[id] = mergedProv;
+      if (Object.keys(mergedBackup).length > 0) {
+        if (!pageProvenance.ai_backup) pageProvenance.ai_backup = { slots: {} };
+        if (!pageProvenance.ai_backup.repeats) pageProvenance.ai_backup.repeats = {};
+        pageProvenance.ai_backup.repeats[id] = mergedBackup;
+      } else if (pageProvenance.ai_backup?.repeats) {
+        delete pageProvenance.ai_backup.repeats[id];
+      }
     }
   }
 

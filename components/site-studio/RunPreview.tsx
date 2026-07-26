@@ -181,8 +181,22 @@ export interface RunPreviewProps {
  * form-submission, top-navigation, and popup privilege sandbox normally
  * strips stays stripped — an uploaded template's own `<script>` (left
  * un-rewritten by `buildPreview` on purpose, see that file) still never
- * runs. The server's own `untrustedContentHeaders` CSP (`sandbox` directive
- * with no exceptions) is defense-in-depth on top of this either way.
+ * runs.
+ *
+ * CROSS-REFERENCE (FIX 1, Phase 4a review) — this iframe attribute is only
+ * HALF the story: the server's `untrustedContentHeaders` CSP `sandbox`
+ * directive on the `/preview` response ITSELF also gates origin, and the two
+ * combine RESTRICTIVELY (whichever side omits a token wins). A bare CSP
+ * `sandbox` (no `allow-same-origin`) forces an opaque origin regardless of
+ * this attribute — which is exactly how click-to-edit shipped dead in every
+ * real browser (`contentDocument` was `null`; jsdom doesn't enforce CSP, so
+ * the test suite never caught it). The route this iframe's `src` points at
+ * (`app/api/site-studio/runs/[id]/preview/route.ts`) now passes
+ * `{ allowSameOrigin: true }` to `untrustedContentHeaders` for exactly this
+ * reason — if that route's CSP is ever changed back to bare `sandbox`
+ * without changing this attribute (or vice versa), click-to-edit goes dead
+ * again with no test-suite signal short of a real browser. See
+ * `untrustedContentHeaders`'s own doc comment for the other side of this.
  *
  * REPEAT-ROW KEYS (Phase 4a): a click on a repeat-row TEXT slot (see
  * `parseSlotKey`'s `"idx:repeatId#row:slotId"` shape) opens the same

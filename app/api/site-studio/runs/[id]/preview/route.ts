@@ -95,7 +95,16 @@ export async function GET(req: Request, ctx: Ctx) {
     );
   }
 
+  // `allowSameOrigin: true` — FIX 1 (Phase 4a review): this response is the
+  // one `RunPreview`'s iframe navigates to, and that iframe carries
+  // `sandbox="allow-same-origin"` specifically so its parent can reach
+  // `contentDocument` for click-to-edit. The two must agree (see
+  // `untrustedContentHeaders`'s own cross-reference note) or the combined
+  // sandbox forces an opaque origin and click-to-edit goes dead. The asset
+  // branch above is NOT the navigated document (it's `<img>`/`<link>`
+  // subresources the page itself loads), so it is left on the strict
+  // default.
   return new NextResponse(preview.html, {
-    headers: untrustedContentHeaders("text/html"),
+    headers: untrustedContentHeaders("text/html", { allowSameOrigin: true }),
   });
 }

@@ -42,3 +42,40 @@ describe("untrustedContentHeaders", () => {
     expect(h["Cache-Control"]).toContain("must-revalidate");
   });
 });
+
+/**
+ * FIX 1 (Phase 4a review): the run-preview route
+ * (`app/api/site-studio/runs/[id]/preview/route.ts`, page mode) passes
+ * `{ allowSameOrigin: true }` so its response agrees with `RunPreview.tsx`'s
+ * iframe `sandbox="allow-same-origin"` attribute — without this, the bare
+ * `sandbox` CSP forces an opaque origin regardless of the iframe attribute,
+ * and `frame.contentDocument` is `null` in every real browser (jsdom does not
+ * enforce CSP, so `tests/siteStudioPreviewUi.test.tsx` never catches this).
+ * This guards the header string that specific route actually sends.
+ */
+describe("untrustedContentHeaders({ allowSameOrigin: true }) — the run-preview opt-in", () => {
+  const h = untrustedContentHeaders("text/html", { allowSameOrigin: true }) as Record<string, string>;
+  const csp = h["Content-Security-Policy"];
+  const directives = csp.split(";").map((d) => d.trim());
+
+  it("grants allow-same-origin so the iframe's contentDocument is reachable", () => {
+    expect(directives).toContain("sandbox allow-same-origin");
+  });
+
+  it("still blocks script execution — allow-scripts is never granted", () => {
+    expect(csp).not.toContain("allow-scripts");
+  });
+
+  it("leaves every other directive exactly as the strict default", () => {
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("img-src 'self' data:");
+    expect(csp).toContain("style-src 'unsafe-inline' 'self'");
+    expect(csp).toContain("font-src 'self' data:");
+  });
+
+  it("does not affect other callers that omit the option (template preview/original stay strict)", () => {
+    const strict = untrustedContentHeaders("text/html") as Record<string, string>;
+    expect(strict["Content-Security-Policy"].split(";").map((d) => d.trim())).toContain("sandbox");
+    expect(strict["Content-Security-Policy"]).not.toContain("allow-same-origin");
+  });
+});

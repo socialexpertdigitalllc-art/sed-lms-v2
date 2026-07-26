@@ -363,3 +363,110 @@ describe("FIX 1: a re-roll must invalidate a stale ai_backup (reproduces the rev
     expect(revertField(d, 0, { slotId: "index_s1" }).ok).toBe(false);
   });
 });
+
+describe("FIX 2: a re-roll that shrinks a repeat must not delete an operator-owned row or corrupt its backup", () => {
+  it("shrink 3 rows -> 2 with row 3 operator-owned: the operator's row survives, appended after the new AI rows, and no orphaned backup remains", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats); // [Card A, Card B, Card C], all ai
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "2": { index_r1_s1: "Operator's card 3" } } },
+    });
+    expect(edited.provenance[0].ai_backup?.repeats?.index_r1?.["2"]?.index_r1_s1).toBe("Card C");
+
+    const shrinkResult = okResult({
+      ok: true,
+      title: "Acme Plumbing | Home",
+      slots: { index_s1: "Welcome to Acme Plumbing" },
+      repeats: { index_r1: [{ index_r1_s1: "New A" }, { index_r1_s1: "New B" }] }, // only 2 rows back
+    });
+    const shrunk = applyRewrite(edited, 0, shrinkResult);
+
+    // the operator's row is NOT deleted — it survives, appended after the two new AI rows
+    expect(shrunk.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "New A" },
+      { index_r1_s1: "New B" },
+      { index_r1_s1: "Operator's card 3" },
+    ]);
+    expect(shrunk.provenance[0].repeats.index_r1["2"].index_r1_s1.written_by).toBe("operator");
+    // the backup that protects it travels with it — no orphan left behind
+    expect(shrunk.provenance[0].ai_backup?.repeats?.index_r1?.["2"]?.index_r1_s1).toBe("Card C");
+    expect(Object.keys(shrunk.provenance[0].ai_backup?.repeats?.index_r1 ?? {})).toEqual(["2"]);
+  });
+
+  it("the full shrink -> regrow -> edit -> revert sequence: revert restores the value the operator's edit overwrote, not content from an earlier generation", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResultWithRepeats); // [Card A, Card B, Card C]
+    d = applyOperatorEdit(d, 0, { repeats: { index_r1: { "2": { index_r1_s1: "Operator's card 3" } } } });
+
+    // shrink to 2 rows
+    d = applyRewrite(d, 0, okResult({
+      ok: true, title: "t", slots: { index_s1: "s" },
+      repeats: { index_r1: [{ index_r1_s1: "Gen2 A" }, { index_r1_s1: "Gen2 B" }] },
+    }));
+    expect(d.pages[0].repeats.index_r1[2]).toEqual({ index_r1_s1: "Operator's card 3" });
+
+    // regrow back to 3 rows — the operator's (still-owned) row must stay
+    // exactly as it was, NOT be overwritten by the regrow's own fresh value
+    d = applyRewrite(d, 0, okResult({
+      ok: true, title: "t", slots: { index_s1: "s" },
+      repeats: {
+        index_r1: [{ index_r1_s1: "Gen3 A" }, { index_r1_s1: "Gen3 B" }, { index_r1_s1: "Gen3 C (must not win)" }],
+      },
+    }));
+    expect(d.pages[0].repeats.index_r1[2]).toEqual({ index_r1_s1: "Operator's card 3" });
+    expect(d.provenance[0].repeats.index_r1["2"].index_r1_s1.written_by).toBe("operator");
+    expect(d.provenance[0].ai_backup?.repeats?.index_r1?.["2"]?.index_r1_s1).toBe("Card C");
+
+    // a second operator edit of the same (still operator-owned) row does not
+    // recapture the backup — the ORIGINAL ai value ("Card C") stays put
+    d = applyOperatorEdit(d, 0, { repeats: { index_r1: { "2": { index_r1_s1: "Operator's SECOND edit" } } } });
+    expect(d.provenance[0].ai_backup?.repeats?.index_r1?.["2"]?.index_r1_s1).toBe("Card C");
+
+    const reverted = revertField(d, 0, { repeat: { repeatId: "index_r1", rowIndex: 2, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    // restores "Card C" — the value the operator's edit chain actually
+    // overwrote — never "Gen3 C (must not win)" or any other intervening
+    // regeneration this row was protected from.
+    expect(reverted.doc.pages[0].repeats.index_r1[2].index_r1_s1).toBe("Card C");
+  });
+
+  it("a re-roll that GROWS the repeat still works and leaves provenance coherent", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats); // 3 rows
+    const grown = applyRewrite(written, 0, okResult({
+      ok: true, title: "t", slots: { index_s1: "s" },
+      repeats: {
+        index_r1: [
+          { index_r1_s1: "A" }, { index_r1_s1: "B" }, { index_r1_s1: "C" }, { index_r1_s1: "D" },
+        ],
+      },
+    }));
+    expect(grown.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "A" }, { index_r1_s1: "B" }, { index_r1_s1: "C" }, { index_r1_s1: "D" },
+    ]);
+    for (const k of ["0", "1", "2", "3"]) {
+      expect(grown.provenance[0].repeats.index_r1[k].index_r1_s1.written_by).toBe("ai");
+    }
+    expect(grown.provenance[0].ai_backup?.repeats?.index_r1).toBeUndefined();
+  });
+
+  it("existing behaviour for equal-length merges is unchanged: an operator-owned row is protected, an ai-owned row is overwritten", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats); // [Card A, Card B, Card C]
+    const edited = applyOperatorEdit(written, 0, { repeats: { index_r1: { "1": { index_r1_s1: "Operator's card 2" } } } });
+
+    const rerolled = applyRewrite(edited, 0, okResult({
+      ok: true, title: "t", slots: { index_s1: "s" },
+      repeats: { index_r1: [{ index_r1_s1: "New A" }, { index_r1_s1: "New B" }, { index_r1_s1: "New C" }] },
+    }));
+    expect(rerolled.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "New A" },
+      { index_r1_s1: "Operator's card 2" }, // protected
+      { index_r1_s1: "New C" },
+    ]);
+    expect(rerolled.provenance[0].repeats.index_r1["0"].index_r1_s1.written_by).toBe("ai");
+    expect(rerolled.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("operator");
+    expect(rerolled.provenance[0].repeats.index_r1["2"].index_r1_s1.written_by).toBe("ai");
+  });
+});
