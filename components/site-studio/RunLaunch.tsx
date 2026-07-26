@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Search, X } from "lucide-react";
 import { btnPrimary, btnSecondary } from "@/components/common/buttons";
 import { inputCls } from "@/components/forms/Field";
@@ -111,11 +111,26 @@ export function RunLaunch({
 
   // Preselect the lead passed in via ?lead=<id> once the eligible list is in —
   // runs once per dialog open (bails out as soon as something is selected).
+  // If the lead loaded but isn't eligible (wrong status, or deleted), the
+  // operator arrived here by clicking a button on that lead's own page, so
+  // silence would read as "the app is broken" — tell them once, by name, and
+  // leave the picker open so they can choose someone else.
+  const notifiedIneligibleRef = useRef(false);
   useEffect(() => {
-    if (!initialLeadId || selectedLeadId) return;
+    if (!initialLeadId || selectedLeadId || leads === null) return;
     const match = eligibleLeads.find((l) => l.id === initialLeadId);
-    if (match) selectLead(match);
-  }, [initialLeadId, eligibleLeads, selectedLeadId]);
+    if (match) {
+      selectLead(match);
+      return;
+    }
+    if (!notifiedIneligibleRef.current) {
+      notifiedIneligibleRef.current = true;
+      toast({
+        kind: "error",
+        title: "This lead isn't eligible for a run — its status must be 'Not Ready'.",
+      });
+    }
+  }, [initialLeadId, eligibleLeads, selectedLeadId, leads, toast]);
 
   async function submit() {
     if (!selectedLead) {
