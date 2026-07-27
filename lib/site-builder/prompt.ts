@@ -21,10 +21,6 @@ export interface BusinessBrief {
   map_embed?: string;
   /** Logo image URL. When present it replaces the template's wordmark. */
   logo?: string;
-  /** The client's own word for their trade, taken verbatim — see
-   *  `lib/site-builder/imageNeeds.ts` for the one place this drives anything
-   *  (image search queries). Never a guessed/mapped taxonomy. */
-  site_type?: string;
   services: string[];
   service_areas: string[];
   /** Free text from the lead, e.g. "#0C5AA0 ,#F24F24" or "navy and orange". */

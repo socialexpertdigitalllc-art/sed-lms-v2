@@ -52,7 +52,7 @@ describe("buildBrief", () => {
     // Nothing commercial/internal leaks through — BusinessBrief has no field
     // for any of it, so this is really "the object has exactly these keys".
     expect(Object.keys(brief).sort()).toEqual(
-      ["about_business", "business_name", "color_scheme", "email", "logo", "map_embed", "phone", "profile_link", "service_areas", "services", "site_type", "years_experience"].sort(),
+      ["about_business", "business_name", "color_scheme", "email", "logo", "map_embed", "phone", "profile_link", "service_areas", "services", "years_experience"].sort(),
     );
   });
 

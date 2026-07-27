@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ImageOff, Loader2, Rocket, Search } from "lucide-react";
 import { PageHeader } from "@/components/common/Panel";
@@ -29,66 +29,81 @@ interface LeadOption {
   image_links: string[] | null;
 }
 
-interface NeedCandidate {
-  kind: "library" | "pexels";
+/** One thumbnail on the image screen. `kind: "manual"` is a candidate added
+ *  through the "search instead" escape hatch — unlike an auto-sourced one
+ *  (rehosted only once actually used, at Generate), `BuilderImagePicker`
+ *  rehosts immediately on pick, so a manual candidate already carries a
+ *  durable `url`, not just a thumbnail. `kind: "client"` is one of the
+ *  lead's own photos offered as a Hero option — its `url` is the lead's own
+ *  (not yet rehosted) link, resolved the same way a Gallery pick is. */
+interface DisplayCandidate {
+  kind: "library" | "pexels" | "client" | "manual";
   key: string;
-  width: number;
-  height: number;
   thumb_url: string | null;
+  width?: number;
+  height?: number;
   asset_id?: string;
   pexels_id?: number;
   download_url?: string;
   photographer?: string;
+  url?: string;
 }
 
-/** A candidate picked through the "search instead" escape hatch. Unlike an
- *  auto-sourced candidate (rehosted only once actually used, at Generate),
- *  `BuilderImagePicker` rehosts immediately on pick — so this already carries
- *  a durable `url`, not just a thumbnail. */
-interface ManualPick {
-  key: "manual";
-  thumb_url: string;
-  url: string;
-  purpose: string;
-}
-
-interface NeedRow {
+interface ServiceRow {
+  service: string;
   purpose: string;
   query: string;
-  candidates: NeedCandidate[];
-  manualPick: ManualPick | null;
+  candidates: DisplayCandidate[];
   pexelsError: string | null;
-  /** A candidate's `key`, `"manual"`, or null for an explicit "no image". */
+  /** A candidate's `key`, or null for an explicit "no image" — single-select,
+   *  the operator picks exactly one option for this service. */
   pickedKey: string | null;
 }
 
 interface SourceApiCandidate {
-  kind: "library" | "pexels";
+  kind: "library" | "pexels" | "client";
   key: string;
-  width: number;
-  height: number;
+  width?: number;
+  height?: number;
   thumb_url: string | null;
   asset_id?: string;
   pexels_id?: number;
   download_url?: string;
   photographer?: string;
+  url?: string;
 }
-interface SourceApiNeed {
+interface SourceApiServiceRow {
+  service: string;
   purpose: string;
   query: string;
   pexelsError: string | null;
   candidates: SourceApiCandidate[];
 }
+interface SourceApiResponse {
+  hero: SourceApiCandidate[];
+  services: SourceApiServiceRow[];
+  servicesTruncated: boolean;
+  droppedServices: string[];
+}
+
+/** The most hero picks the operator may carry into Generate — the source
+ *  route offers up to 5 candidates (one from each of the first 3 services,
+ *  one of the lead's own photos if it has any, topped up with next-best
+ *  results from those same service searches); the operator narrows that
+ *  down to at most 3. Enforced here, not just suggested: a 4th click is a
+ *  no-op until one of the first 3 is deselected. */
+const HERO_PICK_LIMIT = 3;
 
 /**
  * The Site Builder image step: sourcing fires automatically the moment a
  * lead is picked (`POST /api/site-builder/images/source`), landing the
- * operator on an already-populated screen — one row per need (Hero, one per
- * service, About), each with its first candidate pre-selected, plus the
- * lead's own photos as the Gallery. The default path is zero clicks: an
- * operator happy with everything just hits Generate. Manual search
- * (`BuilderImagePicker`) is kept only as a per-row escape hatch for when the
- * auto candidates are all wrong — see AGENTS.md's brief on this rework.
+ * operator on an already-populated screen — a Hero row (up to 5 candidates,
+ * pick up to 3), one row per service (3 candidates each, pick 1), plus the
+ * lead's own photos as the Gallery. The default path is close to zero
+ * clicks: an operator happy with the auto picks only has to narrow Hero down
+ * to 3 (or fewer) and hit Generate. Manual search (`BuilderImagePicker`) is
+ * kept only as a per-row escape hatch for when the auto candidates are all
+ * wrong.
  */
 export function NewSiteFlow() {
   const router = useRouter();
@@ -102,11 +117,14 @@ export function NewSiteFlow() {
   const [submitting, setSubmitting] = useState(false);
 
   const [needsLoading, setNeedsLoading] = useState(false);
-  const [needRows, setNeedRows] = useState<NeedRow[]>([]);
+  const [heroCandidates, setHeroCandidates] = useState<DisplayCandidate[]>([]);
+  const [heroSelected, setHeroSelected] = useState<Set<string>>(new Set());
+  const [serviceRows, setServiceRows] = useState<ServiceRow[]>([]);
   const [servicesTruncated, setServicesTruncated] = useState(false);
   const [droppedServices, setDroppedServices] = useState<string[]>([]);
   const [gallerySelected, setGallerySelected] = useState<Set<string>>(new Set());
   const [searchRowFor, setSearchRowFor] = useState<string | null>(null);
+  const manualKeyCounter = useRef(0);
 
   const loadLeads = useCallback(async () => {
     try {
@@ -151,7 +169,9 @@ export function NewSiteFlow() {
   // the same pass (no searching involved there at all — see AGENTS.md).
   useEffect(() => {
     if (!selectedLead) {
-      setNeedRows([]);
+      setHeroCandidates([]);
+      setHeroSelected(new Set());
+      setServiceRows([]);
       setGallerySelected(new Set());
       setServicesTruncated(false);
       setDroppedServices([]);
@@ -160,7 +180,9 @@ export function NewSiteFlow() {
     setGallerySelected(new Set(selectedLead.image_links ?? []));
     let cancelled = false;
     setNeedsLoading(true);
-    setNeedRows([]);
+    setHeroCandidates([]);
+    setHeroSelected(new Set());
+    setServiceRows([]);
     (async () => {
       try {
         const res = await fetch("/api/site-builder/images/source", {
@@ -174,18 +196,21 @@ export function NewSiteFlow() {
           toast({ kind: "error", title: body.error ?? "Could not source images" });
           return;
         }
-        const needs = (body.needs ?? []) as SourceApiNeed[];
-        const rows: NeedRow[] = needs.map((n) => ({
-          purpose: n.purpose,
-          query: n.query,
-          candidates: n.candidates ?? [],
-          manualPick: null,
-          pexelsError: n.pexelsError ?? null,
-          pickedKey: n.candidates?.[0]?.key ?? null,
+        const data = body as SourceApiResponse;
+        const hero = (data.hero ?? []) as DisplayCandidate[];
+        setHeroCandidates(hero);
+        setHeroSelected(new Set(hero.slice(0, HERO_PICK_LIMIT).map((c) => c.key)));
+        const rows: ServiceRow[] = (data.services ?? []).map((s) => ({
+          service: s.service,
+          purpose: s.purpose,
+          query: s.query,
+          candidates: (s.candidates ?? []) as DisplayCandidate[],
+          pexelsError: s.pexelsError ?? null,
+          pickedKey: s.candidates?.[0]?.key ?? null,
         }));
-        setNeedRows(rows);
-        setServicesTruncated(!!body.servicesTruncated);
-        setDroppedServices((body.droppedServices ?? []) as string[]);
+        setServiceRows(rows);
+        setServicesTruncated(!!data.servicesTruncated);
+        setDroppedServices((data.droppedServices ?? []) as string[]);
       } catch (e) {
         if (cancelled) return;
         toast({ kind: "error", title: e instanceof Error ? e.message : "Could not source images" });
@@ -198,29 +223,56 @@ export function NewSiteFlow() {
   }, [selectedLead?.id]);
 
   const purposeSuggestions = useMemo(() => {
-    const base = ["Hero", "Gallery", "About"];
+    const base = ["Hero", "Gallery"];
     const services = selectedLead?.services ?? [];
     return [...base, ...services.map((s) => `Service: ${s}`)];
   }, [selectedLead]);
 
   const clientPhotos = selectedLead?.image_links ?? [];
 
-  function pickCandidate(purpose: string, key: string) {
-    setNeedRows((prev) => prev.map((r) => (r.purpose === purpose ? { ...r, pickedKey: key } : r)));
+  function toggleHero(key: string) {
+    setHeroSelected((prev) => {
+      if (prev.has(key)) {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      }
+      if (prev.size >= HERO_PICK_LIMIT) {
+        toast({ kind: "error", title: `Pick at most ${HERO_PICK_LIMIT} hero images — deselect one first` });
+        return prev;
+      }
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
   }
-  function pickNone(purpose: string) {
-    setNeedRows((prev) => prev.map((r) => (r.purpose === purpose ? { ...r, pickedKey: null } : r)));
+
+  function pickService(purpose: string, key: string) {
+    setServiceRows((prev) => prev.map((r) => (r.purpose === purpose ? { ...r, pickedKey: key } : r)));
   }
+  function pickServiceNone(purpose: string) {
+    setServiceRows((prev) => prev.map((r) => (r.purpose === purpose ? { ...r, pickedKey: null } : r)));
+  }
+
   function applyManualPick(purpose: string, img: PickedImage) {
-    setNeedRows((prev) =>
-      prev.map((r) =>
-        r.purpose === purpose
-          ? { ...r, manualPick: { key: "manual", thumb_url: img.url, url: img.url, purpose: img.purpose }, pickedKey: "manual" }
-          : r,
-      ),
-    );
+    const key = `manual:${++manualKeyCounter.current}`;
+    const candidate: DisplayCandidate = { kind: "manual", key, thumb_url: img.url, url: img.url };
+    if (purpose === "Hero") {
+      setHeroCandidates((prev) => [...prev, candidate]);
+      setHeroSelected((prev) => {
+        if (prev.size >= HERO_PICK_LIMIT) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+    } else {
+      setServiceRows((prev) =>
+        prev.map((r) => (r.purpose === purpose ? { ...r, candidates: [...r.candidates, candidate], pickedKey: key } : r)),
+      );
+    }
     setSearchRowFor(null);
   }
+
   function toggleGallery(url: string) {
     setGallerySelected((prev) => {
       const next = new Set(prev);
@@ -230,21 +282,28 @@ export function NewSiteFlow() {
     });
   }
 
-  async function resolveCandidate(candidate: NeedCandidate, purpose: string): Promise<string> {
+  /** Turn one auto-sourced or manually-added candidate into a durable URL,
+   *  ready to sit in the run's `images` array. Manual candidates already
+   *  carry one (BuilderImagePicker rehosts on pick); library/pexels/client
+   *  candidates are only rehosted now, on actual use — never before. */
+  async function resolveDisplayCandidate(candidate: DisplayCandidate, purpose: string): Promise<string> {
+    if (candidate.kind === "manual") return candidate.url as string;
     const body =
       candidate.kind === "library"
         ? { kind: "library", asset_id: candidate.asset_id, lead_id: selectedLead?.id }
-        : {
-            kind: "pexels",
-            pexels: {
-              download_url: candidate.download_url,
-              pexels_id: candidate.pexels_id,
-              width: candidate.width,
-              height: candidate.height,
-              photographer: candidate.photographer,
-              subject: purpose,
-            },
-          };
+        : candidate.kind === "pexels"
+          ? {
+              kind: "pexels",
+              pexels: {
+                download_url: candidate.download_url,
+                pexels_id: candidate.pexels_id,
+                width: candidate.width,
+                height: candidate.height,
+                photographer: candidate.photographer,
+                subject: purpose,
+              },
+            }
+          : { kind: "client", url: candidate.url, lead_id: selectedLead?.id };
     const res = await fetch("/api/site-builder/images/pick", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -269,22 +328,35 @@ export function NewSiteFlow() {
   async function generate() {
     if (!selectedLead) { toast({ kind: "error", title: "Pick a lead first" }); return; }
     if (!templateId) { toast({ kind: "error", title: "Pick a template first" }); return; }
+    if (heroSelected.size > HERO_PICK_LIMIT) {
+      toast({ kind: "error", title: `Pick at most ${HERO_PICK_LIMIT} hero images` });
+      return;
+    }
     setSubmitting(true);
     try {
       const picks: PickedImage[] = [];
       let firstError: string | null = null;
 
       await Promise.all(
-        needRows.map(async (row) => {
-          if (row.pickedKey === null) return;
-          try {
-            if (row.pickedKey === "manual") {
-              if (row.manualPick) picks.push({ url: row.manualPick.url, purpose: row.manualPick.purpose });
-              return;
+        heroCandidates
+          .filter((c) => heroSelected.has(c.key))
+          .map(async (c) => {
+            try {
+              const url = await resolveDisplayCandidate(c, "Hero");
+              picks.push({ url, purpose: "Hero" });
+            } catch (e) {
+              firstError ??= e instanceof Error ? e.message : "Could not use one of the hero images";
             }
-            const candidate = row.candidates.find((c) => c.key === row.pickedKey);
-            if (!candidate) return;
-            const url = await resolveCandidate(candidate, row.purpose);
+          }),
+      );
+
+      await Promise.all(
+        serviceRows.map(async (row) => {
+          if (row.pickedKey === null) return;
+          const candidate = row.candidates.find((c) => c.key === row.pickedKey);
+          if (!candidate) return;
+          try {
+            const url = await resolveDisplayCandidate(candidate, row.purpose);
             picks.push({ url, purpose: row.purpose });
           } catch (e) {
             firstError ??= e instanceof Error ? e.message : `Could not use the image for ${row.purpose}`;
@@ -327,7 +399,7 @@ export function NewSiteFlow() {
     }
   }
 
-  const searchRow = needRows.find((r) => r.purpose === searchRowFor) ?? null;
+  const searchRow = searchRowFor === "Hero" ? "Hero" : serviceRows.find((r) => r.purpose === searchRowFor)?.purpose ?? null;
 
   return (
     <div className="space-y-6 pb-10">
@@ -423,14 +495,51 @@ export function NewSiteFlow() {
               </p>
             ) : null}
 
-            {needsLoading && needRows.length === 0 ? (
+            {needsLoading && heroCandidates.length === 0 && serviceRows.length === 0 ? (
               <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Finding images…</p>
             ) : (
-              needRows.map((row) => {
-                const displayCandidates: (NeedCandidate | ManualPick)[] = row.manualPick
-                  ? [...row.candidates, row.manualPick]
-                  : row.candidates;
-                return (
+              <>
+                {/* Hero: up to 5 candidates, pick up to 3. */}
+                <div className="rounded-md border border-border p-3">
+                  <div className="mb-2 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-text">Hero</p>
+                      <p className="text-xs text-text-faint">
+                        Pick up to {HERO_PICK_LIMIT} — {heroSelected.size} selected
+                      </p>
+                    </div>
+                    <button type="button" className={btnSecondarySm} onClick={() => setSearchRowFor("Hero")}>
+                      <Search className="h-3.5 w-3.5" /> Search instead
+                    </button>
+                  </div>
+                  {needsLoading ? (
+                    <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Searching…</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {heroCandidates.map((c) => (
+                        <button
+                          key={c.key}
+                          type="button"
+                          onClick={() => toggleHero(c.key)}
+                          aria-pressed={heroSelected.has(c.key)}
+                          aria-label="Use this image for Hero"
+                          className={cn(
+                            "relative h-16 w-16 shrink-0 overflow-hidden rounded-md border",
+                            heroSelected.has(c.key) ? "border-accent ring-2 ring-accent" : "border-border",
+                          )}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={c.thumb_url ?? ""} alt="" loading="lazy" className="h-full w-full object-cover" />
+                        </button>
+                      ))}
+                      {heroCandidates.length === 0 ? (
+                        <p className="self-center text-xs text-text-muted">No candidates found — try &ldquo;Search instead&rdquo;.</p>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+
+                {serviceRows.map((row) => (
                   <div key={row.purpose} className="rounded-md border border-border p-3">
                     <div className="mb-2 flex items-start justify-between gap-3">
                       <div>
@@ -454,7 +563,7 @@ export function NewSiteFlow() {
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() => pickNone(row.purpose)}
+                          onClick={() => pickServiceNone(row.purpose)}
                           aria-pressed={row.pickedKey === null}
                           title="No image for this"
                           aria-label={`No image for ${row.purpose}`}
@@ -466,11 +575,11 @@ export function NewSiteFlow() {
                           <ImageOff className="mb-0.5 h-4 w-4" />
                           No image
                         </button>
-                        {displayCandidates.map((c) => (
+                        {row.candidates.map((c) => (
                           <button
                             key={c.key}
                             type="button"
-                            onClick={() => pickCandidate(row.purpose, c.key)}
+                            onClick={() => pickService(row.purpose, c.key)}
                             aria-pressed={row.pickedKey === c.key}
                             aria-label={`Use this image for ${row.purpose}`}
                             className={cn(
@@ -482,14 +591,14 @@ export function NewSiteFlow() {
                             <img src={c.thumb_url ?? ""} alt="" loading="lazy" className="h-full w-full object-cover" />
                           </button>
                         ))}
-                        {displayCandidates.length === 0 ? (
+                        {row.candidates.length === 0 ? (
                           <p className="self-center text-xs text-text-muted">No candidates found — try &ldquo;Search instead&rdquo;.</p>
                         ) : null}
                       </div>
                     )}
                   </div>
-                );
-              })
+                ))}
+              </>
             )}
 
             {/* Gallery: the client's own photos, pre-selected, no searching. */}
@@ -535,9 +644,9 @@ export function NewSiteFlow() {
       {searchRow && selectedLead ? (
         <BuilderImagePicker
           leadId={selectedLead.id}
-          purposeSuggestions={[searchRow.purpose, ...purposeSuggestions.filter((p) => p !== searchRow.purpose)]}
+          purposeSuggestions={[searchRow, ...purposeSuggestions.filter((p) => p !== searchRow)]}
           clientPhotos={clientPhotos}
-          onAdded={(img) => applyManualPick(searchRow.purpose, img)}
+          onAdded={(img) => applyManualPick(searchRow, img)}
           onClose={() => setSearchRowFor(null)}
         />
       ) : null}

@@ -33,7 +33,6 @@ export function buildBrief(lead: Record<string, unknown>): BusinessBrief {
     profile_link: d.profile_link,
     map_embed: d.map_embed,
     logo: d.logo,
-    site_type: d.site_type,
     services: d.services,
     service_areas: d.service_areas,
     color_scheme: d.color_scheme,

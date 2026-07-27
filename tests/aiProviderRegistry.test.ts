@@ -60,7 +60,7 @@ describe("AI provider registry", () => {
 });
 
 describe("AI task registry", () => {
-  it("describes exactly the seven AI tasks", () => {
+  it("describes exactly the eight AI tasks", () => {
     expect(AI_TASK_REGISTRY.map((t) => t.key)).toEqual([
       "content_plan",
       "file_regen",
@@ -69,6 +69,7 @@ describe("AI task registry", () => {
       "template_compile",
       "content_write",
       "site_build",
+      "image_rank",
     ]);
     expect(isAiTaskKey("file_regen")).toBe(true);
     expect(isAiTaskKey("nope")).toBe(false);
@@ -142,6 +143,14 @@ describe("capability constraints", () => {
     // pairing must now be refused rather than silently truncate.
     expect(isValidAssignment("content_write", "deepseek", "deepseek-chat")).toBe(false);
     expect(isValidAssignment("content_write", "gemini", "gemini-3.1-pro-preview")).toBe(true);
+  });
+
+  it("defaults Site Builder's image ranking task to MiniMax M3 and refuses text-only models", () => {
+    expect(getTask("image_rank")!.requires.vision).toBe(true);
+    expect(getTask("image_rank")!.defaultProvider).toBe("minimax");
+    expect(getTask("image_rank")!.defaultModel).toBe("MiniMax-M3");
+    expect(isValidAssignment("image_rank", "minimax", "MiniMax-M3")).toBe(true);
+    expect(isValidAssignment("image_rank", "deepseek", "deepseek-chat")).toBe(false);
   });
 
   it("requires a real long-output ceiling for Site Builder's whole-page rewrite", () => {

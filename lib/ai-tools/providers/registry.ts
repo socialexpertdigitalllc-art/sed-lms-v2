@@ -166,7 +166,8 @@ export type AiTaskKey =
   | "legacy_v1"
   | "template_compile"
   | "content_write"
-  | "site_build";
+  | "site_build"
+  | "image_rank";
 
 export interface AiTaskDescriptor {
   key: AiTaskKey;
@@ -293,6 +294,18 @@ const siteBuild: AiTaskDescriptor = {
   routable: true,
 };
 
+const imageRank: AiTaskDescriptor = {
+  key: "image_rank",
+  label: "Image ranking (Site Builder)",
+  description:
+    "Looks at each auto-sourced candidate photo for the Hero and Service image rows and reports which show visible people. Used only to ORDER candidates — people-free ones first — never to discard any; ranking never blocks or fails sourcing, a bad or unconfigured pairing just leaves the original order untouched. MULTIMODAL IS MANDATORY — a text-only model would answer about images it never saw.",
+  where: "lib/site-builder/imageRank.ts",
+  requires: { vision: true, minOutputTokens: 4000 },
+  defaultProvider: "minimax",
+  defaultModel: "MiniMax-M3",
+  routable: true,
+};
+
 export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
   contentPlan,
   fileRegen,
@@ -301,6 +314,7 @@ export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
   templateCompile,
   contentWrite,
   siteBuild,
+  imageRank,
 ];
 
 export function getTask(key: string): AiTaskDescriptor | undefined {
