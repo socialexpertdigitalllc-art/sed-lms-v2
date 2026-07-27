@@ -9,7 +9,7 @@ import { iconBtnDanger } from "@/components/common/buttons";
 import { cn } from "@/lib/utils";
 
 export type DeploymentStatus = "live" | "taken_down" | "failed";
-export type DeploymentOrigin = "studio" | "v2_import";
+export type DeploymentOrigin = "studio" | "v2_import" | "builder";
 
 export interface DeploymentRow {
   id: string;
@@ -180,7 +180,7 @@ export function DeploymentsBoard() {
                   </td>
                   <td className="px-3 py-2">
                     <Pill tone={row.origin === "v2_import" ? "neutral" : "accent"}>
-                      {row.origin === "v2_import" ? "v2 import" : "studio"}
+                      {row.origin === "v2_import" ? "v2 import" : row.origin === "builder" ? "builder" : "studio"}
                     </Pill>
                   </td>
                   <td className="px-3 py-2 text-text-muted">
