@@ -113,3 +113,48 @@ export function seedContentDoc(
 
   return { doc, pending, skipped };
 }
+
+/** One image slot on a "gallery"-kind doc-page a lead's own photo can be
+ *  placed into at prepare (Task 2, Phase 4c) — see `gallerySlotTargets`. */
+export interface GallerySlotTarget {
+  /** The doc-page's array INDEX, not its `page_id` — a stamped fan-out page
+   *  can repeat the same `page_id` (mirrors the addressing `applyWritten`
+   *  and `SlotImageState` already use for exactly this reason). */
+  page_index: number;
+  slot_id: string;
+  /** Carried through from the manifest slot's own `subject_hint`, when it has
+   *  one, so the caller doing the actual rehost (`run/engine.ts`'s
+   *  `runPrepare`) can give the placed asset a sensible `subject` without
+   *  re-deriving it — omitted (not empty-stringed) when the slot has none. */
+  subject_hint?: string;
+}
+
+/** Every IMAGE slot, in doc order (page order, then each page's own manifest
+ *  slot order), on a doc-page whose manifest `kind` is "gallery" — the exact
+ *  set of places a lead's own `client_photos` are placed into at `prepare`,
+ *  one photo per slot, in order, until either list runs out (see
+ *  `run/engine.ts`'s `runPrepare`, which does the actual rehosting/merging;
+ *  this stays a pure, deterministic lookup, same separation
+ *  `imageSource.ts`'s `imageSlotQueries` already draws between "what to do"
+ *  and "the effectful doing of it"). A template with no gallery-kind page
+ *  simply returns an empty list — the caller is responsible for deciding
+ *  that means the photos are left for the picker instead. */
+export function gallerySlotTargets(manifest: TemplateManifest, doc: ContentDoc): GallerySlotTarget[] {
+  const pageDefsById = new Map(manifest.pages.map((p) => [p.id, p]));
+  const out: GallerySlotTarget[] = [];
+
+  doc.pages.forEach((docPage, page_index) => {
+    const def = pageDefsById.get(docPage.page_id);
+    if (!def || def.kind !== "gallery") return;
+    for (const slot of def.slots) {
+      if (slot.type !== "image") continue;
+      out.push({
+        page_index,
+        slot_id: slot.id,
+        ...(slot.subject_hint ? { subject_hint: slot.subject_hint } : {}),
+      });
+    }
+  });
+
+  return out;
+}

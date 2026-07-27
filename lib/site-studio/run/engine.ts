@@ -7,14 +7,14 @@ import { renderSite } from "../render/renderer";
 import { loadPackage } from "../service/templates";
 import { buildDossier, type Dossier } from "./dossier";
 import { selectPages, slugify } from "./pageSelect";
-import { seedContentDoc } from "./seed";
+import { seedContentDoc, gallerySlotTargets } from "./seed";
 import { writePage, type AiCall, type WriteResult } from "./writer";
-import { applyWritten } from "./applyWritten";
+import { applyWritten, applyOperatorEdit } from "./applyWritten";
 import { finalizeRun } from "./finalize";
 import { nextStep, type PageWriteState, type RunStep, type RunStatus, type SlotImageState, type StudioRunRow } from "./types";
 import { sourceImages } from "./imageSource";
 import { searchPexels as pexelsSearch, type PexelsResult } from "../assets/pexels";
-import { STUDIO_ASSETS_BUCKET } from "../assets/rehost";
+import { STUDIO_ASSETS_BUCKET, rehostFromUrl } from "../assets/rehost";
 
 /** Production AiCall: routes the per-page write through the task router on
  *  its own registered task ("content_write") — kept separate from
@@ -52,6 +52,12 @@ export interface RunStepDeps {
    *  and as any test not exercising sourcing may) is safe and hermetic —
    *  see `noPexelsConfigured`. */
   searchPexels?: (query: string) => Promise<PexelsResult>;
+  /** Injectable fetch for rehosting a lead's own gallery photos during
+   *  `prepare` (Task 2, Phase 4c — see `runPrepare`'s gallery-fill block).
+   *  Tests inject a stub so no network call is ever made; production omits
+   *  it, letting `rehostFromUrl` fall back to the global `fetch` — same
+   *  optional-injection idiom as `searchPexels` above. */
+  fetchImpl?: typeof fetch;
 }
 
 export interface RunStepResult {
@@ -336,7 +342,12 @@ async function logEvent(
  *  facts get filled in after this step. The renderer's completeness check
  *  itself is UNCHANGED — it remains the real backstop against a key that
  *  somehow ends up absent from `identity` entirely. */
-async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => Date): Promise<StudioRunRow> {
+async function runPrepare(
+  admin: SupabaseClient,
+  row: StudioRunRow,
+  now: () => Date,
+  fetchImpl?: typeof fetch,
+): Promise<StudioRunRow> {
   if (!row.lead_id) {
     const updated = await persistRun(
       admin, row.id,
@@ -363,17 +374,84 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
 
   const { doc } = seedContentDoc(manifest, dossier, selection.pages, now());
 
+  // TASK 2 (Phase 4c): a lead's own photos belong in the gallery WITHOUT
+  // anyone clicking — measured production fact: both real acceptance runs
+  // launched `options.auto: true`, which skips Gate 1 (where image curation
+  // otherwise happens) entirely, so a lead's `client_photos` reached the run
+  // and were never placed anywhere. Every IMAGE slot on a doc-page whose
+  // manifest `kind` is "gallery" (`gallerySlotTargets`, seed.ts) is filled
+  // from `dossier.client_photos`, IN ORDER, one photo per slot, until either
+  // list runs out — deliberately BEFORE the identity gate below, so a
+  // missing-identity pause never blocks this from happening first.
+  //
+  // REHOST FIRST, ALWAYS: exactly the rule an operator's own Gate 1/2 image
+  // pick already follows (see the `images` route) — a slot never receives
+  // the lead's raw external URL, only `asset:{id}` after `rehostFromUrl` has
+  // copied the bytes into OUR bucket. A client's photo hot-linked from
+  // whatever host they originally uploaded it to will eventually rot and
+  // break their live site.
+  //
+  // A photo that fails to rehost (dead link, oversized, wrong content-type)
+  // is skipped — its slot simply keeps the template's own sample image — and
+  // recorded as a `warn` naming the URL; it can NEVER fail the whole run,
+  // same discipline as image sourcing during `write` (see `sourceImagesOnce`).
+  // Slots beyond the supplied photos are untouched, same as a template with
+  // no gallery-kind page at all (photos are then left for the picker, and a
+  // warn says so, rather than silently disappearing).
+  //
+  // PROVENANCE "operator": a human (the lead) supplied this photo, so it is
+  // merged via `applyOperatorEdit` — the SAME call and the SAME
+  // `imageSlotIds` guard the images route uses — so a later AI re-roll can
+  // never silently replace it, and its pre-fill sample value is never
+  // captured into `ai_backup` either (an image slot's backup would only ever
+  // let a revert reinstate the vendor's own stock photo).
+  let workingDoc: ContentDoc = doc;
+  const galleryWarnings: string[] = [];
+  const galleryTargets = gallerySlotTargets(manifest, doc);
+  if (galleryTargets.length === 0) {
+    if (dossier.client_photos.length > 0) {
+      galleryWarnings.push(
+        `This lead has ${dossier.client_photos.length} photo(s) but the template has no gallery page to place them on — left for the picker.`,
+      );
+    }
+  } else {
+    const placeCount = Math.min(galleryTargets.length, dossier.client_photos.length);
+    for (let i = 0; i < placeCount; i++) {
+      const target = galleryTargets[i];
+      const url = dossier.client_photos[i];
+      const result = await rehostFromUrl(
+        admin, url,
+        {
+          kind: "client",
+          lead_id: row.lead_id,
+          subject: target.subject_hint?.trim() || "gallery photo",
+          source: "client_link",
+        },
+        fetchImpl,
+      );
+      if (result.ok) {
+        workingDoc = applyOperatorEdit(
+          workingDoc, target.page_index,
+          { slots: { [target.slot_id]: `asset:${result.asset.id}` } },
+          new Set([target.slot_id]),
+        );
+      } else {
+        galleryWarnings.push(`Could not place client photo (${url}) in the gallery: ${result.error}`);
+      }
+    }
+  }
+
   const referenced = referencedIdentityKeys(tpl);
-  const pendingIdentity = [...referenced].filter((k) => !(k in doc.identity)).sort();
+  const pendingIdentity = [...referenced].filter((k) => !(k in workingDoc.identity)).sort();
   // Present-but-empty, not omitted: `"" in doc.identity` reads true, which is
   // exactly what both this render check and the renderer's own rely on.
-  for (const key of pendingIdentity) doc.identity[key] = "";
+  for (const key of pendingIdentity) workingDoc.identity[key] = "";
 
   const siteSlug = `${slugify(dossier.business_name) || "site"}-${randomBase36(6)}`;
 
   const prepareStep: NonNullable<StudioRunRow["steps"]["prepare"]> = {
     at: now().toISOString(),
-    pages: doc.pages.length,
+    pages: workingDoc.pages.length,
     ...(pendingIdentity.length > 0
       ? { pending_identity: pendingIdentity, pending_identity_usage: identityUsage(tpl, pendingIdentity) }
       : {}),
@@ -382,7 +460,7 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
   const updated = await persistRun(
     admin, row.id,
     {
-      content_doc: doc,
+      content_doc: workingDoc,
       client_photos: dossier.client_photos,
       site_slug: siteSlug,
       steps: { ...row.steps, prepare: prepareStep },
@@ -396,9 +474,12 @@ async function runPrepare(admin: SupabaseClient, row: StudioRunRow, now: () => D
       : "";
   await logEvent(
     admin, row.id, "prepare", "info",
-    `Prepared ${doc.pages.length} page(s)${selection.skipped.length ? `; skipped: ${selection.skipped.join(", ")}` : ""}.${pendingNote}`,
+    `Prepared ${workingDoc.pages.length} page(s)${selection.skipped.length ? `; skipped: ${selection.skipped.join(", ")}` : ""}.${pendingNote}`,
     { skipped: selection.skipped, pending_identity: pendingIdentity },
   );
+  for (const warning of galleryWarnings) {
+    await logEvent(admin, row.id, "prepare", "warn", warning);
+  }
   return updated;
 }
 
@@ -799,7 +880,7 @@ export async function runStep(admin: SupabaseClient, row: StudioRunRow, deps: Ru
 
   switch (step) {
     case "prepare":
-      return { done: false, row: await runPrepare(admin, claimed, now), claimed: true };
+      return { done: false, row: await runPrepare(admin, claimed, now, deps.fetchImpl), claimed: true };
     case "write":
       return { done: false, row: await runWrite(admin, claimed, deps), claimed: true };
     case "render":

@@ -140,6 +140,171 @@ async function seedTwoPageAdmin(): Promise<{ state: FakeAdminState; admin: Retur
 
 const noPexels = async () => ({ ok: false as const, error: "no pexels in this test" });
 
+const galleryManifest: TemplateManifest = {
+  engine: 3, name: "gate-engine-gallery-test", version: 1,
+  identity: {},
+  theme: { mode: "none", roles: {} },
+  nav: [],
+  pages: [
+    {
+      id: "index", file: "index.html", kind: "home", stampable: false,
+      title_sample: "Home",
+      slots: [
+        { id: "index_s1", type: "text", sample: "Welcome", max_chars: 60, html: false },
+        { id: "index_i1", type: "image", sample: "img/hero.jpg", html: false },
+      ],
+      repeats: [],
+    },
+    {
+      id: "gallery", file: "gallery.html", kind: "gallery", stampable: false,
+      title_sample: "Gallery",
+      slots: [
+        { id: "gal_i1", type: "image", sample: "img/gal1.jpg", html: false },
+        { id: "gal_i2", type: "image", sample: "img/gal2.jpg", html: false },
+      ],
+      repeats: [],
+    },
+  ],
+};
+
+const galleryCompiled: CompiledTemplate = {
+  manifest: galleryManifest,
+  pages: {
+    "index.html": `<html><head><title>{{title}}</title></head><body><h1>{{slot:index_s1}}</h1><img src="{{img:index_i1}}"></body></html>`,
+    "gallery.html": `<html><head><title>{{title}}</title></head><body><img src="{{img:gal_i1}}"><img src="{{img:gal_i2}}"></body></html>`,
+  },
+  fragments: {},
+  assets: {},
+};
+
+async function seedGalleryAdmin(clientPhotos: string[]): Promise<{ state: FakeAdminState; admin: ReturnType<typeof makeFakeAdmin> }> {
+  const state = emptyFakeAdminState();
+  const admin = makeFakeAdmin(state);
+  await savePackage(admin, "tpl-gallery", galleryCompiled);
+  state.templates["tpl-gallery"] = { manifest: galleryManifest };
+  state.leads["lead-gallery"] = { id: "lead-gallery", business_name: "Gallery Co", image_links: clientPhotos };
+  state.runs["run-gallery"] = {
+    ...freshRow(),
+    id: "run-gallery", lead_id: "lead-gallery", template_id: "tpl-gallery",
+  } as unknown as Record<string, unknown>;
+  return { state, admin };
+}
+
+const jpegResponse = (bytes = new Uint8Array([1, 2, 3])) =>
+  new Response(bytes.slice().buffer as ArrayBuffer, { status: 200, headers: { "content-type": "image/jpeg" } });
+
+describe("Gate 1 — prepare fills the gallery from the lead's own photos (Task 2, Phase 4c)", () => {
+  it("rehosts each client photo (kind:'client', this lead, source:'client_link') and writes asset:{id} into gallery-kind image slots, in order", async () => {
+    const photos = ["https://client.example/photo-1.jpg", "https://client.example/photo-2.jpg"];
+    const { state, admin } = await seedGalleryAdmin(photos);
+    const row = state.runs["run-gallery"] as unknown as StudioRunRow;
+    const fetchImpl = async () => jpegResponse();
+
+    const result = await runStep(admin, row, { aiCall: genericAiCall, now: NOW, fetchImpl });
+    const prepared = result.row;
+
+    expect(prepared.status).toBe("preparing");
+    const galleryPage = prepared.content_doc!.pages.find((p) => p.page_id === "gallery")!;
+    expect(galleryPage.slots.gal_i1).toMatch(/^asset:/);
+    expect(galleryPage.slots.gal_i2).toMatch(/^asset:/);
+    expect(galleryPage.slots.gal_i1).not.toBe(galleryPage.slots.gal_i2);
+
+    const asset1Id = galleryPage.slots.gal_i1.replace("asset:", "");
+    const asset2Id = galleryPage.slots.gal_i2.replace("asset:", "");
+    const asset1 = state.studio_assets[asset1Id] as Record<string, unknown>;
+    const asset2 = state.studio_assets[asset2Id] as Record<string, unknown>;
+    expect(asset1.kind).toBe("client");
+    expect(asset1.lead_id).toBe("lead-gallery");
+    expect(asset1.source).toBe("client_link");
+    expect(asset2.kind).toBe("client");
+
+    // Non-gallery page's image slot is untouched by this fill.
+    const indexPage = prepared.content_doc!.pages.find((p) => p.page_id === "index")!;
+    expect(indexPage.slots.index_i1).toBe("img/hero.jpg");
+  });
+
+  it("stamps a placed slot's provenance 'operator', so a later re-roll can't overwrite it", async () => {
+    const photos = ["https://client.example/photo-1.jpg"];
+    const { state, admin } = await seedGalleryAdmin(photos);
+    const row = state.runs["run-gallery"] as unknown as StudioRunRow;
+    const fetchImpl = async () => jpegResponse();
+
+    const result = await runStep(admin, row, { aiCall: genericAiCall, now: NOW, fetchImpl });
+    const provenance = (result.row.content_doc as unknown as { provenance: { slots: Record<string, { written_by: string }> }[] }).provenance;
+    const galleryIndex = result.row.content_doc!.pages.findIndex((p) => p.page_id === "gallery");
+    expect(provenance[galleryIndex].slots.gal_i1.written_by).toBe("operator");
+  });
+
+  it("a slot with no corresponding photo (more slots than photos) keeps the template's own sample image", async () => {
+    const photos = ["https://client.example/photo-1.jpg"]; // only one photo, two gallery slots
+    const { state, admin } = await seedGalleryAdmin(photos);
+    const row = state.runs["run-gallery"] as unknown as StudioRunRow;
+    const fetchImpl = async () => jpegResponse();
+
+    const result = await runStep(admin, row, { aiCall: genericAiCall, now: NOW, fetchImpl });
+    const galleryPage = result.row.content_doc!.pages.find((p) => p.page_id === "gallery")!;
+    expect(galleryPage.slots.gal_i1).toMatch(/^asset:/);
+    expect(galleryPage.slots.gal_i2).toBe("img/gal2.jpg"); // unchanged — no second photo to place
+  });
+
+  it("a photo that fails to rehost is skipped, warned by name, and does NOT fail the run", async () => {
+    const photos = ["https://client.example/broken.jpg", "https://client.example/photo-2.jpg"];
+    const { state, admin } = await seedGalleryAdmin(photos);
+    const row = state.runs["run-gallery"] as unknown as StudioRunRow;
+    let call = 0;
+    const fetchImpl = async () => {
+      call++;
+      if (call === 1) return new Response(null, { status: 500 });
+      return jpegResponse();
+    };
+
+    const result = await runStep(admin, row, { aiCall: genericAiCall, now: NOW, fetchImpl });
+    expect(result.row.status).toBe("preparing"); // never fails the run
+    const galleryPage = result.row.content_doc!.pages.find((p) => p.page_id === "gallery")!;
+    expect(galleryPage.slots.gal_i1).toBe("img/gal1.jpg"); // failed photo left the sample in place
+    expect(galleryPage.slots.gal_i2).toMatch(/^asset:/); // the second photo still placed
+
+    const warnEvent = state.events.find(
+      (e) => e.step === "prepare" && e.level === "warn" && String(e.message).includes("https://client.example/broken.jpg"),
+    );
+    expect(warnEvent).toBeTruthy();
+  });
+
+  it("no gallery-kind page: photos are left for the picker, and a warn records that they weren't placed", async () => {
+    const photos = ["https://client.example/photo-1.jpg"];
+    const state = emptyFakeAdminState();
+    const admin = makeFakeAdmin(state);
+    await savePackage(admin, "tpl-gate", onePageCompiled); // no gallery page in this fixture
+    state.templates["tpl-gate"] = { manifest: onePageManifest };
+    state.leads["lead-gate"] = { id: "lead-gate", business_name: "Gatekeeper Co", image_links: photos };
+    state.runs["run1"] = freshRow() as unknown as Record<string, unknown>;
+
+    const fetchImpl = async () => jpegResponse();
+    const result = await runStep(admin, state.runs["run1"] as unknown as StudioRunRow, { aiCall: genericAiCall, now: NOW, fetchImpl });
+
+    expect(result.row.status).toBe("preparing");
+    const indexPage = result.row.content_doc!.pages.find((p) => p.page_id === "index")!;
+    expect(indexPage.slots.index_i1).toBe("img/hero.jpg"); // untouched
+
+    const warnEvent = state.events.find(
+      (e) => e.step === "prepare" && e.level === "warn" && String(e.message).toLowerCase().includes("gallery"),
+    );
+    expect(warnEvent).toBeTruthy();
+  });
+
+  it("no client photos at all: gallery slots simply keep their sample images, no warn logged", async () => {
+    const { state, admin } = await seedGalleryAdmin([]);
+    const row = state.runs["run-gallery"] as unknown as StudioRunRow;
+    const fetchImpl = async () => jpegResponse();
+
+    const result = await runStep(admin, row, { aiCall: genericAiCall, now: NOW, fetchImpl });
+    const galleryPage = result.row.content_doc!.pages.find((p) => p.page_id === "gallery")!;
+    expect(galleryPage.slots.gal_i1).toBe("img/gal1.jpg");
+    expect(galleryPage.slots.gal_i2).toBe("img/gal2.jpg");
+    expect(state.events.some((e) => e.step === "prepare" && e.level === "warn")).toBe(false);
+  });
+});
+
 describe("Gate 1 — write completion parks the machine at 'reviewing'", () => {
   it("all pages written + images sourced -> status 'reviewing'; a further step is a safe no-op (the machine cannot cross the gate)", async () => {
     const { state, admin } = await seedOnePageAdmin();

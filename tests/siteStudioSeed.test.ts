@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { seedContentDoc } from "@/lib/site-studio/run/seed";
+import { seedContentDoc, gallerySlotTargets } from "@/lib/site-studio/run/seed";
 import { contentDocSchema } from "@/lib/site-studio/schema";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { Dossier } from "@/lib/site-studio/run/dossier";
@@ -123,5 +123,74 @@ describe("seedContentDoc — an unknown selected page id", () => {
     expect(skipped).toEqual(["does-not-exist"]);
     expect(doc.pages).toHaveLength(3);
     expect(doc.pages.map((p) => p.page_id)).toEqual(["index", "svc", "svc"]);
+  });
+});
+
+describe("gallerySlotTargets — Task 2 (Phase 4c): where the lead's own photos are placed at prepare", () => {
+  const galleryManifest = {
+    engine: 3, name: "t", version: 1,
+    identity: {},
+    theme: { mode: "none", roles: {} },
+    nav: [],
+    pages: [
+      {
+        id: "index", file: "index.html", kind: "home", stampable: false,
+        title_sample: "Home | Demo",
+        slots: [
+          { id: "index_s1", type: "text", sample: "Welcome", max_chars: 60, html: false },
+          { id: "index_i1", type: "image", sample: "img/hero.jpg", html: false },
+        ],
+        repeats: [],
+      },
+      {
+        id: "gallery", file: "gallery.html", kind: "gallery", stampable: false,
+        title_sample: "Gallery | Demo",
+        slots: [
+          { id: "gal_i1", type: "image", sample: "img/gal1.jpg", html: false },
+          { id: "gal_i2", type: "image", sample: "img/gal2.jpg", html: false, subject_hint: "finished patio" },
+          { id: "gal_s1", type: "text", sample: "Our work", max_chars: 40, html: false },
+        ],
+        repeats: [],
+      },
+    ],
+  } as unknown as TemplateManifest;
+
+  const noGalleryManifest = {
+    ...galleryManifest,
+    pages: [galleryManifest.pages[0]],
+  } as unknown as TemplateManifest;
+
+  it("finds only IMAGE slots on pages whose manifest kind is 'gallery', in manifest slot order, ignoring text slots and other pages", () => {
+    const galleryPages: SelectedPage[] = [{ page_id: "index" }, { page_id: "gallery" }];
+    const { doc } = seedContentDoc(galleryManifest, dossier, galleryPages);
+
+    const targets = gallerySlotTargets(galleryManifest, doc);
+
+    expect(targets).toEqual([
+      { page_index: 1, slot_id: "gal_i1" },
+      { page_index: 1, slot_id: "gal_i2", subject_hint: "finished patio" },
+    ]);
+  });
+
+  it("returns an empty list when the template has no gallery-kind page", () => {
+    const { doc } = seedContentDoc(noGalleryManifest, dossier, [{ page_id: "index" }]);
+    expect(gallerySlotTargets(noGalleryManifest, doc)).toEqual([]);
+  });
+
+  it("addresses a stamped duplicate gallery page by its DOC-PAGE INDEX, not its page_id, so two instances don't collide", () => {
+    const stampedPages: SelectedPage[] = [
+      { page_id: "gallery", output: "gallery/one.html" },
+      { page_id: "gallery", output: "gallery/two.html" },
+    ];
+    const { doc } = seedContentDoc(galleryManifest, dossier, stampedPages);
+
+    const targets = gallerySlotTargets(galleryManifest, doc);
+
+    expect(targets).toEqual([
+      { page_index: 0, slot_id: "gal_i1" },
+      { page_index: 0, slot_id: "gal_i2", subject_hint: "finished patio" },
+      { page_index: 1, slot_id: "gal_i1" },
+      { page_index: 1, slot_id: "gal_i2", subject_hint: "finished patio" },
+    ]);
   });
 });
