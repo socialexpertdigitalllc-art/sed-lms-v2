@@ -60,8 +60,17 @@ describe("AI provider registry", () => {
 });
 
 describe("AI task registry", () => {
-  it("describes exactly the four AI tasks", () => {
-    expect(AI_TASK_REGISTRY.map((t) => t.key)).toEqual(["content_plan", "file_regen", "image_vision", "legacy_v1"]);
+  it("describes exactly the eight AI tasks", () => {
+    expect(AI_TASK_REGISTRY.map((t) => t.key)).toEqual([
+      "content_plan",
+      "file_regen",
+      "image_vision",
+      "legacy_v1",
+      "template_compile",
+      "content_write",
+      "site_build",
+      "image_rank",
+    ]);
     expect(isAiTaskKey("file_regen")).toBe(true);
     expect(isAiTaskKey("nope")).toBe(false);
   });
@@ -119,6 +128,38 @@ describe("capability constraints", () => {
 
   it("allows a small text model for planning, which only needs 8k", () => {
     expect(isValidAssignment("content_plan", "deepseek", "deepseek-chat")).toBe(true);
+  });
+
+  it("requires a real long-output ceiling for Site Studio's page writer, not the old 8k test-fixture number", () => {
+    // A measured production page (183 text slots) truncated mid-JSON at the
+    // old 8000 ceiling every time. Writing now batches large pages, but a
+    // single batch — or an atomic repeat too big to split across batches —
+    // must still clear real model output. Rebased on LONG_OUTPUT_TOKENS, the
+    // same bar file_regen's own whole-page rewrite already uses.
+    expect(getTask("content_write")!.requires.minOutputTokens).toBe(LONG_OUTPUT_TOKENS);
+    // DeepSeek's 8192-token ceiling is too tight a margin for a ~45-slot
+    // batch once a verbose model's hidden reasoning tokens are accounted
+    // for (see image_vision's own note on gemini-3.5-flash's ~1,800) — this
+    // pairing must now be refused rather than silently truncate.
+    expect(isValidAssignment("content_write", "deepseek", "deepseek-chat")).toBe(false);
+    expect(isValidAssignment("content_write", "gemini", "gemini-3.1-pro-preview")).toBe(true);
+  });
+
+  it("defaults Site Builder's image ranking task to MiniMax M3 and refuses text-only models", () => {
+    expect(getTask("image_rank")!.requires.vision).toBe(true);
+    expect(getTask("image_rank")!.defaultProvider).toBe("minimax");
+    expect(getTask("image_rank")!.defaultModel).toBe("MiniMax-M3");
+    expect(isValidAssignment("image_rank", "minimax", "MiniMax-M3")).toBe(true);
+    expect(isValidAssignment("image_rank", "deepseek", "deepseek-chat")).toBe(false);
+  });
+
+  it("requires a real long-output ceiling for Site Builder's whole-page rewrite", () => {
+    // A real template page is ~110KB (~30k tokens) and must come back WHOLE —
+    // same bar as content_write, since there is no smaller "just the text"
+    // path here (Site Builder sends and returns full markup).
+    expect(getTask("site_build")!.requires.minOutputTokens).toBe(LONG_OUTPUT_TOKENS);
+    expect(isValidAssignment("site_build", "deepseek", "deepseek-chat")).toBe(false);
+    expect(isValidAssignment("site_build", "gemini", "gemini-3.1-pro-preview")).toBe(true);
   });
 
   it("names unknown tasks, providers and models rather than silently passing", () => {

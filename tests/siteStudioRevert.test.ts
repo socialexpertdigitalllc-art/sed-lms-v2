@@ -1,0 +1,472 @@
+import { describe, it, expect } from "vitest";
+import { seedContentDoc } from "@/lib/site-studio/run/seed";
+import { applyWritten, applyOperatorEdit, applyRewrite } from "@/lib/site-studio/run/applyWritten";
+import { revertField } from "@/lib/site-studio/run/revert";
+import type { TemplateManifest } from "@/lib/site-studio/schema";
+import type { Dossier } from "@/lib/site-studio/run/dossier";
+import type { SelectedPage } from "@/lib/site-studio/run/pageSelect";
+import type { WriteResult } from "@/lib/site-studio/run/writer";
+
+const manifest = {
+  engine: 3, name: "t", version: 1,
+  identity: { logo: "img/logo-sample.png" },
+  theme: { mode: "css_vars", roles: { brand: { hex: "#111111" } } },
+  nav: [],
+  pages: [
+    {
+      id: "index", file: "index.html", kind: "home", stampable: false,
+      title_sample: "Home | Demo",
+      slots: [
+        { id: "index_s1", type: "text", sample: "Welcome to Demo Co", max_chars: 60, html: false },
+        { id: "index_i1", type: "image", sample: "img/hero.jpg", html: false },
+      ],
+      repeats: [],
+    },
+    {
+      id: "svc", file: "service.html", kind: "service", stampable: true,
+      title_sample: "Service | Demo",
+      slots: [{ id: "svc_s1", type: "text", sample: "Service description here", max_chars: 80, html: false }],
+      repeats: [],
+    },
+  ],
+} as unknown as TemplateManifest;
+
+const dossier: Dossier = {
+  lead_id: "l1", business_name: "Acme Plumbing", phone: "(303) 555-1234", phone_href: "tel:3035551234",
+  no_email: true, services: [], service_areas: [], requested_pages: [], design_references: [],
+  add_ons: [], client_photos: [],
+};
+
+const selectedPages: SelectedPage[] = [
+  { page_id: "index" },
+  { page_id: "svc", output: "services/drain.html", stamp_value: "Drain", nav_title: "Drain" },
+];
+
+const okResult = <T extends Extract<WriteResult, { ok: true }>>(r: T) => r;
+
+const indexResult = okResult({
+  ok: true,
+  title: "Acme Plumbing | Home",
+  slots: { index_s1: "Welcome to Acme Plumbing" },
+  repeats: {},
+});
+
+const indexResultWithRepeats = okResult({
+  ok: true,
+  title: "Acme Plumbing | Home",
+  slots: { index_s1: "Welcome to Acme Plumbing" },
+  repeats: {
+    index_r1: [{ index_r1_s1: "Card A" }, { index_r1_s1: "Card B" }, { index_r1_s1: "Card C" }],
+  },
+});
+
+describe("applyOperatorEdit records an ai_backup on the first ai->operator flip", () => {
+  it("backs up the title's prior AI value the first time it's operator-edited", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const edited = applyOperatorEdit(written, 0, { title: "Operator's title" });
+    expect(edited.provenance[0].ai_backup?.title).toBe("Acme Plumbing | Home");
+    expect(edited.pages[0].title).toBe("Operator's title");
+  });
+
+  it("backs up a slot's prior AI value the first time it's operator-edited", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const edited = applyOperatorEdit(written, 0, { slots: { index_s1: "Operator's headline" } });
+    expect(edited.provenance[0].ai_backup?.slots?.index_s1).toBe("Welcome to Acme Plumbing");
+  });
+
+  it("does NOT overwrite an existing backup on a second operator edit of the same field", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    let edited = applyOperatorEdit(written, 0, { title: "First operator edit" });
+    edited = applyOperatorEdit(edited, 0, { title: "Second operator edit" });
+    expect(edited.pages[0].title).toBe("Second operator edit");
+    // backup is still the ORIGINAL ai value, not "First operator edit"
+    expect(edited.provenance[0].ai_backup?.title).toBe("Acme Plumbing | Home");
+  });
+
+  it("backs up the CURRENT (pre-edit) value even on a doc with no provenance yet", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const edited = applyOperatorEdit(doc, 1, { slots: { svc_s1: "Manual copy" } });
+    expect(edited.provenance[1].ai_backup?.slots?.svc_s1).toBe("");
+  });
+
+  it("does not mutate its input", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const before = JSON.parse(JSON.stringify(written));
+    applyOperatorEdit(written, 0, { title: "Changed" });
+    expect(written).toEqual(before);
+  });
+});
+
+describe("revertField", () => {
+  it("restores the backed-up AI value, flips provenance back to ai, and clears the backup", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const edited = applyOperatorEdit(written, 0, { title: "Operator's title" });
+
+    const reverted = revertField(edited, 0, { title: true });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    expect(reverted.doc.pages[0].title).toBe("Acme Plumbing | Home");
+    expect(reverted.doc.provenance[0].title?.written_by).toBe("ai");
+    expect(reverted.doc.provenance[0].ai_backup?.title).toBeUndefined();
+  });
+
+  it("restores a reverted slot the same way", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const edited = applyOperatorEdit(written, 0, { slots: { index_s1: "Operator's headline" } });
+
+    const reverted = revertField(edited, 0, { slotId: "index_s1" });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    expect(reverted.doc.pages[0].slots.index_s1).toBe("Welcome to Acme Plumbing");
+    expect(reverted.doc.provenance[0].slots.index_s1.written_by).toBe("ai");
+    expect(reverted.doc.provenance[0].ai_backup?.slots?.index_s1).toBeUndefined();
+  });
+
+  it("returns {ok:false} when the field was never operator-edited (no backup) — never a silent no-op", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const reverted = revertField(written, 0, { title: true });
+    expect(reverted.ok).toBe(false);
+  });
+
+  it("returns {ok:false} for a slot that was never operator-edited", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const reverted = revertField(written, 0, { slotId: "index_s1" });
+    expect(reverted.ok).toBe(false);
+  });
+
+  it("a revert on one field leaves every other field and page alone", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResult);
+    d = applyOperatorEdit(d, 0, { title: "Operator's title", slots: { index_s1: "Operator's headline" } });
+
+    const reverted = revertField(d, 0, { title: true });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    // the slot edit is untouched by reverting the title
+    expect(reverted.doc.pages[0].slots.index_s1).toBe("Operator's headline");
+    expect(reverted.doc.provenance[0].slots.index_s1.written_by).toBe("operator");
+    // page 1 is completely undisturbed
+    expect(reverted.doc.pages[1]).toEqual(d.pages[1]);
+    expect(reverted.doc.provenance[1]).toEqual(d.provenance[1]);
+  });
+
+  it("is pure: does not mutate its input", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+    const edited = applyOperatorEdit(written, 0, { title: "Operator's title" });
+    const before = JSON.parse(JSON.stringify(edited));
+    revertField(edited, 0, { title: true });
+    expect(edited).toEqual(before);
+  });
+
+  it("a field edited, reverted, and edited again backs up the ORIGINAL AI value both times", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResult);
+
+    let d = applyOperatorEdit(written, 0, { title: "First operator edit" });
+    expect(d.provenance[0].ai_backup?.title).toBe("Acme Plumbing | Home");
+
+    const reverted = revertField(d, 0, { title: true });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    d = reverted.doc;
+    expect(d.pages[0].title).toBe("Acme Plumbing | Home");
+
+    d = applyOperatorEdit(d, 0, { title: "Second operator edit" });
+    // backed up again, and it's still the ORIGINAL AI value
+    expect(d.provenance[0].ai_backup?.title).toBe("Acme Plumbing | Home");
+    expect(d.pages[0].title).toBe("Second operator edit");
+  });
+
+  it("throws on an out-of-range page index", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    expect(() => revertField(doc, 99, { title: true })).toThrow();
+  });
+});
+
+describe("revertField for repeat rows (Phase 4a)", () => {
+  it("restores only the reverted row+slot, leaving sibling rows in the same repeat untouched", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "1": { index_r1_s1: "Operator's card 2" } } },
+    });
+
+    const reverted = revertField(edited, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    expect(reverted.doc.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "Card A" },
+      { index_r1_s1: "Card B" },
+      { index_r1_s1: "Card C" },
+    ]);
+    expect(reverted.doc.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("ai");
+    expect(reverted.doc.provenance[0].ai_backup?.repeats?.index_r1?.["1"]?.index_r1_s1).toBeUndefined();
+  });
+
+  it("refuses when that row+slot isn't currently an operator edit", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+    const reverted = revertField(written, 0, { repeat: { repeatId: "index_r1", rowIndex: 0, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(false);
+  });
+
+  it("two rows of the same repeat are independently revertible: reverting row 1 leaves row 0's operator edit alone", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "0": { index_r1_s1: "Edited A" }, "1": { index_r1_s1: "Edited B" } } },
+    });
+
+    const reverted = revertField(edited, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    expect(reverted.doc.pages[0].repeats.index_r1[0].index_r1_s1).toBe("Edited A");
+    expect(reverted.doc.pages[0].repeats.index_r1[1].index_r1_s1).toBe("Card B");
+    expect(reverted.doc.provenance[0].repeats.index_r1["0"].index_r1_s1.written_by).toBe("operator");
+    expect(reverted.doc.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("ai");
+  });
+
+  it("a revert on one repeat-row field leaves every other field, page, and repeat alone", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResultWithRepeats);
+    d = applyOperatorEdit(d, 0, {
+      title: "Operator's title",
+      repeats: { index_r1: { "1": { index_r1_s1: "Edited B" } } },
+    });
+
+    const reverted = revertField(d, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    // the title edit is untouched by reverting the repeat row
+    expect(reverted.doc.pages[0].title).toBe("Operator's title");
+    expect(reverted.doc.provenance[0].title?.written_by).toBe("operator");
+    // page 1 is completely undisturbed
+    expect(reverted.doc.pages[1]).toEqual(d.pages[1]);
+    expect(reverted.doc.provenance[1]).toEqual(d.provenance[1]);
+  });
+
+  it("is pure: does not mutate its input", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "1": { index_r1_s1: "Edited B" } } },
+    });
+    const before = JSON.parse(JSON.stringify(edited));
+    revertField(edited, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(edited).toEqual(before);
+  });
+
+  it("a repeat-row field edited, reverted, and edited again backs up the ORIGINAL AI value both times", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats);
+
+    let d = applyOperatorEdit(written, 0, { repeats: { index_r1: { "1": { index_r1_s1: "First edit" } } } });
+    expect(d.provenance[0].ai_backup?.repeats?.index_r1?.["1"]?.index_r1_s1).toBe("Card B");
+
+    const reverted = revertField(d, 0, { repeat: { repeatId: "index_r1", rowIndex: 1, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    d = reverted.doc;
+    expect(d.pages[0].repeats.index_r1[1].index_r1_s1).toBe("Card B");
+
+    d = applyOperatorEdit(d, 0, { repeats: { index_r1: { "1": { index_r1_s1: "Second edit" } } } });
+    expect(d.provenance[0].ai_backup?.repeats?.index_r1?.["1"]?.index_r1_s1).toBe("Card B");
+    expect(d.pages[0].repeats.index_r1[1].index_r1_s1).toBe("Second edit");
+  });
+});
+
+describe("FIX 1: a re-roll must invalidate a stale ai_backup (reproduces the review's 5-step sequence)", () => {
+  it("AI writes v1 -> operator edits to v2 -> override re-roll writes v3 (ai) -> operator edits to v4 -> revert restores v3, never the pre-re-roll v1", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+
+    // 1. AI writes "v1" (applyWritten's own merge, via the shared `indexResult` fixture)
+    let d = applyWritten(doc, 0, indexResult);
+    expect(d.pages[0].slots.index_s1).toBe("Welcome to Acme Plumbing"); // "v1"
+
+    // 2. operator edits to "v2" -> backup captures "v1"
+    d = applyOperatorEdit(d, 0, { slots: { index_s1: "v2" } });
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBe("Welcome to Acme Plumbing");
+
+    // 3. an OVERRIDE re-roll writes "v3" and flips provenance back to "ai".
+    // Before the fix, the stale "v1" backup survives this untouched.
+    const rerollResult = okResult({ ok: true, title: "Acme Plumbing | Home", slots: { index_s1: "v3" }, repeats: {} });
+    d = applyRewrite(d, 0, rerollResult, { includeOperatorFields: true });
+    expect(d.pages[0].slots.index_s1).toBe("v3");
+    expect(d.provenance[0].slots.index_s1.written_by).toBe("ai");
+    // FIX 1(a): the override re-roll must clear the now-stale backup
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBeUndefined();
+
+    // FIX 1(b): a direct revert attempt immediately after the re-roll must be
+    // refused — the field reads "ai" provenance, so there is nothing an
+    // operator-revert makes sense against, regardless of any leftover backup.
+    const immediateRevert = revertField(d, 0, { slotId: "index_s1" });
+    expect(immediateRevert.ok).toBe(false);
+
+    // 4. operator edits again to "v4" -> backup is captured FRESH, from the
+    // CURRENT ai value ("v3"), never resurrecting the old "v1".
+    d = applyOperatorEdit(d, 0, { slots: { index_s1: "v4" } });
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBe("v3");
+    expect(d.pages[0].slots.index_s1).toBe("v4");
+
+    // 5. revert restores "v3" — content the current AI pass actually
+    // produced — never the pre-re-roll "v1".
+    const reverted = revertField(d, 0, { slotId: "index_s1" });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    expect(reverted.doc.pages[0].slots.index_s1).toBe("v3");
+    expect(reverted.doc.pages[0].slots.index_s1).not.toBe("Welcome to Acme Plumbing");
+  });
+
+  it("a direct revert right after a NORMAL (non-override) re-roll also refuses — the field was never operator-owned to begin with", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResult);
+    const rerollResult = okResult({ ok: true, title: "New Title", slots: { index_s1: "rerolled" }, repeats: {} });
+    d = applyRewrite(d, 0, rerollResult); // no includeOperatorFields
+    expect(revertField(d, 0, { slotId: "index_s1" }).ok).toBe(false);
+  });
+
+  it("an override re-roll of the TITLE also clears a stale title backup, and blocks the immediate direct revert", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResult);
+    d = applyOperatorEdit(d, 0, { title: "Operator title" });
+    expect(d.provenance[0].ai_backup?.title).toBe("Acme Plumbing | Home");
+
+    const rerollResult = okResult({
+      ok: true, title: "Rerolled Title", slots: { index_s1: "Welcome to Acme Plumbing" }, repeats: {},
+    });
+    d = applyRewrite(d, 0, rerollResult, { includeOperatorFields: true });
+    expect(d.provenance[0].ai_backup?.title).toBeUndefined();
+    expect(revertField(d, 0, { title: true }).ok).toBe(false);
+  });
+
+  it("an override SLOT re-roll (onlySlot) also clears that slot's stale backup", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResult);
+    d = applyOperatorEdit(d, 0, { slots: { index_s1: "operator value" } });
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBe("Welcome to Acme Plumbing");
+
+    const rerollResult = okResult({
+      ok: true, title: "Acme Plumbing | Home", slots: { index_s1: "rerolled slot" }, repeats: {},
+    });
+    d = applyRewrite(d, 0, rerollResult, { onlySlot: "index_s1", includeOperatorFields: true });
+    expect(d.pages[0].slots.index_s1).toBe("rerolled slot");
+    expect(d.provenance[0].ai_backup?.slots?.index_s1).toBeUndefined();
+    expect(revertField(d, 0, { slotId: "index_s1" }).ok).toBe(false);
+  });
+});
+
+describe("FIX 2: a re-roll that shrinks a repeat must not delete an operator-owned row or corrupt its backup", () => {
+  it("shrink 3 rows -> 2 with row 3 operator-owned: the operator's row survives, appended after the new AI rows, and no orphaned backup remains", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats); // [Card A, Card B, Card C], all ai
+    const edited = applyOperatorEdit(written, 0, {
+      repeats: { index_r1: { "2": { index_r1_s1: "Operator's card 3" } } },
+    });
+    expect(edited.provenance[0].ai_backup?.repeats?.index_r1?.["2"]?.index_r1_s1).toBe("Card C");
+
+    const shrinkResult = okResult({
+      ok: true,
+      title: "Acme Plumbing | Home",
+      slots: { index_s1: "Welcome to Acme Plumbing" },
+      repeats: { index_r1: [{ index_r1_s1: "New A" }, { index_r1_s1: "New B" }] }, // only 2 rows back
+    });
+    const shrunk = applyRewrite(edited, 0, shrinkResult);
+
+    // the operator's row is NOT deleted — it survives, appended after the two new AI rows
+    expect(shrunk.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "New A" },
+      { index_r1_s1: "New B" },
+      { index_r1_s1: "Operator's card 3" },
+    ]);
+    expect(shrunk.provenance[0].repeats.index_r1["2"].index_r1_s1.written_by).toBe("operator");
+    // the backup that protects it travels with it — no orphan left behind
+    expect(shrunk.provenance[0].ai_backup?.repeats?.index_r1?.["2"]?.index_r1_s1).toBe("Card C");
+    expect(Object.keys(shrunk.provenance[0].ai_backup?.repeats?.index_r1 ?? {})).toEqual(["2"]);
+  });
+
+  it("the full shrink -> regrow -> edit -> revert sequence: revert restores the value the operator's edit overwrote, not content from an earlier generation", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    let d = applyWritten(doc, 0, indexResultWithRepeats); // [Card A, Card B, Card C]
+    d = applyOperatorEdit(d, 0, { repeats: { index_r1: { "2": { index_r1_s1: "Operator's card 3" } } } });
+
+    // shrink to 2 rows
+    d = applyRewrite(d, 0, okResult({
+      ok: true, title: "t", slots: { index_s1: "s" },
+      repeats: { index_r1: [{ index_r1_s1: "Gen2 A" }, { index_r1_s1: "Gen2 B" }] },
+    }));
+    expect(d.pages[0].repeats.index_r1[2]).toEqual({ index_r1_s1: "Operator's card 3" });
+
+    // regrow back to 3 rows — the operator's (still-owned) row must stay
+    // exactly as it was, NOT be overwritten by the regrow's own fresh value
+    d = applyRewrite(d, 0, okResult({
+      ok: true, title: "t", slots: { index_s1: "s" },
+      repeats: {
+        index_r1: [{ index_r1_s1: "Gen3 A" }, { index_r1_s1: "Gen3 B" }, { index_r1_s1: "Gen3 C (must not win)" }],
+      },
+    }));
+    expect(d.pages[0].repeats.index_r1[2]).toEqual({ index_r1_s1: "Operator's card 3" });
+    expect(d.provenance[0].repeats.index_r1["2"].index_r1_s1.written_by).toBe("operator");
+    expect(d.provenance[0].ai_backup?.repeats?.index_r1?.["2"]?.index_r1_s1).toBe("Card C");
+
+    // a second operator edit of the same (still operator-owned) row does not
+    // recapture the backup — the ORIGINAL ai value ("Card C") stays put
+    d = applyOperatorEdit(d, 0, { repeats: { index_r1: { "2": { index_r1_s1: "Operator's SECOND edit" } } } });
+    expect(d.provenance[0].ai_backup?.repeats?.index_r1?.["2"]?.index_r1_s1).toBe("Card C");
+
+    const reverted = revertField(d, 0, { repeat: { repeatId: "index_r1", rowIndex: 2, slotId: "index_r1_s1" } });
+    expect(reverted.ok).toBe(true);
+    if (!reverted.ok) return;
+    // restores "Card C" — the value the operator's edit chain actually
+    // overwrote — never "Gen3 C (must not win)" or any other intervening
+    // regeneration this row was protected from.
+    expect(reverted.doc.pages[0].repeats.index_r1[2].index_r1_s1).toBe("Card C");
+  });
+
+  it("a re-roll that GROWS the repeat still works and leaves provenance coherent", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats); // 3 rows
+    const grown = applyRewrite(written, 0, okResult({
+      ok: true, title: "t", slots: { index_s1: "s" },
+      repeats: {
+        index_r1: [
+          { index_r1_s1: "A" }, { index_r1_s1: "B" }, { index_r1_s1: "C" }, { index_r1_s1: "D" },
+        ],
+      },
+    }));
+    expect(grown.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "A" }, { index_r1_s1: "B" }, { index_r1_s1: "C" }, { index_r1_s1: "D" },
+    ]);
+    for (const k of ["0", "1", "2", "3"]) {
+      expect(grown.provenance[0].repeats.index_r1[k].index_r1_s1.written_by).toBe("ai");
+    }
+    expect(grown.provenance[0].ai_backup?.repeats?.index_r1).toBeUndefined();
+  });
+
+  it("existing behaviour for equal-length merges is unchanged: an operator-owned row is protected, an ai-owned row is overwritten", () => {
+    const { doc } = seedContentDoc(manifest, dossier, selectedPages);
+    const written = applyWritten(doc, 0, indexResultWithRepeats); // [Card A, Card B, Card C]
+    const edited = applyOperatorEdit(written, 0, { repeats: { index_r1: { "1": { index_r1_s1: "Operator's card 2" } } } });
+
+    const rerolled = applyRewrite(edited, 0, okResult({
+      ok: true, title: "t", slots: { index_s1: "s" },
+      repeats: { index_r1: [{ index_r1_s1: "New A" }, { index_r1_s1: "New B" }, { index_r1_s1: "New C" }] },
+    }));
+    expect(rerolled.pages[0].repeats.index_r1).toEqual([
+      { index_r1_s1: "New A" },
+      { index_r1_s1: "Operator's card 2" }, // protected
+      { index_r1_s1: "New C" },
+    ]);
+    expect(rerolled.provenance[0].repeats.index_r1["0"].index_r1_s1.written_by).toBe("ai");
+    expect(rerolled.provenance[0].repeats.index_r1["1"].index_r1_s1.written_by).toBe("operator");
+    expect(rerolled.provenance[0].repeats.index_r1["2"].index_r1_s1.written_by).toBe("ai");
+  });
+});

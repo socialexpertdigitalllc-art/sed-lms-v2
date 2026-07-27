@@ -680,6 +680,13 @@ describe("sanitizeInline", () => {
     expect(sanitizeInline("Fast <strong>same-day</strong> fix")).toBe("Fast <strong>same-day</strong> fix");
     expect(sanitizeInline(`Hi <script>x()</script><div>there</div>`)).toBe("Hi x()there");
   });
+  it("neutralizes parser-differential payloads (malformed tags read as text)", () => {
+    expect(sanitizeInline("<svg/onload=alert(1)>")).toBe("&lt;svg/onload=alert(1)&gt;");
+    expect(sanitizeInline("<b/onmouseover=alert(1)>click</b>")).toBe("&lt;b/onmouseover=alert(1)&gt;click");
+  });
+  it("does not double-escape entities in legitimate text", () => {
+    expect(sanitizeInline("Bread &amp; butter")).toBe("Bread &amp; butter");
+  });
 });
 ```
 
@@ -732,7 +739,7 @@ const INLINE_ALLOWED = new Set(["b", "i", "em", "strong", "br"]);
 export function sanitizeInline(s: string): string {
   const root = parse(s);
   const walk = (node: any): string => {
-    if (node.nodeType === 3) return node.rawText;
+    if (node.nodeType === 3) return escapeHtml(node.text);
     const tag = (node.rawTagName ?? "").toLowerCase();
     const inner = node.childNodes.map(walk).join("");
     if (tag && INLINE_ALLOWED.has(tag)) return tag === "br" ? "<br>" : `<${tag}>${inner}</${tag}>`;

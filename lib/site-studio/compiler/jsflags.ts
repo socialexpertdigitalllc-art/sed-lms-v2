@@ -1,0 +1,78 @@
+import { Diagnostic } from "../schema";
+import { Inventory } from "./inventory";
+
+const DOM_WRITE_RE = /innerHTML|outerHTML\s*=|document\.write|customElements\.define|insertAdjacentHTML|\.html\(|\.append\(|\.prepend\(/;
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Pass 6: flag JS that renders DOM, and catch any demo identity value that
+ * survives `compiler/assetIdentity.ts`'s tokenization pass inside a text
+ * asset. By the time this runs, compile.ts has already tokenized every
+ * literal occurrence it could find — so a match here means the value
+ * appears in some form that pass's literal-substring search couldn't
+ * safely rewrite (inside a regex literal, split across string
+ * concatenation, minified beyond recognition). That is a residual leak: a
+ * client's deployed site would render the template author's own business
+ * name/phone/email. This cannot be a warning — it's a BLOCKER, the same as
+ * any other certification-blocking defect.
+ */
+export function flagJs(inv: Inventory, identity: Record<string, string>): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const page of inv.pages) {
+    for (const script of page.root.querySelectorAll("script")) {
+      if (DOM_WRITE_RE.test(script.text)) {
+        diagnostics.push({
+          level: "warn", code: "js_renders_dom", page: page.file,
+          message: `Inline script on ${page.file} writes to the DOM; compile-time baking lands in Phase 2 — review its output manually.`,
+        });
+        break;
+      }
+    }
+  }
+
+  for (const [path, bytes] of Object.entries(inv.assets)) {
+    if (!/\.(js|css)$/i.test(path)) continue;
+    const text = new TextDecoder().decode(bytes);
+    if (DOM_WRITE_RE.test(text) && path.toLowerCase().endsWith(".js"))
+      diagnostics.push({ level: "warn", code: "js_renders_dom", message: `${path} writes to the DOM; review its output manually.` });
+
+    const flaggedKeys = new Set<string>();
+    for (const [key, value] of Object.entries(identity)) {
+      // Anti-noise threshold: below 6 chars a match is too likely to be
+      // coincidental (minified vendor bundles are full of short tokens) —
+      // this consciously excludes bare years ("2024") and very short names.
+      if (value.length < 6) continue;
+
+      let matched = text.includes(value);
+
+      // Phone-like values: compare digits only, allowing arbitrary separators
+      // between digits (e.g. "512.555.0147" vs "(512) 555-0147"). Scoped to
+      // a digit-by-digit regex rather than a whole-file digit projection to
+      // avoid false positives from unrelated concatenated numbers.
+      if (!matched && /\d{3}.*\d{4}/.test(value)) {
+        const digits = value.replace(/\D/g, "");
+        if (digits.length >= 7) {
+          const digitPattern = digits.split("").map(escapeRe).join("\\D?");
+          matched = new RegExp(digitPattern).test(text);
+        }
+      }
+
+      // Email-like values: case-insensitive compare.
+      if (!matched && value.includes("@")) {
+        matched = text.toLowerCase().includes(value.toLowerCase());
+      }
+
+      if (matched && !flaggedKeys.has(key)) {
+        flaggedKeys.add(key);
+        diagnostics.push({
+          level: "blocker", code: "asset_identity_echo",
+          message: `${path} still contains demo ${key} ("${value}") after asset-identity tokenization; this form survived the pass's literal-text rewrite (e.g. a regex literal, split concatenation, or minified bundle) and would ship the template author's own ${key} to every client site — this must be fixed in the source template and re-uploaded, it cannot be certified as-is.`,
+        });
+      }
+    }
+  }
+
+  return diagnostics;
+}

@@ -1,0 +1,12 @@
+:root {
+  --brand: #1c6b3a;
+  --brand-dark: #123f22;
+}
+body { font-family: sans-serif; color: #222222; }
+h1 { color: var(--brand); }
+.card { border-top: 3px solid var(--brand); }
+.logo { color: var(--brand-dark); }
+/* GearHead Garage brand accents */
+.badge::before {
+  content: "GearHead Garage";
+}

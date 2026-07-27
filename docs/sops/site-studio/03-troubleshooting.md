@@ -1,0 +1,66 @@
+# SOP 03 — Troubleshooting
+
+## A run parked at "Awaiting review" is not stuck
+
+Status `reviewing` **is Gate 1, working as designed** — it is not a hang, and it will never clear on its own. The background advancer (the cron that finishes abandoned steps for runs nobody's actively driving) structurally cannot cross this status: `nextStep("reviewing")` is `null` by design, so there is no machine step left for it to run. The **only** way past it is a human clicking **Approve & render** in the cockpit (see SOP 02 §4). If a run has sat at `reviewing` for a long time, that just means nobody has reviewed it yet — go review it.
+
+## A page failed to write
+
+Each page gets up to **2** write attempts. A page card showing **Failed** has a **Retry** button — click it and the cockpit resumes driving. If a page **exhausts both attempts**, the whole run is failed (not just that page), and the run's error names the stuck page(s) and the last error each hit. This is deliberate: retrying forever would leave the run wedged at `preparing` permanently with no way out. There's no retry-a-failed-run action — start a new run against the same lead once whatever caused the failures (usually a transient model/API error) has passed.
+
+## A template asked for a fact the lead couldn't supply — this is not a failure
+
+`prepare` no longer fails the run over a missing identity fact (a phone/email/map link the lead lacks, or something more specific like a neighborhood or an owner's name a lead record has no column for at all). It seeds the fact in blank and the run proceeds normally — see SOP 02 §2. If you're looking at a run that reached Gate 1 with a **Site facts** panel showing one or more inputs, that's this working as designed, not a partial failure: fill in what you know, and leave the rest blank if you don't have it. There's no run-level error to chase here, and nothing to restart.
+
+If you instead see a run in `failed` with the identity-style wording from an OLDER run (started before this behavior shipped), the historical fix still applies to that one artifact: it can't be resumed or repaired in place — start a new run for that lead.
+
+## Render refused with a list of missing slots
+
+If `render` or `finalize` fails with `Render refused: missing <page>/<slot>, ...`, the run's content document doesn't have everything the compiled template needs to produce a complete site — most commonly because a picked image's asset failed to resolve (see the next entry), or because a page/slot the template declares was never populated. The run fails naming every missing `page_id/slot_id` pair; there is no partial-site output. Check the named pages back at Gate 1 if the run can be restarted, or open a new run.
+
+A closely related failure is `Finalize refused: picked image(s) failed to resolve — missing asset(s): <ids>` — this means an image that was picked earlier can no longer be loaded from storage (a deleted `studio_assets` row, a storage read failure). Re-pick the image for the named slot(s) and retry.
+
+## Pause / Resume / Cancel
+
+- **Pause** stops the cockpit (and the advancer cron) from claiming the next step for this run — nothing else changes. **Resume** lets it continue exactly where it left off.
+- **Cancel** is available on any non-terminal run and is final — a cancelled run cannot be resumed; start a new one.
+- Both buttons disappear once a run reaches `ready`, `failed`, or `cancelled` — there's nothing left to pause or cancel at that point.
+
+## A deploy failed
+
+The Deploy button on the Gate 2 preview (`components/site-studio/RunPreview.tsx`) is enabled once a run is `ready`. Clicking it asks you to confirm (this publishes a real client site to a live subdomain), then calls `POST /api/site-studio/runs/{id}/deploy` and disables itself until that call finishes, so a double-click can't fire two overlapping deploys. On success the returned URL is shown as a clickable link; on failure the server's message is shown verbatim, distinguishing a 409 (something about this request/run) from a 502 (the upstream DirectAdmin host itself failed) — the message tells you exactly where it stopped:
+
+- **"Deployment is not configured"** — the host isn't configured in this environment (`DA_HOST`/`DA_USERNAME`/`DA_LOGIN_KEY`/`DA_DOMAIN`); this is an environment problem, not a per-run one.
+- **"Subdomain ... is already live for a different lead"** — a naming collision with another live site. Take the other one down from the Deployments board first (SOP 02 §6), then retry.
+- **"A deploy is already running for this run"** — a second deploy attempt landed while the first was still in flight; wait for it to finish.
+- **"Site zip not found in storage — the live site (if any) was not touched"** — the zip couldn't be fetched; nothing was changed on the live site. Safe to retry once the run has a valid zip.
+- **"Deployment failed at upload: ..." / "at extract: ..."** — the upload to the host itself failed partway. The site may be left half-updated; retry the deploy once the underlying issue (usually transient) is resolved.
+- Any message that says **"The site IS live"** — the site went live successfully, but some bookkeeping step after that failed (recording it, updating the lead's link, retiring a stale record, writing the activity log). The site is genuinely up; whoever sees this message should check `studio_deployments` manually and fix the bookkeeping rather than re-deploying blind.
+- A success toast that also mentions **clearing the old docroot failed** — the deploy completed, but the live docroot may now hold a **mix of the old and new build** (the cleanup-before-upload step failed, though the new upload still went through). Resolve the underlying issue (usually a host-side permissions hiccup) and redeploy to clear it.
+
+## Editing at Gate 2 (the "ready" preview)
+
+Click-to-edit, per-field revert, re-roll, the theme color panel, image picks, and the Site facts panel all work at Gate 2, exactly as they do at Gate 1 — `content`, `revert`, `theme`, `reroll`, `images`, and `identity` all accept a run whose status is `reviewing` **or** `ready` (see `isEditable` in `lib/site-studio/run/types.ts`). If you ever see a 409 saying a run "is not at a gate," check the run's actual status (`Site Studio → Runs`) — it means the run is `failed`, `cancelled`, or mid-step (`queued`/`preparing`/`approved`/`rendering`), not that Gate 2 editing is broken.
+
+Every edit at Gate 2 also re-finalizes the deployable/downloadable zip so it never drifts from what the preview shows (see SOP 02 §5). If a toast says the build is **stale** after an edit, the edit itself still saved — only the re-finalize step was refused (usually a picked image whose asset failed to resolve, same as the "Render refused" entry above). Fix whatever's named in the warning, then make any further edit (or re-pick the image) to trigger another re-finalize attempt before deploying.
+
+## Asset library upkeep
+
+- Client photos are permanently fenced to their own lead (`kind:'client'`, `lead_id` set) — they are never offered as a candidate to any other lead's run, by a server-side check that fails closed on any error. Stock photos (`kind:'stock'`) are shared across every lead.
+- Deleting a library asset that's still referenced by an active run's picks is refused (409) — finish or cancel the run(s) using it first.
+- The `use_count` shown in the library is informational only (how often a photo's been picked) — nothing about generation depends on it being accurate.
+- Subject text matters: it's what `searchLibrary` matches against for future runs' candidate sourcing. A stock upload with a vague or missing subject just won't surface itself as a candidate later — tag uploads with a real subject (e.g. "plumber van", not "photo1").
+
+## A template needs re-compiling
+
+See SOP 01 §6 — re-compile is deterministic against the original immutable zip and self-heals a corrupted package with no re-upload needed. A **certified** template must be disabled first.
+
+## Post-deploy client change requests
+
+Once a site is live and the client asks for a change:
+
+1. Open the run's page from **Site Studio → Runs** — a `ready` run keeps its Gate 2 preview available indefinitely, it isn't a one-time view.
+2. Edit the changed field(s) in the preview — each edit re-finalizes the build automatically (SOP 02 §5).
+3. Re-deploy. Because deploy resolves to the lead's existing subdomain whenever one exists, this **overwrites the live site in place at the same URL** — it does not create a second site or require any DNS change.
+
+Source of truth for this SOP: `lib/site-studio/run/engine.ts`, `lib/site-studio/deploy/deployRun.ts`, and the error messages in `app/api/site-studio/runs/[id]/{step,control,content,theme,revert,images,reroll,identity,deploy}/route.ts`.
