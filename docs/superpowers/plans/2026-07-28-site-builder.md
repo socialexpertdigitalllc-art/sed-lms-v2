@@ -14,6 +14,7 @@ lead details + template zip + chosen images
 1. **Full HTML per page.** The AI gets one page's HTML + business details + chosen image URLs, and returns that page's complete rewritten HTML. It may change anything: copy, logo, colours, image sources, layout.
 2. **The AI may create pages the template doesn't have**, when the lead's `specify_pages` asks for them, imitating the template's design.
 3. **Fresh, minimal build.** New `lib/site-builder/` namespace. Nothing inherited from the Site Studio compile/token/render/cockpit machinery.
+4. **Model-agnostic, always.** No model or provider is named anywhere in Site Builder code. It registers ONE task key (`site_build`) and calls `callForTask("site_build", ...)`, which resolves provider+model at call time from the operator's AI Tools settings. Gemini, DeepSeek and MiniMax are supported today; Kimi/Qwen/anything else is added in `lib/ai-tools/providers/config.ts` and becomes selectable with NO change to the generator. Any hardcoded model name in a Site Builder file is a bug.
 
 ## Explicitly NOT in this system
 No compiler. No tokens. No manifest. No health checks. No certification. No round-trip verification. No gate machine. No slot/repeat extraction. If a future task proposes any of these, it is out of scope.
@@ -33,6 +34,8 @@ Upload a zip, list, delete. Store the zip; record which files are HTML pages and
 
 ### 3. The prompt + one-page generation
 `lib/site-builder/generate.ts`: given one page's HTML, the business details, and the chosen image URLs, produce the rewritten page. Rules in the prompt: keep the design and structure; replace all demo business identity with the client's; use the supplied images; apply the client's colours; never invent licences/awards/years/prices; return only HTML. Injectable model call so tests never hit the network.
+
+The prompt must be written for ANY competent model, not tuned to one vendor's quirks — plain instructions, no provider-specific formatting tricks. Output handling must tolerate what real models actually do: a ```html fence around the reply, leading prose before the doctype, trailing commentary after `</html>`. Strip those and take the HTML; only fail when there is genuinely no HTML in the reply. Different models will be used and they will not all behave identically.
 
 ### 4. Run the whole site
 Pages generate in parallel. Extra pages requested by the lead are generated from the closest template page as a design reference. Assets (css/js/img) copy through untouched. Assemble into a zip. Per-page failure is recorded and retryable on its own — never kills the run.
