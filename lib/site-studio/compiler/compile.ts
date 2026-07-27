@@ -76,7 +76,10 @@ export function compileTemplate(zipBytes: Uint8Array, name: string): CompileResu
     pages[page.file] = page.root.toString();
   }
 
-  const theme = extractTheme(inv.assets);
+  // `pages` (built by the loop above) is passed so theme_literal_colors can
+  // count a mapped role's literal hex in page HTML too, not just CSS assets
+  // — see theme.ts's own doc comment on the diagnostic.
+  const theme = extractTheme(inv.assets, pages);
   diagnostics.push(...theme.diagnostics);
   // flagJs runs AFTER asset tokenization: any demo identity value it still
   // finds in inv.assets survived the tokenization pass above (a form the

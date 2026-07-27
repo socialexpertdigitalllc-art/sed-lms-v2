@@ -164,4 +164,76 @@ describe("extractTheme — theme_literal_colors diagnostic", () => {
     expect(theme.mode).toBe("literal_remap");
     expect(diagnostics.some((d) => d.code === "theme_literal_colors")).toBe(false);
   });
+
+  // Phase 4d: a real commercial template writes most of its color as literal
+  // hex in inline `style="..."` attributes, not in CSS — exactly the pattern
+  // this diagnostic exists to catch. Before this fix the count only ever
+  // looked at CSS assets, so that template stayed silent.
+  it("warns when a mapped role's hex appears only in inline HTML style attributes (never in CSS)", () => {
+    const css = `:root { --primary: #0a5adf; } h1 { color: var(--primary); }`;
+    const pages = {
+      "index.html": `
+        <div style="color:#0a5adf">A</div>
+        <div style="color:#0a5adf">B</div>
+        <div style="color:#0a5adf">C</div>
+        <div style="color:#0a5adf">D</div>
+      `,
+    };
+    const { theme, diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) }, pages);
+    expect(theme.mode).toBe("css_vars");
+    const warn = diagnostics.find((d) => d.code === "theme_literal_colors");
+    expect(warn).toBeDefined();
+    expect(warn?.message).toMatch(/brand/);
+    expect(warn?.message).toMatch(/var\(--primary\)/);
+    expect(warn?.message).toMatch(/4 in HTML/);
+  });
+
+  it("reports both CSS and HTML counts when a role's hex appears literally in both", () => {
+    const css = `
+      :root { --primary: #0a5adf; }
+      .btn { color: #0a5adf; }
+      .badge { color: #0a5adf; }
+      h1 { color: var(--primary); }
+    `;
+    const pages = {
+      "index.html": `
+        <div style="color:#0a5adf">A</div>
+        <div style="color:#0a5adf">B</div>
+      `,
+    };
+    const { diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) }, pages);
+    const warn = diagnostics.find((d) => d.code === "theme_literal_colors");
+    expect(warn).toBeDefined();
+    expect(warn?.message).toMatch(/2 in CSS/);
+    expect(warn?.message).toMatch(/2 in HTML/);
+  });
+
+  it("stays silent when the combined CSS+HTML literal count is at or below the threshold", () => {
+    const css = `
+      :root { --primary: #0a5adf; }
+      .btn { color: #0a5adf; }
+      h1 { color: var(--primary); }
+    `;
+    const pages = {
+      "index.html": `<div style="color:#0a5adf">A</div><div style="color:#0a5adf">B</div>`,
+    };
+    // total = 1 in CSS + 2 in HTML = 3, not > 3
+    const { diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) }, pages);
+    expect(diagnostics.some((d) => d.code === "theme_literal_colors")).toBe(false);
+  });
+
+  it("does not count near-miss literals like #0c5aa0-box or #0c5aa0ff in HTML toward the tally", () => {
+    const css = `:root { --primary: #0c5aa0; } h1 { color: var(--primary); }`;
+    const pages = {
+      "index.html": `
+        <div data-a="#0c5aa0-box"></div>
+        <div data-b="#0c5aa0ff"></div>
+        <div data-c="#0c5aa0-box"></div>
+        <div data-d="#0c5aa0ff"></div>
+        <div data-e="#0c5aa0-box"></div>
+      `,
+    };
+    const { diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) }, pages);
+    expect(diagnostics.some((d) => d.code === "theme_literal_colors")).toBe(false);
+  });
 });

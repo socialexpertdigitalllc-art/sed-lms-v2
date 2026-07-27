@@ -22,12 +22,21 @@ const cssAssets = (files: FileMap): [string, string][] =>
 const HEX = "#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})";
 
 // ---------------------------------------------------------------------------
-// `theme_literal_colors` diagnostic (Phase 4c): css_vars mode only ever
-// retints what actually reads a CSS variable. A template that ALSO writes a
-// mapped role's own hex as a literal — outside the `:root` block that
-// legitimately declares it as a custom property — has spots that will never
-// see the client's color, and today nothing tells the operator that at
-// review time (the failure this warn exists for shipped with zero signal).
+// `theme_literal_colors` diagnostic (Phase 4c, extended Phase 4d): css_vars
+// mode only ever retints what actually reads a CSS variable. A template that
+// ALSO writes a mapped role's own hex as a literal — outside the `:root`
+// block that legitimately declares it as a custom property — has spots that
+// will never see the client's color, and today nothing tells the operator
+// that at review time (the failure this warn exists for shipped with zero
+// signal).
+// Phase 4d: the count originally looked at CSS assets only. The commercial
+// template that motivated this diagnostic writes most of its color as
+// literal hex in inline `style="..."` attributes in the page HTML, not in
+// CSS — exactly the pattern the warning exists to flag — so it stayed silent
+// for the one template it was built for. The count now also scans each
+// page's HTML (optional `pages` param, passed by compile.ts once pages are
+// assembled), and the message reports CSS/HTML counts separately so the
+// operator knows which files to fix.
 // Mirrors render/theme.ts's own hex-matching rules (case-insensitive, 3-digit
 // shorthand, boundary-safe) so "the same color" means the same thing at
 // compile time and render time — duplicated rather than imported, since
@@ -74,8 +83,19 @@ function countHexLiteral(css: string, hex: string): number {
  *  hardcodes its brand color throughout is. */
 const LITERAL_ESCAPE_THRESHOLD = 3;
 
-/** Pass 5: map the template's colors to named roles. */
-export function extractTheme(files: FileMap): { theme: ThemeDef; diagnostics: Diagnostic[] } {
+/** Pass 5: map the template's colors to named roles.
+ *
+ * `pages` (page file path -> assembled HTML string, as built by compile.ts's
+ * own per-page loop) is optional and, when given, folded into the
+ * `theme_literal_colors` count alongside CSS assets — see the diagnostic's
+ * doc comment above. Callers that only care about the theme mapping itself
+ * (every existing test, and any future caller that hasn't assembled page
+ * HTML yet) can omit it; the count then falls back to CSS-only, matching the
+ * diagnostic's original Phase 4c scope. */
+export function extractTheme(
+  files: FileMap,
+  pages?: Record<string, string>,
+): { theme: ThemeDef; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
   const css = cssAssets(files)
     .map(([, s]) => s)
@@ -107,14 +127,24 @@ export function extractTheme(files: FileMap): { theme: ThemeDef; diagnostics: Di
     // template itself — a property of the file the operator is about to
     // accept, not of any one run's rendered output — which is why this is
     // checked here rather than at render time.
-    const outsideRoot = stripRootBlocks(css);
+    const outsideRootCss = stripRootBlocks(css);
+    // Page HTML never legitimately contains a `:root { ... }` declaration
+    // block of its own, but an embedded `<style>` tag theoretically could —
+    // stripRootBlocks is applied here too so that hypothetical case can't
+    // inflate the count either.
+    const outsideRootHtml = stripRootBlocks(Object.values(pages ?? {}).join("\n"));
     for (const [role, def] of Object.entries(roles)) {
-      const count = countHexLiteral(outsideRoot, def.hex);
-      if (count > LITERAL_ESCAPE_THRESHOLD) {
+      const cssCount = countHexLiteral(outsideRootCss, def.hex);
+      const htmlCount = countHexLiteral(outsideRootHtml, def.hex);
+      const total = cssCount + htmlCount;
+      if (total > LITERAL_ESCAPE_THRESHOLD) {
+        const locations: string[] = [];
+        if (cssCount > 0) locations.push(`${cssCount} in CSS`);
+        if (htmlCount > 0) locations.push(`${htmlCount} in HTML`);
         diagnostics.push({
           level: "warn",
           code: "theme_literal_colors",
-          message: `"${role}" (${def.hex}) also appears as a literal color ${count} times outside :root — theme control will stay partial there until those spots use var(${def.var}) instead of the literal hex.`,
+          message: `"${role}" (${def.hex}) also appears as a literal color ${total} times outside :root (${locations.join(", ")}) — theme control will stay partial there until those spots use var(${def.var}) instead of the literal hex.`,
         });
       }
     }
