@@ -4,10 +4,13 @@ import {
   AI_PROVIDER_REGISTRY,
   AI_TASK_REGISTRY,
   LONG_OUTPUT_TOKENS,
+  MIN_OUTPUT_TOKENS,
   TEXT_BATCH_TOKENS,
   apiKeyFrom,
   assignmentError,
   capableModelsForTask,
+  clampOutputTokens,
+  defaultOutputTokens,
   getModel,
   getProvider,
   getTask,
@@ -210,5 +213,87 @@ describe("credential handling", () => {
     expect(apiKeyFrom(gemini, { api_key: " sk-abc " })).toBe("sk-abc");
     expect(apiKeyFrom(gemini, { api_key: "" })).toBeNull();
     expect(apiKeyFrom(gemini, null)).toBeNull();
+  });
+});
+
+describe("output token budgeting", () => {
+  it("carries MiniMax's documented ceilings, not the old 32000 placeholder", () => {
+    // Grounded in platform.minimax.io/docs/api-reference/text-chat-openai
+    // (read 2026-07-28): max_completion_tokens max 524288 / recommended
+    // 131072 for M3; max 204800 / recommended 65536 for M2.x. The placeholder
+    // this replaced was silently truncating whole-page rewrites.
+    const m3 = getModel("minimax", "MiniMax-M3")!;
+    expect(m3.maxOutputTokens).toBe(524288);
+    expect(m3.recommendedOutputTokens).toBe(131072);
+    expect(m3.contextWindow).toBe(1000000);
+
+    for (const id of ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"]) {
+      const m = getModel("minimax", id)!;
+      expect(m.maxOutputTokens).toBe(204800);
+      expect(m.recommendedOutputTokens).toBe(65536);
+      expect(m.contextWindow).toBe(204800);
+    }
+  });
+
+  it("sends the output budget on the field each provider documents", () => {
+    // MiniMax deprecated max_tokens in favour of max_completion_tokens; the
+    // others only understand max_tokens, so this must stay per-provider.
+    expect(getProvider("minimax")!.outputTokenParam).toBe("max_completion_tokens");
+    for (const key of ["gemini", "deepseek", "webcraft"]) {
+      expect(getProvider(key)!.outputTokenParam).toBeUndefined();
+    }
+  });
+
+  it("defaults to the vendor's recommendation, never the raw ceiling, when one is published", () => {
+    // The ceiling is not free to ask for: MiniMax bills input+output against
+    // one budget, so requesting 512K alongside a real prompt cannot be met.
+    expect(defaultOutputTokens(getModel("minimax", "MiniMax-M3")!)).toBe(131072);
+    // A model with no separate recommendation just uses its ceiling.
+    const gemini = getModel("gemini", "gemini-3.1-pro-preview")!;
+    expect(defaultOutputTokens(gemini)).toBe(gemini.maxOutputTokens);
+  });
+
+  it("clamps an operator's budget into the model's range instead of failing", () => {
+    const m3 = getModel("minimax", "MiniMax-M3")!;
+    expect(clampOutputTokens(m3, 200000)).toBe(200000);
+    expect(clampOutputTokens(m3, 999999999)).toBe(524288); // above ceiling -> ceiling
+    expect(clampOutputTokens(m3, 10)).toBe(MIN_OUTPUT_TOKENS); // below floor -> floor
+    expect(clampOutputTokens(m3, 65536.7)).toBe(65536); // fractional -> floored
+  });
+
+  it("treats an absent or nonsensical budget as 'use the default'", () => {
+    const m3 = getModel("minimax", "MiniMax-M3")!;
+    for (const bad of [null, undefined, 0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(clampOutputTokens(m3, bad as number | null | undefined)).toBe(131072);
+    }
+  });
+
+  it("never lets the floor exceed a small model's own ceiling", () => {
+    // deepseek-chat's ceiling (8192) is well above MIN_OUTPUT_TOKENS, but the
+    // clamp must stay coherent even if a tiny model is ever added.
+    const tiny = { id: "tiny", vision: false, maxOutputTokens: 500 };
+    expect(clampOutputTokens(tiny, 1)).toBe(500);
+    expect(clampOutputTokens(tiny, 100000)).toBe(500);
+  });
+
+  it("every model's recommendation sits inside its own ceiling", () => {
+    for (const p of AI_PROVIDER_REGISTRY) {
+      for (const m of p.models) {
+        expect(m.maxOutputTokens).toBeGreaterThan(0);
+        if (m.recommendedOutputTokens !== undefined) {
+          expect(m.recommendedOutputTokens).toBeLessThanOrEqual(m.maxOutputTokens);
+          expect(m.recommendedOutputTokens).toBeGreaterThan(0);
+        }
+        if (m.contextWindow !== undefined) {
+          expect(m.contextWindow).toBeGreaterThanOrEqual(m.maxOutputTokens);
+        }
+      }
+    }
+  });
+
+  it("the provider capability rollup reports its best model's real ceiling", () => {
+    for (const p of AI_PROVIDER_REGISTRY) {
+      expect(p.capabilities.maxOutputTokens).toBe(Math.max(...p.models.map((m) => m.maxOutputTokens)));
+    }
   });
 });

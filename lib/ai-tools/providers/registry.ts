@@ -31,8 +31,22 @@ export interface AiModelDescriptor {
   id: string;
   /** Accepts `image_url` content parts on the chat/completions endpoint. */
   vision: boolean;
-  /** Provider-documented ceiling on output tokens for THIS model. */
+  /**
+   * Provider-documented HARD ceiling on output tokens for THIS model — the
+   * largest value the vendor will accept, not a house preference. An operator
+   * may dial a task DOWN from here (see `ai_task_assignments.max_output_tokens`
+   * and `clampOutputTokens`), never up: above it the vendor rejects the call.
+   */
   maxOutputTokens: number;
+  /**
+   * What the vendor recommends for normal use, when they publish a figure
+   * distinct from the hard ceiling. This is what `"model-max"` actually asks
+   * for — see `defaultOutputTokens`. Absent means "the ceiling is the
+   * recommendation".
+   */
+  recommendedOutputTokens?: number;
+  /** Total input+output budget, where the vendor publishes one. Display only. */
+  contextWindow?: number;
   /** One short factual line for the picker. No marketing copy. */
   note?: string;
 }
@@ -42,6 +56,15 @@ export interface AiProviderDescriptor {
   label: string;
   /** OpenAI-compatible chat/completions URL. */
   endpoint: string;
+  /**
+   * Which field carries the output budget on the wire. `max_tokens` is the
+   * universally-understood default; a provider that has deprecated it in
+   * favour of OpenAI's newer `max_completion_tokens` (MiniMax) says so here.
+   * Per-provider ON PURPOSE — sending the newer field to a provider that only
+   * knows the older one silently loses the budget (or 400s), which is exactly
+   * the class of bug this whole file exists to prevent.
+   */
+  outputTokenParam?: "max_tokens" | "max_completion_tokens";
   models: AiModelDescriptor[];
   credentialFields: AiCredentialField[];
   /** Best-case rollup across `models` — for display only. See file header. */
@@ -118,32 +141,52 @@ const webcraft: AiProviderDescriptor = {
 };
 
 /**
- * MiniMax. Grounded in the vendor's own OpenAI-SDK page
- * (platform.minimax.io/docs/api-reference/text-openai-api), read 2026-07-20:
- * base_url `https://api.minimax.io/v1`, Bearer key, and the model ids below are
- * the ones that page lists. That page also states that image (and video) input
- * on chat/completions is supported for `MiniMax-M3` — so M3 is the ONLY model
- * here flagged vision, and pointing the image task at any other MiniMax model
- * is refused rather than silently mis-run.
+ * MiniMax. Grounded in the vendor's own docs, re-read 2026-07-28:
+ *  - base_url + model ids: platform.minimax.io/docs/api-reference/text-openai-api
+ *  - output ceilings: platform.minimax.io/docs/api-reference/text-chat-openai,
+ *    which documents `max_completion_tokens` (and deprecates `max_tokens`) as
+ *    max 524288 / recommended 131072 for MiniMax-M3, and max 204800 /
+ *    recommended 65536 for the M2.x models.
+ *  - context windows: 1,000,000 for M3, 204,800 for M2.x.
+ * Image (and video) input on chat/completions is documented for `MiniMax-M3`
+ * only, so M3 is the ONLY model here flagged vision, and pointing the image
+ * task at any other MiniMax model is refused rather than silently mis-run.
  *
- * The official OpenAI-compat page does NOT publish a max output-token ceiling,
- * so `maxOutputTokens` is a deliberately conservative 32000 rather than an
- * invented number — `callWithProvider` only ever sends min(requested, this).
+ * WHY RECOMMENDED ≠ CEILING HERE. The ceiling is what the vendor will ACCEPT;
+ * it is not free to ask for. MiniMax counts input and output against ONE
+ * budget, so on an M2.x model (204,800 context AND 204,800 max output) asking
+ * for the full ceiling alongside any prompt at all cannot be satisfied. The
+ * recommended figure is therefore what `"model-max"` requests by default, and
+ * the ceiling is the top of the range an operator may dial a task up to.
+ *
+ * These numbers replace a placeholder 32000 that predated the vendor
+ * publishing any figure. That placeholder was silently truncating whole-page
+ * rewrites on M3 — the page came back cut off mid-file.
  */
 const minimax: AiProviderDescriptor = {
   key: "minimax",
   label: "MiniMax",
   endpoint: "https://api.minimax.io/v1/chat/completions",
+  // The vendor's chat-completions page marks `max_tokens` deprecated and
+  // documents its published ceilings against `max_completion_tokens`.
+  outputTokenParam: "max_completion_tokens",
   models: [
-    { id: "MiniMax-M3", vision: true, maxOutputTokens: 32000, note: "The only MiniMax model documented to accept image input." },
-    { id: "MiniMax-M2.7", vision: false, maxOutputTokens: 32000, note: "Text only." },
-    { id: "MiniMax-M2.5", vision: false, maxOutputTokens: 32000, note: "Text only." },
-    { id: "MiniMax-M2.1", vision: false, maxOutputTokens: 32000, note: "Text only." },
-    { id: "MiniMax-M2", vision: false, maxOutputTokens: 32000, note: "Text only." },
+    {
+      id: "MiniMax-M3",
+      vision: true,
+      maxOutputTokens: 524288,
+      recommendedOutputTokens: 131072,
+      contextWindow: 1000000,
+      note: "1M context, up to 512K output. The only MiniMax model documented to accept image input.",
+    },
+    { id: "MiniMax-M2.7", vision: false, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2.5", vision: false, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2.1", vision: false, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2", vision: false, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
   ],
   credentialFields: [{ key: "api_key", label: "API key", type: "password" }],
-  capabilities: { vision: true, longOutput: true, maxOutputTokens: 32000 },
-  docsUrl: "https://platform.minimax.io/docs/api-reference/text-openai-api",
+  capabilities: { vision: true, longOutput: true, maxOutputTokens: 524288 },
+  docsUrl: "https://platform.minimax.io/docs/api-reference/text-chat-openai",
   envKey: "MINIMAX_API_KEY",
 };
 
@@ -155,6 +198,42 @@ export function getProvider(key: string): AiProviderDescriptor | undefined {
 
 export function getModel(providerKey: string, modelId: string): AiModelDescriptor | undefined {
   return getProvider(providerKey)?.models.find((m) => m.id === modelId);
+}
+
+/* ------------------------------------------------------- output budgeting */
+
+/**
+ * The smallest output budget worth offering. Below this nothing this app asks
+ * for — not a page, not a JSON plan — can come back whole, so an operator
+ * typing a smaller number is asking for guaranteed truncation.
+ */
+export const MIN_OUTPUT_TOKENS = 1000;
+
+/**
+ * What to request when a caller says `"model-max"`: the vendor's RECOMMENDED
+ * figure where they publish one distinct from the ceiling, else the ceiling.
+ *
+ * Not the ceiling by default, because on providers that bill one budget for
+ * input+output (MiniMax) the ceiling cannot be satisfied alongside a real
+ * prompt — see the MiniMax descriptor's note.
+ */
+export function defaultOutputTokens(model: AiModelDescriptor): number {
+  return model.recommendedOutputTokens ?? model.maxOutputTokens;
+}
+
+/**
+ * Hold an operator-chosen output budget inside what the model actually
+ * allows. Anything unusable (absent, non-finite, ≤ 0) means "no override" and
+ * yields the default; a number is clamped into
+ * [MIN_OUTPUT_TOKENS, model.maxOutputTokens] rather than rejected, so a stale
+ * override saved against a different model can never fail a generation.
+ */
+export function clampOutputTokens(model: AiModelDescriptor, requested: number | null | undefined): number {
+  if (typeof requested !== "number" || !Number.isFinite(requested) || requested <= 0) {
+    return defaultOutputTokens(model);
+  }
+  const floor = Math.min(MIN_OUTPUT_TOKENS, model.maxOutputTokens);
+  return Math.min(Math.max(Math.floor(requested), floor), model.maxOutputTokens);
 }
 
 /* ----------------------------------------------------------------- tasks */

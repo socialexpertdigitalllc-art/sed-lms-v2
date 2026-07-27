@@ -1,6 +1,13 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { extractHtml, extractFileSource, generatePage, generateNewPage, generateComponents } from "@/lib/site-builder/generate";
+import {
+  extractHtml,
+  extractFileSource,
+  stripReasoningBlocks,
+  generatePage,
+  generateNewPage,
+  generateComponents,
+} from "@/lib/site-builder/generate";
 import type { BusinessBrief } from "@/lib/site-builder/prompt";
 
 const brief: BusinessBrief = {
@@ -11,7 +18,43 @@ const brief: BusinessBrief = {
 
 const RAW_PAGE = "<!DOCTYPE html><html><head><title>Demo</title></head><body>Hello</body></html>";
 
+describe("stripReasoningBlocks", () => {
+  it("removes a <think> block, the shape MiniMax-M3 really returns", () => {
+    // Verified live 2026-07-28: M3 returns its chain-of-thought inside the
+    // ordinary `content` string, wrapped in <think>…</think>.
+    const raw = `<think>\nThe user wants the page rewritten. Let me plan.\n</think>\n\n${RAW_PAGE}`;
+    expect(stripReasoningBlocks(raw)).toBe(RAW_PAGE);
+  });
+
+  it("removes several blocks and tolerates <thinking>/<reasoning> spellings", () => {
+    const raw = `<think>one</think>${RAW_PAGE}<reasoning>two</reasoning><thinking>three</thinking>`;
+    expect(stripReasoningBlocks(raw)).toBe(RAW_PAGE);
+  });
+
+  it("drops everything after an UNCLOSED block — a reply cut off mid-thought has no file", () => {
+    expect(stripReasoningBlocks("<think>I was still planning when the budget ran ou")).toBe("");
+  });
+
+  it("leaves a reply with no reasoning block untouched", () => {
+    expect(stripReasoningBlocks(`  ${RAW_PAGE}  `)).toBe(RAW_PAGE);
+  });
+});
+
 describe("extractHtml", () => {
+  it("discards a <think> block and returns only the page", () => {
+    const raw = `<think>Let me rewrite the hero. Actually, let me reconsider the nav.</think>\n${RAW_PAGE}`;
+    const r = extractHtml(raw, "index.html");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.html).toBe(RAW_PAGE);
+  });
+
+  it("a reply that is ONLY an unterminated think block fails cleanly", () => {
+    const r = extractHtml("<think>planning, planning, and then the budget ran out", "index.html");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/no HTML/i);
+  });
+
   it("takes a clean reply as-is", () => {
     const r = extractHtml(RAW_PAGE, "index.html");
     expect(r.ok).toBe(true);
@@ -143,6 +186,11 @@ describe("extractFileSource", () => {
     const raw = `Here is the rewritten file:\n\n\`\`\`js\n${SOURCE}\n\`\`\`\n\nLet me know if you'd like changes!`;
     const r = extractFileSource(raw, "components.js");
     expect(r).toEqual({ ok: true, html: SOURCE });
+  });
+
+  it("discards a <think> block and returns only the file source", () => {
+    const raw = `<think>The header needs the new business name. Let me write it.</think>\n${SOURCE}`;
+    expect(extractFileSource(raw, "components.js")).toEqual({ ok: true, html: SOURCE });
   });
 
   it("fails on an empty reply with the file's name in the error", () => {

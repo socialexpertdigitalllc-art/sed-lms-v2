@@ -88,7 +88,7 @@ Your reply must contain the finished page EXACTLY ONCE, wrapped between these tw
 <the complete page HTML, from its doctype to its closing tag>
 ===FILE END===
 
-Everything outside the markers is discarded unread. Do not think out loud anywhere in your reply — no plans, no notes, no partial drafts, no commentary before, between, or after the markers, and no markdown fences. If you catch yourself explaining, stop and write only the file. A reply whose markers contain anything other than the one complete file is a failed reply.`;
+Everything outside the markers is discarded unread. Do not think out loud anywhere in your reply — no plans, no notes, no partial drafts, no commentary before, between, or after the markers, and no markdown fences. Keep any reasoning brief and finish it BEFORE the start marker: your output budget is shared between thinking and the file, and a reply that reasons at length runs out of room and gets cut off mid-file. If you catch yourself explaining, stop and write only the file. A reply whose markers contain anything other than the one complete file is a failed reply.`;
 
 function briefText(b: BusinessBrief): string {
   const lines = [`Business name: ${b.business_name}`];
@@ -178,7 +178,7 @@ Your reply must contain the complete rewritten source of the file EXACTLY ONCE, 
 <the complete rewritten file source>
 ===FILE END===
 
-Everything outside the markers is discarded unread. Do not think out loud anywhere in your reply — no plans, no notes, no partial drafts, no commentary before, between, or after the markers, and no markdown fences. If you catch yourself explaining, stop and write only the file. A reply whose markers contain anything other than the one complete file is a failed reply.`;
+Everything outside the markers is discarded unread. Do not think out loud anywhere in your reply — no plans, no notes, no partial drafts, no commentary before, between, or after the markers, and no markdown fences. Keep any reasoning brief and finish it BEFORE the start marker: your output budget is shared between thinking and the file, and a reply that reasons at length runs out of room and gets cut off mid-file. If you catch yourself explaining, stop and write only the file. A reply whose markers contain anything other than the one complete file is a failed reply.`;
 
 /** Rewrite the template's shared-components file for this business — always
  *  the FIRST generation of a run, so every page prompt can carry the result. */

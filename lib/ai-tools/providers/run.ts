@@ -57,7 +57,12 @@ export interface TaskCallOptions {
 }
 
 function budget(opts: TaskCallOptions, resolved: ResolvedTaskModel): ProviderCallOptions {
-  return { ...opts, maxTokens: opts.maxTokens === "model-max" ? resolved.spec.maxOutputTokens : opts.maxTokens };
+  // `resolved.outputTokens`, NOT `spec.maxOutputTokens`: the former is the
+  // operator's per-task budget (or the vendor's recommended figure), already
+  // clamped; the latter is the hard ceiling, which on providers that bill
+  // input+output against one budget cannot be satisfied alongside a real
+  // prompt. `callWithProvider` still min()s against the ceiling regardless.
+  return { ...opts, maxTokens: opts.maxTokens === "model-max" ? resolved.outputTokens : opts.maxTokens };
 }
 
 export interface TaskCallResult {
