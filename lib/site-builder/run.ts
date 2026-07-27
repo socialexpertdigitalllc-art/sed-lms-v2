@@ -1,6 +1,7 @@
 import { zipFromMap } from "@/lib/site-studio/zip";
 import { buildDossier } from "@/lib/site-studio/run/dossier";
 import { generatePage, generateNewPage, generateComponents, type AiCall } from "./generate";
+import { localizeImages } from "./siteImages";
 import type { TemplateBundle } from "./templates";
 import type { BusinessBrief, SuppliedImage, SharedComponents } from "./prompt";
 
@@ -253,7 +254,13 @@ export function assembleZip(assets: Record<string, Uint8Array>, pages: Record<st
 export interface RunSiteArgs {
   aiCall: AiCall;
   brief: BusinessBrief;
+  /** The operator's picks, still carrying their storage URLs. They are
+   *  downloaded into the site before any prompt is built — see
+   *  `localizeImages` — so the model only ever sees relative paths. */
   images: SuppliedImage[];
+  /** Fetches a pick's bytes. Production passes the global `fetch`; tests pass
+   *  a stub so image bundling never touches the network under test. */
+  fetchImage?: typeof fetch;
   template: TemplateBundle;
   /** The lead's specify_pages — the ONLY pages this site gets (plus the
    *  entry page). Empty means "the whole template" — see `selectPages`. */
@@ -270,6 +277,13 @@ export interface RunSiteResult {
   ok: boolean;
   pages: Record<string, PageState>;
   zipBytes?: Uint8Array;
+  /** The picks as they now live IN the site (`url` = relative path). The
+   *  caller persists these over the run's original `images` so a later
+   *  regeneration reuses the identical paths. */
+  images: SuppliedImage[];
+  /** Picks that could not be downloaded, so the run can report them rather
+   *  than silently shipping fewer images than the operator chose. */
+  imageFailures: string[];
 }
 
 /**
@@ -289,7 +303,13 @@ export interface RunSiteResult {
  * when EVERY page fails does the run itself fail.
  */
 export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
-  const { aiCall, brief, images, template, requestedPages, onProgress } = args;
+  const { aiCall, brief, template, requestedPages, onProgress } = args;
+
+  // Images become files in the site BEFORE any prompt is built, so every
+  // prompt below carries short relative paths instead of tokenised storage
+  // URLs the model would mangle (see siteImages.ts).
+  const localized = await localizeImages(args.images, args.fetchImage);
+  const images = localized.images;
 
   const components = findComponentsFile(template);
   // A components.html is a page FILE but never a page of the site — it must
@@ -371,7 +391,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
   await Promise.all([...plan.existing.map(runExisting), ...plan.newPages.map(runNew)]);
 
   const ok = Object.values(pages).some((p) => p.status === "ok" && p.kind !== "component");
-  if (!ok) return { ok: false, pages };
+  if (!ok) return { ok: false, pages, images, imageFailures: localized.failures };
 
   // When an HTML components file failed to rewrite, ship the template's
   // original — it is a page FILE (not an asset, so `assembleZip` wouldn't
@@ -379,12 +399,19 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
   // site whose shared include 404s is broken everywhere, which is worse than
   // demo content the operator will regenerate anyway. A JS components file
   // needs no such step: it lives in `assets` and ships by default.
-  const baseAssets = { ...template.assets };
+  // The bundled images ride along the same way — they ARE part of the site now.
+  const baseAssets = { ...template.assets, ...localized.files };
   if (components && template.pages[components.file] !== undefined && pages[components.file]?.status !== "ok") {
     baseAssets[components.file] = new TextEncoder().encode(components.source);
   }
 
-  return { ok: true, pages, zipBytes: assembleZip(baseAssets, pages) };
+  return {
+    ok: true,
+    pages,
+    zipBytes: assembleZip(baseAssets, pages),
+    images,
+    imageFailures: localized.failures,
+  };
 }
 
 export interface RegeneratePageArgs {
