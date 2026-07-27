@@ -31,6 +31,7 @@ import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
+import { leadCopyText } from "@/lib/leads/copyText";
 import { RegionFilter } from "./RegionFilter";
 import { TagFilter } from "./TagFilter";
 import { tagColor } from "@/lib/leads/tagColors";
@@ -247,14 +248,15 @@ export function LeadsTable({
           const tagIds = c.row.original.tag_ids ?? [];
           return (
             <div className="min-w-0">
-              <div className="font-medium text-text truncate">
+              <div className="font-medium text-text truncate flex items-center gap-1">
                 <Link
                   href={`/leads/${c.row.original.id}`}
                   onClick={(e) => e.stopPropagation()}
-                  className="hover:underline"
+                  className="hover:underline truncate"
                 >
                   {c.row.original.business_name}
                 </Link>
+                <CopyButton value={leadCopyText(c.row.original)} title="Copy all business details" className="shrink-0" />
               </div>
               <div className="text-xs text-text-faint truncate">{c.row.original.business_email ?? ""}</div>
               {sentContractSet.has(c.row.original.id) && (
