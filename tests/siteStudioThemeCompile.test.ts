@@ -92,3 +92,76 @@ describe("extractTheme", () => {
     expect(theme.roles.brand).toEqual({ var: "--primary", hex: "#0a5adf" });
   });
 });
+
+/**
+ * Phase 4c: css_vars mode is only ever a PARTIAL fix when the same mapped
+ * hex ALSO shows up as a literal outside the `:root` block that declares it
+ * as a custom property — those spots never see the studio-theme.css
+ * override. Nothing told an operator that at review time before this warn
+ * existed; the production failure this exists for shipped with zero signal.
+ */
+describe("extractTheme — theme_literal_colors diagnostic", () => {
+  it("warns when a mapped role's hex appears as a literal more than a handful of times outside :root", () => {
+    const css = `
+      :root { --primary: #0a5adf; }
+      .btn { color: #0a5adf; }
+      .badge { color: #0a5adf; }
+      .tag { color: #0A5ADF; }
+      .pill { color: #0a5adf; }
+      h1 { color: var(--primary); }
+    `;
+    const { theme, diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) });
+    expect(theme.mode).toBe("css_vars");
+    const warn = diagnostics.find((d) => d.code === "theme_literal_colors");
+    expect(warn).toBeDefined();
+    expect(warn?.level).toBe("warn");
+    expect(warn?.message).toMatch(/brand/);
+    expect(warn?.message).toMatch(/var\(--primary\)/);
+  });
+
+  it("does not warn for a one-off literal (below the handful threshold)", () => {
+    const css = `
+      :root { --primary: #0a5adf; }
+      .btn { color: #0a5adf; }
+      h1 { color: var(--primary); }
+    `;
+    const { diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) });
+    expect(diagnostics.some((d) => d.code === "theme_literal_colors")).toBe(false);
+  });
+
+  it("does not count the :root declaration itself toward the literal-outside-root tally", () => {
+    // The value ONLY appears inside :root (where it belongs, as the
+    // variable's own declaration) — never repeated as a literal elsewhere.
+    const css = `:root { --primary: #0a5adf; } h1 { color: var(--primary); }`;
+    const { diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) });
+    expect(diagnostics.some((d) => d.code === "theme_literal_colors")).toBe(false);
+  });
+
+  it("counts the 3-digit shorthand of the same color toward the tally, case-insensitively", () => {
+    // #112233 is non-neutral (unlike #ffffff/white, which isNeutralHex would
+    // exclude from ever becoming a role at all) and has a valid 3-digit
+    // shorthand (#123) — each channel's two digits double up.
+    const css = `
+      :root { --primary: #112233; }
+      .a { color: #123; }
+      .b { color: #123; }
+      .c { color: #112233; }
+      .d { color: #112233; }
+      h1 { color: var(--primary); }
+    `;
+    const { diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) });
+    expect(diagnostics.some((d) => d.code === "theme_literal_colors")).toBe(true);
+  });
+
+  it("never fires for literal_remap mode (the diagnostic only applies where a var() exists to switch to)", () => {
+    const css = `
+      .btn { color: #b4540a; }
+      .badge { color: #b4540a; }
+      .tag { color: #b4540a; }
+      .pill { color: #b4540a; }
+    `;
+    const { theme, diagnostics } = extractTheme({ "style.css": new TextEncoder().encode(css) });
+    expect(theme.mode).toBe("literal_remap");
+    expect(diagnostics.some((d) => d.code === "theme_literal_colors")).toBe(false);
+  });
+});

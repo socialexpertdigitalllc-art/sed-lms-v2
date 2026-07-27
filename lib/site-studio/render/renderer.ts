@@ -3,7 +3,7 @@ import {
   escapeCssString, escapeHtml, escapeJsString, fillSlotValue, findTokens,
   navMarker, repeatMarker, NAV_HREF, NAV_TITLE,
 } from "../tokens";
-import { applyTheme } from "./theme";
+import { applyTheme, applyThemeToHtml } from "./theme";
 import { annotatePageHtml, annotateRepeatRow, RenderOptions } from "./annotate";
 
 // Context-aware escape for an identity value substituted into a tokenized
@@ -187,6 +187,15 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
       if (t.kind === "link") html = html.split(t.raw).join(prefix + (outputOf.get(t.key) ?? "index.html"));
       else if (t.kind === "id") html = html.split(t.raw).join(escapeHtml(doc.identity[t.key]));
     }
+
+    // Literal brand-color retint (Phase 4c) — a rendered page's HTML is not
+    // one of `tpl.assets`' entries (it's assembled fresh right here), so
+    // `applyTheme` above never sees it; this is the sibling pass that covers
+    // inline `style="color:#0C5AA0"` attributes and any other literal
+    // occurrence of a mapped role's own demo hex baked into the skeleton
+    // markup. See theme.ts's `applyThemeToHtml` doc comment for scope
+    // (css_vars mode only) and why it can't be folded into `applyTheme`.
+    html = applyThemeToHtml(html, tpl.manifest.theme, doc.theme);
 
     if (themed.injectCssFile)
       html = html.replace("</head>", `<link rel="stylesheet" href="${prefix}${themed.injectCssFile}"></head>`);
