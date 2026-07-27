@@ -6,7 +6,7 @@ These rules are derived from the compiler itself, not from style preference. A t
 
 Site Studio compiles a template **once** into a package: tokenized HTML skeletons plus a manifest of sample content. Certification requires that `render(compile(zip), samples)` reproduces the original site — if the compiler can't put the template back together byte-for-byte, it refuses to certify. Every rule below exists because breaking it either fails that check or silently makes content uneditable.
 
-## The nine hard rules
+## The ten hard rules
 
 ### 1. All visible content lives in HTML. JavaScript may not write to the DOM.
 The compiler tokenizes HTML only. Anything JS injects at runtime ships to the client's site **verbatim, with the template's demo business in it**.
@@ -93,6 +93,10 @@ A client's logo can only replace a business-name wordmark if the compiler can fi
 ```
 
 If found, the element is tokenized as `{{brand}}` (not `{{id:business_name}}`): a client with a logo image gets `<img src="…" alt="…">` there; a client without one gets their own business name instead of the template's demo wordmark. **A template may have at most one distinct brand wordmark text** — if a second header/footer candidate's text doesn't byte-match the first one found, it is left untouched and reported (`identity_brand_mismatch`), never guessed at.
+
+### 10. At most one map iframe and one Google-profile iframe, distinguished by which demo URL they point at.
+
+A Google Maps `<iframe>` (rule 8's "also worth doing") tokenizes as `{{id:map_embed}}`. A **second**, separate Google iframe — a reviews/profile widget, not the map — tokenizes as `{{id:profile_embed}}` as long as it points at a *different* URL than the map iframe and its host is a recognized Google domain (`google.com`, `maps.google.com`, `g.page`, `goo.gl/maps`, `maps.app.goo.gl`, `business.google.com`). Point each iframe at the demo URL that matches its real purpose; don't reuse the map's exact URL for the profile embed. A client's own map link (`map_embed_link`) and Google Business Profile link (`business_profile_link`) are kept and embedded separately — **the locked decision: the map iframe always keeps using `map_embed_link`**, the profile embeds on its own, and neither ever substitutes for the other.
 
 ## Also worth doing
 

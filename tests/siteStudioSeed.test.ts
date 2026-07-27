@@ -74,6 +74,15 @@ describe("seedContentDoc", () => {
     expect(doc.identity).not.toHaveProperty("logo");
     expect(doc.identity).not.toHaveProperty("map_embed");
     expect(doc.identity).not.toHaveProperty("profile_link");
+    expect(doc.identity).not.toHaveProperty("profile_embed");
+  });
+
+  it("carries profile_embed verbatim from the dossier when present (Phase 4c, Task 6)", () => {
+    const { doc: withEmbed } = seedContentDoc(
+      manifest, { ...dossier, profile_link: "https://g.page/acme", profile_embed: "https://g.page/acme" }, selectedPages,
+    );
+    expect(withEmbed.identity.profile_embed).toBe("https://g.page/acme");
+    expect(withEmbed.identity.profile_link).toBe("https://g.page/acme");
   });
 
   it("defaults every image slot to the template's own sample", () => {

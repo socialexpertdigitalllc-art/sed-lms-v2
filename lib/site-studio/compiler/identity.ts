@@ -15,6 +15,21 @@ function mostFrequent(values: string[]): string | undefined {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const GOOGLE_HOSTS = new Set(["google.com", "www.google.com", "maps.google.com", "g.page", "goo.gl", "maps.app.goo.gl", "business.google.com"]);
+
+/** True when `src` parses as an absolute http(s) URL on a recognized Google
+ *  host — used to find a Business Profile / reviews iframe (Task 6) as
+ *  distinct from an arbitrary third-party embed. Fails safe (false) for a
+ *  relative path, a template token already substituted in, or garbage. */
+function isGoogleHost(src: string): boolean {
+  try {
+    const u = new URL(src);
+    return (u.protocol === "http:" || u.protocol === "https:") && GOOGLE_HOSTS.has(u.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 const BRAND_LANDMARK_TAGS = new Set(["header", "footer"]);
 const BRAND_HOOK_RE = /\b(logo|brand)\b/i;
 const BRAND_SKIP = new Set(["script", "style", "noscript", "template", "title", "head", "html", "body", "header", "footer", "nav"]);
@@ -194,6 +209,21 @@ export function extractIdentity(
     if (iframe && !identity.map_embed) identity.map_embed = iframe.getAttribute("src")!;
   }
   if (identity.map_embed) replaceEverywhere(inv.pages, identity.map_embed, idToken("map_embed"), false);
+
+  // Pass 2b (Phase 4c, Task 6): a SEPARATE Google iframe — the client's
+  // Business Profile / reviews widget, never the map — tokenized as
+  // {{id:profile_embed}}. Distinguished from the map purely by pointing at
+  // a DIFFERENT src: the locked operator decision is that the map iframe
+  // always keeps using map_embed_link, so any OTHER Google iframe found is
+  // the profile embed — never a substitute for, or folded into, the map.
+  for (const page of inv.pages) {
+    const iframe = page.root.querySelectorAll("iframe").find((f) => {
+      const src = f.getAttribute("src") ?? "";
+      return !!src && src !== identity.map_embed && isGoogleHost(src);
+    });
+    if (iframe && !identity.profile_embed) identity.profile_embed = iframe.getAttribute("src")!;
+  }
+  if (identity.profile_embed) replaceEverywhere(inv.pages, identity.profile_embed, idToken("profile_embed"), false);
 
   const home = inv.pages.find((p) => p.kind === "home") ?? inv.pages[0];
   const title = home?.root.querySelector("title")?.text ?? "";

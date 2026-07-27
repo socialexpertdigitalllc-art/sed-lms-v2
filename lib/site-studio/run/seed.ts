@@ -48,6 +48,7 @@ function seedIdentity(dossier: Dossier, now: Date): Record<string, string> {
   if (dossier.logo) identity.logo = dossier.logo;
   if (dossier.map_embed) identity.map_embed = dossier.map_embed;
   if (dossier.profile_link) identity.profile_link = dossier.profile_link;
+  if (dossier.profile_embed) identity.profile_embed = dossier.profile_embed;
   identity.year = currentYear(now);
   return identity;
 }

@@ -22,6 +22,13 @@ export interface Dossier {
    *  absent email is "not captured yet", which is a different thing. */
   no_email: boolean;
   profile_link?: string;
+  /** An embeddable `src` for the client's Google Business Profile — present
+   *  only when `business_profile_link` is recognizably a Google URL (see
+   *  `isGoogleProfileUrl`). Distinct from `map_embed`: the locked operator
+   *  decision (Phase 4c, Task 6) is that the map iframe keeps using
+   *  `map_embed_link`, and a Google profile embeds SEPARATELY — never as a
+   *  substitute for the map, never folded into it. */
+  profile_embed?: string;
   logo?: string;
   map_embed?: string;
   site_type?: string;
@@ -50,6 +57,30 @@ const str = (v: unknown): string | undefined => {
 // string — it is never part of a number a `tel:` link should include.
 const EXTENSION_RE = /\b(ext\.?|extension|x)\b|\bx(?=\d)|#/i;
 
+/**
+ * True for a URL that is recognizably a Google Business Profile / Maps
+ * listing — a Maps place URL, a `g.page`/`goo.gl/maps`/`maps.app.goo.gl`
+ * short link, a `business.google.com` dashboard URL, or a `maps.google.com`
+ * link (e.g. a `?cid=` permalink). Deliberately narrow: a generic
+ * `google.com` URL that ISN'T under `/maps` (a Doc, a Form, a Drive link)
+ * does not count — those are not embeddable business listings. Fails safe
+ * (false) for anything that doesn't parse as an absolute http(s) URL.
+ */
+function isGoogleProfileUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  const host = u.hostname.toLowerCase();
+  if (host === "g.page" || host === "maps.app.goo.gl" || host === "business.google.com" || host === "maps.google.com") return true;
+  if (host === "goo.gl" && u.pathname.startsWith("/maps")) return true;
+  if ((host === "google.com" || host === "www.google.com") && u.pathname.startsWith("/maps")) return true;
+  return false;
+}
+
 function isDialable(digits: string): boolean {
   if (digits.startsWith("+")) return digits.length - 1 >= 8; // international
   return digits.length === 10 || (digits.length === 11 && digits[0] === "1");
@@ -77,6 +108,7 @@ export function buildDossier(lead: Record<string, unknown>): Dossier {
   const addOns = Array.isArray(lead.add_ons)
     ? (lead.add_ons as { label?: unknown }[]).map((a) => String(a?.label ?? "").trim()).filter(Boolean)
     : [];
+  const profileLink = str(lead.business_profile_link);
   return {
     lead_id: String(lead.id),
     business_name: String(lead.business_name ?? "").trim(),
@@ -85,7 +117,8 @@ export function buildDossier(lead: Record<string, unknown>): Dossier {
     email: str(lead.business_email),
     email_href: str(lead.business_email) ? `mailto:${str(lead.business_email)}` : undefined,
     no_email: lead.no_email === true,
-    profile_link: str(lead.business_profile_link),
+    profile_link: profileLink,
+    profile_embed: profileLink && isGoogleProfileUrl(profileLink) ? profileLink : undefined,
     logo: str(lead.logo_link),
     map_embed: str(lead.map_embed_link),
     site_type: str(lead.site_type),
