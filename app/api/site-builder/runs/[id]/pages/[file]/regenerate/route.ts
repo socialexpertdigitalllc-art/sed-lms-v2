@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
+import { unzipToMap } from "@/lib/site-studio/zip";
+import { siteImagesFromZip, localizeImages } from "@/lib/site-builder/siteImages";
 import { loadTemplateBundle } from "@/lib/site-builder/templates";
 import { productionSiteBuildCall } from "@/lib/site-builder/generate";
 import { regeneratePage, buildBrief, assembleZip, findComponentsFile, outputPathFor, BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
@@ -55,7 +57,22 @@ export async function POST(req: Request, ctx: Ctx) {
   }
 
   const brief = buildBrief(lead as Record<string, unknown>);
-  const images = Array.isArray(run.images) ? (run.images as SuppliedImage[]) : [];
+  const storedImages = Array.isArray(run.images) ? (run.images as SuppliedImage[]) : [];
+
+  // A run generated BEFORE images were bundled still holds raw signed storage
+  // URLs (no `file`). Feeding one back to the model would reproduce the exact
+  // bug this replaced — a mangled ?token= and a broken <img> — so such a run
+  // heals here: its picks are downloaded into the site now, and the freshly
+  // localized paths are what the prompt and the rebuilt zip both use.
+  let images = storedImages;
+  let healedFiles: Record<string, Uint8Array> = {};
+  let healedImages: SuppliedImage[] | null = null;
+  if (storedImages.length > 0 && storedImages.every((i) => !i.file)) {
+    const localized = await localizeImages(storedImages);
+    images = localized.images;
+    healedFiles = localized.files;
+    healedImages = localized.images;
+  }
   // The site's PAGES — the components entry is not a page and must not
   // appear in "link only to these".
   const siteFiles = Object.keys(pages).filter((f) => pages[f].kind !== "component");
@@ -88,11 +105,27 @@ export async function POST(req: Request, ctx: Ctx) {
       : { status: "failed", kind: current.kind, name: current.name, error: outcome.error },
   };
 
+  // The site's bundled images live in the CURRENT output zip and nowhere else
+  // (see siteImages.ts) — carry them across, or a regeneration would rebuild
+  // the site without the very images the pages reference.
+  let carriedImages: Record<string, Uint8Array> = {};
+  if (run.output_path) {
+    const { data: priorZip } = await admin.storage.from(BUILDER_SITES_BUCKET).download(run.output_path as string);
+    if (priorZip) {
+      try {
+        carriedImages = siteImagesFromZip(unzipToMap(new Uint8Array(await priorZip.arrayBuffer())));
+      } catch {
+        // A corrupt prior zip must not block a regeneration; the page still
+        // rewrites, and the operator can regenerate the run to restore images.
+      }
+    }
+  }
+
   // Same fallback runSite applies on assembly: an HTML components file that
   // is not currently "ok" ships as the template's original (it is a page
   // file, so it isn't in `assets`, and every generated page fetches it).
   const original = findComponentsFile(bundle);
-  const baseAssets = { ...bundle.assets };
+  const baseAssets = { ...bundle.assets, ...carriedImages, ...healedFiles };
   if (original && bundle.pages[original.file] !== undefined && newPages[original.file]?.status !== "ok") {
     baseAssets[original.file] = new TextEncoder().encode(original.source);
   }
@@ -106,7 +139,14 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const { data: updated, error: updErr } = await admin
     .from("builder_runs")
-    .update({ pages: newPages, output_path: outputPath, updated_at: new Date().toISOString() })
+    .update({
+      pages: newPages,
+      output_path: outputPath,
+      // Only written when an old run was healed above; otherwise the stored
+      // picks are already the in-site paths and must not be disturbed.
+      ...(healedImages ? { images: healedImages } : {}),
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", id)
     .select("*")
     .single();

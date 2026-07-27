@@ -343,6 +343,68 @@ describe("runSite", () => {
     expect(dec.decode(files["components.html"])).toBe("<header>Acme Plumbing</header>");
   });
 
+  it("REGRESSION: bundles picked images into the site and shows the model only relative paths", async () => {
+    // Production bug: picks were passed to the model as long signed Supabase
+    // URLs with a mandatory ?token= JWT, which the model truncated when
+    // writing <img src>, so live pages 400'd on their images.
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "style.css": "body{}" });
+    const signedUrl =
+      "https://ikuvbxjkoojtgekapbul.supabase.co/storage/v1/object/sign/studio-assets/abc.jpg?token=eyJhbGciOi.SIGNATURE";
+    const prompts: string[] = [];
+    const call: AiCall = async (_s, u) => {
+      prompts.push(u);
+      return { text: okHtml("PAGE") };
+    };
+    const fetchImage = (async () =>
+      new Response(enc.encode("JPEGBYTES"), { status: 200, headers: { "content-type": "image/jpeg" } })) as typeof fetch;
+
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [{ url: signedUrl, purpose: "Hero" }],
+      fetchImage,
+      template: tpl,
+      requestedPages: [],
+    });
+
+    expect(result.ok).toBe(true);
+    // the prompt names the local file, and never the signed URL or its token
+    expect(prompts[0]).toContain("images/hero-1.jpg");
+    expect(prompts[0]).not.toContain("token=");
+    expect(prompts[0]).not.toContain("supabase.co");
+    // the image really is a file in the built site
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["images/hero-1.jpg"])).toBe("JPEGBYTES");
+    // and the run reports the picks as they now live in the site
+    expect(result.images).toEqual([{ url: "images/hero-1.jpg", purpose: "Hero", file: "images/hero-1.jpg" }]);
+    expect(result.imageFailures).toEqual([]);
+  });
+
+  it("an image that cannot be downloaded is reported, and never referenced in a prompt", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" });
+    const prompts: string[] = [];
+    const call: AiCall = async (_s, u) => {
+      prompts.push(u);
+      return { text: okHtml("PAGE") };
+    };
+    const fetchImage = (async () => new Response("gone", { status: 404 })) as typeof fetch;
+
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [{ url: "https://x.test/a.jpg", purpose: "Hero" }],
+      fetchImage,
+      template: tpl,
+      requestedPages: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.images).toEqual([]);
+    expect(result.imageFailures).toHaveLength(1);
+    expect(prompts[0]).toContain("No images were supplied");
+    expect(unzipToMap(result.zipBytes!)["images/hero-1.jpg"]).toBeUndefined();
+  });
+
   it("reports live progress: everything pending first, components before pages, all terminal at the end", async () => {
     const tpl = bundle(
       { "index.html": "<html>home</html>", "about.html": "<html>about</html>" },

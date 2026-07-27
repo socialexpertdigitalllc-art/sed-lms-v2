@@ -30,10 +30,20 @@ export interface BusinessBrief {
 }
 
 export interface SuppliedImage {
+  /**
+   * What the model is told to use as the `src`. By the time a prompt is
+   * built this is an IN-SITE RELATIVE PATH (`images/hero-1.jpg`), never the
+   * original signed storage URL — see `lib/site-builder/siteImages.ts` for
+   * why handing a model a tokenised URL produced broken images in production.
+   */
   url: string;
   /** What the operator picked it for: "hero", "service: Window Tinting",
    *  "gallery", "about". Free text — it is a hint to the model, not a schema. */
   purpose: string;
+  /** Set once the image has been bundled into the site: its relative path,
+   *  the same value as `url`. Its presence is what marks a pick as localized
+   *  (the run row keeps it so a later regeneration reuses the same names). */
+  file?: string;
 }
 
 /** The template's shared-components file (a `components.js` rendering the
@@ -107,7 +117,10 @@ function briefText(b: BusinessBrief): string {
 
 function imagesText(images: SuppliedImage[]): string {
   if (!images.length) return "No images were supplied — keep the template's own images.";
-  return images.map((i) => `- ${i.purpose}: ${i.url}`).join("\n");
+  return [
+    "These files already exist inside the site. Reference each one EXACTLY as written below — a plain relative path, copied character for character. Never turn one into an absolute URL, never add a query string to it, and never invent a path that is not on this list.",
+    ...images.map((i) => `- ${i.purpose}: ${i.url}`),
+  ].join("\n");
 }
 
 export const SITE_BUILD_SYSTEM = rules;

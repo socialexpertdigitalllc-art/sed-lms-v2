@@ -3,9 +3,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { contentTypeFor } from "@/lib/site-studio/service/contentType";
 import { isSafeAssetPath } from "@/lib/site-studio/preview/assetPath";
+import { unzipToMap } from "@/lib/site-studio/zip";
 import { loadTemplateBundle } from "@/lib/site-builder/templates";
 import { rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
-import type { PageState } from "@/lib/site-builder/run";
+import { isSiteImagePath } from "@/lib/site-builder/siteImages";
+import { BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -78,7 +80,11 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 
   const admin = createAdminClient();
-  const { data: run, error: fetchErr } = await admin.from("builder_runs").select("template_id, pages").eq("id", id).single();
+  const { data: run, error: fetchErr } = await admin
+    .from("builder_runs")
+    .select("template_id, pages, output_path, images")
+    .eq("id", id)
+    .single();
   if (fetchErr || !run) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   let bundle;
@@ -124,7 +130,14 @@ export async function GET(req: Request, ctx: Ctx) {
       return new NextResponse(page.html, { headers: previewHeaders(contentType) });
     }
     const previewBase = `/api/site-builder/runs/${id}/preview/`;
-    const known = [...bundle.assetFiles, ...Object.keys(pages)];
+    // Bundled images join the known-file list so a ROOT-ABSOLUTE reference to
+    // one ("/images/hero-1.jpg") is routed through the preview like any other
+    // asset. A plain relative reference — what the prompt asks for and what
+    // pages normally carry — is already handled by the injected <base>.
+    const imagePaths = Array.isArray(run.images)
+      ? (run.images as { url?: unknown }[]).map((i) => (typeof i.url === "string" ? i.url : "")).filter(Boolean)
+      : [];
+    const known = [...bundle.assetFiles, ...Object.keys(pages), ...imagePaths];
     const rewritten = rewriteAssetRefs(page.html, known, previewBase);
     // A `<base>` makes RELATIVE references resolve against the preview
     // directory no matter which URL this page was opened at — critically the
@@ -140,6 +153,26 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 
   const bytes = bundle.assets[target];
-  if (!bytes) return NextResponse.json({ error: "File not in this run or its template" }, { status: 404 });
-  return new NextResponse(new Uint8Array(bytes), { headers: previewHeaders(contentTypeFor(target)) });
+  if (bytes) return new NextResponse(new Uint8Array(bytes), { headers: previewHeaders(contentTypeFor(target)) });
+
+  // Bundled site images are NOT template assets — they were downloaded into
+  // the site at generation time and live only in the run's output zip (see
+  // siteImages.ts). Serving them here is what makes the preview show the same
+  // images the deployed site will.
+  if (isSiteImagePath(target) && run.output_path) {
+    const { data: zipBlob } = await admin.storage.from(BUILDER_SITES_BUCKET).download(run.output_path as string);
+    if (zipBlob) {
+      try {
+        const files = unzipToMap(new Uint8Array(await zipBlob.arrayBuffer()));
+        const image = files[target];
+        if (image) {
+          return new NextResponse(new Uint8Array(image), { headers: previewHeaders(contentTypeFor(target)) });
+        }
+      } catch {
+        // fall through to the 404 below
+      }
+    }
+  }
+
+  return NextResponse.json({ error: "File not in this run or its template" }, { status: 404 });
 }
