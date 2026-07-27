@@ -34,7 +34,7 @@ export function compileTemplate(zipBytes: Uint8Array, name: string): CompileResu
   const inv = inventory(files);
   diagnostics.push(...inv.diagnostics);
 
-  const { identity, diagnostics: idDiags } = extractIdentity(inv);
+  const { identity, diagnostics: idDiags, brand } = extractIdentity(inv);
   diagnostics.push(...idDiags);
 
   // Pass 2b: tokenize the SAME identity values inside text assets (.js/.css)
@@ -93,6 +93,7 @@ export function compileTemplate(zipBytes: Uint8Array, name: string): CompileResu
     engine: 3, name, version: 1, identity,
     theme: theme.theme, nav: nav.regions, pages: pageDefs,
     tokenizedAssets: assetTok.tokenizedAssets,
+    ...(brand ? { brand } : {}),
   };
 
   const template: CompiledTemplate = { manifest, pages, fragments, assets: inv.assets };

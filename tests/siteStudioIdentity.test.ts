@@ -38,6 +38,80 @@ describe("extractIdentity (plumberpro)", () => {
   });
 });
 
+describe("extractIdentity (brand block detection, Phase 4c Task 5)", () => {
+  const html = (bodyExtra = "") => `<html><head><title>Northpoint Remodeling - Beautiful Denver Kitchens</title></head>
+<body>
+  <header id="np-nav">
+    <a href="index.html"><span id="np-logo-dot"></span><span id="np-logo-txt">NORTHPOINT</span></a>
+  </header>
+  <div id="np-loader"><span>NORTHPOINT</span></div>
+  <footer>
+    <div><span></span><span>NORTHPOINT</span></div>
+    <p>Northpoint Remodeling proudly serves the Denver metro.</p>
+    <h3>The Northpoint Guarantee</h3>
+  </footer>
+  ${bodyExtra}
+</body></html>`;
+
+  it("tags the header id=logo wordmark and the footer text-prefix wordmark with {{brand}}, capturing the demo text as the sample", () => {
+    const inv = buildInv(html());
+    const { identity, brand } = extractIdentity(inv);
+    expect(identity.business_name).toBe("Northpoint Remodeling");
+    expect(brand?.sample).toBe("NORTHPOINT");
+    const out = inv.pages[0].root.toString();
+    expect(out.match(/\{\{brand\}\}/g)).toHaveLength(2);
+    // the preloader's bare NORTHPOINT (no header/footer landmark) is left alone —
+    // out of scope for the header/footer brand block requirement
+    expect(out).toContain('<div id="np-loader"><span>NORTHPOINT</span></div>');
+    // the footer's full-sentence mention still tokenizes normally as business_name
+    expect(out).toContain("{{id:business_name}} proudly serves");
+    // "The Northpoint Guarantee" is a normal (non-brand) heading, left for the
+    // ordinary text-slot pass — not this identity pass's concern
+    expect(out).toContain("<h3>The Northpoint Guarantee</h3>");
+  });
+
+  it("preserves attributes on the tagged element", () => {
+    const inv = buildInv(html());
+    extractIdentity(inv);
+    const out = inv.pages[0].root.toString();
+    expect(out).toContain('<span id="np-logo-txt">{{brand}}</span>');
+    expect(out).toContain('<span id="np-logo-dot"></span>');
+  });
+
+  it("a plain exact-name match with a logo class (plumberpro-shaped) is also tagged", () => {
+    const inv = buildInv(`<html><head><title>Acme Co | Plumbing</title></head><body>
+      <header><a class="logo" href="index.html">Acme Co</a></header>
+    </body></html>`);
+    const { brand } = extractIdentity(inv);
+    expect(brand?.sample).toBe("Acme Co");
+    expect(inv.pages[0].root.toString()).toContain('<a class="logo" href="index.html">{{brand}}</a>');
+  });
+
+  it("does not tag a decorative empty logo-hook element (nothing to preserve as a sample)", () => {
+    const inv = buildInv(html());
+    extractIdentity(inv);
+    const out = inv.pages[0].root.toString();
+    expect(out).toContain('<span id="np-logo-dot"></span>');
+  });
+
+  it("a second brand-ish element whose text differs from the first captured sample is left untouched and reported", () => {
+    const inv = buildInv(`<html><head><title>Acme Co | Plumbing</title></head><body>
+      <header><a class="logo" href="index.html">Acme Co</a></header>
+      <footer><span class="brand">Different Text</span></footer>
+    </body></html>`);
+    const { brand, diagnostics } = extractIdentity(inv);
+    expect(brand?.sample).toBe("Acme Co");
+    expect(inv.pages[0].root.toString()).toContain("Different Text");
+    expect(diagnostics.some((d) => d.code === "identity_brand_mismatch" && d.level === "warn")).toBe(true);
+  });
+
+  it("emits no brand at all when no candidate is found", () => {
+    const inv = buildInv(`<html><head><title>Acme Co | Plumbing</title></head><body><header><nav></nav></header></body></html>`);
+    const { brand } = extractIdentity(inv);
+    expect(brand).toBeUndefined();
+  });
+});
+
 describe("extractIdentity (bakery)", () => {
   const inv = inventory(fixtureFiles("bakery"));
   const { identity } = extractIdentity(inv);

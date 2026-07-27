@@ -108,6 +108,16 @@ export const manifestSchema = z.object({
   name: z.string().min(1),
   version: z.number().int().min(1),
   identity: z.record(z.string(), z.string()),
+  // The site's brand element (Phase 4c, Task 5) — present only when the
+  // compiler's identity pass (compiler/identity.ts's extractBrand) found one.
+  // `sample` is the LITERAL original text captured at that element (e.g.
+  // "NORTHPOINT"), which may differ from `identity.business_name` (e.g.
+  // "Northpoint Remodeling") when the demo shows a stylized short wordmark —
+  // see render/renderer.ts's {{brand}} handling for why this exact string
+  // must be preserved for the round-trip render to reproduce the original
+  // bytes. Optional so existing manifests/fixtures without a brand block
+  // (the vast majority — no template is required to have one) stay valid.
+  brand: z.object({ sample: z.string() }).optional(),
   theme: themeDefSchema,
   nav: z.array(navRegionSchema),
   pages: z.array(pageDefSchema).min(1),

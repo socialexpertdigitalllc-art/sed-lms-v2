@@ -1,6 +1,6 @@
 import { CompiledTemplate, ContentDoc, ContentDocPage, FileMap, RenderResult } from "../schema";
 import {
-  escapeCssString, escapeHtml, escapeJsString, fillSlotValue, findTokens,
+  BRAND_TOKEN, escapeCssString, escapeHtml, escapeJsString, fillSlotValue, findTokens,
   navMarker, repeatMarker, NAV_HREF, NAV_TITLE,
 } from "../tokens";
 import { applyTheme, applyThemeToHtml } from "./theme";
@@ -50,6 +50,44 @@ function substituteAssetIdentity(
 const renderNavLi = (frag: string, href: string, label: string): string =>
   frag.split(NAV_HREF).join(href).split(NAV_TITLE).join(escapeHtml(label));
 
+/**
+ * {{brand}} (Phase 4c, Task 5) — the site's brand element, marked by the
+ * compiler's identity pass (compiler/identity.ts's extractBrand) on a
+ * header/footer wordmark. Unlike an {{id:*}} token this isn't unconditional
+ * value substitution: it renders an <img> when the doc's identity carries a
+ * non-empty `logo`, or text otherwise — see tokens.ts's BRAND_TOKEN doc
+ * comment.
+ *
+ * The no-logo TEXT branch has two cases, both driven by comparing the doc's
+ * `business_name` against `tpl.manifest.identity.business_name` (the value
+ * the compiler captured from the DEMO template, always what
+ * `sampleContentDoc` copies verbatim):
+ *   - they match (rendering the demo/sample identity — this is exactly what
+ *     the verification round-trip and golden-hash tests do): reproduce
+ *     `tpl.manifest.brand.sample`, the LITERAL original text captured at the
+ *     brand element, verbatim. That text (e.g. "NORTHPOINT") may be a
+ *     stylized short form that differs from the full business name (e.g.
+ *     "Northpoint Remodeling") — using the sample instead of re-deriving
+ *     from business_name is the only way to reproduce the original bytes.
+ *   - they differ (a real, distinct client): show the client's own escaped
+ *     business name — the actual product requirement ("if it's empty just
+ *     add the business name there").
+ *
+ * Both branches route through escapeHtml, matching every other identity
+ * substitution in this file (see the `id` branch below) — never dropped in
+ * raw, for the same reason `fillSlotValue` exists: an unescaped value can
+ * inject a live attribute or break the surrounding markup.
+ */
+function renderBrand(tpl: CompiledTemplate, doc: ContentDoc): string {
+  const logo = doc.identity.logo;
+  const businessName = doc.identity.business_name ?? "";
+  if (logo) return `<img src="${escapeHtml(logo)}" alt="${escapeHtml(businessName)}">`;
+
+  const sample = tpl.manifest.brand?.sample;
+  const isDemoIdentity = sample !== undefined && businessName === (tpl.manifest.identity.business_name ?? "");
+  return escapeHtml(isDemoIdentity ? sample! : businessName);
+}
+
 /** Depth-aware relative prefix: "services/sewer.html" links back up with "../". */
 const relPrefix = (from: string) => "../".repeat(from.split("/").length - 1);
 
@@ -84,10 +122,14 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
   const navLabels = tpl.manifest.nav.flatMap((r) => (r.items ?? []).map((it) => it.label));
   const tokenizedAssetPaths = tpl.manifest.tokenizedAssets ?? [];
   const assetTexts = tokenizedAssetPaths.map((p) => new TextDecoder().decode(tpl.assets[p] ?? new Uint8Array()));
+  const allSkeletonText = Object.values(tpl.pages).concat(Object.values(tpl.fragments)).concat(navLabels).concat(assetTexts);
   const referenced = new Set(
-    Object.values(tpl.pages).concat(Object.values(tpl.fragments)).concat(navLabels).concat(assetTexts)
-      .flatMap((html) => findTokens(html)).filter((t) => t.kind === "id").map((t) => t.key),
+    allSkeletonText.flatMap((html) => findTokens(html)).filter((t) => t.kind === "id").map((t) => t.key),
   );
+  // {{brand}} isn't an {{id:*}} token (see tokens.ts), so it's invisible to
+  // the scan above — but its no-logo fallback still needs business_name, so
+  // a template using it must be treated as if it referenced that key too.
+  if (allSkeletonText.some((html) => html.includes(BRAND_TOKEN))) referenced.add("business_name");
   for (const key of referenced) if (!(key in doc.identity)) missing.push({ page_id: "(site)", slot_id: `id:${key}` });
 
   if (missing.length > 0) return { ok: false, missing };
@@ -105,6 +147,10 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
     };
   }
   const files: FileMap = { ...assetSub.files };
+
+  // Computed once — {{brand}}'s resolved shape depends only on the doc's
+  // identity/manifest, never on which page it's rendered into.
+  const brandHtml = renderBrand(tpl, doc);
 
   for (let docPageIndex = 0; docPageIndex < built.length; docPageIndex++) {
     const b = built[docPageIndex];
@@ -182,6 +228,7 @@ export function renderSite(tpl: CompiledTemplate, doc: ContentDoc, opts?: Render
     }
 
     html = html.split("{{title}}").join(escapeHtml(b.page.title));
+    if (html.includes(BRAND_TOKEN)) html = html.split(BRAND_TOKEN).join(brandHtml);
 
     for (const t of findTokens(html)) {
       if (t.kind === "link") html = html.split(t.raw).join(prefix + (outputOf.get(t.key) ?? "index.html"));

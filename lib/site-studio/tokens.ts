@@ -6,6 +6,15 @@ export const slotToken = (id: string) => `{{slot:${id}}}`;
 export const imgToken = (id: string) => `{{img:${id}}}`;
 export const linkToken = (pageId: string) => `{{link:${pageId}}}`;
 export const TITLE_TOKEN = "{{title}}";
+// The brand block (Phase 4c, Task 5) — marks the site's brand element (a
+// header/footer wordmark, etc.) so the renderer can swap in the client's
+// logo image, or their business name, at render time. Deliberately NOT an
+// {{id:*}} token: identity tokens are unconditional value substitution, and
+// this needs to render one of two entirely different shapes (an <img>, or
+// escaped text) depending on whether the doc's identity carries a logo — see
+// render/renderer.ts. Carries no key (like {{title}}) because a site has at
+// most one brand identity to express, regardless of how many elements show it.
+export const BRAND_TOKEN = "{{brand}}";
 export const NAV_TITLE = "{{nav:title}}";
 export const NAV_HREF = "{{nav:href}}";
 export const repeatMarker = (id: string) => `<!--@repeat:${id}-->`;
@@ -13,7 +22,7 @@ export const navMarker = (id: string) => `<!--@nav:${id}-->`;
 
 export interface FoundToken { kind: string; key: string; raw: string }
 
-const TOKEN_RE = /\{\{(id|slot|img|link|title)(?::([A-Za-z0-9_./-]+))?\}\}|\{\{nav:(title|href)\}\}|<!--@(repeat|nav):([A-Za-z0-9_-]+)-->/g;
+const TOKEN_RE = /\{\{(id|slot|img|link|title|brand)(?::([A-Za-z0-9_./-]+))?\}\}|\{\{nav:(title|href)\}\}|<!--@(repeat|nav):([A-Za-z0-9_-]+)-->/g;
 
 /** Every token/marker occurrence in a string (markers report kind "repeat"/"nav"). */
 export function findTokens(s: string): FoundToken[] {

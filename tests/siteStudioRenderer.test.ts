@@ -339,6 +339,84 @@ describe("renderSite escapes attribute-bound slots (alt text) safely", () => {
  * business name breaks the asset's syntax and takes down the whole
  * deployed site.
  */
+/**
+ * The {{brand}} block (Phase 4c, Task 5) — swaps a client's logo <img> in
+ * for the template's header/footer wordmark, falling back to the escaped
+ * business name when no logo is supplied. The no-logo, "demo identity"
+ * branch must reproduce the manifest-captured `brand.sample` text
+ * byte-for-byte (this is what keeps the round-trip/golden render pinned
+ * even though the wordmark's demo text, e.g. "NORTHPOINT", is a stylized
+ * short form that differs from the full `identity.business_name`, e.g.
+ * "Northpoint Remodeling").
+ */
+describe("renderSite: {{brand}} block", () => {
+  const brandTpl: CompiledTemplate = {
+    manifest: {
+      engine: 3, name: "brand-mini", version: 1,
+      identity: { business_name: "Northpoint Remodeling" },
+      brand: { sample: "NORTHPOINT" },
+      theme: { mode: "none", roles: {} },
+      nav: [],
+      pages: [{ id: "index", file: "index.html", kind: "home", stampable: false, title_sample: "Northpoint Remodeling", slots: [], repeats: [] }],
+    },
+    pages: {
+      "index.html": `<html><head><title>{{title}}</title></head><body><header><span id="np-logo-txt">{{brand}}</span></header></body></html>`,
+    },
+    fragments: {},
+    assets: {},
+  };
+  const docFor = (identity: Record<string, string>): ContentDoc => ({
+    identity, theme: {},
+    pages: [{ page_id: "index", title: "Northpoint Remodeling", slots: {}, repeats: {} }],
+  });
+
+  it("reproduces the captured demo sample verbatim when rendering the demo/sample identity (round trip)", () => {
+    const r = renderSite(brandTpl, docFor({ business_name: "Northpoint Remodeling" }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(dec(r.files["index.html"])).toContain('<span id="np-logo-txt">NORTHPOINT</span>');
+  });
+
+  it("falls back to the escaped real business name when it differs from the demo identity and no logo is set", () => {
+    const r = renderSite(brandTpl, docFor({ business_name: `Bob's Plumbing & Sons` }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(dec(r.files["index.html"])).toContain('<span id="np-logo-txt">Bob&#39;s Plumbing &amp; Sons</span>');
+  });
+
+  it("emits an <img> with escaped src/alt when the doc identity carries a logo", () => {
+    const r = renderSite(brandTpl, { ...docFor({ business_name: "Acme & Sons" }), identity: { business_name: "Acme & Sons", logo: "https://cdn.example.com/logo.png?x=1&y=2" } });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const html = dec(r.files["index.html"]);
+    expect(html).toContain('<span id="np-logo-txt"><img src="https://cdn.example.com/logo.png?x=1&amp;y=2" alt="Acme &amp; Sons"></span>');
+  });
+
+  it("does not let a hostile logo URL or business name break out of the attribute", () => {
+    const r = renderSite(brandTpl, {
+      ...docFor({}),
+      identity: { business_name: `foo" onerror="alert(1)`, logo: `x.png" onerror="alert(1)` },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const html = dec(r.files["index.html"]);
+    expect(html).not.toContain('onerror="alert(1)"');
+    expect(html).toContain(`<img src="x.png&quot; onerror=&quot;alert(1)" alt="foo&quot; onerror=&quot;alert(1)">`);
+  });
+
+  it("refuses when a template uses {{brand}} but the doc has no business_name at all", () => {
+    const r = renderSite(brandTpl, { identity: {}, theme: {}, pages: [{ page_id: "index", title: "X", slots: {}, repeats: {} }] });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.missing.some((m) => m.slot_id === "id:business_name")).toBe(true);
+  });
+
+  it("a template with no {{brand}} token is unaffected (manifest.brand absent)", () => {
+    const r = renderSite(tpl, doc);
+    expect(r.ok).toBe(true);
+  });
+});
+
 describe("renderSite substitutes identity tokens inside tokenized assets", () => {
   const assetTpl: CompiledTemplate = {
     manifest: {

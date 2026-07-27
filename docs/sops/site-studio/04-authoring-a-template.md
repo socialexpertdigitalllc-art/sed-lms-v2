@@ -6,7 +6,7 @@ These rules are derived from the compiler itself, not from style preference. A t
 
 Site Studio compiles a template **once** into a package: tokenized HTML skeletons plus a manifest of sample content. Certification requires that `render(compile(zip), samples)` reproduces the original site — if the compiler can't put the template back together byte-for-byte, it refuses to certify. Every rule below exists because breaking it either fails that check or silently makes content uneditable.
 
-## The eight hard rules
+## The nine hard rules
 
 ### 1. All visible content lives in HTML. JavaScript may not write to the DOM.
 The compiler tokenizes HTML only. Anything JS injects at runtime ships to the client's site **verbatim, with the template's demo business in it**.
@@ -72,6 +72,27 @@ Scattered hex literals still work (a weaker `literal_remap` mode); no consistent
 | anything else | generic |
 
 `area` is matched **before** `service`, so `service-areas.html` is correctly a service-areas page. Use plain, predictable names: `index.html`, `about.html`, `services.html`, `service-areas.html`, `gallery.html`, `contact.html`.
+
+### 9. A logo/brand link, if you want one, must be a text LEAF inside `<header>`/`<footer>`.
+
+A client's logo can only replace a business-name wordmark if the compiler can find it. Detection is narrow, on purpose — a false positive rewrites the wrong element on every page of every client site:
+
+- the element must be a **leaf** (no element children of its own — a wrapper `<div>` holding the wordmark *and* something else is never swallowed whole);
+- it must sit inside a `<header>` or `<footer>` landmark;
+- it must carry non-empty text; and it must EITHER
+  - have an `id`/`class` naming it, containing the word `logo` or `brand` (e.g. `<a class="logo" href="index.html">Acme Co</a>`), OR
+  - show, as its complete text, the business name or its first word (a stylized short wordmark — `NORTHPOINT` for a business named "Northpoint Remodeling").
+
+```html
+<!-- GOOD: either shape is detected -->
+<a class="logo" href="index.html">Acme Co</a>
+<span id="site-logo">ACME</span>
+
+<!-- BAD: wrapped in something with sibling content, or outside header/footer -->
+<a href="index.html"><span class="dot"></span><span>ACME</span></a>  <!-- inside <header>, but the <a> itself has no hook and isn't the leaf -->
+```
+
+If found, the element is tokenized as `{{brand}}` (not `{{id:business_name}}`): a client with a logo image gets `<img src="…" alt="…">` there; a client without one gets their own business name instead of the template's demo wordmark. **A template may have at most one distinct brand wordmark text** — if a second header/footer candidate's text doesn't byte-match the first one found, it is left untouched and reported (`identity_brand_mismatch`), never guessed at.
 
 ## Also worth doing
 

@@ -1,6 +1,6 @@
 import { HTMLElement, TextNode } from "node-html-parser";
 import { Diagnostic } from "../schema";
-import { idToken } from "../tokens";
+import { BRAND_TOKEN, findTokens, idToken } from "../tokens";
 import { Inventory } from "./inventory";
 
 const PHONE_RE = /(?:\+1[-. ]?)?(?:\(\d{3}\)\s?|\d{3}[-. ])\d{3}[-. ]\d{4}/g;
@@ -14,6 +14,103 @@ function mostFrequent(values: string[]): string | undefined {
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const BRAND_LANDMARK_TAGS = new Set(["header", "footer"]);
+const BRAND_HOOK_RE = /\b(logo|brand)\b/i;
+const BRAND_SKIP = new Set(["script", "style", "noscript", "template", "title", "head", "html", "body", "header", "footer", "nav"]);
+
+function withinBrandLandmark(el: HTMLElement): boolean {
+  let cur: HTMLElement | null = el;
+  while (cur) {
+    if (BRAND_LANDMARK_TAGS.has(cur.rawTagName?.toLowerCase() ?? "")) return true;
+    cur = cur.parentNode as HTMLElement | null;
+  }
+  return false;
+}
+
+/**
+ * Pass 2c: the site's BRAND element (Phase 4c, Task 5) — a header/footer
+ * wordmark the renderer can swap a client logo <img> into, falling back to
+ * the business name when no logo is supplied (tokens.ts's BRAND_TOKEN,
+ * render/renderer.ts). Runs BEFORE the business-name literal replace below
+ * so it sees the ORIGINAL demo text, and so a candidate it claims is
+ * naturally excluded from that later pass (its content is already gone).
+ *
+ * Detection is deliberately narrow — a false positive rewrites the wrong
+ * element on every page of every site. A candidate must be:
+ *   - a LEAF (no element children — a wrapper that also holds unrelated
+ *     content is never swallowed whole);
+ *   - inside a <header> or <footer> landmark (the literal product
+ *     requirement: "use this in the header and footer");
+ *   - carrying non-empty own text; and EITHER
+ *     - an id/class naming it as a logo/brand element (the plumberpro/
+ *       gearhead fixture shape, `<a class="logo">Business Name</a>`), OR
+ *     - its complete text case-insensitively equal to the detected business
+ *       name or its first word — a stylized short wordmark like
+ *       "NORTHPOINT" for "Northpoint Remodeling", the exact case that
+ *       motivated this pass: the plain business-name literal match never
+ *       fires there (it isn't a substring match, the word is truncated),
+ *       and <span> is inline so the ordinary text-slot pass never reaches
+ *       it either (compiler/slots.ts's isSlottableLeaf).
+ *
+ * Every match must carry BYTE-IDENTICAL text to the first one found — the
+ * renderer's no-logo fallback can only reproduce ONE captured sample. A
+ * later candidate whose text differs is left untouched (not guessed at)
+ * and reported via identity_brand_mismatch.
+ */
+function extractBrand(
+  pages: Inventory["pages"], businessName: string,
+): { sample?: string; diagnostics: Diagnostic[] } {
+  const diagnostics: Diagnostic[] = [];
+  if (!businessName) return { diagnostics };
+
+  const words = businessName.split(/\s+/).filter(Boolean);
+  const nameMatches = new Set([businessName.toLowerCase()]);
+  if (words.length > 1) nameMatches.add(words[0].toLowerCase());
+
+  let sample: string | undefined;
+  let matchCount = 0;
+  for (const page of pages) {
+    for (const el of page.root.querySelectorAll("*")) {
+      const tag = el.rawTagName?.toLowerCase() ?? "";
+      if (!tag || BRAND_SKIP.has(tag)) continue;
+      if (el.querySelectorAll("*").length > 0) continue; // leaf only
+      if (!withinBrandLandmark(el)) continue;
+
+      const text = el.text.trim();
+      if (!text || findTokens(text).length > 0) continue; // empty (decorative) or already tokenized
+
+      const idCls = `${el.getAttribute("id") ?? ""} ${el.getAttribute("class") ?? ""}`;
+      const hasHook = BRAND_HOOK_RE.test(idCls);
+      const isNameMatch = nameMatches.has(text.toLowerCase());
+      if (!hasHook && !isNameMatch) continue;
+
+      if (sample === undefined) sample = text;
+      if (text !== sample) {
+        diagnostics.push({
+          level: "warn",
+          code: "identity_brand_mismatch",
+          page: page.file,
+          message: `A second brand-like element ("${text}") does not match the first captured brand text ("${sample}") — left untouched; a client logo will only replace the first.`,
+        });
+        continue;
+      }
+
+      el.set_content(BRAND_TOKEN);
+      matchCount++;
+    }
+  }
+
+  if (sample !== undefined) {
+    diagnostics.push({
+      level: "info",
+      code: "identity_brand_detected",
+      message: `Brand element detected (demo text "${sample}") and tokenized at ${matchCount} location(s) — a client logo image will replace it when supplied, otherwise the client's business name renders in its place.`,
+    });
+  }
+
+  return { sample, diagnostics };
+}
 
 function replaceEverywhere(pages: Inventory["pages"], value: string, token: string, wordBounded: boolean) {
   const re = new RegExp(
@@ -36,7 +133,9 @@ function replaceEverywhere(pages: Inventory["pages"], value: string, token: stri
 }
 
 /** Pass 2 (deterministic subset): tokenize phone/email/map/name/year in text + attributes. */
-export function extractIdentity(inv: Inventory): { identity: Record<string, string>; diagnostics: Diagnostic[] } {
+export function extractIdentity(
+  inv: Inventory,
+): { identity: Record<string, string>; diagnostics: Diagnostic[]; brand?: { sample: string } } {
   const diagnostics: Diagnostic[] = [];
   const identity: Record<string, string> = {};
   const allText = inv.pages.map((p) => p.root.toString()).join("\n");
@@ -99,8 +198,18 @@ export function extractIdentity(inv: Inventory): { identity: Record<string, stri
   const home = inv.pages.find((p) => p.kind === "home") ?? inv.pages[0];
   const title = home?.root.querySelector("title")?.text ?? "";
   const name = title.split(/[|\-–—]/)[0].trim();
+  let brand: { sample: string } | undefined;
   if (name.length >= 3) {
     identity.business_name = name;
+
+    // Brand-block detection (Phase 4c, Task 5) runs BEFORE the literal
+    // business-name replace just below, so it captures the ORIGINAL demo
+    // text at a candidate element (which may not literally equal `name` —
+    // see extractBrand's doc comment) before that text is gone.
+    const brandResult = extractBrand(inv.pages, name);
+    diagnostics.push(...brandResult.diagnostics);
+    if (brandResult.sample !== undefined) brand = { sample: brandResult.sample };
+
     replaceEverywhere(inv.pages, name, idToken("business_name"), true);
     diagnostics.push({
       level: "warn", code: "identity_name_heuristic",
@@ -126,5 +235,5 @@ export function extractIdentity(inv: Inventory): { identity: Record<string, stri
     }
   }
 
-  return { identity, diagnostics };
+  return { identity, diagnostics, brand };
 }
