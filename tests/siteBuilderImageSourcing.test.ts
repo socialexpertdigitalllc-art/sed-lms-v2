@@ -268,3 +268,59 @@ describe("sourceImages — service rows", () => {
     }
   });
 });
+
+describe("sourceImages — starved-row fallbacks", () => {
+  it("a service whose searches found nothing gets the client's own photos as its candidates (auto-picked first)", async () => {
+    searchLibraryMock.mockImplementation(async (_admin: unknown, opts: { subject?: string }) =>
+      opts.subject === "Empty Service" ? [] : Array.from({ length: 9 }, (_, i) => libraryRow(`${opts.subject}-${i}`)),
+    );
+    const searchPexels = vi.fn(async (): Promise<PexelsResult> => ({ ok: true, candidates: [] }));
+    const needs = needsFor(["Service A", "Empty Service"]);
+
+    const result = await sourceImages({ admin, searchPexels }, needs, "lead-1", [
+      "https://example.com/client1.jpg",
+      "https://example.com/client2.jpg",
+    ]);
+
+    const starved = result.services.find((r) => r.service === "Empty Service")!;
+    expect(starved.candidates.length).toBeGreaterThan(0);
+    expect(starved.candidates.every((c) => c.kind === "client")).toBe(true);
+    expect(starved.candidates[0]).toMatchObject({ kind: "client", url: "https://example.com/client1.jpg" });
+    // the healthy row keeps its own search results — no fallback there
+    const healthy = result.services.find((r) => r.service === "Service A")!;
+    expect(healthy.candidates.every((c) => c.kind === "library")).toBe(true);
+  });
+
+  it("with no client photos either, a starved row falls back to other services' leftover results", async () => {
+    searchLibraryMock.mockImplementation(async (_admin: unknown, opts: { subject?: string }) =>
+      opts.subject === "Empty Service" ? [] : Array.from({ length: 9 }, (_, i) => libraryRow(`${opts.subject}-${i}`)),
+    );
+    const searchPexels = vi.fn(async (): Promise<PexelsResult> => ({ ok: true, candidates: [] }));
+    const needs = needsFor(["Service A", "Empty Service"]);
+
+    const result = await sourceImages({ admin, searchPexels }, needs, "lead-1", []);
+
+    const starved = result.services.find((r) => r.service === "Empty Service")!;
+    expect(starved.candidates.length).toBeGreaterThan(0);
+    expect(starved.candidates.every((c) => c.kind === "library")).toBe(true);
+    // the fallback candidates are OTHER services' photos, never duplicates of
+    // what Service A's own row already shows
+    const healthy = result.services.find((r) => r.service === "Service A")!;
+    const healthyIds = new Set(healthy.candidates.map((c) => (c.kind === "library" ? c.asset_id : "")));
+    for (const c of starved.candidates) {
+      if (c.kind === "library") expect(healthyIds.has(c.asset_id)).toBe(false);
+    }
+  });
+
+  it("fallback client-photo keys are namespaced per row — two starved rows never collide", async () => {
+    searchLibraryMock.mockResolvedValue([]);
+    const searchPexels = vi.fn(async (): Promise<PexelsResult> => ({ ok: true, candidates: [] }));
+    const needs = needsFor(["Empty A", "Empty B"]);
+
+    const result = await sourceImages({ admin, searchPexels }, needs, "lead-1", ["https://example.com/client1.jpg"]);
+
+    const keys = result.services.flatMap((r) => r.candidates.map((c) => c.key));
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+});

@@ -226,6 +226,42 @@ export async function sourceImages(
     }
   }
 
+  // ---- Fallbacks: a service row whose searches found NOTHING still gets
+  // options, per the operator's rule — first the client's OWN photos; a lead
+  // with no photos falls back to other services' leftover results. Keys are
+  // namespaced per row so the same client photo offered on two starved rows
+  // never collides with itself (or with Hero's own `client:` key). The
+  // default pick in the UI is a row's first candidate, so a starved row
+  // auto-selects a client image exactly as specified.
+  const clientPool = clientPhotoUrls.filter((u) => u && u.trim());
+  const takeLeftovers = (count: number): SourcedCandidate[] => {
+    const out: SourcedCandidate[] = [];
+    let idx = 0;
+    let missesInARow = 0;
+    while (out.length < count && pools.length > 0 && missesInARow < pools.length) {
+      const next = pools[idx % pools.length].shift();
+      idx++;
+      if (next) {
+        out.push(next);
+        missesInARow = 0;
+      } else {
+        missesInARow++;
+      }
+    }
+    return out;
+  };
+  services.forEach((row, i) => {
+    if (row.candidates.length > 0) return;
+    row.candidates =
+      clientPool.length > 0
+        ? clientPool.slice(0, ROW_CANDIDATE_COUNT).map((url, j) => ({
+            kind: "client" as const,
+            key: `client:row${i}:${j}:${url}`,
+            url,
+          }))
+        : takeLeftovers(ROW_CANDIDATE_COUNT);
+  });
+
   return {
     hero: hero.slice(0, HERO_TARGET),
     services,

@@ -1,10 +1,13 @@
 import { callForTask } from "@/lib/ai-tools/providers/run";
 import {
   SITE_BUILD_SYSTEM,
+  SITE_COMPONENTS_SYSTEM,
   buildPagePrompt,
   buildNewPagePrompt,
+  buildComponentsPrompt,
   type BusinessBrief,
   type SuppliedImage,
+  type SharedComponents,
 } from "./prompt";
 
 /**
@@ -84,9 +87,64 @@ export function extractHtml(raw: string, label: string): GenerateOutcome {
   return { ok: true, html: text.slice(start, end) };
 }
 
+/**
+ * Tolerant SOURCE extraction from a raw model reply — the components-file
+ * counterpart of `extractHtml`. A components file is usually JavaScript, so
+ * there is no doctype/closing-tag pair to anchor on; the only wrapping real
+ * models add around a source file is a markdown fence and/or a sentence of
+ * prose before it. When the reply contains a fence, the content between the
+ * FIRST fence opener and the LAST closing fence is the file (trailing
+ * commentary always sits after the last fence, a leading sentence before the
+ * first); with no fence at all, the whole trimmed reply is the file.
+ */
+export function extractFileSource(raw: string, label: string): GenerateOutcome {
+  const text = raw.trim();
+  if (!text) return { ok: false, error: `${label}: the reply was empty.` };
+
+  const firstFence = text.indexOf("```");
+  if (firstFence === -1) return { ok: true, html: text };
+
+  const openEnd = text.indexOf("\n", firstFence);
+  if (openEnd === -1) return { ok: false, error: `${label}: reply opened a code fence but had no content after it.` };
+  const lastFence = text.lastIndexOf("```");
+  const body = lastFence > openEnd ? text.slice(openEnd + 1, lastFence) : text.slice(openEnd + 1);
+  const trimmed = body.trim();
+  if (!trimmed) return { ok: false, error: `${label}: the reply's code fence was empty.` };
+  return { ok: true, html: trimmed };
+}
+
 function withInstruction(user: string, instruction?: string): string {
   const trimmed = instruction?.trim();
   return trimmed ? `${user}\n\nOPERATOR INSTRUCTION FOR THIS REGENERATION: ${trimmed}` : user;
+}
+
+/** Rewrite the template's shared components file (see SITE_COMPONENTS_SYSTEM).
+ *  Always the run's FIRST generation — its result feeds every page prompt. */
+export async function generateComponents(
+  deps: { aiCall: AiCall },
+  args: {
+    brief: BusinessBrief;
+    images: SuppliedImage[];
+    file: string;
+    source: string;
+    siteFiles: string[];
+    instruction?: string;
+  },
+): Promise<GenerateOutcome> {
+  const user = withInstruction(
+    buildComponentsPrompt({
+      brief: args.brief,
+      images: args.images,
+      file: args.file,
+      source: args.source,
+      siteFiles: args.siteFiles,
+    }),
+    args.instruction,
+  );
+  const { text } = await deps.aiCall(SITE_COMPONENTS_SYSTEM, user);
+  // An HTML components include still ends in </html>-less fragment markup, so
+  // the source extractor (fence/prose stripping only) is right for both kinds.
+  return extractFileSource(text, args.file);
 }
 
 /** Rewrite one existing template page for this business. */
@@ -98,6 +156,7 @@ export async function generatePage(
     pageFile: string;
     pageHtml: string;
     siteFiles: string[];
+    components?: SharedComponents;
     /** Operator's free-text steer for a regeneration. Appended to the prompt
      *  functions' own output — prompt.ts itself is never rewritten. */
     instruction?: string;
@@ -110,6 +169,7 @@ export async function generatePage(
       pageFile: args.pageFile,
       pageHtml: args.pageHtml,
       siteFiles: args.siteFiles,
+      components: args.components,
     }),
     args.instruction,
   );
@@ -127,6 +187,7 @@ export async function generateNewPage(
     newFile: string;
     references: { file: string; html: string }[];
     siteFiles: string[];
+    components?: SharedComponents;
     instruction?: string;
   },
 ): Promise<GenerateOutcome> {
@@ -138,6 +199,7 @@ export async function generateNewPage(
       newFile: args.newFile,
       references: args.references,
       siteFiles: args.siteFiles,
+      components: args.components,
     }),
     args.instruction,
   );

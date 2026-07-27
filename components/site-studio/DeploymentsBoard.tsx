@@ -5,7 +5,8 @@ import { ExternalLink, Globe, Loader2, Trash2 } from "lucide-react";
 import { EmptyPanel, PageHeader, Pill, type PillTone } from "@/components/common/Panel";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { useToast } from "@/components/common/Toast";
-import { iconBtnDanger } from "@/components/common/buttons";
+import { iconBtn, iconBtnDanger } from "@/components/common/buttons";
+import { TransferDeploymentModal } from "@/components/site-studio/TransferDeploymentModal";
 import { cn } from "@/lib/utils";
 
 export type DeploymentStatus = "live" | "taken_down" | "failed";
@@ -57,6 +58,8 @@ export function DeploymentsBoard() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterId>("live");
   const [confirming, setConfirming] = useState<DeploymentRow | null>(null);
+  const [confirmingRecord, setConfirmingRecord] = useState<DeploymentRow | null>(null);
+  const [transferRow, setTransferRow] = useState<DeploymentRow | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(
@@ -104,6 +107,27 @@ export function DeploymentsBoard() {
         kind: body.warning ? "info" : "success",
         title: body.warning ?? `${row.leads?.business_name ?? "Site"} was taken down`,
       });
+      await load();
+    } catch {
+      toast({ kind: "error", title: "Network error — try again" });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  /** Remove a NON-LIVE row from the board entirely — pure bookkeeping, the
+   *  route refuses it for live rows (`?mode=record`). */
+  async function deleteRecord(row: DeploymentRow) {
+    setConfirmingRecord(null);
+    setBusyId(row.id);
+    try {
+      const res = await fetch(`/api/site-studio/deployments/${row.id}?mode=record`, { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ kind: "error", title: body.error ?? "Delete failed" });
+        return;
+      }
+      toast({ kind: "success", title: "Deployment record deleted" });
       await load();
     } catch {
       toast({ kind: "error", title: "Network error — try again" });
@@ -188,13 +212,40 @@ export function DeploymentsBoard() {
                   </td>
                   <td className="px-3 py-2 text-right">
                     {row.status === "live" ? (
+                      <span className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          className={iconBtn}
+                          title="Transfer to custom domain"
+                          aria-label={`Transfer ${row.leads?.business_name ?? "site"} to a custom domain`}
+                          disabled={busyId !== null}
+                          onClick={() => setTransferRow(row)}
+                        >
+                          <Globe className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className={iconBtnDanger}
+                          title="Take down"
+                          aria-label={`Take down ${row.leads?.business_name ?? "site"}`}
+                          disabled={busyId !== null}
+                          onClick={() => setConfirming(row)}
+                        >
+                          {busyId === row.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                        </button>
+                      </span>
+                    ) : (
                       <button
                         type="button"
                         className={iconBtnDanger}
-                        title="Take down"
-                        aria-label={`Take down ${row.leads?.business_name ?? "site"}`}
+                        title="Delete record"
+                        aria-label={`Delete ${row.leads?.business_name ?? "site"} deployment record`}
                         disabled={busyId !== null}
-                        onClick={() => setConfirming(row)}
+                        onClick={() => setConfirmingRecord(row)}
                       >
                         {busyId === row.id ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -202,7 +253,7 @@ export function DeploymentsBoard() {
                           <Trash2 className="h-4 w-4" />
                         )}
                       </button>
-                    ) : null}
+                    )}
                   </td>
                 </tr>
               ))}
@@ -210,6 +261,50 @@ export function DeploymentsBoard() {
           </table>
         </div>
       )}
+
+      {transferRow ? (
+        <TransferDeploymentModal
+          deploymentId={transferRow.id}
+          businessName={transferRow.leads?.business_name ?? transferRow.subdomain}
+          onClose={() => setTransferRow(null)}
+          onDone={() => void load()}
+        />
+      ) : null}
+
+      {/* Record-delete confirm — closes only via its own buttons (house rule) */}
+      {confirmingRecord ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Delete this deployment record?"
+        >
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5 shadow-lg">
+            <h3 className="text-sm font-semibold text-text">
+              Delete {confirmingRecord.leads?.business_name ?? "this site"}&apos;s deployment record?
+            </h3>
+            <p className="mt-2 text-sm text-text-muted">
+              The row disappears from this board. Nothing on the server changes — this site is already {confirmingRecord.status === "failed" ? "failed" : "taken down"}.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmingRecord(null)}
+                className="rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void deleteRecord(confirmingRecord)}
+                className="rounded-md bg-dropped-fg px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+              >
+                Delete record
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Take-down confirm — closes only via its own buttons (house rule) */}
       {confirming ? (

@@ -1,17 +1,30 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, ShieldCheck, UploadCloud } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Download,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+  UploadCloud,
+} from "lucide-react";
 import { PageHeader, Pill, type PillTone } from "@/components/common/Panel";
 import { btnGhostSm, btnPrimary, btnSecondarySm } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
+import { encodePathSegments } from "@/lib/site-builder/preview";
 import { cn } from "@/lib/utils";
 
 type BuilderRunStatus = "queued" | "generating" | "review" | "approved" | "deployed" | "failed";
 
 interface PageState {
-  status: "ok" | "failed";
-  kind: "existing" | "new";
+  status: "pending" | "generating" | "ok" | "failed";
+  kind: "existing" | "new" | "component";
   name?: string;
   html?: string;
   error?: string;
@@ -42,15 +55,27 @@ const STATUS_PILL: Record<BuilderRunStatus, { tone: PillTone; label: string }> =
 
 const IN_FLIGHT = new Set<BuilderRunStatus>(["queued", "generating"]);
 
+const KIND_LABEL: Record<PageState["kind"], string> = {
+  existing: "existing page",
+  new: "new page",
+  component: "shared components",
+};
+
 /**
- * The run screen: per-page generation state, a page-by-page preview iframe,
- * "Regenerate this page" with an optional instruction, Approve, and Deploy.
- * Failed pages show their error and a Retry. There is no click-to-edit here
- * (unlike Site Studio's `RunPreview`) — a Site Builder page is the AI's own
- * complete, final HTML; the only lever the operator has is regenerating it,
- * optionally steered by a note.
+ * The run screen: LIVE per-page progress (the generate route persists every
+ * page-state change, this screen polls it), a page-by-page preview iframe,
+ * open-in-new-tab whole-site preview, zip download, "Regenerate this page"
+ * with an optional instruction, Approve, Deploy, and Delete. Failed pages
+ * show their error and a Retry.
+ *
+ * Generation itself is KICKED from here: a freshly-created run arrives
+ * "queued", and the first mount that sees it fires `POST .../generate`
+ * (idempotent — the route claims the run by CAS, extra kicks 409 silently).
+ * That is what makes the progress live: the operator lands here immediately
+ * after Create, watching pages finish one by one.
  */
 export function BuilderRun({ runId }: { runId: string }) {
+  const router = useRouter();
   const { toast } = useToast();
   const [run, setRun] = useState<BuilderRunRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +84,7 @@ export function BuilderRun({ runId }: { runId: string }) {
   const [regeneratingFile, setRegeneratingFile] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [deploying, setDeploying] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const mountedRef = useRef(false);
   useEffect(() => {
@@ -90,30 +116,62 @@ export function BuilderRun({ runId }: { runId: string }) {
     return () => { cancelled = true; };
   }, [loadRun]);
 
-  // Poll while the run is still in flight — a fresh POST /runs already
-  // resolves generation synchronously before this screen ever mounts, but a
-  // run can still be `queued`/`generating` here if the operator arrived via
-  // a bookmark or the runs list while another tab's create is still running.
+  // Kick generation for a queued run, exactly once per mount. The route is
+  // CAS-guarded, so a second tab (or a remount) kicking again just 409s.
+  // The fetch resolves only when generation FINISHES — its result is the
+  // final run row; until then the poll below keeps the screen live.
+  const kickedRef = useRef(false);
+  useEffect(() => {
+    if (!run || run.status !== "queued" || kickedRef.current) return;
+    kickedRef.current = true;
+    void fetch(`/api/site-builder/runs/${runId}/generate`, { method: "POST" })
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (res.ok && body.run && mountedRef.current) setRun(body.run as BuilderRunRow);
+      })
+      .catch(() => {});
+  }, [run, runId]);
+
+  // Poll while the run is in flight — this is what makes the per-page
+  // progress cards move as the generate route persists each state change.
   useEffect(() => {
     if (!run || !IN_FLIGHT.has(run.status)) return;
     const id = setInterval(() => {
       void loadRun().then((row) => { if (row && mountedRef.current) setRun(row); });
-    }, 3000);
+    }, 2000);
     return () => clearInterval(id);
   }, [run, loadRun]);
 
-  const pageFiles = useMemo(() => (run ? Object.keys(run.pages ?? {}).sort() : []), [run]);
-  const okFiles = useMemo(() => pageFiles.filter((f) => run?.pages[f]?.status === "ok"), [pageFiles, run]);
+  const pageFiles = useMemo(() => {
+    if (!run) return [];
+    // Components first (it generates first), then pages alphabetically.
+    return Object.keys(run.pages ?? {}).sort((a, b) => {
+      const ka = run.pages[a]?.kind === "component" ? 0 : 1;
+      const kb = run.pages[b]?.kind === "component" ? 0 : 1;
+      return ka - kb || a.localeCompare(b);
+    });
+  }, [run]);
+  const okFiles = useMemo(
+    () =>
+      pageFiles.filter(
+        (f) => run?.pages[f]?.status === "ok" && run.pages[f].kind !== "component" && /\.html?$/i.test(f),
+      ),
+    [pageFiles, run],
+  );
+
+  const progress = useMemo(() => {
+    if (!run) return null;
+    const states = pageFiles.map((f) => run.pages[f]);
+    const total = states.length;
+    if (total === 0) return null;
+    const done = states.filter((p) => p.status === "ok").length;
+    const failed = states.filter((p) => p.status === "failed").length;
+    const generating = pageFiles.filter((f) => run.pages[f].status === "generating");
+    return { total, done, failed, generating };
+  }, [run, pageFiles]);
 
   /**
    * The previewed page is DERIVED, not stored-then-corrected by an effect.
-   *
-   * It used to be plain state that an effect filled in on the next tick, which
-   * meant the preview and the regenerate control were briefly absent even
-   * though the run was fully loaded and had a good page to show. The operator
-   * saw a flash of nothing; a test querying right after render saw nothing at
-   * all. Deriving removes the gap entirely: the moment a run with a usable
-   * page is in hand, there is a selected page.
    *
    * `picked` holds only an EXPLICIT choice (a tab click) and is ignored the
    * moment that page stops being usable — e.g. the operator regenerates it and
@@ -178,6 +236,20 @@ export function BuilderRun({ runId }: { runId: string }) {
     }
   }
 
+  async function deleteRun() {
+    if (!confirm("Delete this run and its packaged zip? A deployed site stays live — take it down from the Deployments board.")) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/site-builder/runs/${runId}`, { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { toast({ kind: "error", title: body.error ?? "Could not delete this run" }); return; }
+      toast({ kind: "success", title: "Run deleted" });
+      router.push("/ai-tools/site-builder/runs");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (loading || !run) {
     return (
       <div className="flex items-center gap-2 py-12 text-sm text-text-muted">
@@ -188,8 +260,9 @@ export function BuilderRun({ runId }: { runId: string }) {
 
   const pill = STATUS_PILL[run.status];
   const gate = run.status === "review" || run.status === "approved";
+  const previewRoot = `/api/site-builder/runs/${runId}/preview/`;
   const previewSrc = selectedFile
-    ? `/api/site-builder/runs/${runId}/preview?file=${encodeURIComponent(selectedFile)}&v=${encodeURIComponent(run.updated_at)}`
+    ? `${previewRoot}${encodePathSegments(selectedFile)}?v=${encodeURIComponent(run.updated_at)}`
     : null;
 
   return (
@@ -204,6 +277,16 @@ export function BuilderRun({ runId }: { runId: string }) {
           </a>
         ) : null}
         <div className="ml-auto flex items-center gap-2">
+          {okFiles.length > 0 ? (
+            <a href={previewRoot} target="_blank" rel="noreferrer" className={btnSecondarySm}>
+              <ExternalLink className="h-3.5 w-3.5" /> Open preview
+            </a>
+          ) : null}
+          {run.output_path ? (
+            <a href={`/api/site-builder/runs/${runId}/download`} className={btnSecondarySm}>
+              <Download className="h-3.5 w-3.5" /> Download zip
+            </a>
+          ) : null}
           {run.status === "review" ? (
             <button className={btnPrimary} onClick={() => void approve()} disabled={approving}>
               {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
@@ -216,6 +299,15 @@ export function BuilderRun({ runId }: { runId: string }) {
               Deploy
             </button>
           ) : null}
+          <button
+            className={btnGhostSm}
+            onClick={() => void deleteRun()}
+            disabled={deleting || IN_FLIGHT.has(run.status)}
+            title="Delete this run"
+          >
+            {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            Delete
+          </button>
         </div>
       </div>
 
@@ -228,12 +320,22 @@ export function BuilderRun({ runId }: { runId: string }) {
       ) : null}
 
       {IN_FLIGHT.has(run.status) ? (
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-surface p-4 text-sm text-text-muted">
-          <Loader2 className="h-4 w-4 animate-spin" /> Generating this site…
+        <div className="rounded-lg border border-border bg-surface p-4 text-sm text-text-muted">
+          <p className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {progress
+              ? `Generating — ${progress.done} of ${progress.total} done${progress.failed ? `, ${progress.failed} failed` : ""}.`
+              : "Starting this site's generation…"}
+          </p>
+          {progress && progress.generating.length > 0 ? (
+            <p className="mt-1 text-xs text-text-faint">
+              Writing now: {progress.generating.map((f) => run.pages[f]?.name ?? f).join(", ")}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
-      {/* Per-page state */}
+      {/* Per-page state — live during generation, the review checklist after. */}
       {pageFiles.length > 0 ? (
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {pageFiles.map((file) => {
@@ -245,11 +347,15 @@ export function BuilderRun({ runId }: { runId: string }) {
                   <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">{p.name ?? file}</span>
                   {p.status === "ok" ? (
                     <Pill tone="ready" icon={CheckCircle2}>OK</Pill>
-                  ) : (
+                  ) : p.status === "failed" ? (
                     <Pill tone="dropped" icon={AlertTriangle}>Failed</Pill>
+                  ) : p.status === "generating" ? (
+                    <Pill tone="accent" icon={Loader2}>Writing…</Pill>
+                  ) : (
+                    <Pill tone="neutral" icon={Clock}>Waiting</Pill>
                   )}
                 </div>
-                <p className="truncate text-xs text-text-faint">{file} · {p.kind === "new" ? "new page" : "existing page"}</p>
+                <p className="truncate text-xs text-text-faint">{file} · {KIND_LABEL[p.kind]}</p>
                 {p.status === "failed" ? (
                   <div className="mt-2 rounded-md border border-dropped-bg bg-dropped-bg/30 p-2 text-xs text-dropped-fg">
                     <p className="mb-1">{p.error ?? "Generation failed."}</p>
@@ -291,7 +397,10 @@ export function BuilderRun({ runId }: { runId: string }) {
             style={{ width: "100%", height: "60vh" }}
           >
             {previewSrc ? (
-              <iframe title="Site preview" src={previewSrc} sandbox="" className="h-full w-full" />
+              // allow-scripts (mirrored by the response's CSP sandbox, see the
+              // preview route) so the template's components.js can render the
+              // shared header/footer — origin stays opaque, so no LMS reach.
+              <iframe title="Site preview" src={previewSrc} sandbox="allow-scripts" className="h-full w-full" />
             ) : null}
           </div>
 

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { extractHtml, generatePage, generateNewPage } from "@/lib/site-builder/generate";
+import { extractHtml, extractFileSource, generatePage, generateNewPage, generateComponents } from "@/lib/site-builder/generate";
 import type { BusinessBrief } from "@/lib/site-builder/prompt";
 
 const brief: BusinessBrief = {
@@ -82,6 +82,54 @@ describe("extractHtml", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toMatch(/no HTML/i);
+  });
+});
+
+describe("extractFileSource", () => {
+  const SOURCE = "const NAME = 'Acme';\nexport { NAME };";
+
+  it("returns a bare source reply as-is, trimmed", () => {
+    const r = extractFileSource(`\n${SOURCE}\n`, "components.js");
+    expect(r).toEqual({ ok: true, html: SOURCE });
+  });
+
+  it("strips a markdown fence, plus prose before it and commentary after it", () => {
+    const raw = `Here is the rewritten file:\n\n\`\`\`js\n${SOURCE}\n\`\`\`\n\nLet me know if you'd like changes!`;
+    const r = extractFileSource(raw, "components.js");
+    expect(r).toEqual({ ok: true, html: SOURCE });
+  });
+
+  it("fails on an empty reply with the file's name in the error", () => {
+    const r = extractFileSource("   ", "components.js");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("components.js");
+  });
+});
+
+describe("generateComponents", () => {
+  const brief2: BusinessBrief = { business_name: "Acme Plumbing", services: ["Drains"], service_areas: ["Denver"] };
+
+  it("sends the components prompt (site pages included) and returns the extracted source", async () => {
+    let seenSystem = "";
+    let seenUser = "";
+    const call = async (system: string, user: string) => {
+      seenSystem = system;
+      seenUser = user;
+      return { text: "const NAME = 'Acme Plumbing';" };
+    };
+    const r = await generateComponents({ aiCall: call }, {
+      brief: brief2,
+      images: [],
+      file: "js/components.js",
+      source: "const NAME = 'Demo Kitchens';",
+      siteFiles: ["index.html", "about.html"],
+    });
+    expect(r).toEqual({ ok: true, html: "const NAME = 'Acme Plumbing';" });
+    expect(seenSystem).toContain("shared-components file");
+    expect(seenUser).toContain("js/components.js");
+    expect(seenUser).toContain("Demo Kitchens");
+    expect(seenUser).toContain("index.html, about.html");
   });
 });
 

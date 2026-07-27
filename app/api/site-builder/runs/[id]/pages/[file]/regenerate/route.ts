@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { loadTemplateBundle } from "@/lib/site-builder/templates";
 import { productionSiteBuildCall } from "@/lib/site-builder/generate";
-import { regeneratePage, buildBrief, assembleZip, outputPathFor, BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
+import { regeneratePage, buildBrief, assembleZip, findComponentsFile, outputPathFor, BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
 export const runtime = "nodejs";
@@ -56,7 +56,17 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const brief = buildBrief(lead as Record<string, unknown>);
   const images = Array.isArray(run.images) ? (run.images as SuppliedImage[]) : [];
-  const siteFiles = Object.keys(pages);
+  // The site's PAGES — the components entry is not a page and must not
+  // appear in "link only to these".
+  const siteFiles = Object.keys(pages).filter((f) => pages[f].kind !== "component");
+
+  // The run's current rewritten components file, as page-prompt context —
+  // same context the original generation gave every page.
+  const componentsEntry = Object.entries(pages).find(([, p]) => p.kind === "component");
+  const components =
+    componentsEntry && componentsEntry[1].status === "ok" && componentsEntry[1].html !== undefined
+      ? { file: componentsEntry[0], source: componentsEntry[1].html }
+      : undefined;
 
   const outcome = await regeneratePage({
     aiCall: productionSiteBuildCall,
@@ -67,6 +77,7 @@ export async function POST(req: Request, ctx: Ctx) {
     file,
     kind: current.kind,
     name: current.name,
+    components,
     instruction,
   });
 
@@ -77,7 +88,16 @@ export async function POST(req: Request, ctx: Ctx) {
       : { status: "failed", kind: current.kind, name: current.name, error: outcome.error },
   };
 
-  const zipBytes = assembleZip(bundle.assets, newPages);
+  // Same fallback runSite applies on assembly: an HTML components file that
+  // is not currently "ok" ships as the template's original (it is a page
+  // file, so it isn't in `assets`, and every generated page fetches it).
+  const original = findComponentsFile(bundle);
+  const baseAssets = { ...bundle.assets };
+  if (original && bundle.pages[original.file] !== undefined && newPages[original.file]?.status !== "ok") {
+    baseAssets[original.file] = new TextEncoder().encode(original.source);
+  }
+
+  const zipBytes = assembleZip(baseAssets, newPages);
   const outputPath = outputPathFor(id);
   const { error: upErr } = await admin.storage
     .from(BUILDER_SITES_BUCKET)

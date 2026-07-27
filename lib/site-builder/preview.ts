@@ -32,12 +32,21 @@ function normalizeRef(value: string): string {
   return bare.replace(/^(\.\/)+/, "").replace(/^\/+/, "");
 }
 
-export function rewriteAssetRefs(html: string, assetFiles: string[], previewAssetBase: string): string {
-  if (assetFiles.length === 0) return html;
-  const known = new Set(assetFiles);
+/** Encode a zip path for use inside a URL path, PER SEGMENT — the slashes
+ *  must survive as real path separators (the preview route is a catch-all
+ *  over path segments), while each segment's own reserved characters are
+ *  escaped. A whole-string encodeURIComponent would fold "css/style.css"
+ *  into ONE opaque segment and break the route match. */
+export function encodePathSegments(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+export function rewriteAssetRefs(html: string, knownFiles: string[], previewBase: string): string {
+  if (knownFiles.length === 0) return html;
+  const known = new Set(knownFiles);
   return html.replace(ATTR_RE, (whole, attr: string, quote: string, value: string) => {
     const normalized = normalizeRef(value);
     if (!known.has(normalized)) return whole;
-    return `${attr}=${quote}${previewAssetBase}${encodeURIComponent(normalized)}${quote}`;
+    return `${attr}=${quote}${previewBase}${encodePathSegments(normalized)}${quote}`;
   });
 }

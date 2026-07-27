@@ -1,7 +1,17 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
 import { unzipToMap } from "@/lib/site-studio/zip";
-import { buildBrief, pickReferencePages, runSite, regeneratePage, assembleZip, type PageState } from "@/lib/site-builder/run";
+import {
+  buildBrief,
+  pickReferencePages,
+  runSite,
+  regeneratePage,
+  assembleZip,
+  selectPages,
+  matchTemplatePage,
+  findComponentsFile,
+  type PageState,
+} from "@/lib/site-builder/run";
 import type { AiCall } from "@/lib/site-builder/generate";
 import type { TemplateBundle } from "@/lib/site-builder/templates";
 
@@ -97,6 +107,74 @@ describe("pickReferencePages", () => {
   });
 });
 
+describe("matchTemplatePage", () => {
+  const files = ["index.html", "about.html", "contact-us.html", "services.html", "service-areas.html"];
+
+  it("matches exactly by slug", () => {
+    expect(matchTemplatePage("Services", files)).toBe("services.html");
+    expect(matchTemplatePage("Service Areas", files)).toBe("service-areas.html");
+  });
+
+  it("maps every home-ish name to the index page", () => {
+    for (const name of ["Home", "Homepage", "Landing Page", "Main"]) {
+      expect(matchTemplatePage(name, files)).toBe("index.html");
+    }
+  });
+
+  it("matches forgivingly across extra tokens, both directions", () => {
+    expect(matchTemplatePage("About Us", files)).toBe("about.html");
+    expect(matchTemplatePage("Contact", files)).toBe("contact-us.html");
+  });
+
+  it("returns null when the template has no page of that type", () => {
+    expect(matchTemplatePage("Pricing", files)).toBeNull();
+    expect(matchTemplatePage("Reviews", files)).toBeNull();
+  });
+});
+
+describe("selectPages", () => {
+  const files = ["index.html", "about.html", "services.html", "gallery.html", "contact.html"];
+
+  it("an empty request means the whole template", () => {
+    expect(selectPages(files, [])).toEqual({ existing: [...files], newPages: [] });
+  });
+
+  it("builds ONLY the requested pages — plus the entry page, always", () => {
+    const plan = selectPages(files, ["About Us", "Contact"]);
+    expect(plan.existing).toEqual(["index.html", "about.html", "contact.html"]);
+    expect(plan.newPages).toEqual([]);
+  });
+
+  it("turns a requested page the template lacks into a designed new page", () => {
+    const plan = selectPages(files, ["Pricing"]);
+    expect(plan.existing).toEqual(["index.html"]);
+    expect(plan.newPages).toEqual([{ name: "Pricing", file: "pricing.html" }]);
+  });
+
+  it("two requested names resolving to the same template page build it once", () => {
+    const plan = selectPages(files, ["Home", "Homepage", "About"]);
+    expect(plan.existing).toEqual(["index.html", "about.html"]);
+    expect(plan.newPages).toEqual([]);
+  });
+});
+
+describe("findComponentsFile", () => {
+  it("finds a components.js among the assets", () => {
+    const tpl = bundle({ "index.html": "<html></html>" }, { "js/components.js": "// demo header" });
+    expect(findComponentsFile(tpl)).toEqual({ file: "js/components.js", source: "// demo header" });
+  });
+
+  it("finds a components.html among the pages", () => {
+    const tpl = bundle({ "index.html": "<html></html>", "components.html": "<header>Demo Co</header>" });
+    expect(findComponentsFile(tpl)).toEqual({ file: "components.html", source: "<header>Demo Co</header>" });
+  });
+
+  it("returns null when the template has none", () => {
+    const tpl = bundle({ "index.html": "<html></html>" }, { "css/style.css": "body{}" });
+    expect(findComponentsFile(tpl)).toBeNull();
+  });
+});
+
 describe("runSite", () => {
   const brief = { business_name: "Acme Plumbing", services: [], service_areas: [] };
 
@@ -176,6 +254,125 @@ describe("runSite", () => {
     expect(result.pages["index.html"].status).toBe("failed");
     expect(result.pages["about.html"].status).toBe("failed");
   });
+
+  it("generates ONLY the requested pages — unrequested template pages never ship", async () => {
+    const tpl = bundle(
+      {
+        "index.html": "<html>home</html>",
+        "about.html": "<html>about</html>",
+        "services.html": "<html>services</html>",
+        "gallery.html": "<html>gallery</html>",
+      },
+      { "css/style.css": "body{}" },
+    );
+    const call: AiCall = async () => ({ text: okHtml("PAGE") });
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: ["About Us"] });
+
+    expect(result.ok).toBe(true);
+    expect(Object.keys(result.pages).sort()).toEqual(["about.html", "index.html"]);
+    const files = unzipToMap(result.zipBytes!);
+    expect(files["index.html"]).toBeDefined();
+    expect(files["about.html"]).toBeDefined();
+    expect(files["services.html"]).toBeUndefined();
+    expect(files["gallery.html"]).toBeUndefined();
+    expect(files["css/style.css"]).toBeDefined();
+  });
+
+  it("rewrites the components file FIRST and hands the result to every page prompt", async () => {
+    const tpl = bundle(
+      { "index.html": "<html>home</html>", "about.html": "<html>about</html>" },
+      { "js/components.js": "const NAME = 'Demo Kitchens';" },
+    );
+    const calls: { system: string; user: string }[] = [];
+    const call: AiCall = async (system, user) => {
+      calls.push({ system, user });
+      if (system.includes("shared-components file")) return { text: "const NAME = 'Acme Plumbing';" };
+      return { text: okHtml("PAGE") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.ok).toBe(true);
+    // components strictly first
+    expect(calls[0].system).toContain("shared-components file");
+    expect(calls[0].user).toContain("js/components.js");
+    // every later (page) prompt carries the REWRITTEN components content
+    for (const c of calls.slice(1)) {
+      expect(c.user).toContain("SHARED COMPONENTS FILE — js/components.js");
+      expect(c.user).toContain("const NAME = 'Acme Plumbing';");
+    }
+    // the rewritten file replaces the template's copy in the zip
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["js/components.js"])).toBe("const NAME = 'Acme Plumbing';");
+    expect(result.pages["js/components.js"]).toMatchObject({ status: "ok", kind: "component" });
+  });
+
+  it("a failed components rewrite never kills the run — pages still generate, the template's copy still ships", async () => {
+    const tpl = bundle(
+      { "index.html": "<html>home</html>" },
+      { "components.js": "const NAME = 'Demo Kitchens';" },
+    );
+    const call: AiCall = async (system) => {
+      if (system.includes("shared-components file")) return { text: "" }; // empty reply -> failure
+      return { text: okHtml("PAGE") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["components.js"].status).toBe("failed");
+    expect(result.pages["index.html"].status).toBe("ok");
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["components.js"])).toBe("const NAME = 'Demo Kitchens';");
+  });
+
+  it("a components.html is the components file, never a page — and ships rewritten", async () => {
+    const tpl = bundle({
+      "index.html": "<html>home</html>",
+      "components.html": "<header>Demo Kitchens</header>",
+    });
+    const call: AiCall = async (system) => {
+      if (system.includes("shared-components file")) return { text: "<header>Acme Plumbing</header>" };
+      return { text: okHtml("PAGE") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["components.html"]).toMatchObject({ status: "ok", kind: "component" });
+    // it is not treated as a site page: requesting nothing built index only + the component
+    expect(Object.keys(result.pages).sort()).toEqual(["components.html", "index.html"]);
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["components.html"])).toBe("<header>Acme Plumbing</header>");
+  });
+
+  it("reports live progress: everything pending first, components before pages, all terminal at the end", async () => {
+    const tpl = bundle(
+      { "index.html": "<html>home</html>", "about.html": "<html>about</html>" },
+      { "components.js": "// demo" },
+    );
+    const snapshots: Record<string, PageState["status"]>[] = [];
+    const call: AiCall = async (system) =>
+      system.includes("shared-components file") ? { text: "// rewritten" } : { text: okHtml("PAGE") };
+    await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: [],
+      onProgress: (pages) => {
+        snapshots.push(Object.fromEntries(Object.entries(pages).map(([f, p]) => [f, p.status])));
+      },
+    });
+
+    // first frame: the full plan, all pending
+    expect(snapshots[0]).toEqual({ "components.js": "pending", "index.html": "pending", "about.html": "pending" });
+    // components generates while every page is still pending
+    const componentsRunning = snapshots.find((s) => s["components.js"] === "generating");
+    expect(componentsRunning).toBeDefined();
+    expect(componentsRunning!["index.html"]).toBe("pending");
+    expect(componentsRunning!["about.html"]).toBe("pending");
+    // last frame: everything terminal
+    const last = snapshots[snapshots.length - 1];
+    expect(Object.values(last).every((s) => s === "ok" || s === "failed")).toBe(true);
+  });
 });
 
 describe("regeneratePage", () => {
@@ -223,6 +420,55 @@ describe("regeneratePage", () => {
     expect(outcome.ok).toBe(true);
     expect(seenUser).toContain("About Us");
     expect(seenUser).toContain("DESIGN REFERENCE");
+  });
+
+  it("regenerates the components file from the template's own original source", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "js/components.js": "const NAME = 'Demo Kitchens';" });
+    let seenSystem = "";
+    let seenUser = "";
+    const call: AiCall = async (s, u) => {
+      seenSystem = s;
+      seenUser = u;
+      return { text: "const NAME = 'Acme Plumbing';" };
+    };
+    const outcome = await regeneratePage({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      siteFiles: ["index.html"],
+      file: "js/components.js",
+      kind: "component",
+      instruction: "keep the booking form two-field",
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.html).toBe("const NAME = 'Acme Plumbing';");
+    expect(seenSystem).toContain("shared-components file");
+    expect(seenUser).toContain("Demo Kitchens");
+    expect(seenUser).toContain("keep the booking form two-field");
+  });
+
+  it("passes the run's rewritten components as context when regenerating a page", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "js/components.js": "// demo" });
+    let seenUser = "";
+    const call: AiCall = async (_s, u) => {
+      seenUser = u;
+      return { text: okHtml("REGENERATED") };
+    };
+    const outcome = await regeneratePage({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      siteFiles: ["index.html"],
+      file: "index.html",
+      kind: "existing",
+      components: { file: "js/components.js", source: "// rewritten for Acme" },
+    });
+    expect(outcome.ok).toBe(true);
+    expect(seenUser).toContain("SHARED COMPONENTS FILE — js/components.js");
+    expect(seenUser).toContain("// rewritten for Acme");
   });
 
   it("reports an actionable error for an existing page no longer in the template", async () => {

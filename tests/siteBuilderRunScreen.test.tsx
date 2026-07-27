@@ -2,6 +2,10 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { BuilderRun } from "@/components/site-builder/BuilderRun";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 /** Mount smoke tests, same idiom as tests/siteStudioBoard.test.tsx. */
 
 function runFixture(status: "review" | "approved" | "deployed") {
@@ -64,5 +68,36 @@ describe("BuilderRun", () => {
     expect(await screen.findByText("https://ace-plumbing.example.com")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^approve$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^deploy$/i })).not.toBeInTheDocument();
+  });
+
+  it("shows LIVE per-page progress while generating: done, writing-now, and waiting states", async () => {
+    const run = {
+      ...runFixture("review"),
+      status: "generating",
+      pages: {
+        "js/components.js": { status: "ok", kind: "component", name: "Shared components", html: "// rewritten" },
+        "index.html": { status: "generating", kind: "existing" },
+        "about.html": { status: "pending", kind: "existing" },
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ run }) } as Response)));
+    render(<BuilderRun runId="run-1" />);
+
+    expect(await screen.findByText(/Generating — 1 of 3 done/)).toBeInTheDocument();
+    expect(screen.getByText(/Writing now: index.html/)).toBeInTheDocument();
+    expect(screen.getByText(/^OK$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Writing…$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Waiting$/)).toBeInTheDocument();
+    expect(screen.getByText(/shared components/)).toBeInTheDocument();
+  });
+
+  it("offers Open preview and Download zip once pages exist", async () => {
+    stubFetch(runFixture("approved"));
+    render(<BuilderRun runId="run-1" />);
+    const preview = await screen.findByRole("link", { name: /open preview/i });
+    expect(preview).toHaveAttribute("href", "/api/site-builder/runs/run-1/preview/");
+    expect(preview).toHaveAttribute("target", "_blank");
+    const download = screen.getByRole("link", { name: /download zip/i });
+    expect(download).toHaveAttribute("href", "/api/site-builder/runs/run-1/download");
   });
 });

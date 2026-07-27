@@ -1,8 +1,8 @@
 import { zipFromMap } from "@/lib/site-studio/zip";
 import { buildDossier } from "@/lib/site-studio/run/dossier";
-import { generatePage, generateNewPage, type AiCall } from "./generate";
+import { generatePage, generateNewPage, generateComponents, type AiCall } from "./generate";
 import type { TemplateBundle } from "./templates";
-import type { BusinessBrief, SuppliedImage } from "./prompt";
+import type { BusinessBrief, SuppliedImage, SharedComponents } from "./prompt";
 
 export const BUILDER_SITES_BUCKET = "builder-sites";
 
@@ -62,6 +62,144 @@ function fileNameFor(pageName: string, taken: Set<string>): string {
   return file;
 }
 
+/** The names a lead uses for the entry page — all of them map to the
+ *  template's index page rather than spawning a "home.html". */
+const HOME_NAMES = new Set(["home", "homepage", "home-page", "index", "main", "main-page", "landing", "landing-page"]);
+
+const isIndexFile = (f: string) => /(^|\/)index\.html?$/i.test(f);
+
+/** The slug of a page FILE — its basename without the extension. */
+function fileSlug(file: string): string {
+  const base = file.split("/").pop() ?? file;
+  return slugify(base.replace(/\.html?$/i, ""));
+}
+
+/** Slug tokens, plural-insensitive ("services" and "service" compare equal;
+ *  short tokens like "us"/"gas" are left alone so they don't degrade). */
+function tokensOf(slug: string): Set<string> {
+  return new Set(
+    slug
+      .split("-")
+      .filter(Boolean)
+      .map((t) => (t.length > 3 ? t.replace(/s$/, "") : t)),
+  );
+}
+
+const isSubset = (a: Set<string>, b: Set<string>) => [...a].every((t) => b.has(t));
+
+/**
+ * The template page a lead-requested page name refers to, or null when the
+ * template has no page of that type (the caller then designs it as a NEW
+ * page). Matching is deliberately forgiving — a lead writes "About Us", a
+ * template ships "about.html" — but every miss is safe: an unmatched name
+ * just becomes a designed page, so a false negative costs one extra AI call,
+ * never a wrong site. Preference order:
+ *   1. exact slug match ("about-us" = "about-us")
+ *   2. any home-ish name → the index page
+ *   3. token-subset match, plural-insensitive, fewest leftover tokens wins
+ *      ("about-us" ⊇ "about", "contact" ⊆ "contact-us")
+ */
+export function matchTemplatePage(requestedName: string, pageFiles: string[]): string | null {
+  const want = slugify(requestedName);
+  if (!want) return null;
+
+  const files = pageFiles.map((f) => ({ f, slug: fileSlug(f) }));
+  const exact = files.find((x) => x.slug === want);
+  if (exact) return exact.f;
+
+  if (HOME_NAMES.has(want)) {
+    const home = files.find((x) => isIndexFile(x.f)) ?? files.find((x) => HOME_NAMES.has(x.slug));
+    if (home) return home.f;
+  }
+
+  const wantTokens = tokensOf(want);
+  let best: string | null = null;
+  let bestExtra = Infinity;
+  for (const x of files) {
+    const haveTokens = tokensOf(x.slug);
+    if (!isSubset(wantTokens, haveTokens) && !isSubset(haveTokens, wantTokens)) continue;
+    const extra = Math.abs(haveTokens.size - wantTokens.size);
+    if (extra < bestExtra) {
+      best = x.f;
+      bestExtra = extra;
+    }
+  }
+  return best;
+}
+
+export interface PagePlan {
+  /** Template pages to rewrite — ONLY these ship; unrequested template pages
+   *  are never generated and never appear in the output zip. */
+  existing: string[];
+  /** Requested pages the template lacks — designed from reference pages. */
+  newPages: { name: string; file: string }[];
+}
+
+/**
+ * Which pages this site actually gets, from the lead's own `specify_pages`.
+ *
+ * A lead that names pages gets EXACTLY those (plus the entry page — a site
+ * without an index is undeployable, so the template's home page is always
+ * built even when the lead forgot to list it). Each requested name is
+ * matched against the template (see `matchTemplatePage`); a name the
+ * template has no page for becomes a designed-from-scratch page. A lead
+ * that names nothing gets the whole template, unchanged behaviour.
+ */
+export function selectPages(pageFiles: string[], requestedPages: string[]): PagePlan {
+  const requested = requestedPages.map((s) => s.trim()).filter(Boolean);
+  if (requested.length === 0) return { existing: [...pageFiles], newPages: [] };
+
+  const existing: string[] = [];
+  const claimed = new Set<string>();
+  const newPages: { name: string; file: string }[] = [];
+  const taken = new Set(pageFiles);
+
+  for (const name of requested) {
+    const match = matchTemplatePage(name, pageFiles);
+    if (match) {
+      // Two requested names resolving to the same template page ("Home" and
+      // "Homepage") build it once — never a duplicate, never a forced clone.
+      if (!claimed.has(match)) {
+        claimed.add(match);
+        existing.push(match);
+      }
+      continue;
+    }
+    const file = fileNameFor(name, taken);
+    taken.add(file);
+    newPages.push({ name, file });
+  }
+
+  if (pageFiles.length > 0) {
+    const home = pageFiles.find(isIndexFile) ?? [...pageFiles].sort()[0];
+    if (!claimed.has(home)) {
+      claimed.add(home);
+      existing.unshift(home);
+    }
+  }
+
+  return { existing, newPages };
+}
+
+/** The template's shared-components file — the `components.js` (or
+ *  `components.html`) that renders the header/nav/footer/booking form every
+ *  page shares. Detected by basename, the same convention the old template
+ *  engine's manifest used (`lib/template-engine/manifest.ts`). */
+export interface ComponentsSource {
+  file: string;
+  source: string;
+}
+
+const COMPONENTS_RE = /(^|\/)components\.(js|html?)$/i;
+
+export function findComponentsFile(template: TemplateBundle): ComponentsSource | null {
+  const pageHit = template.pageFiles.find((f) => COMPONENTS_RE.test(f));
+  if (pageHit !== undefined) return { file: pageHit, source: template.pages[pageHit] };
+  const assetHit = template.assetFiles.find((f) => COMPONENTS_RE.test(f));
+  if (assetHit !== undefined) return { file: assetHit, source: new TextDecoder().decode(template.assets[assetHit]) };
+  return null;
+}
+
 /**
  * Pick 2–3 existing pages as design references for a new page: the home
  * page plus the one or two OTHER pages most different in size from it — a
@@ -82,19 +220,27 @@ export function pickReferencePages(pageFiles: string[], pages: Record<string, st
 }
 
 export interface PageState {
-  status: "ok" | "failed";
-  kind: "existing" | "new";
-  /** The human page name ("About Us") — present for kind "new" only, needed
-   *  to reconstruct buildNewPagePrompt on a later regenerate. */
+  /** "pending" and "generating" exist so a run's row can carry LIVE progress
+   *  while generation is still going — the run screen polls the row and shows
+   *  exactly which pages are done, running, or still queued. */
+  status: "pending" | "generating" | "ok" | "failed";
+  kind: "existing" | "new" | "component";
+  /** The human page name ("About Us") — present for kind "new" (needed to
+   *  reconstruct buildNewPagePrompt on a later regenerate) and for kind
+   *  "component" (a display label). */
   name?: string;
+  /** For kind "component" this holds the rewritten file SOURCE (usually
+   *  JavaScript) — the field name is historical, the content is whatever the
+   *  file is. */
   html?: string;
   error?: string;
 }
 
 /** Assemble the output zip from whichever pages currently succeeded, plus
- *  every template asset untouched. A failed page is simply absent from the
- *  zip until the operator regenerates it — no placeholder, no fallback to
- *  the template's own (wrong-business) copy of that page. */
+ *  every template asset untouched. A successful "component" entry overrides
+ *  the template's own copy of that file (same key). A failed page is simply
+ *  absent from the zip until the operator regenerates it — no placeholder,
+ *  no fallback to the template's own (wrong-business) copy of that page. */
 export function assembleZip(assets: Record<string, Uint8Array>, pages: Record<string, PageState>): Uint8Array {
   const files: Record<string, Uint8Array> = { ...assets };
   const encoder = new TextEncoder();
@@ -109,90 +255,136 @@ export interface RunSiteArgs {
   brief: BusinessBrief;
   images: SuppliedImage[];
   template: TemplateBundle;
-  /** The lead's specify_pages — page names the lead asked for. Any that the
-   *  template doesn't already have (by slug) are designed as new pages. */
+  /** The lead's specify_pages — the ONLY pages this site gets (plus the
+   *  entry page). Empty means "the whole template" — see `selectPages`. */
   requestedPages: string[];
+  /** Called after every page-state change with the CURRENT pages map — the
+   *  live-progress seam. The caller persists it (serialised however it
+   *  likes); runSite awaits each call so persistence can't fall behind. */
+  onProgress?: (pages: Record<string, PageState>) => void | Promise<void>;
 }
 
 export interface RunSiteResult {
-  /** True when at least one page generated successfully. False only when
-   *  every page — existing and new — failed. */
+  /** True when at least one real page generated successfully (a rewritten
+   *  components file alone is not a site). */
   ok: boolean;
   pages: Record<string, PageState>;
   zipBytes?: Uint8Array;
 }
 
 /**
- * Generate a whole site: every template page rewritten in parallel, plus
- * any lead-requested pages the template lacks (designed from reference
- * pages), assets copied through untouched. A per-page failure is recorded
- * in `pages` and never kills the run — only when EVERY page fails does the
- * run itself fail.
+ * Generate a whole site, components first:
+ *
+ *  1. The shared-components file (when the template has one) is rewritten
+ *     BEFORE anything else — it renders the header/nav/footer/booking form
+ *     every page shares, so its rewritten content is context for every page
+ *     prompt. Its failure never kills the run: pages still generate (without
+ *     the context) and the operator can regenerate it alone.
+ *  2. Only the lead-requested pages (see `selectPages`) are then generated in
+ *     parallel — template pages the lead didn't ask for are never built and
+ *     never ship. Requested pages the template lacks are designed from
+ *     reference pages.
+ *
+ * A per-page failure is recorded in `pages` and never kills the run — only
+ * when EVERY page fails does the run itself fail.
  */
 export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
-  const { aiCall, brief, images, template, requestedPages } = args;
+  const { aiCall, brief, images, template, requestedPages, onProgress } = args;
 
-  const existingSlugs = new Set(template.pageFiles.map((f) => slugify(f.replace(/\.html?$/i, ""))));
-  const taken = new Set(template.pageFiles);
-  const newPages: { name: string; file: string }[] = [];
-  for (const name of requestedPages) {
-    const slug = slugify(name);
-    if (!slug || existingSlugs.has(slug)) continue;
-    const file = fileNameFor(name, taken);
-    taken.add(file);
-    newPages.push({ name, file });
+  const components = findComponentsFile(template);
+  // A components.html is a page FILE but never a page of the site — it must
+  // not be selectable, and must not count toward "did any page succeed".
+  const selectablePages = template.pageFiles.filter((f) => f !== components?.file);
+  const plan = selectPages(selectablePages, requestedPages);
+  const siteFiles = [...plan.existing, ...plan.newPages.map((p) => p.file)];
+
+  const pages: Record<string, PageState> = {};
+  if (components) pages[components.file] = { status: "pending", kind: "component", name: "Shared components" };
+  for (const f of plan.existing) pages[f] = { status: "pending", kind: "existing" };
+  for (const p of plan.newPages) pages[p.file] = { status: "pending", kind: "new", name: p.name };
+
+  const emit = async () => {
+    if (onProgress) await onProgress(pages);
+  };
+  await emit();
+
+  // ---- 1. components, first and alone ----
+  let shared: SharedComponents | undefined;
+  if (components) {
+    pages[components.file] = { ...pages[components.file], status: "generating" };
+    await emit();
+    const outcome = await generateComponents(
+      { aiCall },
+      { brief, images, file: components.file, source: components.source, siteFiles },
+    );
+    pages[components.file] = outcome.ok
+      ? { status: "ok", kind: "component", name: "Shared components", html: outcome.html }
+      : { status: "failed", kind: "component", name: "Shared components", error: outcome.error };
+    if (outcome.ok) shared = { file: components.file, source: outcome.html };
+    await emit();
   }
 
-  const siteFiles = [...template.pageFiles, ...newPages.map((p) => p.file)];
-  const references = pickReferencePages(template.pageFiles, template.pages).map((file) => ({
+  // References come from the WHOLE template (minus the components file) —
+  // design vocabulary doesn't shrink just because the lead asked for fewer
+  // pages.
+  const references = pickReferencePages(selectablePages, template.pages).map((file) => ({
     file,
     html: template.pages[file],
   }));
 
-  const [existingResults, newResults] = await Promise.all([
-    Promise.all(
-      template.pageFiles.map(async (file) => {
-        const outcome = await generatePage({ aiCall }, {
-          brief,
-          images,
-          pageFile: file,
-          pageHtml: template.pages[file],
-          siteFiles,
-        });
-        return [file, outcome] as const;
-      }),
-    ),
-    Promise.all(
-      newPages.map(async ({ name, file }) => {
-        const outcome = await generateNewPage({ aiCall }, {
-          brief,
-          images,
-          pageName: name,
-          newFile: file,
-          references,
-          siteFiles,
-        });
-        return [file, outcome, name] as const;
-      }),
-    ),
-  ]);
-
-  const pages: Record<string, PageState> = {};
-  for (const [file, outcome] of existingResults) {
+  // ---- 2. the pages, in parallel ----
+  const runExisting = async (file: string) => {
+    pages[file] = { ...pages[file], status: "generating" };
+    await emit();
+    const outcome = await generatePage({ aiCall }, {
+      brief,
+      images,
+      pageFile: file,
+      pageHtml: template.pages[file],
+      siteFiles,
+      components: shared,
+    });
     pages[file] = outcome.ok
       ? { status: "ok", kind: "existing", html: outcome.html }
       : { status: "failed", kind: "existing", error: outcome.error };
-  }
-  for (const [file, outcome, name] of newResults) {
+    await emit();
+  };
+
+  const runNew = async ({ name, file }: { name: string; file: string }) => {
+    pages[file] = { ...pages[file], status: "generating" };
+    await emit();
+    const outcome = await generateNewPage({ aiCall }, {
+      brief,
+      images,
+      pageName: name,
+      newFile: file,
+      references,
+      siteFiles,
+      components: shared,
+    });
     pages[file] = outcome.ok
       ? { status: "ok", kind: "new", name, html: outcome.html }
       : { status: "failed", kind: "new", name, error: outcome.error };
-  }
+    await emit();
+  };
 
-  const ok = Object.values(pages).some((p) => p.status === "ok");
+  await Promise.all([...plan.existing.map(runExisting), ...plan.newPages.map(runNew)]);
+
+  const ok = Object.values(pages).some((p) => p.status === "ok" && p.kind !== "component");
   if (!ok) return { ok: false, pages };
 
-  return { ok: true, pages, zipBytes: assembleZip(template.assets, pages) };
+  // When an HTML components file failed to rewrite, ship the template's
+  // original — it is a page FILE (not an asset, so `assembleZip` wouldn't
+  // otherwise carry it) and every generated page fetches it at runtime; a
+  // site whose shared include 404s is broken everywhere, which is worse than
+  // demo content the operator will regenerate anyway. A JS components file
+  // needs no such step: it lives in `assets` and ships by default.
+  const baseAssets = { ...template.assets };
+  if (components && template.pages[components.file] !== undefined && pages[components.file]?.status !== "ok") {
+    baseAssets[components.file] = new TextEncoder().encode(components.source);
+  }
+
+  return { ok: true, pages, zipBytes: assembleZip(baseAssets, pages) };
 }
 
 export interface RegeneratePageArgs {
@@ -202,25 +394,51 @@ export interface RegeneratePageArgs {
   template: TemplateBundle;
   siteFiles: string[];
   file: string;
-  kind: "existing" | "new";
+  kind: "existing" | "new" | "component";
   /** Required when kind is "new" — the page name buildNewPagePrompt needs. */
   name?: string;
+  /** The run's current (rewritten) components file, as page-prompt context.
+   *  Ignored for kind "component" — that regeneration starts from the
+   *  template's own original source. */
+  components?: SharedComponents;
   instruction?: string;
 }
 
-/** Regenerate exactly one page, existing or newly-designed, optionally
- *  steered by an operator instruction. Used by the regenerate route so a
- *  disliked page can be redone without touching the rest of the run. */
+/** Regenerate exactly one entry — an existing page, a newly-designed page,
+ *  or the shared components file — optionally steered by an operator
+ *  instruction. Used by the regenerate route so a disliked page can be
+ *  redone without touching the rest of the run. */
 export async function regeneratePage(args: RegeneratePageArgs) {
-  const { aiCall, brief, images, template, siteFiles, file, kind, name, instruction } = args;
+  const { aiCall, brief, images, template, siteFiles, file, kind, name, components, instruction } = args;
+
+  if (kind === "component") {
+    const original = findComponentsFile(template);
+    if (!original || original.file !== file) {
+      return { ok: false as const, error: `${file}: not this template's components file.` };
+    }
+    return generateComponents({ aiCall }, {
+      brief,
+      images,
+      file,
+      source: original.source,
+      siteFiles,
+      instruction,
+    });
+  }
+
   if (kind === "existing") {
     const pageHtml = template.pages[file];
     if (pageHtml === undefined) {
       return { ok: false as const, error: `${file}: not found in this template.` };
     }
-    return generatePage({ aiCall }, { brief, images, pageFile: file, pageHtml, siteFiles, instruction });
+    return generatePage({ aiCall }, { brief, images, pageFile: file, pageHtml, siteFiles, components, instruction });
   }
-  const references = pickReferencePages(template.pageFiles, template.pages).map((f) => ({
+
+  const componentsFile = findComponentsFile(template)?.file;
+  const references = pickReferencePages(
+    template.pageFiles.filter((f) => f !== componentsFile),
+    template.pages,
+  ).map((f) => ({
     file: f,
     html: template.pages[f],
   }));
@@ -231,6 +449,7 @@ export async function regeneratePage(args: RegeneratePageArgs) {
     newFile: file,
     references,
     siteFiles,
+    components,
     instruction,
   });
 }

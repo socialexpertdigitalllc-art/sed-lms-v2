@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { loadTemplateBundle } from "@/lib/site-builder/templates";
-import { productionSiteBuildCall } from "@/lib/site-builder/generate";
-import { runSite, buildBrief, outputPathFor, BUILDER_SITES_BUCKET } from "@/lib/site-builder/run";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 30;
 
 function sanitizeImages(input: unknown): SuppliedImage[] {
   if (!Array.isArray(input)) return [];
@@ -35,11 +32,12 @@ export async function GET() {
 }
 
 /**
- * Create+start a run in one request: builds the whole site (every template
- * page in parallel, plus any lead-requested pages the template lacks),
- * assembles the output zip, and leaves the row in "review" (or "failed" only
- * if EVERY page failed) — see runSite's own doc comment. There is no
- * separate step machine to poll; a real page is one AI call, not a pipeline.
+ * Create a run and return it immediately, still "queued" — generation is a
+ * SEPARATE request (`POST /runs/[id]/generate`) that the run screen fires
+ * the moment it sees a queued run. Split this way so the operator lands on
+ * the run screen instantly and watches per-page progress live (the generate
+ * route persists every page-state change), instead of staring at a spinner
+ * on the New Site screen for the whole generation.
  */
 export async function POST(req: Request) {
   const auth = await guard();
@@ -66,56 +64,18 @@ export async function POST(req: Request) {
 
   const { data: run, error: insErr } = await admin
     .from("builder_runs")
-    .insert({ lead_id: leadId, template_id: templateId, options, images, status: "generating", created_by: auth.userId })
+    .insert({ lead_id: leadId, template_id: templateId, options, images, status: "queued", created_by: auth.userId })
     .select("*")
     .single();
   if (insErr || !run) return NextResponse.json({ error: insErr?.message ?? "Create failed" }, { status: 400 });
 
-  try {
-    const bundle = await loadTemplateBundle(admin, templateId);
-    const brief = buildBrief(lead as Record<string, unknown>);
-    const requestedPages = Array.isArray(lead.specify_pages) ? (lead.specify_pages as unknown[]).map(String) : [];
+  await admin.from("activity_log").insert({
+    user_id: auth.userId,
+    action: "site_builder.run.created",
+    entity_type: "builder_run",
+    entity_id: run.id,
+    new_value: { lead_id: leadId, template_id: templateId, business_name: lead.business_name, status: "queued" },
+  });
 
-    const result = await runSite({ aiCall: productionSiteBuildCall, brief, images, template: bundle, requestedPages });
-
-    let outputPath: string | null = null;
-    if (result.zipBytes) {
-      outputPath = outputPathFor(run.id);
-      const { error: upErr } = await admin.storage
-        .from(BUILDER_SITES_BUCKET)
-        .upload(outputPath, result.zipBytes, { contentType: "application/zip", upsert: true });
-      if (upErr) throw new Error(`zip upload failed: ${upErr.message}`);
-    }
-
-    const { data: updated, error: updErr } = await admin
-      .from("builder_runs")
-      .update({
-        status: result.ok ? "review" : "failed",
-        pages: result.pages,
-        output_path: outputPath,
-        error: result.ok ? null : "Every page failed to generate.",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", run.id)
-      .select("*")
-      .single();
-    if (updErr || !updated) return NextResponse.json({ error: updErr?.message ?? "Update failed" }, { status: 400 });
-
-    await admin.from("activity_log").insert({
-      user_id: auth.userId,
-      action: "site_builder.run.created",
-      entity_type: "builder_run",
-      entity_id: run.id,
-      new_value: { lead_id: leadId, template_id: templateId, business_name: lead.business_name, status: updated.status },
-    });
-
-    return NextResponse.json({ run: updated }, { status: 201 });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Generation failed";
-    await admin
-      .from("builder_runs")
-      .update({ status: "failed", error: message, updated_at: new Date().toISOString() })
-      .eq("id", run.id);
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  return NextResponse.json({ run }, { status: 201 });
 }

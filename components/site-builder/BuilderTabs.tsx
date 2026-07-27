@@ -8,12 +8,15 @@ const TABS = [
   { href: "/ai-tools/site-builder", label: "Templates" },
   { href: "/ai-tools/site-builder/new", label: "New Site" },
   { href: "/ai-tools/site-builder/runs", label: "Runs" },
+  { href: "/ai-tools/site-builder/deployments", label: "Deployments" },
 ] as const;
 
-/** Templates | New Site | Runs — mounted at the top of every Site Builder
- *  server page. Same idiom as `StudioTabs` (Site Studio's own tab bar): the
- *  Templates tab matches only the exact root path, since every Site Builder
- *  path starts with it. */
+/** Templates | New Site | Runs | Deployments — mounted at the top of every
+ *  Site Builder server page. Same idiom as `StudioTabs` (Site Studio's own
+ *  tab bar): the Templates tab matches only the exact root path, since every
+ *  Site Builder path starts with it. Deployments renders the SHARED
+ *  `studio_deployments` board — every deployed site, whatever system
+ *  deployed it, with take-down and transfer-to-custom-domain. */
 export function BuilderTabs() {
   const pathname = usePathname() ?? "";
 

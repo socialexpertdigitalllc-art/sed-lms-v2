@@ -36,6 +36,16 @@ export interface SuppliedImage {
   purpose: string;
 }
 
+/** The template's shared-components file (a `components.js` rendering the
+ *  header/nav/footer/booking form as custom elements, or a `components.html`
+ *  include), AFTER it has been rewritten for this business. Passed into every
+ *  page prompt so a page never re-invents — or worse, keeps the template's
+ *  copy of — the sections this file renders at runtime. */
+export interface SharedComponents {
+  file: string;
+  source: string;
+}
+
 const rules = `You rewrite one page of a website template so it belongs to a specific real business.
 
 You are given the page's complete HTML, a brief about the business, and a list of images chosen for this site. You return the complete rewritten HTML for that page.
@@ -96,6 +106,20 @@ function imagesText(images: SuppliedImage[]): string {
 
 export const SITE_BUILD_SYSTEM = rules;
 
+/** The shared-components block appended to a page prompt when the template
+ *  has a components file. The pages LOAD this file at runtime — so the page
+ *  prompt must show its (already rewritten) content, and must warn the model
+ *  off duplicating or contradicting what it renders. */
+function componentsText(c?: SharedComponents): string {
+  if (!c) return "";
+  return `
+
+SHARED COMPONENTS FILE — ${c.file} (already rewritten for this business; its content is below)
+This site renders its shared sections — header, navigation, footer, booking/contact form and similar — from this file at runtime. The page you write must keep loading and using it exactly the way the template does: same tags, same script reference, same custom elements. Do NOT write your own replacement header/footer/booking form into the page where the template relied on this file, and do not contradict it (its nav links and business details are already correct).
+
+${c.source}`;
+}
+
 /** Rewrite an existing template page for this business. */
 export function buildPagePrompt(args: {
   brief: BusinessBrief;
@@ -104,6 +128,7 @@ export function buildPagePrompt(args: {
   pageHtml: string;
   /** The other page filenames in this site, so links stay valid. */
   siteFiles: string[];
+  components?: SharedComponents;
 }): string {
   return `THE BUSINESS
 ${briefText(args.brief)}
@@ -112,11 +137,59 @@ IMAGES CHOSEN FOR THIS SITE
 ${imagesText(args.images)}
 
 PAGES IN THIS SITE (link only to these)
-${args.siteFiles.join(", ")}
+${args.siteFiles.join(", ")}${componentsText(args.components)}
 
 THE PAGE TO REWRITE: ${args.pageFile}
 
 ${args.pageHtml}`;
+}
+
+/** System prompt for rewriting the shared components file itself. Separate
+ *  from the page rules because the output is a source FILE (usually
+ *  JavaScript), not a page: the failure mode to defend against is breaking
+ *  the code, not breaking a layout. */
+export const SITE_COMPONENTS_SYSTEM = `You rewrite ONE shared-components file of a website template so it belongs to a specific real business. This file (typically a components.js defining custom elements, sometimes an HTML include) renders the sections every page of the site shares: the header, navigation, footer, booking or contact form, and similar.
+
+You are given the file's complete source, a brief about the business, the list of pages the finished site will have, and the images chosen for the site. You return the complete rewritten source of that one file.
+
+WHAT TO CHANGE
+1. Every trace of the template's demo business: its name, phone numbers, email addresses, street addresses, city and area names, wordmark text, social links, review/testimonial names, copyright line — wherever they appear in string literals or markup inside this file.
+2. Business identity goes where the template shows its own: phone in tel: links, email in mailto: links, the business name (or the supplied logo as an <img> with the name as alt text) where the wordmark was.
+3. Navigation must link ONLY to the pages listed for this site, with sensible labels. Remove nav items for pages this site does not have; add items for pages it has that the template's nav lacks, styled the same way.
+4. Services, service areas and colours follow the brief exactly, same as any page: never pad with invented services, and apply the colour scheme where this file hard-codes the template's own colours.
+5. Booking/contact forms keep working exactly as before — same field structure, same submit behaviour, same classes — with only their visible text, labels and destination details (phone/email) rewritten for this business.
+
+WHAT MUST NOT CHANGE
+The code must still run. Keep the file's structure, its custom element names, its exported/global symbols, its event wiring and its DOM APIs intact. You are rewriting the CONTENT the code renders, not refactoring the code. Do not rename, remove or reorder functions or elements that pages depend on.
+
+NEVER INVENT FACTS
+No licence, certification, award, rating, review count, price or years-in-business claim unless the brief states it. Testimonials in this file must become plainly generic, never attributed to invented named customers.
+
+OUTPUT
+Return only the complete rewritten source of the file. No explanation, no commentary, no markdown fence.`;
+
+/** Rewrite the template's shared-components file for this business — always
+ *  the FIRST generation of a run, so every page prompt can carry the result. */
+export function buildComponentsPrompt(args: {
+  brief: BusinessBrief;
+  images: SuppliedImage[];
+  file: string;
+  source: string;
+  /** The pages the finished site will have — the nav must match these. */
+  siteFiles: string[];
+}): string {
+  return `THE BUSINESS
+${briefText(args.brief)}
+
+IMAGES CHOSEN FOR THIS SITE
+${imagesText(args.images)}
+
+PAGES IN THIS SITE (the navigation must link only to these)
+${args.siteFiles.join(", ")}
+
+THE SHARED COMPONENTS FILE TO REWRITE: ${args.file}
+
+${args.source}`;
 }
 
 /**
@@ -139,6 +212,7 @@ export function buildNewPagePrompt(args: {
   /** Existing pages used purely as design references. */
   references: { file: string; html: string }[];
   siteFiles: string[];
+  components?: SharedComponents;
 }): string {
   const refs = args.references
     .map((r) => `DESIGN REFERENCE — ${r.file}:\n\n${r.html}`)
@@ -151,7 +225,7 @@ IMAGES CHOSEN FOR THIS SITE
 ${imagesText(args.images)}
 
 PAGES IN THIS SITE (link only to these)
-${args.siteFiles.join(", ")}
+${args.siteFiles.join(", ")}${componentsText(args.components)}
 
 YOUR JOB: CREATE A NEW PAGE — "${args.pageName}", to be saved as ${args.newFile}
 

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { deleteSubdomain } from "@/lib/template-engine/directadmin";
+import { deleteSubdomain, subFromWebsiteLink } from "@/lib/template-engine/directadmin";
+import { hostingerConfigured, deleteWebsite } from "@/lib/hostinger/client";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -26,10 +27,12 @@ type Ctx = { params: Promise<{ id: string }> };
  * subdomain is still live and serving would be a worse failure mode than a
  * visible error, because nothing would ever prompt a retry.
  */
-export async function DELETE(_req: Request, ctx: Ctx) {
+export async function DELETE(req: Request, ctx: Ctx) {
   const auth = await guard();
   if ("error" in auth) return guardError(auth.error);
   const { id } = await ctx.params;
+
+  const mode = new URL(req.url).searchParams.get("mode");
 
   const admin = createAdminClient();
   const { data: row, error: fetchErr } = await admin
@@ -39,14 +42,54 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     .maybeSingle();
   if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 400 });
   if (!row) return NextResponse.json({ error: "Deployment not found" }, { status: 404 });
+
+  // `?mode=record` — delete a NON-LIVE row from the board entirely. No infra
+  // is touched (the site is already gone or never existed); this is pure
+  // bookkeeping removal, refused for live rows precisely because deleting a
+  // live row would orphan a site that is still serving.
+  if (mode === "record") {
+    if (row.status === "live") {
+      return NextResponse.json({ error: "This site is live — take it down first, then delete the record." }, { status: 409 });
+    }
+    const { error: delErr } = await admin.from("studio_deployments").delete().eq("id", id);
+    if (delErr) return NextResponse.json({ error: delErr.message }, { status: 400 });
+    await admin.from("activity_log").insert({
+      user_id: auth.userId,
+      action: "studio.deployment.record_deleted",
+      entity_type: "studio_deployment",
+      entity_id: id,
+      new_value: { subdomain: row.subdomain, url: row.url, status: row.status },
+    });
+    return NextResponse.json({ ok: true });
+  }
+
   if (row.status === "taken_down") {
     return NextResponse.json({ error: "This site is already taken down" }, { status: 409 });
   }
 
-  const removed = await deleteSubdomain(row.subdomain);
-  if (removed.error) {
-    const message = removed.text || removed.details || "subdomain deletion failed";
-    return NextResponse.json({ error: `Could not delete the subdomain: ${message}` }, { status: 502 });
+  // A transferred site lives on a CUSTOM domain (its url no longer points at
+  // a DA subdomain) — takedown there removes the Hostinger addon website
+  // instead of a DirectAdmin subdomain.
+  const daDomain = process.env.DA_DOMAIN ?? "";
+  const sub = subFromWebsiteLink(row.url, daDomain);
+  if (sub) {
+    const removed = await deleteSubdomain(sub);
+    if (removed.error) {
+      const message = removed.text || removed.details || "subdomain deletion failed";
+      return NextResponse.json({ error: `Could not delete the subdomain: ${message}` }, { status: 502 });
+    }
+  } else {
+    const domain = row.url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!hostingerConfigured()) {
+      return NextResponse.json(
+        { error: `This site lives on ${domain} (custom domain) and Hostinger is not configured to remove it.` },
+        { status: 422 },
+      );
+    }
+    const removed = await deleteWebsite(domain);
+    if (!removed.ok) {
+      return NextResponse.json({ error: `Could not remove ${domain} from hosting: ${removed.message ?? "failed"}` }, { status: 502 });
+    }
   }
 
   // CAS on status (not just id) so a concurrent double-submit that raced past
