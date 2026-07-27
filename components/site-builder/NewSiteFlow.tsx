@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Plus, Rocket, Search, Trash2 } from "lucide-react";
+import { ImageOff, Loader2, Rocket, Search } from "lucide-react";
 import { PageHeader } from "@/components/common/Panel";
-import { btnPrimary, btnSecondarySm, iconBtnDanger } from "@/components/common/buttons";
+import { btnPrimary, btnSecondarySm } from "@/components/common/buttons";
 import { inputCls } from "@/components/forms/Field";
 import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
@@ -29,14 +29,66 @@ interface LeadOption {
   image_links: string[] | null;
 }
 
+interface NeedCandidate {
+  kind: "library" | "pexels";
+  key: string;
+  width: number;
+  height: number;
+  thumb_url: string | null;
+  asset_id?: string;
+  pexels_id?: number;
+  download_url?: string;
+  photographer?: string;
+}
+
+/** A candidate picked through the "search instead" escape hatch. Unlike an
+ *  auto-sourced candidate (rehosted only once actually used, at Generate),
+ *  `BuilderImagePicker` rehosts immediately on pick — so this already carries
+ *  a durable `url`, not just a thumbnail. */
+interface ManualPick {
+  key: "manual";
+  thumb_url: string;
+  url: string;
+  purpose: string;
+}
+
+interface NeedRow {
+  purpose: string;
+  query: string;
+  candidates: NeedCandidate[];
+  manualPick: ManualPick | null;
+  pexelsError: string | null;
+  /** A candidate's `key`, `"manual"`, or null for an explicit "no image". */
+  pickedKey: string | null;
+}
+
+interface SourceApiCandidate {
+  kind: "library" | "pexels";
+  key: string;
+  width: number;
+  height: number;
+  thumb_url: string | null;
+  asset_id?: string;
+  pexels_id?: number;
+  download_url?: string;
+  photographer?: string;
+}
+interface SourceApiNeed {
+  purpose: string;
+  query: string;
+  pexelsError: string | null;
+  candidates: SourceApiCandidate[];
+}
+
 /**
- * The whole Site Builder flow on one screen: pick a lead, pick a template,
- * pick images (each labelled with a purpose), then Generate. Mirrors
- * `RunLaunch.tsx`'s sectioned layout, but as its own page rather than a
- * slide-over — there is no separate "pages" or "fan-out" step here (Site
- * Builder has no manifest to fan out against; every template page is always
- * rewritten, plus whatever extra pages the lead's own `specify_pages` asks
- * for — see `lib/site-builder/run.ts#runSite`).
+ * The Site Builder image step: sourcing fires automatically the moment a
+ * lead is picked (`POST /api/site-builder/images/source`), landing the
+ * operator on an already-populated screen — one row per need (Hero, one per
+ * service, About), each with its first candidate pre-selected, plus the
+ * lead's own photos as the Gallery. The default path is zero clicks: an
+ * operator happy with everything just hits Generate. Manual search
+ * (`BuilderImagePicker`) is kept only as a per-row escape hatch for when the
+ * auto candidates are all wrong — see AGENTS.md's brief on this rework.
  */
 export function NewSiteFlow() {
   const router = useRouter();
@@ -47,9 +99,14 @@ export function NewSiteFlow() {
   const [leadQuery, setLeadQuery] = useState("");
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [templateId, setTemplateId] = useState("");
-  const [images, setImages] = useState<PickedImage[]>([]);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const [needsLoading, setNeedsLoading] = useState(false);
+  const [needRows, setNeedRows] = useState<NeedRow[]>([]);
+  const [servicesTruncated, setServicesTruncated] = useState(false);
+  const [droppedServices, setDroppedServices] = useState<string[]>([]);
+  const [gallerySelected, setGallerySelected] = useState<Set<string>>(new Set());
+  const [searchRowFor, setSearchRowFor] = useState<string | null>(null);
 
   const loadLeads = useCallback(async () => {
     try {
@@ -87,8 +144,58 @@ export function NewSiteFlow() {
 
   function selectLead(lead: LeadOption) {
     setSelectedLeadId(lead.id);
-    setImages([]);
   }
+
+  // Sourcing fires the instant a lead is selected — no search box, no manual
+  // step. The lead's own photos become the Gallery's default selection in
+  // the same pass (no searching involved there at all — see AGENTS.md).
+  useEffect(() => {
+    if (!selectedLead) {
+      setNeedRows([]);
+      setGallerySelected(new Set());
+      setServicesTruncated(false);
+      setDroppedServices([]);
+      return;
+    }
+    setGallerySelected(new Set(selectedLead.image_links ?? []));
+    let cancelled = false;
+    setNeedsLoading(true);
+    setNeedRows([]);
+    (async () => {
+      try {
+        const res = await fetch("/api/site-builder/images/source", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lead_id: selectedLead.id }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          toast({ kind: "error", title: body.error ?? "Could not source images" });
+          return;
+        }
+        const needs = (body.needs ?? []) as SourceApiNeed[];
+        const rows: NeedRow[] = needs.map((n) => ({
+          purpose: n.purpose,
+          query: n.query,
+          candidates: n.candidates ?? [],
+          manualPick: null,
+          pexelsError: n.pexelsError ?? null,
+          pickedKey: n.candidates?.[0]?.key ?? null,
+        }));
+        setNeedRows(rows);
+        setServicesTruncated(!!body.servicesTruncated);
+        setDroppedServices((body.droppedServices ?? []) as string[]);
+      } catch (e) {
+        if (cancelled) return;
+        toast({ kind: "error", title: e instanceof Error ? e.message : "Could not source images" });
+      } finally {
+        if (!cancelled) setNeedsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLead?.id]);
 
   const purposeSuggestions = useMemo(() => {
     const base = ["Hero", "Gallery", "About"];
@@ -98,12 +205,65 @@ export function NewSiteFlow() {
 
   const clientPhotos = selectedLead?.image_links ?? [];
 
-  function removeImage(index: number) {
-    setImages((prev) => prev.filter((_, i) => i !== index));
+  function pickCandidate(purpose: string, key: string) {
+    setNeedRows((prev) => prev.map((r) => (r.purpose === purpose ? { ...r, pickedKey: key } : r)));
+  }
+  function pickNone(purpose: string) {
+    setNeedRows((prev) => prev.map((r) => (r.purpose === purpose ? { ...r, pickedKey: null } : r)));
+  }
+  function applyManualPick(purpose: string, img: PickedImage) {
+    setNeedRows((prev) =>
+      prev.map((r) =>
+        r.purpose === purpose
+          ? { ...r, manualPick: { key: "manual", thumb_url: img.url, url: img.url, purpose: img.purpose }, pickedKey: "manual" }
+          : r,
+      ),
+    );
+    setSearchRowFor(null);
+  }
+  function toggleGallery(url: string) {
+    setGallerySelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
   }
 
-  function updatePurpose(index: number, purpose: string) {
-    setImages((prev) => prev.map((img, i) => (i === index ? { ...img, purpose } : img)));
+  async function resolveCandidate(candidate: NeedCandidate, purpose: string): Promise<string> {
+    const body =
+      candidate.kind === "library"
+        ? { kind: "library", asset_id: candidate.asset_id, lead_id: selectedLead?.id }
+        : {
+            kind: "pexels",
+            pexels: {
+              download_url: candidate.download_url,
+              pexels_id: candidate.pexels_id,
+              width: candidate.width,
+              height: candidate.height,
+              photographer: candidate.photographer,
+              subject: purpose,
+            },
+          };
+    const res = await fetch("/api/site-builder/images/pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const resBody = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(resBody.error ?? `Could not use the picked image for ${purpose}`);
+    return resBody.url as string;
+  }
+
+  async function resolveGalleryPhoto(url: string): Promise<string> {
+    const res = await fetch("/api/site-builder/images/pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "client", url, lead_id: selectedLead?.id }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? "Could not use one of the client's photos");
+    return body.url as string;
   }
 
   async function generate() {
@@ -111,10 +271,47 @@ export function NewSiteFlow() {
     if (!templateId) { toast({ kind: "error", title: "Pick a template first" }); return; }
     setSubmitting(true);
     try {
+      const picks: PickedImage[] = [];
+      let firstError: string | null = null;
+
+      await Promise.all(
+        needRows.map(async (row) => {
+          if (row.pickedKey === null) return;
+          try {
+            if (row.pickedKey === "manual") {
+              if (row.manualPick) picks.push({ url: row.manualPick.url, purpose: row.manualPick.purpose });
+              return;
+            }
+            const candidate = row.candidates.find((c) => c.key === row.pickedKey);
+            if (!candidate) return;
+            const url = await resolveCandidate(candidate, row.purpose);
+            picks.push({ url, purpose: row.purpose });
+          } catch (e) {
+            firstError ??= e instanceof Error ? e.message : `Could not use the image for ${row.purpose}`;
+          }
+        }),
+      );
+
+      await Promise.all(
+        [...gallerySelected].map(async (photoUrl) => {
+          try {
+            const url = await resolveGalleryPhoto(photoUrl);
+            picks.push({ url, purpose: "Gallery" });
+          } catch (e) {
+            firstError ??= e instanceof Error ? e.message : "Could not use one of the client's photos";
+          }
+        }),
+      );
+
+      if (firstError) {
+        toast({ kind: "error", title: firstError });
+        return;
+      }
+
       const res = await fetch("/api/site-builder/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_id: selectedLead.id, template_id: templateId, images }),
+        body: JSON.stringify({ lead_id: selectedLead.id, template_id: templateId, images: picks }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -130,11 +327,13 @@ export function NewSiteFlow() {
     }
   }
 
+  const searchRow = needRows.find((r) => r.purpose === searchRowFor) ?? null;
+
   return (
     <div className="space-y-6 pb-10">
       <PageHeader
         title="New site"
-        description="Pick a lead, a template, and the images you want used — the AI writes the whole site from there."
+        description="Pick a lead and a template — the images are found for you, and the AI writes the whole site from there."
       />
 
       {/* 1. Lead */}
@@ -212,47 +411,117 @@ export function NewSiteFlow() {
 
       {/* 3. Images */}
       <section className="rounded-lg border border-border bg-surface p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-faint">3. Images</h3>
-          <button
-            type="button"
-            className={btnSecondarySm}
-            onClick={() => setPickerOpen(true)}
-            disabled={!selectedLead}
-          >
-            <Plus className="h-3.5 w-3.5" /> Add image
-          </button>
-        </div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-faint">3. Images</h3>
         {!selectedLead ? (
-          <p className="text-sm text-text-muted">Pick a lead first.</p>
-        ) : images.length === 0 ? (
-          <p className="text-sm text-text-muted">No images picked yet — the AI will keep the template's own images unless you add some.</p>
+          <p className="text-sm text-text-muted">Pick a lead first — images are found automatically from there.</p>
         ) : (
-          <ul className="space-y-2">
-            {images.map((img, i) => (
-              <li key={`${img.url}-${i}`} className="flex items-center gap-3 rounded-md border border-border p-2">
-                <span className="grid h-12 w-16 shrink-0 place-items-center overflow-hidden rounded bg-surface-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={img.url} alt="" loading="lazy" className="h-full w-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-                </span>
-                <input
-                  className={cn(inputCls, "flex-1")}
-                  value={img.purpose}
-                  onChange={(e) => updatePurpose(i, e.target.value)}
-                  aria-label={`Purpose for image ${i + 1}`}
-                />
-                <button
-                  type="button"
-                  className={iconBtnDanger}
-                  title="Remove image"
-                  aria-label={`Remove image ${i + 1}`}
-                  onClick={() => removeImage(i)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div className="space-y-3">
+            {servicesTruncated ? (
+              <p className="rounded-md border border-border bg-surface-2 p-2 text-xs text-text-muted">
+                This lead lists more than 8 services — only the first 8 got their own image row
+                {droppedServices.length ? ` (dropped: ${droppedServices.join(", ")})` : ""}. Every service still appears in the site's copy.
+              </p>
+            ) : null}
+
+            {needsLoading && needRows.length === 0 ? (
+              <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Finding images…</p>
+            ) : (
+              needRows.map((row) => {
+                const displayCandidates: (NeedCandidate | ManualPick)[] = row.manualPick
+                  ? [...row.candidates, row.manualPick]
+                  : row.candidates;
+                return (
+                  <div key={row.purpose} className="rounded-md border border-border p-3">
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-text">{row.purpose}</p>
+                        <p className="text-xs text-text-faint">Searched: &ldquo;{row.query || "—"}&rdquo;</p>
+                      </div>
+                      <button type="button" className={btnSecondarySm} onClick={() => setSearchRowFor(row.purpose)}>
+                        <Search className="h-3.5 w-3.5" /> Search instead
+                      </button>
+                    </div>
+
+                    {row.pexelsError ? (
+                      <p className="mb-2 text-xs text-text-faint">
+                        Pexels search failed for this row ({row.pexelsError}) — showing library results only.
+                      </p>
+                    ) : null}
+
+                    {needsLoading ? (
+                      <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Searching…</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => pickNone(row.purpose)}
+                          aria-pressed={row.pickedKey === null}
+                          title="No image for this"
+                          aria-label={`No image for ${row.purpose}`}
+                          className={cn(
+                            "grid h-16 w-16 shrink-0 place-items-center rounded-md border text-center text-[10px] leading-tight text-text-muted",
+                            row.pickedKey === null ? "border-accent ring-2 ring-accent" : "border-border",
+                          )}
+                        >
+                          <ImageOff className="mb-0.5 h-4 w-4" />
+                          No image
+                        </button>
+                        {displayCandidates.map((c) => (
+                          <button
+                            key={c.key}
+                            type="button"
+                            onClick={() => pickCandidate(row.purpose, c.key)}
+                            aria-pressed={row.pickedKey === c.key}
+                            aria-label={`Use this image for ${row.purpose}`}
+                            className={cn(
+                              "relative h-16 w-16 shrink-0 overflow-hidden rounded-md border",
+                              row.pickedKey === c.key ? "border-accent ring-2 ring-accent" : "border-border",
+                            )}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={c.thumb_url ?? ""} alt="" loading="lazy" className="h-full w-full object-cover" />
+                          </button>
+                        ))}
+                        {displayCandidates.length === 0 ? (
+                          <p className="self-center text-xs text-text-muted">No candidates found — try &ldquo;Search instead&rdquo;.</p>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+
+            {/* Gallery: the client's own photos, pre-selected, no searching. */}
+            <div className="rounded-md border border-border p-3">
+              <p className="mb-2 text-sm font-medium text-text">Gallery</p>
+              {clientPhotos.length === 0 ? (
+                <p className="text-sm text-text-muted">This lead has no photos on file.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {clientPhotos.map((url) => {
+                    const selected = gallerySelected.has(url);
+                    return (
+                      <button
+                        key={url}
+                        type="button"
+                        onClick={() => toggleGallery(url)}
+                        aria-pressed={selected}
+                        aria-label={selected ? "Remove from gallery" : "Add to gallery"}
+                        className={cn(
+                          "relative h-16 w-16 shrink-0 overflow-hidden rounded-md border",
+                          selected ? "border-accent ring-2 ring-accent" : "border-border opacity-50",
+                        )}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={url} alt="" loading="lazy" className="h-full w-full object-cover" />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </section>
 
@@ -263,13 +532,13 @@ export function NewSiteFlow() {
         </button>
       </div>
 
-      {pickerOpen ? (
+      {searchRow && selectedLead ? (
         <BuilderImagePicker
-          leadId={selectedLead?.id ?? null}
-          purposeSuggestions={purposeSuggestions}
+          leadId={selectedLead.id}
+          purposeSuggestions={[searchRow.purpose, ...purposeSuggestions.filter((p) => p !== searchRow.purpose)]}
           clientPhotos={clientPhotos}
-          onAdded={(img) => setImages((prev) => [...prev, img])}
-          onClose={() => setPickerOpen(false)}
+          onAdded={(img) => applyManualPick(searchRow.purpose, img)}
+          onClose={() => setSearchRowFor(null)}
         />
       ) : null}
     </div>
