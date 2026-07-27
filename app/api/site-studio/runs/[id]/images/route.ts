@@ -69,8 +69,49 @@ function rehostStatus(error: string): number {
 }
 
 /**
+ * A parsed `key`, either shape documented on `annotate.ts`'s `SLOT_ATTR`
+ * (the same constant `RunPreview.tsx`'s own `parseSlotKey` parses — kept as
+ * a separate, duplicated parser here rather than importing from a "use
+ * client" component into a server route):
+ *  - plain page-level:  `"${docPageIndex}:${slotId}"`
+ *  - repeat row (4c):   `"${docPageIndex}:${repeatId}#${rowIndex}:${slotId}"`
+ * `repeat` is set only for the second shape — `#` never appears in the
+ * first, which is exactly what lets a caller tell them apart before parsing
+ * either one further.
+ */
+interface ParsedImageKey {
+  pageIndex: number;
+  slotId: string;
+  repeat?: { repeatId: string; rowIndex: number };
+}
+
+function parseImageKey(key: string): ParsedImageKey | null {
+  const firstColon = key.indexOf(":");
+  if (firstColon === -1) return null;
+  const pageIndex = Number(key.slice(0, firstColon));
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) return null;
+  const rest = key.slice(firstColon + 1);
+  const hashIdx = rest.indexOf("#");
+  if (hashIdx === -1) {
+    if (!rest) return null;
+    return { pageIndex, slotId: rest };
+  }
+  const repeatId = rest.slice(0, hashIdx);
+  const afterHash = rest.slice(hashIdx + 1); // "${rowIndex}:${slotId}"
+  const secondColon = afterHash.indexOf(":");
+  if (!repeatId || secondColon === -1) return null;
+  const rowIndex = Number(afterHash.slice(0, secondColon));
+  const slotId = afterHash.slice(secondColon + 1);
+  if (!Number.isInteger(rowIndex) || rowIndex < 0 || !slotId) return null;
+  return { pageIndex, slotId, repeat: { repeatId, rowIndex } };
+}
+
+/**
  * POST: pick an image for one slot. `key` is `"${docPageIndex}:${slotId}"`
- * (types.ts's `SlotImageState` doc comment). Allowed at Gate 1 ("reviewing")
+ * for a page-level image slot, or `"${docPageIndex}:${repeatId}#${rowIndex}:
+ * ${slotId}"` for a slot inside a repeat row (Phase 4c — gallery/card images
+ * typically live in a repeat, and this is what makes them pickable at all;
+ * see `parseImageKey` above). Allowed at Gate 1 ("reviewing")
  * and Gate 2 ("ready") — `ImagePicker` is reachable from `RunPreview`, which
  * only mounts once a run is "ready", so this must accept that status too
  * (see `isEditable`'s own doc comment). A Gate 2 pick re-finalizes the zip
@@ -119,6 +160,25 @@ function rehostStatus(error: string): number {
  * catch it: `contentDocSchema.tokenFree` only blocks `{{`-style tokens, and
  * `resolveAssets` only rewrites slots the manifest already says are images —
  * a text slot's `asset:` value would ship to the deployed site verbatim).
+ * For a REPEAT-ROW key this same check runs against that REPEAT's declared
+ * slots (`pageDef.repeats.find(r => r.id === repeatId).slots`, never the
+ * page-level `pageDef.slots`) — manifest-authoritative the same way, never
+ * shape-guessed from the value being written — and the row index is checked
+ * against the doc's actual row count for that repeat (`docPage.repeats
+ * [repeatId].length`), refusing an out-of-range row with 422 the same way an
+ * unknown page index already does.
+ *
+ * Sourced candidates (`steps.images.slots[key]`, used below for the pexels
+ * candidate-membership check and as the `subject` attributed to a fresh
+ * rehost) exist ONLY for page-level slots today — `imageSource.ts`'s sourcing
+ * pass walks `pageDef.slots`, never `pageDef.repeats` (repeat-row sourcing is
+ * a separate piece of work this task doesn't cover). A repeat-row key is
+ * therefore NOT required to have an entry there the way a flat key's 422
+ * ("No sourced candidates for slot") still is — its query/candidates simply
+ * default to empty, which correctly makes a pexels pick 422 (nothing was
+ * ever offered as a candidate for that key) while leaving library, client-
+ * photo, and upload picks fully usable, since none of those three depend on
+ * a sourced candidate list at all.
  *
  * Only a `library` pick reuses an existing asset untouched (its `subject`
  * stays whatever the library already recorded); a `pexels` or `client` pick
@@ -139,10 +199,9 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!body || typeof body.key !== "string" || !body.choice || typeof body.choice !== "object") {
     return NextResponse.json({ error: "key and choice are required" }, { status: 422 });
   }
-  const keyMatch = /^(\d+):(.+)$/.exec(body.key);
-  if (!keyMatch) return NextResponse.json({ error: `Malformed slot key "${body.key}"` }, { status: 422 });
-  const pageIndex = Number(keyMatch[1]);
-  const slotId = keyMatch[2];
+  const parsedKey = parseImageKey(body.key);
+  if (!parsedKey) return NextResponse.json({ error: `Malformed slot key "${body.key}"` }, { status: 422 });
+  const { pageIndex, slotId, repeat } = parsedKey;
   const choice = body.choice as PickChoice;
   if (choice.kind !== "library" && choice.kind !== "pexels" && choice.kind !== "client") {
     return NextResponse.json({ error: `choice.kind must be library, pexels, or client` }, { status: 422 });
@@ -164,9 +223,12 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: `page index ${pageIndex} out of range (doc has ${doc.pages.length} page(s))` }, { status: 422 });
   }
 
-  // The target slot must be a declared IMAGE slot on this doc page — never
-  // inferred from the value being written, always from the manifest (see
-  // resolveAssets.ts's own note on why that distinction matters).
+  // The target slot must be a declared IMAGE slot — never inferred from the
+  // value being written, always from the manifest (see resolveAssets.ts's
+  // own note on why that distinction matters). A repeat-row key is checked
+  // against that REPEAT's own declared slots, and its row index against the
+  // doc's actual row count for that repeat — never against page-level slots,
+  // and never shape-guessed.
   const docPage = doc.pages[pageIndex];
   let manifest;
   try {
@@ -178,16 +240,44 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!pageDef) {
     return NextResponse.json({ error: `Page "${docPage.page_id}" is not in the template manifest` }, { status: 422 });
   }
-  const slotDef = pageDef.slots.find((s) => s.id === slotId);
-  if (!slotDef || slotDef.type !== "image") {
-    return NextResponse.json({ error: `Slot "${slotId}" is not an image slot on this page` }, { status: 422 });
+
+  if (repeat) {
+    const repeatDef = pageDef.repeats.find((r) => r.id === repeat.repeatId);
+    if (!repeatDef) {
+      return NextResponse.json({ error: `Repeat "${repeat.repeatId}" is not declared on this page` }, { status: 422 });
+    }
+    const rows = docPage.repeats[repeat.repeatId] ?? [];
+    if (repeat.rowIndex >= rows.length) {
+      return NextResponse.json(
+        { error: `Row ${repeat.rowIndex} is out of range for repeat "${repeat.repeatId}" (it has ${rows.length} row(s))` },
+        { status: 422 },
+      );
+    }
+    const repeatSlotDef = repeatDef.slots.find((s) => s.id === slotId);
+    if (!repeatSlotDef || repeatSlotDef.type !== "image") {
+      return NextResponse.json(
+        { error: `Slot "${slotId}" is not an image slot on repeat "${repeat.repeatId}"` },
+        { status: 422 },
+      );
+    }
+  } else {
+    const slotDef = pageDef.slots.find((s) => s.id === slotId);
+    if (!slotDef || slotDef.type !== "image") {
+      return NextResponse.json({ error: `Slot "${slotId}" is not an image slot on this page` }, { status: 422 });
+    }
   }
 
+  // Sourced candidates exist only for page-level slots today (see the route
+  // doc comment above) — required for a flat key (unchanged 422), but merely
+  // optional for a repeat-row key: its query/candidates default to empty
+  // rather than refusing the whole pick, so library/client/upload picks stay
+  // usable even though nothing was ever sourced for that exact row.
   const slotState = ((row.steps?.images?.slots ?? {}) as Record<string, SlotImageState>)[body.key];
-  if (!slotState) {
+  if (!repeat && !slotState) {
     return NextResponse.json({ error: `No sourced candidates for slot "${body.key}"` }, { status: 422 });
   }
-  const slotQuery = slotState.query;
+  const slotQuery = slotState?.query ?? "";
+  const candidates = slotState?.candidates ?? [];
 
   let assetId: string;
   if (choice.kind === "library") {
@@ -208,7 +298,7 @@ export async function POST(req: Request, ctx: Ctx) {
     await bumpUseCount(admin, choice.asset_id);
     assetId = choice.asset_id;
   } else if (choice.kind === "pexels") {
-    const candidateMatch = slotState.candidates.find(
+    const candidateMatch = candidates.find(
       (c): c is Extract<ImageCandidate, { kind: "pexels" }> => c.kind === "pexels" && c.pexels_id === choice.pexels_id,
     );
     if (!candidateMatch) {
@@ -249,13 +339,22 @@ export async function POST(req: Request, ctx: Ctx) {
 
   let merged;
   try {
-    // imageSlotIds: this route already confirmed `slotDef.type === "image"`
-    // above — passing it stops applyOperatorEdit from backing up an image
-    // slot's value at all (review fix, Phase 4a: an image slot's pre-pick
-    // value is the template's own demo sample, never an AI-written value, so
-    // backing it up would let a later revert reinstate a vendor stock photo
-    // on a client's live site, mislabelled "ai").
-    merged = applyOperatorEdit(doc, pageIndex, { slots: { [slotId]: `asset:${assetId}` } }, new Set([slotId]));
+    if (repeat) {
+      // Row-aware, same shape `/content` PATCH's `repeats` body and
+      // `applyOperatorEdit`'s own `OperatorEdit.repeats` already use —
+      // touches exactly this one row's one slot, no sibling row or field.
+      merged = applyOperatorEdit(doc, pageIndex, {
+        repeats: { [repeat.repeatId]: { [String(repeat.rowIndex)]: { [slotId]: `asset:${assetId}` } } },
+      });
+    } else {
+      // imageSlotIds: this route already confirmed `slotDef.type === "image"`
+      // above — passing it stops applyOperatorEdit from backing up an image
+      // slot's value at all (review fix, Phase 4a: an image slot's pre-pick
+      // value is the template's own demo sample, never an AI-written value, so
+      // backing it up would let a later revert reinstate a vendor stock photo
+      // on a client's live site, mislabelled "ai").
+      merged = applyOperatorEdit(doc, pageIndex, { slots: { [slotId]: `asset:${assetId}` } }, new Set([slotId]));
+    }
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Invalid pick" }, { status: 422 });
   }

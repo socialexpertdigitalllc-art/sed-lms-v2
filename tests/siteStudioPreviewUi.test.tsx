@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { RunPreview, SlotEditor } from "@/components/site-studio/RunPreview";
+import { RunPreview, SlotEditor, resolveClickTarget } from "@/components/site-studio/RunPreview";
 import { ThemePanel } from "@/components/site-studio/ThemePanel";
 import { ToastProvider } from "@/components/common/Toast";
 import { DeploymentsBoard, type DeploymentRow } from "@/components/site-studio/DeploymentsBoard";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { StudioRunRow } from "@/lib/site-studio/run/types";
+import type { RunContentDoc } from "@/lib/site-studio/run/applyWritten";
 
 /**
  * Mount smoke tests, 2b/3b precedent (tests/siteStudioBoard.test.tsx,
@@ -67,6 +68,97 @@ function runFixture(overrides: Partial<StudioRunRow> = {}): StudioRunRow {
     ...overrides,
   };
 }
+
+/**
+ * Phase 4c: gallery/card images almost always sit inside a repeat, and a
+ * click on one used to just toast "not supported" — `ImagePicker` only knew
+ * a flat pageIndex/slotId. `resolveClickTarget` is the pure decision behind
+ * every preview click (text or image, flat or repeat-row); these test it
+ * directly rather than through a real click, since jsdom doesn't execute the
+ * preview iframe's own navigation (see RunPreview.tsx's own note on this).
+ */
+describe("resolveClickTarget", () => {
+  function docFixture(): RunContentDoc {
+    return {
+      identity: {},
+      theme: {},
+      pages: [
+        {
+          page_id: "gallery",
+          title: "Gallery",
+          slots: { hero_img: "img/hero.jpg", hero_alt: "A hero" },
+          repeats: {
+            cards: [
+              { card_img: "img/card1.jpg", card_alt: "Card one", card_text: "First" },
+              { card_img: "img/card2.jpg", card_alt: "Card two", card_text: "Second" },
+            ],
+          },
+        },
+      ],
+      provenance: [
+        {
+          slots: { hero_text: { written_by: "operator" } },
+          repeats: { cards: { "1": { card_text: { written_by: "operator" } } } },
+        },
+      ],
+    };
+  }
+
+  it("resolves a flat page-level text click", () => {
+    const next = resolveClickTarget(docFixture(), "0:hero_alt", false, null);
+    expect(next).toEqual({ kind: "text", pageIndex: 0, slotId: "hero_alt", value: "A hero", operatorOwned: false });
+  });
+
+  it("resolves a flat page-level image click, picking up its paired alt slot", () => {
+    const next = resolveClickTarget(docFixture(), "0:hero_img", true, "0:hero_alt");
+    expect(next).toEqual({
+      kind: "image", pageIndex: 0, slotId: "hero_img", altSlotId: "hero_alt", altValue: "A hero",
+    });
+  });
+
+  it("resolves a repeat-row TEXT click, scoped to that row only", () => {
+    const next = resolveClickTarget(docFixture(), "0:cards#1:card_text", false, null);
+    expect(next).toEqual({
+      kind: "text", pageIndex: 0, slotId: "card_text", value: "Second", operatorOwned: true,
+      repeat: { repeatId: "cards", rowIndex: 1 },
+    });
+  });
+
+  it("resolves a repeat-row IMAGE click — this is the fix: it used to be unsupported", () => {
+    const next = resolveClickTarget(docFixture(), "0:cards#1:card_img", true, "0:cards#1:card_alt");
+    expect(next).toEqual({
+      kind: "image", pageIndex: 0, slotId: "card_img", altSlotId: "card_alt", altValue: "Card two",
+      repeat: { repeatId: "cards", rowIndex: 1 },
+    });
+  });
+
+  it("ignores an alt key from a DIFFERENT row than the image itself", () => {
+    const next = resolveClickTarget(docFixture(), "0:cards#1:card_img", true, "0:cards#0:card_alt");
+    expect(next).toEqual({
+      kind: "image", pageIndex: 0, slotId: "card_img", altSlotId: undefined, altValue: "",
+      repeat: { repeatId: "cards", rowIndex: 1 },
+    });
+  });
+
+  it("ignores a flat alt key for a repeat-row image (shape mismatch)", () => {
+    const next = resolveClickTarget(docFixture(), "0:cards#1:card_img", true, "0:hero_alt");
+    expect(next?.kind).toBe("image");
+    if (next?.kind !== "image") return;
+    expect(next.altSlotId).toBeUndefined();
+  });
+
+  it("returns null for a malformed key", () => {
+    expect(resolveClickTarget(docFixture(), "not-a-key", false, null)).toBeNull();
+  });
+
+  it("returns null for an out-of-range page index", () => {
+    expect(resolveClickTarget(docFixture(), "9:hero_img", true, null)).toBeNull();
+  });
+
+  it("returns null for a repeat row that doesn't exist in the doc", () => {
+    expect(resolveClickTarget(docFixture(), "0:cards#9:card_img", true, null)).toBeNull();
+  });
+});
 
 describe("RunPreview", () => {
   it("renders the preview iframe with the page index and version query", () => {

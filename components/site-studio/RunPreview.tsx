@@ -150,7 +150,99 @@ type EditState =
        *  and pre-4a Gate 2) shape. */
       repeat?: { repeatId: string; rowIndex: number };
     }
-  | { kind: "image"; pageIndex: number; slotId: string; altSlotId?: string; altValue: string };
+  | {
+      kind: "image";
+      pageIndex: number;
+      slotId: string;
+      altSlotId?: string;
+      altValue: string;
+      /** Present only for a repeat-row image click (Phase 4c) — carried
+       *  straight through to `ImagePicker`, which builds the exact same
+       *  `"${pageIndex}:${repeatId}#${rowIndex}:${slotId}"` key the images
+       *  route (and everything else in `annotate.ts`'s `SLOT_ATTR` family)
+       *  already uses, so nothing downstream needs a second key format. */
+      repeat?: { repeatId: string; rowIndex: number };
+    };
+
+/**
+ * Pure decision logic behind a preview click: given the doc, the clicked
+ * slot's key, whether it's an image, and the paired alt-text key (if any),
+ * returns the `EditState` the click should open — or null when the key
+ * doesn't resolve to anything in the current doc (e.g. a stale preview).
+ * Split out from the click handler itself (which lives inside `RunPreview`
+ * and needs a live DOM `Document` to attach to) specifically so this
+ * decision can be unit-tested directly: jsdom does not execute the preview
+ * iframe's own navigation, so a real click delivered through it is not
+ * reachable from a test the way a browser click would be (see this file's
+ * own note on the iframe sandbox), and this is what stays testable anyway.
+ *
+ * REPEAT-ROW IMAGES (Phase 4c): previously, an image click inside a repeat
+ * row toasted "not supported" — `ImagePicker` only knew a flat
+ * `pageIndex`/`slotId`. Now it opens `ImagePicker` exactly like a page-level
+ * image click does, with the row's `repeat` key carried through unchanged.
+ */
+export function resolveClickTarget(
+  doc: RunContentDoc,
+  key: string,
+  isImage: boolean,
+  altKey: string | null,
+): EditState | null {
+  const parsed = parseSlotKey(key);
+  if (!parsed) return null;
+  const { pageIndex: idx, slotId } = parsed;
+  const page = doc.pages[idx];
+  if (!page) return null;
+
+  if (parsed.repeat) {
+    const { repeatId, rowIndex } = parsed.repeat;
+    const row = page.repeats[repeatId]?.[rowIndex];
+    if (!row) return null;
+
+    if (isImage) {
+      // The alt-text key, if present, is only used when it names the SAME
+      // row (repeatId + rowIndex) — a mismatched or flat altKey is treated
+      // as "no alt slot" rather than guessed at.
+      const altParsed = altKey ? parseSlotKey(altKey) : null;
+      const altSlotId =
+        altParsed?.repeat && altParsed.repeat.repeatId === repeatId && altParsed.repeat.rowIndex === rowIndex
+          ? altParsed.slotId
+          : undefined;
+      return {
+        kind: "image",
+        pageIndex: idx,
+        slotId,
+        altSlotId,
+        altValue: altSlotId ? row[altSlotId] ?? "" : "",
+        repeat: { repeatId, rowIndex },
+      };
+    }
+
+    const owned = doc.provenance?.[idx]?.repeats?.[repeatId]?.[String(rowIndex)]?.[slotId]?.written_by === "operator";
+    return {
+      kind: "text",
+      pageIndex: idx,
+      slotId,
+      value: row[slotId] ?? "",
+      operatorOwned: owned,
+      repeat: { repeatId, rowIndex },
+    };
+  }
+
+  if (isImage) {
+    const altParsed = altKey ? parseSlotKey(altKey) : null;
+    const altSlotId = altParsed && !altParsed.repeat ? altParsed.slotId : undefined;
+    return {
+      kind: "image",
+      pageIndex: idx,
+      slotId,
+      altSlotId,
+      altValue: altSlotId ? page.slots[altSlotId] ?? "" : "",
+    };
+  }
+
+  const owned = doc.provenance?.[idx]?.slots?.[slotId]?.written_by === "operator";
+  return { kind: "text", pageIndex: idx, slotId, value: page.slots[slotId] ?? "", operatorOwned: owned };
+}
 
 export interface RunPreviewProps {
   run: StudioRunRow;
@@ -203,11 +295,11 @@ export interface RunPreviewProps {
  * `SlotEditor` a plain slot does, and saves/reverts through the row-aware
  * `repeats: { [repeatId]: { [rowIndex]: { [slotId]: value } } }` body
  * `PATCH /content` and `POST /revert` now both understand (see those
- * routes' own doc comments). A repeat-row IMAGE click is left unsupported —
- * same posture as before this task, and this file's own note on why the
- * image-click path is untouched: `ImagePicker` only knows a flat
- * `pageIndex`/`slotId`, and wiring a repeat-row image edit through it is a
- * separate piece of work this task doesn't cover.
+ * routes' own doc comments). A repeat-row IMAGE click (Phase 4c) opens
+ * `ImagePicker` the same way a page-level image click does — gallery and
+ * card images almost always live inside a repeat, so this is what makes them
+ * pickable at all — with the row's `repeat` key carried through unchanged
+ * (see `resolveClickTarget`, and `ImagePicker`'s own `repeat` prop).
  */
 export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
   const { toast } = useToast();
@@ -323,52 +415,9 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
   }, [runId, toast, handleStaleWrite, onRunUpdated]);
 
   const openSlotFromKey = useCallback((key: string, isImage: boolean, altKey: string | null) => {
-    const parsed = parseSlotKey(key);
-    if (!parsed) return;
-    const { pageIndex: idx, slotId } = parsed;
-    const page = doc.pages[idx];
-    if (!page) return;
-
-    if (parsed.repeat) {
-      const { repeatId, rowIndex } = parsed.repeat;
-      if (isImage) {
-        // Repeat-row image edits aren't wired up yet — see this file's own
-        // note on why the image-click path is untouched by this task.
-        toast({
-          kind: "info",
-          title: `Editing images inside "${repeatId}" isn't supported from this preview yet`,
-        });
-        return;
-      }
-      const row = page.repeats[repeatId]?.[rowIndex];
-      if (!row) return;
-      const owned = doc.provenance?.[idx]?.repeats?.[repeatId]?.[String(rowIndex)]?.[slotId]?.written_by === "operator";
-      setEdit({
-        kind: "text",
-        pageIndex: idx,
-        slotId,
-        value: row[slotId] ?? "",
-        operatorOwned: owned,
-        repeat: { repeatId, rowIndex },
-      });
-      return;
-    }
-
-    if (isImage) {
-      const altParsed = altKey ? parseSlotKey(altKey) : null;
-      const altSlotId = altParsed && !altParsed.repeat ? altParsed.slotId : undefined;
-      setEdit({
-        kind: "image",
-        pageIndex: idx,
-        slotId,
-        altSlotId,
-        altValue: altSlotId ? page.slots[altSlotId] ?? "" : "",
-      });
-    } else {
-      const owned = doc.provenance?.[idx]?.slots?.[slotId]?.written_by === "operator";
-      setEdit({ kind: "text", pageIndex: idx, slotId, value: page.slots[slotId] ?? "", operatorOwned: owned });
-    }
-  }, [doc, toast]);
+    const next = resolveClickTarget(doc, key, isImage, altKey);
+    if (next) setEdit(next);
+  }, [doc]);
 
   const attachClickHandler = useCallback((frameDoc: Document) => {
     const onClick = (e: MouseEvent) => {
@@ -428,7 +477,11 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
 
   async function saveAlt(value: string) {
     if (!edit || edit.kind !== "image" || !edit.altSlotId) return;
-    await saveSlot(edit.pageIndex, edit.altSlotId, value);
+    if (edit.repeat) {
+      await saveRepeatSlot(edit.pageIndex, edit.repeat.repeatId, edit.repeat.rowIndex, edit.altSlotId, value);
+    } else {
+      await saveSlot(edit.pageIndex, edit.altSlotId, value);
+    }
   }
 
   /**
@@ -572,6 +625,7 @@ export function RunPreview({ run, onRunUpdated }: RunPreviewProps) {
           leadId={run.lead_id}
           pageIndex={edit.pageIndex}
           slotId={edit.slotId}
+          repeat={edit.repeat}
           clientPhotos={run.client_photos}
           altValue={edit.altValue}
           onEditAlt={saveAlt}

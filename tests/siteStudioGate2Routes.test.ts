@@ -373,3 +373,213 @@ describe("POST /images — isEditable, not the old 'reviewing'-only gate", () =>
     });
   }
 });
+
+/**
+ * Phase 4c: gallery/card images almost always sit inside a repeat, and the
+ * images route previously only accepted a flat `"pageIndex:slotId"` key —
+ * so the images an operator most wants to change were exactly the ones they
+ * couldn't. These prove the repeat-row key
+ * (`"pageIndex:repeatId#rowIndex:slotId"`) is validated against the
+ * manifest's REPEAT def (never shape-guessed), row-range-checked against the
+ * doc's actual rows, and writes into `pages[i].repeats[repeatId][row][slotId]`
+ * — while every existing guard (client-photo membership, pexels candidate
+ * membership, the library fence, CAS, refreshFinalizedZip) still holds.
+ */
+describe("POST /images — repeat-row keys (Phase 4c)", () => {
+  const manifest: TemplateManifest = {
+    engine: 3, name: "gate2-repeat-images-test", version: 1,
+    identity: {},
+    theme: { mode: "none", roles: {} },
+    nav: [],
+    pages: [
+      {
+        id: "gallery", file: "gallery.html", kind: "gallery", stampable: false, title_sample: "Gallery",
+        slots: [],
+        repeats: [
+          {
+            id: "cards", fragment: "<div>{{slot:card_img}}</div>", min: 0, max: 6,
+            slots: [
+              { id: "card_img", type: "image", sample: "img/card.jpg", html: false },
+              { id: "card_text", type: "text", sample: "Card text", html: false, max_chars: 60 },
+            ],
+            samples: [],
+          },
+        ],
+      },
+    ],
+  };
+  function doc(): ContentDoc {
+    return {
+      identity: {},
+      theme: {},
+      pages: [{
+        page_id: "gallery",
+        title: "Gallery",
+        slots: {},
+        repeats: {
+          cards: [
+            { card_img: "img/card1.jpg", card_text: "First" },
+            { card_img: "img/card2.jpg", card_text: "Second" },
+          ],
+        },
+      }],
+    };
+  }
+  function seedRepeat(state: FakeAdminState, overrides: Partial<StudioRunRow> = {}) {
+    state.templates["tpl-1"] = { manifest };
+    state.studio_assets["asset-1"] = { id: "asset-1", kind: "stock", lead_id: null, use_count: 0 };
+    state.runs["run-1"] = freshRow({
+      status: "reviewing",
+      content_doc: doc(),
+      client_photos: ["https://client.example/photo.jpg"],
+      lead_id: "lead-1",
+      ...overrides,
+    }) as unknown as Record<string, unknown>;
+  }
+
+  it("picks a library image into the named row's slot, leaving the sibling row untouched", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+
+    const res = await imagesPost(
+      jsonReq("POST", { key: "0:cards#1:card_img", choice: { kind: "library", asset_id: "asset-1" } }),
+      ctx,
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.run.content_doc.pages[0].repeats.cards[1].card_img).toBe("asset:asset-1");
+    expect(body.run.content_doc.pages[0].repeats.cards[0].card_img).toBe("img/card1.jpg");
+  });
+
+  it("picks a client photo (membership check still enforced) into a repeat row", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+
+    // The images route calls `rehostFromUrl` with no injectable fetchImpl
+    // (unchanged production behavior) — stub the global so a "client" pick
+    // exercises the real download path without a real network call.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array([1, 2, 3]).buffer, { status: 200, headers: { "content-type": "image/jpeg" } })),
+    );
+    try {
+      const res = await imagesPost(
+        jsonReq("POST", { key: "0:cards#0:card_img", choice: { kind: "client", url: "https://client.example/photo.jpg" } }),
+        ctx,
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.run.content_doc.pages[0].repeats.cards[0].card_img).toBe(`asset:${body.asset_id}`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("422s a client photo URL that is not on this lead's own list — membership check unaffected by the repeat shape", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+
+    const res = await imagesPost(
+      jsonReq("POST", { key: "0:cards#0:card_img", choice: { kind: "client", url: "https://not-this-lead.example/x.jpg" } }),
+      ctx,
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it("422s a library asset outside the client fence", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+    state.studio_assets["asset-other"] = { id: "asset-other", kind: "client", lead_id: "lead-9", use_count: 0 };
+
+    const res = await imagesPost(
+      jsonReq("POST", { key: "0:cards#0:card_img", choice: { kind: "library", asset_id: "asset-other" } }),
+      ctx,
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it("422s a pexels pick when nothing was sourced for that repeat-row key (candidate-membership check still holds)", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+
+    const res = await imagesPost(
+      jsonReq("POST", {
+        key: "0:cards#0:card_img",
+        choice: { kind: "pexels", pexels_id: 1, download_url: "https://img.example/x.jpg", width: 1600, height: 1200, photographer: "Ana" },
+      }),
+      ctx,
+    );
+    const body = await res.json();
+    expect(res.status).toBe(422);
+    expect(body.error).toMatch(/not offered as a candidate/i);
+  });
+
+  it("422s an out-of-range row index, naming the repeat and the actual row count", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+
+    const res = await imagesPost(
+      jsonReq("POST", { key: "0:cards#5:card_img", choice: { kind: "library", asset_id: "asset-1" } }),
+      ctx,
+    );
+    const body = await res.json();
+    expect(res.status).toBe(422);
+    expect(body.error).toMatch(/out of range/i);
+  });
+
+  it("422s a repeat id that isn't declared on the manifest — never shape-guessed", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+
+    const res = await imagesPost(
+      jsonReq("POST", { key: "0:not_a_repeat#0:card_img", choice: { kind: "library", asset_id: "asset-1" } }),
+      ctx,
+    );
+    const body = await res.json();
+    expect(res.status).toBe(422);
+    expect(body.error).toMatch(/not declared/i);
+  });
+
+  it("422s a slot that is declared on the repeat but is TEXT, not image", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+
+    const res = await imagesPost(
+      jsonReq("POST", { key: "0:cards#0:card_text", choice: { kind: "library", asset_id: "asset-1" } }),
+      ctx,
+    );
+    const body = await res.json();
+    expect(res.status).toBe(422);
+    expect(body.error).toMatch(/not an image slot/i);
+  });
+
+  it("422s a malformed repeat-row key (non-numeric row index)", async () => {
+    const { state } = setup();
+    seedRepeat(state);
+
+    const res = await imagesPost(
+      jsonReq("POST", { key: "0:cards#x:card_img", choice: { kind: "library", asset_id: "asset-1" } }),
+      ctx,
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it("a repeat-row pick at status 'ready' re-finalizes the zip, same discipline as a flat pick", async () => {
+    const { state } = setup();
+    seedRepeat(state, { status: "ready", zip_path: "runs/run-1/site.zip" });
+
+    const res = await imagesPost(
+      jsonReq("POST", { key: "0:cards#1:card_img", choice: { kind: "library", asset_id: "asset-1" } }),
+      ctx,
+    );
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    // refreshFinalizedZip is exercised end-to-end elsewhere (finalize.ts
+    // fixtures aren't wired into this describe block's manifest) — the
+    // property this proves here is that a "ready" pick does not itself
+    // refuse or error attempting the refresh.
+    expect(body.run.status).toBe("ready");
+  });
+});

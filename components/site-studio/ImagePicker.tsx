@@ -26,12 +26,22 @@ type Tab = (typeof TABS)[number]["id"];
  * which rehosts (never hot-links) and writes `asset:{id}` into the slot. The
  * paired `{slotId}_alt` text slot is edited right here too — nothing new is
  * needed for alt text (the compiler already pairs every image slot with one).
+ *
+ * REPEAT ROWS (Phase 4c): an optional `repeat` prop names the row this image
+ * slot lives inside — when present, `key` is built as
+ * `"${pageIndex}:${repeatId}#${rowIndex}:${slotId}"`, the exact same
+ * repeat-row key format `annotate.ts`'s `SLOT_ATTR`, the images route, and
+ * `RunPreview`'s own text-slot editing already use. Passed straight through
+ * to both the candidates GET and the pick POST — this component has no
+ * repeat-specific logic beyond building the right key; the route is what
+ * validates it against the manifest.
  */
 export function ImagePicker({
   runId,
   leadId,
   pageIndex,
   slotId,
+  repeat,
   clientPhotos,
   altValue,
   onEditAlt,
@@ -42,6 +52,7 @@ export function ImagePicker({
   leadId: string | null;
   pageIndex: number;
   slotId: string;
+  repeat?: { repeatId: string; rowIndex: number };
   clientPhotos: string[];
   altValue: string;
   onEditAlt: (value: string) => Promise<void>;
@@ -49,7 +60,7 @@ export function ImagePicker({
   onClose: () => void;
 }) {
   const { toast } = useToast();
-  const key = `${pageIndex}:${slotId}`;
+  const key = repeat ? `${pageIndex}:${repeat.repeatId}#${repeat.rowIndex}:${slotId}` : `${pageIndex}:${slotId}`;
 
   const [tab, setTab] = useState<Tab>("candidates");
   const [loading, setLoading] = useState(true);

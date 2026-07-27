@@ -352,6 +352,63 @@ describe("ImagePicker", () => {
 
     expect(await screen.findByText(/photo by ana/i)).toBeInTheDocument();
   });
+
+  /**
+   * Phase 4c: gallery/card images almost always sit inside a repeat, so
+   * `ImagePicker` now accepts an optional `repeat` prop and must build the
+   * SAME row-scoped key (`"${pageIndex}:${repeatId}#${rowIndex}:${slotId}"`)
+   * everything else in the `SLOT_ATTR` family already uses — for BOTH the
+   * candidates lookup and the pick itself, so the images route's manifest
+   * checks land on the right repeat def and row.
+   */
+  it("builds the repeat-row key when a `repeat` prop is passed, for both candidates and the pick", async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    stubFetch((url, method, body) => {
+      calls.push({ url, method, body });
+      if (url.includes("/images") && method === "GET") return { body: { slots: {} } };
+      if (url.includes("/images") && method === "POST") {
+        return { body: { run: { id: "run-1" }, asset_id: "asset-9" } };
+      }
+      return { body: {} };
+    });
+
+    const { container } = render(
+      <ImagePicker
+        runId="run-1"
+        leadId="lead-1"
+        pageIndex={1}
+        slotId="card_img"
+        repeat={{ repeatId: "cards", rowIndex: 2 }}
+        clientPhotos={["https://client.example/photo.jpg"]}
+        altValue=""
+        onEditAlt={async () => {}}
+        onPicked={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    // The candidates GET already happened on mount — key isn't part of the
+    // URL (the client filters the returned map by key), so this just proves
+    // the component didn't blow up sourcing candidates for a repeat-row key.
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/images") && c.method === "GET")).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: /client photos/i }));
+    const photoImg = await waitFor(() => {
+      const img = container.querySelector<HTMLImageElement>('img[src="https://client.example/photo.jpg"]');
+      if (!img) throw new Error("client photo thumbnail not rendered yet");
+      return img;
+    });
+    fireEvent.click(photoImg.closest("button")!);
+
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/images") && c.method === "POST")).toBe(true));
+    const pickCall = calls.find((c) => c.url.includes("/images") && c.method === "POST");
+    expect((pickCall!.body as { key: string }).key).toBe("1:cards#2:card_img");
+    expect((pickCall!.body as { choice: { kind: string; url: string } }).choice).toEqual({
+      kind: "client",
+      url: "https://client.example/photo.jpg",
+      subject: "",
+    });
+  });
 });
 
 const assetsFixture = [
