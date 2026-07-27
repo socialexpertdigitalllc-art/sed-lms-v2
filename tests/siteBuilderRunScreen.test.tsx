@@ -49,7 +49,7 @@ describe("BuilderRun", () => {
     stubFetch(runFixture("review"));
     render(<BuilderRun runId="run-1" />);
     await screen.findByTestId("sb-preview-frame");
-    expect(screen.getByLabelText(/regenerate "index.html"/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/regenerate .index\.html./i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /regenerate this page/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^approve$/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^deploy$/i })).not.toBeInTheDocument();
@@ -99,5 +99,24 @@ describe("BuilderRun", () => {
     expect(preview).toHaveAttribute("target", "_blank");
     const download = screen.getByRole("link", { name: /download zip/i });
     expect(download).toHaveAttribute("href", "/api/site-builder/runs/run-1/download");
+  });
+
+  it("shows the AI-returned code for a page when View code is clicked", async () => {
+    stubFetch(runFixture("review"));
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    render(<BuilderRun runId="run-1" />);
+
+    const viewButtons = await screen.findAllByRole("button", { name: /view code/i });
+    expect(viewButtons.length).toBeGreaterThan(0);
+    await user.click(viewButtons[0]);
+
+    const dialog = await screen.findByRole("dialog", { name: /generated code for index\.html/i });
+    expect(dialog).toBeInTheDocument();
+    // the modal shows the exact stored html for that page
+    expect(dialog.textContent).toContain("<!doctype html><html><body>Home</body></html>");
+    // and a raw link to the source
+    const raw = screen.getByRole("link", { name: /^raw$/i });
+    expect(raw).toHaveAttribute("href", expect.stringContaining("/preview/index.html?raw=1"));
   });
 });

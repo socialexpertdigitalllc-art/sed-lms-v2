@@ -6,6 +6,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  Code2,
+  Copy,
   Download,
   ExternalLink,
   Loader2,
@@ -13,6 +15,7 @@ import {
   ShieldCheck,
   Trash2,
   UploadCloud,
+  X,
 } from "lucide-react";
 import { PageHeader, Pill, type PillTone } from "@/components/common/Panel";
 import { btnGhostSm, btnPrimary, btnSecondarySm } from "@/components/common/buttons";
@@ -85,6 +88,8 @@ export function BuilderRun({ runId }: { runId: string }) {
   const [approving, setApproving] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [viewingCode, setViewingCode] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const mountedRef = useRef(false);
   useEffect(() => {
@@ -356,6 +361,11 @@ export function BuilderRun({ runId }: { runId: string }) {
                   )}
                 </div>
                 <p className="truncate text-xs text-text-faint">{file} · {KIND_LABEL[p.kind]}</p>
+                {p.status === "ok" && p.html !== undefined ? (
+                  <button className={cn(btnGhostSm, "mt-2")} onClick={() => { setViewingCode(file); setCopied(false); }}>
+                    <Code2 className="h-3.5 w-3.5" /> View code
+                  </button>
+                ) : null}
                 {p.status === "failed" ? (
                   <div className="mt-2 rounded-md border border-dropped-bg bg-dropped-bg/30 p-2 text-xs text-dropped-fg">
                     <p className="mb-1">{p.error ?? "Generation failed."}</p>
@@ -408,7 +418,7 @@ export function BuilderRun({ runId }: { runId: string }) {
             <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3 sm:flex-row sm:items-end">
               <div className="flex-1">
                 <label className="mb-1 block text-xs font-medium text-text-muted" htmlFor="sb-instruction">
-                  Regenerate "{selectedFile}" — optional instruction
+                  Regenerate &ldquo;{selectedFile}&rdquo; — optional instruction
                 </label>
                 <input
                   id="sb-instruction"
@@ -428,6 +438,61 @@ export function BuilderRun({ runId }: { runId: string }) {
               </button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* Generated-code viewer — the exact HTML/source the AI returned for one
+          file. Data is already in hand (the run detail includes each page's
+          html), so this is a pure client modal, no extra fetch. */}
+      {viewingCode && run.pages[viewingCode]?.html !== undefined ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Generated code for ${viewingCode}`}
+        >
+          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-lg">
+            <div className="flex items-center gap-2 border-b border-border p-3">
+              <Code2 className="h-4 w-4 text-text-muted" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">
+                {run.pages[viewingCode].name ?? viewingCode}
+                <span className="ml-2 font-normal text-text-faint">{viewingCode}</span>
+              </span>
+              <button
+                className={btnSecondarySm}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(run.pages[viewingCode].html ?? "");
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  } catch {
+                    toast({ kind: "error", title: "Could not copy" });
+                  }
+                }}
+              >
+                {copied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? "Copied" : "Copy"}
+              </button>
+              <a
+                className={btnSecondarySm}
+                href={`/api/site-builder/runs/${runId}/preview/${encodePathSegments(viewingCode)}?raw=1&v=${encodeURIComponent(run.updated_at)}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink className="h-3.5 w-3.5" /> Raw
+              </a>
+              <button
+                className={btnGhostSm}
+                aria-label="Close code viewer"
+                onClick={() => setViewingCode(null)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <pre className="flex-1 overflow-auto bg-surface-2 p-4 text-xs leading-relaxed text-text">
+              <code>{run.pages[viewingCode].html}</code>
+            </pre>
+          </div>
         </div>
       ) : null}
     </div>

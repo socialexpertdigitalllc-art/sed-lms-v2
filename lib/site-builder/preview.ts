@@ -41,6 +41,27 @@ export function encodePathSegments(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
+/** Inject a `<base href>` so RELATIVE references (including ones a script
+ *  inserts at runtime, which `rewriteAssetRefs` can't see) resolve against
+ *  the preview directory no matter which URL the page was opened at. Placed
+ *  just inside <head>, or synthesised if the page has neither head nor html.
+ *  Idempotent enough for our use: pages are freshly generated and never
+ *  already carry a <base>. */
+export function injectBase(html: string, base: string): string {
+  const tag = `<base href="${base}">`;
+  const headOpen = /<head[^>]*>/i.exec(html);
+  if (headOpen) {
+    const at = headOpen.index + headOpen[0].length;
+    return html.slice(0, at) + tag + html.slice(at);
+  }
+  const htmlOpen = /<html[^>]*>/i.exec(html);
+  if (htmlOpen) {
+    const at = htmlOpen.index + htmlOpen[0].length;
+    return `${html.slice(0, at)}<head>${tag}</head>${html.slice(at)}`;
+  }
+  return tag + html;
+}
+
 export function rewriteAssetRefs(html: string, knownFiles: string[], previewBase: string): string {
   if (knownFiles.length === 0) return html;
   const known = new Set(knownFiles);

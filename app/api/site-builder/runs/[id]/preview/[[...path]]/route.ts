@@ -4,7 +4,7 @@ import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { contentTypeFor } from "@/lib/site-studio/service/contentType";
 import { isSafeAssetPath } from "@/lib/site-studio/preview/assetPath";
 import { loadTemplateBundle } from "@/lib/site-builder/templates";
-import { rewriteAssetRefs } from "@/lib/site-builder/preview";
+import { rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
 import type { PageState } from "@/lib/site-builder/run";
 
 export const runtime = "nodejs";
@@ -104,6 +104,18 @@ export async function GET(req: Request, ctx: Ctx) {
     if (page.status !== "ok" || page.html === undefined) {
       return NextResponse.json({ error: page.error ?? `"${target}" has not generated yet.` }, { status: 409 });
     }
+    // `?raw=1` — the exact generated source as plain text, never rendered or
+    // rewritten (backs the code viewer's "Raw" link). text/plain so a browser
+    // shows the markup instead of executing it.
+    if (url.searchParams.get("raw") === "1") {
+      return new NextResponse(page.html, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "private, max-age=0, must-revalidate",
+        },
+      });
+    }
     const contentType = contentTypeFor(target);
     // The components file ships as source (usually JS) — served raw. Pages
     // (and an HTML components include) get their root-absolute references
@@ -113,7 +125,16 @@ export async function GET(req: Request, ctx: Ctx) {
     }
     const previewBase = `/api/site-builder/runs/${id}/preview/`;
     const known = [...bundle.assetFiles, ...Object.keys(pages)];
-    return new NextResponse(rewriteAssetRefs(page.html, known, previewBase), {
+    const rewritten = rewriteAssetRefs(page.html, known, previewBase);
+    // A `<base>` makes RELATIVE references resolve against the preview
+    // directory no matter which URL this page was opened at — critically the
+    // nav/footer links that `components.js` inserts at RUNTIME (rewriteAssetRefs
+    // can't see those, they aren't in the served HTML). Without it, "Open
+    // preview" (opened at `.../preview/`) works but the whole-site navigation
+    // breaks the moment a script-inserted link resolves against the wrong base.
+    // Injected right after <head> so it precedes any script or asset.
+    const withBase = injectBase(rewritten, previewBase);
+    return new NextResponse(withBase, {
       headers: previewHeaders("text/html"),
     });
   }
