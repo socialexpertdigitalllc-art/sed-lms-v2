@@ -311,8 +311,11 @@ export function RunLaunch({
           <section>
             <label className="flex items-center gap-2 text-sm text-text">
               <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-              Skip content review — everything stays editable at the preview
+              Skip review — generate and render without stopping for content or image review
             </label>
+            <p className="mt-1 text-xs text-text-faint">
+              Everything stays editable in the preview afterwards, but no image picks are made — the template&apos;s own images ship unless you change them.
+            </p>
           </section>
         </div>
 

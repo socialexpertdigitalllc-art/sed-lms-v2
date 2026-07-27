@@ -73,6 +73,28 @@ describe("RunLaunch", () => {
     fireEvent.change(search, { target: { value: "nomatch" } });
     await waitFor(() => expect(screen.queryByText("Ace Plumbing")).not.toBeInTheDocument());
   });
+
+  it("the auto/skip-review checkbox names BOTH consequences (content and images), not just content", async () => {
+    // Phase 4c, Task 1: measured production fact — two real runs launched
+    // with `options.auto: true` (this checkbox) skipped Gate 1 entirely,
+    // where image curation happens, and shipped 45 sourced image slots'
+    // worth of template stock photos nobody ever saw. The old label ("Skip
+    // content review") reads as "skips the text step" to an operator, and
+    // says nothing about images.
+    stubFetch((url) => {
+      if (url.includes("/api/leads")) return { body: { leads: leadsFixture } };
+      if (url.includes("/api/site-studio/templates")) return { body: { templates: templatesFixture } };
+      return { body: {} };
+    });
+    render(<RunLaunch onClose={() => {}} onCreated={() => {}} />);
+    await screen.findByText("Ace Plumbing");
+
+    const label = screen.getByText(/skip review/i);
+    expect(label.textContent).toMatch(/image/i);
+    expect(label.textContent).toMatch(/content/i);
+    // The hint underneath must say the template's own images ship untouched.
+    expect(screen.getByText(/template's own images/i)).toBeInTheDocument();
+  });
 });
 
 const manifestFixture = {
