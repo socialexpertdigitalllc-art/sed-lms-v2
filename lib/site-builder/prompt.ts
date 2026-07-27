@@ -82,7 +82,13 @@ Do not state a licence, certification, insurance, award, guarantee, star rating,
 
 OUTPUT
 
-Return only the page's HTML, starting with its doctype or opening tag and ending with its closing tag. No explanation, no commentary, no markdown fence.`;
+Your reply must contain the finished page EXACTLY ONCE, wrapped between these two marker lines, each alone on its own line:
+
+===FILE START===
+<the complete page HTML, from its doctype to its closing tag>
+===FILE END===
+
+Everything outside the markers is discarded unread. Do not think out loud anywhere in your reply — no plans, no notes, no partial drafts, no commentary before, between, or after the markers, and no markdown fences. If you catch yourself explaining, stop and write only the file. A reply whose markers contain anything other than the one complete file is a failed reply.`;
 
 function briefText(b: BusinessBrief): string {
   const lines = [`Business name: ${b.business_name}`];
@@ -166,7 +172,13 @@ NEVER INVENT FACTS
 No licence, certification, award, rating, review count, price or years-in-business claim unless the brief states it. Testimonials in this file must become plainly generic, never attributed to invented named customers.
 
 OUTPUT
-Return only the complete rewritten source of the file. No explanation, no commentary, no markdown fence.`;
+Your reply must contain the complete rewritten source of the file EXACTLY ONCE, wrapped between these two marker lines, each alone on its own line:
+
+===FILE START===
+<the complete rewritten file source>
+===FILE END===
+
+Everything outside the markers is discarded unread. Do not think out loud anywhere in your reply — no plans, no notes, no partial drafts, no commentary before, between, or after the markers, and no markdown fences. If you catch yourself explaining, stop and write only the file. A reply whose markers contain anything other than the one complete file is a failed reply.`;
 
 /** Rewrite the template's shared-components file for this business — always
  *  the FIRST generation of a run, so every page prompt can carry the result. */

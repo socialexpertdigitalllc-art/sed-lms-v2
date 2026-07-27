@@ -83,6 +83,52 @@ describe("extractHtml", () => {
     if (r.ok) return;
     expect(r.error).toMatch(/no HTML/i);
   });
+
+  it("prefers the FILE START/END markers over everything else in the reply", () => {
+    const raw = [
+      "Let me think about the header first.",
+      "```html",
+      "<html><body>a draft snippet, NOT the page</body></html>",
+      "```",
+      "Actually, that's wrong. Here's the final page:",
+      "===FILE START===",
+      RAW_PAGE,
+      "===FILE END===",
+      "Done! Let me know if you'd like changes.",
+    ].join("\n");
+    const r = extractHtml(raw, "index.html");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.html).toBe(RAW_PAGE);
+  });
+
+  it("REGRESSION: a narrating reply that interleaves reasoning with HTML snippets must fail, never ship", () => {
+    // Shape of the real production failure: prose planning + fenced snippets
+    // + the page, no markers. The old first-<html>-to-last-</html> slice
+    // swallowed all the narration into the shipped file.
+    const raw = [
+      "Let me analyze the template structure.",
+      "```html",
+      "<html><body>snippet one</body></html>",
+      "```",
+      "Actually, I should reconsider the hero section.",
+      "Wait, the brief says no license claims. Let me remove those.",
+      "I'll now write the final page:",
+      RAW_PAGE,
+    ].join("\n");
+    const r = extractHtml(raw, "services.html");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("services.html");
+    expect(r.error).toMatch(/regenerate/i);
+  });
+
+  it("a FILE START marker with no FILE END fails as truncation", () => {
+    const raw = "===FILE START===\n<!DOCTYPE html><html><body>cut off mid-";
+    const r = extractHtml(raw, "index.html");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/FILE END|cut off/i);
+  });
 });
 
 describe("extractFileSource", () => {
@@ -104,6 +150,82 @@ describe("extractFileSource", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain("components.js");
+  });
+
+  it("prefers the FILE START/END markers, ignoring narration and snippet fences around them", () => {
+    const raw = [
+      "Let me plan the rewrite.",
+      "```js",
+      "// a small draft snippet",
+      "```",
+      "Actually, here is the final file:",
+      "===FILE START===",
+      SOURCE,
+      "===FILE END===",
+      "That covers everything.",
+    ].join("\n");
+    const r = extractFileSource(raw, "components.js");
+    expect(r).toEqual({ ok: true, html: SOURCE });
+  });
+
+  it("unwraps a single fence INSIDE the markers instead of calling it contamination", () => {
+    const raw = ["===FILE START===", "```js", SOURCE, "```", "===FILE END==="].join("\n");
+    const r = extractFileSource(raw, "components.js");
+    expect(r).toEqual({ ok: true, html: SOURCE });
+  });
+
+  it("REGRESSION: a marker-less narrating reply picks the LARGEST fenced block, not first-to-last", () => {
+    // Shape of the real production failure: the old slicer took everything
+    // from the first fence to the last, shipping the whole thought process
+    // as the deployed components.js.
+    const realFile = `class SiteHeader extends HTMLElement {\n  connectedCallback() { this.innerHTML = "<header>Acme</header>"; }\n}\ncustomElements.define("site-header", SiteHeader);\n// ${"x".repeat(400)}`;
+    const raw = [
+      "Looking at the template, the header uses a wordmark.",
+      "```html",
+      "<span>NORTHPOINT</span>",
+      "```",
+      "The final file:",
+      "```javascript",
+      realFile,
+      "```",
+    ].join("\n");
+    const r = extractFileSource(raw, "components.js");
+    expect(r).toEqual({ ok: true, html: realFile });
+  });
+
+  it("REGRESSION: a truncated narration-only reply (no markers, no closed final fence) must fail, never ship", () => {
+    // The production components.js ended mid-sentence: hundreds of lines of
+    // planning, quoted snippets, then "OK, writing the final file now. Hmm
+    // one issue -" and the output limit hit. Nothing in it is the file, and
+    // the only COMPLETE fenced block is a tiny quoted snippet — which must
+    // not be mistaken for the deliverable.
+    const planning = Array.from(
+      { length: 60 },
+      (_, i) => `The template's section ${i} needs its copy rewritten for the new trade before anything ships.`,
+    ).join("\n");
+    const raw = [
+      "Let me work through the components one by one.",
+      planning,
+      "```html",
+      "<span>NORTHPOINT</span>",
+      "```",
+      "I should replace this with an image tag.",
+      "Actually, licensing claims must go. Let me remove those.",
+      "Wait, the testimonials need generic names too.",
+      "OK, writing the final file now. Hmm one issue -",
+    ].join("\n");
+    const r = extractFileSource(raw, "components.js");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/regenerate/i);
+  });
+
+  it("a FILE START marker with no FILE END fails as truncation", () => {
+    const raw = "===FILE START===\nclass X extends HTMLElement {} // cut off";
+    const r = extractFileSource(raw, "components.js");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/FILE END|cut off/i);
   });
 });
 
@@ -130,6 +252,36 @@ describe("generateComponents", () => {
     expect(seenUser).toContain("js/components.js");
     expect(seenUser).toContain("Demo Kitchens");
     expect(seenUser).toContain("index.html, about.html");
+  });
+
+  it("fails when the rewrite lost the original's customElements.define registrations", async () => {
+    const original = `class SiteHeader extends HTMLElement {}\ncustomElements.define("site-header", SiteHeader);`;
+    const call = async () => ({ text: "// I rewrote the header colours\nconst ACCENT = '#0C5AA0';" });
+    const r = await generateComponents({ aiCall: call }, {
+      brief: brief2,
+      images: [],
+      file: "components.js",
+      source: original,
+      siteFiles: ["index.html"],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("customElements.define");
+  });
+
+  it("fails when the rewrite is implausibly short next to the original", async () => {
+    const original = `// shared components\n${"const filler = 1;\n".repeat(200)}`;
+    const call = async () => ({ text: "const stub = true;" });
+    const r = await generateComponents({ aiCall: call }, {
+      brief: brief2,
+      images: [],
+      file: "components.js",
+      source: original,
+      siteFiles: ["index.html"],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/implausibly short/i);
   });
 });
 
