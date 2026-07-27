@@ -1,7 +1,11 @@
 import {
   AI_PROVIDER_REGISTRY,
   AI_TASK_REGISTRY,
+  MIN_OUTPUT_TOKENS,
   capableModelsForTask,
+  clampOutputTokens,
+  defaultOutputTokens,
+  getModel,
   getProvider,
   type AiCredentialField,
   type AiModelDescriptor,
@@ -45,6 +49,12 @@ export interface AiTaskSetting {
   /** The stored assignment, or null when the task runs its default. */
   assignedProvider: string | null;
   assignedModel: string | null;
+  /** Operator's stored output budget, or null when the model's default runs. */
+  assignedMaxOutputTokens: number | null;
+  /** The budget the next run will actually request, and the range the
+   *  operator may choose within for the EFFECTIVE model. */
+  effectiveMaxOutputTokens: number;
+  outputTokenRange: { min: number; max: number; recommended: number } | null;
   /** What will actually serve the task on the next run. */
   effectiveProvider: string;
   effectiveModel: string;
@@ -102,6 +112,7 @@ export async function listAiRoutingSettings(): Promise<AiRoutingSettings> {
 
     const effectiveProvider = assignedUsable ? assignment!.providerKey : t.defaultProvider;
     const effectiveModel = assignedUsable ? assignment!.model : t.defaultModel;
+    const effectiveModelDescriptor = getModel(effectiveProvider, effectiveModel);
     const effectiveNote = !assignment
       ? null
       : assignedUsable
@@ -120,6 +131,20 @@ export async function listAiRoutingSettings(): Promise<AiRoutingSettings> {
       defaultLabel: `${providerLabel(t.defaultProvider)} · ${t.defaultModel}`,
       assignedProvider: assignment?.providerKey ?? null,
       assignedModel: assignment?.model ?? null,
+      assignedMaxOutputTokens: assignment?.maxOutputTokens ?? null,
+      // Budget + range describe the EFFECTIVE model — what will really run —
+      // so the number the operator sees is the number that will be sent, even
+      // when their assignment is falling back.
+      effectiveMaxOutputTokens: effectiveModelDescriptor
+        ? clampOutputTokens(effectiveModelDescriptor, assignedUsable ? assignment?.maxOutputTokens : null)
+        : 0,
+      outputTokenRange: effectiveModelDescriptor
+        ? {
+            min: Math.min(MIN_OUTPUT_TOKENS, effectiveModelDescriptor.maxOutputTokens),
+            max: effectiveModelDescriptor.maxOutputTokens,
+            recommended: defaultOutputTokens(effectiveModelDescriptor),
+          }
+        : null,
       effectiveProvider,
       effectiveModel,
       effectiveLabel: `${providerLabel(effectiveProvider)} · ${effectiveModel}`,

@@ -52,6 +52,13 @@ const assignmentSchema = z.object({
   /** null on both = reset this task to its registry default. */
   provider_key: z.string().trim().min(1).max(64).nullable(),
   model: z.string().trim().min(1).max(128).nullable(),
+  /**
+   * Output-token budget for this task. Omit or null = the model's
+   * vendor-recommended default. NOT range-checked here on purpose: the
+   * allowed range is per-model, so `saveAiTaskAssignment` clamps it against
+   * the model actually being assigned rather than this schema guessing.
+   */
+  max_output_tokens: z.number().int().positive().nullish(),
 });
 
 const putSchema = z.discriminatedUnion("kind", [providerSchema, assignmentSchema]);
@@ -128,6 +135,7 @@ export async function PUT(req: Request) {
       parsed.data.provider_key,
       parsed.data.model,
       auth.userId,
+      parsed.data.max_output_tokens ?? null,
     );
     clearTaskModelCache();
     return NextResponse.json({ assignment });

@@ -6,6 +6,8 @@ import {
   AI_TASK_REGISTRY,
   apiKeyFrom,
   assignmentError,
+  clampOutputTokens,
+  defaultOutputTokens,
   getModel,
   getProvider,
   getTask,
@@ -51,6 +53,13 @@ export interface AiTaskAssignment {
   taskKey: string;
   providerKey: string;
   model: string;
+  /**
+   * Operator's output-token budget for this task, or null to use the model's
+   * vendor-recommended default. Always re-clamped to the model's allowed
+   * range at resolve time, so a value saved against a different model can
+   * never produce an out-of-range request.
+   */
+  maxOutputTokens: number | null;
   updatedAt: string | null;
 }
 
@@ -65,6 +74,8 @@ type AssignmentRow = {
   task_key: string;
   provider_key: string;
   model: string;
+  /** Optional: absent until 0059 is applied — see `readAssignmentRows`. */
+  max_output_tokens?: number | null;
   updated_at: string | null;
 };
 
@@ -146,7 +157,13 @@ async function readProviderRows(): Promise<ProviderRow[]> {
 async function readAssignmentRows(): Promise<AssignmentRow[]> {
   try {
     const admin = createAdminClient();
-    const { data } = await admin.from(ASSIGNMENT_TABLE).select("task_key, provider_key, model, updated_at");
+    // `*` ON PURPOSE, not a column list. This table holds no secrets (task,
+    // provider, model, who/when), and a column list breaks the moment the
+    // code knows about a column the DB has not been migrated to yet: the
+    // query errors, the catch below swallows it, and EVERY assignment
+    // silently vanishes into "use the default". With `*`, a column the DB
+    // lacks simply reads as undefined and routing keeps working.
+    const { data } = await admin.from(ASSIGNMENT_TABLE).select("*");
     return (data ?? []) as AssignmentRow[];
   } catch {
     return [];
@@ -254,28 +271,47 @@ export async function getAiTaskAssignments(): Promise<AiTaskAssignment[]> {
   const rows = await readAssignmentRows();
   return rows
     .filter((r) => getTask(r.task_key) !== undefined && assignmentError(r.task_key, r.provider_key, r.model) === null)
-    .map((r) => ({ taskKey: r.task_key, providerKey: r.provider_key, model: r.model, updatedAt: r.updated_at }));
+    .map((r) => ({
+      taskKey: r.task_key,
+      providerKey: r.provider_key,
+      model: r.model,
+      maxOutputTokens: typeof r.max_output_tokens === "number" ? r.max_output_tokens : null,
+      updatedAt: r.updated_at,
+    }));
 }
 
-/** Write one assignment. Returns null when the task/pairing is not valid. */
+/**
+ * Write one assignment. Returns null when the task/pairing is not valid.
+ *
+ * `maxOutputTokens` is CLAMPED to the chosen model's allowed range before it
+ * is stored, so the DB can never hold a budget the vendor would reject;
+ * passing null (or omitting it) stores null, meaning "use the model's
+ * recommended default".
+ */
 export async function saveAiTaskAssignment(
   taskKey: string,
   providerKey: string,
   model: string,
   updatedBy?: string | null,
+  maxOutputTokens?: number | null,
 ): Promise<AiTaskAssignment | null> {
   if (assignmentError(taskKey, providerKey, model) !== null) return null;
+  const descriptor = getModel(providerKey, model);
+  const clamped =
+    typeof maxOutputTokens === "number" && descriptor ? clampOutputTokens(descriptor, maxOutputTokens) : null;
+
   const admin = createAdminClient();
   const patch = {
     task_key: taskKey,
     provider_key: providerKey,
     model,
+    max_output_tokens: clamped,
     updated_by: updatedBy ?? null,
     updated_at: new Date().toISOString(),
   };
   const { error } = await admin.from(ASSIGNMENT_TABLE).upsert(patch, { onConflict: "task_key" });
   if (error) throw new Error(error.message);
-  return { taskKey, providerKey, model, updatedAt: patch.updated_at };
+  return { taskKey, providerKey, model, maxOutputTokens: clamped, updatedAt: patch.updated_at };
 }
 
 /** Drop an assignment so the task goes back to its registry default. */
@@ -294,18 +330,28 @@ export interface ResolvedTaskModel {
   model: string;
   /** Carries a live API key. Never log or serialise. */
   spec: ProviderSpec;
+  /**
+   * The output budget a `"model-max"` caller actually gets: the operator's
+   * per-task override when they set one, else the model's vendor-recommended
+   * figure — always clamped into the model's allowed range, so this is safe
+   * to send as-is. `spec.maxOutputTokens` remains the HARD ceiling and still
+   * bounds every request independently.
+   */
+  outputTokens: number;
   /** True when the registry default is running because the assignment could not. */
   usedFallback: boolean;
   /** Human reason the assignment was skipped, when it was. */
   fallbackReason: string | null;
 }
 
-/** Build a callable spec for a (provider, model), or null when unusable. */
+/** Build a callable spec for a (provider, model), or null when unusable.
+ *  `overrideTokens` is the operator's per-task budget, if they set one. */
 function specFor(
   providerKey: string,
   modelId: string,
   configs: AiProviderConfigEntry[],
-): { spec: ProviderSpec; reason: null } | { spec: null; reason: string } {
+  overrideTokens?: number | null,
+): { spec: ProviderSpec; outputTokens: number; reason: null } | { spec: null; reason: string } {
   const descriptor = getProvider(providerKey);
   if (!descriptor) return { spec: null, reason: `provider "${providerKey}" is not in the registry` };
   const model = getModel(providerKey, modelId);
@@ -315,7 +361,14 @@ function specFor(
   const apiKey = apiKeyFrom(descriptor, config?.credentials);
   if (!apiKey) return { spec: null, reason: `${descriptor.label} has no stored credentials` };
   return {
-    spec: { label: `${descriptor.label} ${model.id}`, endpoint: descriptor.endpoint, apiKey, maxOutputTokens: model.maxOutputTokens },
+    spec: {
+      label: `${descriptor.label} ${model.id}`,
+      endpoint: descriptor.endpoint,
+      apiKey,
+      maxOutputTokens: model.maxOutputTokens,
+      outputTokenParam: descriptor.outputTokenParam,
+    },
+    outputTokens: clampOutputTokens(model, overrideTokens),
     reason: null,
   };
 }
@@ -343,20 +396,31 @@ export async function resolveTaskModel(taskKey: AiTaskKey): Promise<ResolvedTask
   let fallbackReason: string | null = null;
 
   if (assignment) {
-    const attempt = specFor(assignment.providerKey, assignment.model, configs);
+    const attempt = specFor(assignment.providerKey, assignment.model, configs, assignment.maxOutputTokens);
     if (attempt.spec) {
-      return { providerKey: assignment.providerKey, model: assignment.model, spec: attempt.spec, usedFallback: false, fallbackReason: null };
+      return {
+        providerKey: assignment.providerKey,
+        model: assignment.model,
+        spec: attempt.spec,
+        outputTokens: attempt.outputTokens,
+        usedFallback: false,
+        fallbackReason: null,
+      };
     }
     fallbackReason = attempt.reason;
     console.warn(`[ai-routing] ${taskKey}: ${attempt.reason} — falling back to ${task.defaultProvider} ${task.defaultModel}`);
   }
 
+  // The override belongs to the ASSIGNED model, not the fallback one — a
+  // budget chosen for a 512K-output model must not follow the task onto an
+  // 8K one. The fallback runs on its own model's default.
   const fallback = specFor(task.defaultProvider, task.defaultModel, configs);
   if (fallback.spec) {
     return {
       providerKey: task.defaultProvider,
       model: task.defaultModel,
       spec: fallback.spec,
+      outputTokens: fallback.outputTokens,
       usedFallback: assignment !== undefined,
       fallbackReason,
     };
@@ -372,7 +436,14 @@ export async function resolveTaskModel(taskKey: AiTaskKey): Promise<ResolvedTask
     return {
       providerKey: descriptor.key,
       model: model.id,
-      spec: { label: `${descriptor.label} ${model.id}`, endpoint: descriptor.endpoint, apiKey: envKey, maxOutputTokens: model.maxOutputTokens },
+      spec: {
+        label: `${descriptor.label} ${model.id}`,
+        endpoint: descriptor.endpoint,
+        apiKey: envKey,
+        maxOutputTokens: model.maxOutputTokens,
+        outputTokenParam: descriptor.outputTokenParam,
+      },
+      outputTokens: defaultOutputTokens(model),
       usedFallback: assignment !== undefined,
       fallbackReason,
     };
@@ -387,16 +458,30 @@ export async function defaultSpecForTask(taskKey: AiTaskKey): Promise<ResolvedTa
   const configs = await getAiProviderConfigs().catch(() => [] as AiProviderConfigEntry[]);
   const attempt = specFor(task.defaultProvider, task.defaultModel, configs);
   if (attempt.spec) {
-    return { providerKey: task.defaultProvider, model: task.defaultModel, spec: attempt.spec, usedFallback: true, fallbackReason: null };
+    return {
+      providerKey: task.defaultProvider,
+      model: task.defaultModel,
+      spec: attempt.spec,
+      outputTokens: attempt.outputTokens,
+      usedFallback: true,
+      fallbackReason: null,
+    };
   }
   const descriptor = getProvider(task.defaultProvider);
   const envKey = descriptor ? (process.env[descriptor.envKey] ?? "").trim() : "";
   const model = descriptor ? getModel(task.defaultProvider, task.defaultModel) : undefined;
   if (!descriptor || !model || !envKey) return null;
   return {
+    outputTokens: defaultOutputTokens(model),
     providerKey: descriptor.key,
     model: model.id,
-    spec: { label: `${descriptor.label} ${model.id}`, endpoint: descriptor.endpoint, apiKey: envKey, maxOutputTokens: model.maxOutputTokens },
+    spec: {
+      label: `${descriptor.label} ${model.id}`,
+      endpoint: descriptor.endpoint,
+      apiKey: envKey,
+      maxOutputTokens: model.maxOutputTokens,
+      outputTokenParam: descriptor.outputTokenParam,
+    },
     usedFallback: true,
     fallbackReason: null,
   };

@@ -142,6 +142,13 @@ export interface ProviderSpec {
   apiKey: string;
   /** Hard ceiling for this model; the request sends min(maxTokens, this). */
   maxOutputTokens: number;
+  /**
+   * Wire field for the output budget. Defaults to `max_tokens`, which every
+   * OpenAI-compatible provider understands; a provider that has deprecated it
+   * (MiniMax → `max_completion_tokens`) sets this from its registry
+   * descriptor. See `AiProviderDescriptor.outputTokenParam`.
+   */
+  outputTokenParam?: "max_tokens" | "max_completion_tokens";
 }
 
 /**
@@ -177,7 +184,7 @@ export async function callWithProvider(
       signal: combined.signal,
       body: JSON.stringify({
         model,
-        max_tokens: Math.min(opts.maxTokens, cfg.maxOutputTokens),
+        [cfg.outputTokenParam ?? "max_tokens"]: Math.min(opts.maxTokens, cfg.maxOutputTokens),
         temperature: opts.temperature,
         stream: false,
         messages: [

@@ -53,6 +53,14 @@ function optionValue(providerKey: string, model: string): string {
   return `${providerKey}::${model}`;
 }
 
+/** Token counts read as "128K"/"1M" far faster than 131072/1000000 when the
+ *  operator is comparing a range; exact values stay in the input itself. */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${Number((n / 1_000_000).toFixed(2))}M`;
+  if (n >= 1000) return `${Number((n / 1000).toFixed(n % 1000 === 0 ? 0 : 1))}K`;
+  return String(n);
+}
+
 /* ------------------------------------------------------------ credentials */
 
 function CredentialForm({ provider, onPatch }: { provider: AiProviderSetting; onPatch: (next: Partial<AiProviderSetting>) => void }) {
@@ -322,6 +330,9 @@ function ProviderCard({ provider, onPatch }: { provider: AiProviderSetting; onPa
 function TaskRow({ task, onPatch }: { task: AiTaskSetting; onPatch: (key: string, next: Partial<AiTaskSetting>) => void }) {
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
+  const [budgetDraft, setBudgetDraft] = useState(
+    task.assignedMaxOutputTokens === null ? "" : String(task.assignedMaxOutputTokens),
+  );
 
   const current = task.assignedProvider && task.assignedModel ? optionValue(task.assignedProvider, task.assignedModel) : "";
 
@@ -338,19 +349,62 @@ function TaskRow({ task, onPatch }: { task: AiTaskSetting; onPatch: (key: string
         toast({ kind: "error", title: "Could not change the model", body: typeof data.error === "string" ? data.error : undefined });
         return null;
       }
-      return data as { assignment: { providerKey: string; model: string; updatedAt: string } | null };
+      return data as {
+        assignment: { providerKey: string; model: string; maxOutputTokens: number | null; updatedAt: string } | null;
+      };
     } finally {
       setSaving(false);
     }
+  }
+
+  /**
+   * Save the typed budget against the CURRENTLY assigned model. Sends null
+   * for an empty box (= use the vendor's recommended default) and echoes back
+   * whatever the server actually stored, which is the clamped value — so a
+   * number typed above the model's ceiling visibly snaps down to it rather
+   * than appearing to have been accepted verbatim.
+   */
+  async function commitBudget() {
+    if (!task.assignedProvider || !task.assignedModel) return;
+    const trimmed = budgetDraft.trim();
+    const parsed = trimmed === "" ? null : Number(trimmed);
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed <= 0)) {
+      setBudgetDraft(task.assignedMaxOutputTokens === null ? "" : String(task.assignedMaxOutputTokens));
+      return;
+    }
+    if (parsed === task.assignedMaxOutputTokens) return;
+
+    const data = await put({
+      provider_key: task.assignedProvider,
+      model: task.assignedModel,
+      max_output_tokens: parsed,
+    });
+    if (!data) {
+      setBudgetDraft(task.assignedMaxOutputTokens === null ? "" : String(task.assignedMaxOutputTokens));
+      return;
+    }
+    const stored = data.assignment?.maxOutputTokens ?? null;
+    setBudgetDraft(stored === null ? "" : String(stored));
+    onPatch(task.key, {
+      assignedMaxOutputTokens: stored,
+      effectiveMaxOutputTokens: stored ?? task.outputTokenRange?.recommended ?? task.effectiveMaxOutputTokens,
+      updatedAt: data.assignment?.updatedAt ?? null,
+    });
+    toast({
+      kind: "success",
+      title: stored === null ? `${task.label} → recommended output budget` : `${task.label} → ${stored} output tokens`,
+    });
   }
 
   async function choose(value: string) {
     if (!value) {
       const data = await put({ provider_key: null, model: null });
       if (!data) return;
+      setBudgetDraft("");
       onPatch(task.key, {
         assignedProvider: null,
         assignedModel: null,
+        assignedMaxOutputTokens: null,
         effectiveProvider: task.defaultProvider,
         effectiveModel: task.defaultModel,
         effectiveLabel: task.defaultLabel,
@@ -361,12 +415,16 @@ function TaskRow({ task, onPatch }: { task: AiTaskSetting; onPatch: (key: string
       return;
     }
     const [providerKey, model] = value.split("::");
+    // No max_output_tokens: switching model CLEARS the budget rather than
+    // carrying a number chosen for a different model's range onto this one.
     const data = await put({ provider_key: providerKey, model });
     if (!data) return;
+    setBudgetDraft("");
     const option = task.options.find((o) => o.providerKey === providerKey && o.model === model);
     onPatch(task.key, {
       assignedProvider: providerKey,
       assignedModel: model,
+      assignedMaxOutputTokens: null,
       effectiveProvider: option?.usable ? providerKey : task.defaultProvider,
       effectiveModel: option?.usable ? model : task.defaultModel,
       effectiveLabel: option?.usable ? `${option.providerLabel} · ${model}` : task.defaultLabel,
@@ -407,6 +465,11 @@ function TaskRow({ task, onPatch }: { task: AiTaskSetting; onPatch: (key: string
         <div className="shrink-0 text-right">
           <p className="text-[11px] uppercase tracking-wide text-text-faint">Serving this task</p>
           <p className="tabular font-mono text-xs text-text">{task.effectiveLabel}</p>
+          {task.outputTokenRange ? (
+            <p className="tabular mt-0.5 font-mono text-[11px] text-text-faint">
+              {formatTokens(task.effectiveMaxOutputTokens)} output
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -423,10 +486,45 @@ function TaskRow({ task, onPatch }: { task: AiTaskSetting; onPatch: (key: string
               ))}
             </select>
           </Field>
+
+          {/* Output budget. Only offered once a model is actually assigned:
+              the allowed range is a property of THAT model, and a number
+              typed against the registry default would be re-clamped the
+              moment the operator picks a different one. */}
+          {task.outputTokenRange && current ? (
+            <Field label="Max output tokens" className="w-44">
+              <input
+                type="number"
+                inputMode="numeric"
+                className={inputCls}
+                min={task.outputTokenRange.min}
+                max={task.outputTokenRange.max}
+                step={1000}
+                value={budgetDraft}
+                disabled={saving}
+                placeholder={String(task.outputTokenRange.recommended)}
+                onChange={(e) => setBudgetDraft(e.target.value)}
+                onBlur={() => void commitBudget()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void commitBudget();
+                }}
+              />
+            </Field>
+          ) : null}
+
           <button type="button" onClick={() => void choose("")} disabled={saving || !current} className={cn(btnSecondarySm, "mb-0.5")}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Reset to default
           </button>
         </div>
+      ) : null}
+
+      {task.outputTokenRange && current ? (
+        <p className="mt-1.5 text-[11px] leading-relaxed text-text-faint">
+          Allowed {formatTokens(task.outputTokenRange.min)}–{formatTokens(task.outputTokenRange.max)} for this model;
+          leave blank for the vendor&apos;s recommended {formatTokens(task.outputTokenRange.recommended)}. A value above
+          the model&apos;s ceiling is clamped, not rejected. Raise this if whole pages come back cut off mid-file; note
+          that input and output share one budget on some providers, so the very top of the range is not always reachable.
+        </p>
       ) : null}
 
       {task.effectiveNote ? (

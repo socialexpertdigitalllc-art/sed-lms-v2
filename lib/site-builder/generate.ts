@@ -41,6 +41,27 @@ const CLOSE_TAG_NEEDLE = "</html>";
  * LAST start marker wins because narration sometimes quotes the marker
  * itself while planning.
  */
+/**
+ * Strip a reasoning model's chain-of-thought out of a reply.
+ *
+ * VERIFIED against the live MiniMax API 2026-07-28: `MiniMax-M3` returns its
+ * thinking inside the ordinary `content` string, wrapped in `<think>…</think>`
+ * — a two-line "say OK" probe came back as
+ * `"<think>The user wants me to reply with exactly OK…</think>\n\nOK"`.
+ * That is the mechanism behind reasoning text landing inside generated files,
+ * and it is invisible to any extractor that only looks for fences or markers.
+ *
+ * A block left UNCLOSED (the model was cut off mid-thought) means everything
+ * after the opener is reasoning and no file ever arrived, so the whole
+ * remainder is dropped and the caller's "no HTML"/"empty" path reports it.
+ */
+export function stripReasoningBlocks(raw: string): string {
+  return raw
+    .replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<(think|thinking|reasoning)>[\s\S]*$/i, "")
+    .trim();
+}
+
 type MarkedResult = { found: string } | { truncated: true } | null;
 
 const START_MARKER_RE = /^[^\S\r\n]*=+[^\S\r\n]*FILE START[^\S\r\n]*=+[^\S\r\n]*$/gim;
@@ -150,7 +171,8 @@ function sliceHtmlDocument(text: string, label: string): GenerateOutcome {
  * A start marker with no end marker fails as truncation — the model spent
  * its output budget narrating and never finished the file.
  */
-export function extractHtml(raw: string, label: string): GenerateOutcome {
+export function extractHtml(rawReply: string, label: string): GenerateOutcome {
+  const raw = stripReasoningBlocks(rawReply);
   const marked = extractMarked(raw);
   if (marked && "truncated" in marked) {
     return {
@@ -199,8 +221,8 @@ function largestFencedBlock(text: string): string | null {
  * Whatever is chosen must then pass the same narration/fence contamination
  * check pages get.
  */
-export function extractFileSource(raw: string, label: string): GenerateOutcome {
-  const text = raw.trim();
+export function extractFileSource(rawReply: string, label: string): GenerateOutcome {
+  const text = stripReasoningBlocks(rawReply);
   if (!text) return { ok: false, error: `${label}: the reply was empty.` };
 
   const marked = extractMarked(text);
