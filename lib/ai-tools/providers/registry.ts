@@ -159,7 +159,14 @@ export function getModel(providerKey: string, modelId: string): AiModelDescripto
 
 /* ----------------------------------------------------------------- tasks */
 
-export type AiTaskKey = "content_plan" | "file_regen" | "image_vision" | "legacy_v1" | "template_compile" | "content_write";
+export type AiTaskKey =
+  | "content_plan"
+  | "file_regen"
+  | "image_vision"
+  | "legacy_v1"
+  | "template_compile"
+  | "content_write"
+  | "site_build";
 
 export interface AiTaskDescriptor {
   key: AiTaskKey;
@@ -253,15 +260,48 @@ const contentWrite: AiTaskDescriptor = {
   key: "content_write",
   label: "Website copy (Site Studio)",
   description:
-    "One call per page, every page written in parallel. Returns strict JSON of plain strings only — no markup, no URLs, no tokens — and is never shown identity fields (name, phone, email, logo, map), which are injected deterministically instead.",
+    "One (or, for a large page, several parallel batch) call(s) per page — every page written in parallel, and a page with too many slots for one reply is itself split into batches. Returns strict JSON of plain strings only — no markup, no URLs, no tokens — and is never shown identity fields (name, phone, email, logo, map), which are injected deterministically instead.",
   where: "lib/site-studio/run/writer.ts",
-  requires: { vision: false, minOutputTokens: 8000 },
+  // 8000 was sized for 6-slot test fixtures, not a real commercial template —
+  // a measured production page with 183 text slots truncated mid-JSON at
+  // that ceiling every time. Writing now batches a page's slots (see
+  // DEFAULT_WRITE_BATCH_SIZE in writer.ts), but a single batch — or an
+  // atomic repeat too big to split across batches — must still comfortably
+  // clear real model output, including a verbose model's hidden reasoning
+  // tokens (see image_vision's own note on gemini-3.5-flash's ~1,800). Rebased
+  // on LONG_OUTPUT_TOKENS, the same "long output" bar file_regen's whole-page
+  // rewrite already uses, rather than a second invented number.
+  requires: { vision: false, minOutputTokens: LONG_OUTPUT_TOKENS },
   defaultProvider: "gemini",
   defaultModel: "gemini-3.1-pro-preview",
   routable: true,
 };
 
-export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [contentPlan, fileRegen, imageVision, legacyV1, templateCompile, contentWrite];
+const siteBuild: AiTaskDescriptor = {
+  key: "site_build",
+  label: "Page rewrite (Site Builder)",
+  description:
+    "One call per page, every page of the site rewritten in parallel. Sent the page's FULL HTML and returns the FULL rewritten HTML — a real template page is ~110KB (~30k tokens) and must come back whole, or the reply is truncated and refused.",
+  where: "lib/site-builder/generate.ts",
+  // Same bar as content_write: a whole page must clear real model output,
+  // not a JSON-batch-sized one. Site Builder sends and returns markup
+  // directly (see docs/superpowers/plans/2026-07-28-site-builder.md), so
+  // there is no smaller "just the text" path to size this down to.
+  requires: { vision: false, minOutputTokens: LONG_OUTPUT_TOKENS },
+  defaultProvider: "gemini",
+  defaultModel: "gemini-3.1-pro-preview",
+  routable: true,
+};
+
+export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
+  contentPlan,
+  fileRegen,
+  imageVision,
+  legacyV1,
+  templateCompile,
+  contentWrite,
+  siteBuild,
+];
 
 export function getTask(key: string): AiTaskDescriptor | undefined {
   return AI_TASK_REGISTRY.find((t) => t.key === key);
