@@ -30,6 +30,17 @@ function isGoogleHost(src: string): boolean {
   }
 }
 
+/**
+ * True when `src` has the "Google Maps query embed" shape — the SAME
+ * substring test the map_embed detection below already uses. A real
+ * template can carry MORE THAN ONE such iframe (e.g. a per-neighborhood
+ * area page embedding its own local map alongside the shared main-location
+ * map) — those are all still "a map", never a Business Profile, so a
+ * profile-embed candidate must NOT match this shape, however Google-hosted
+ * and however different its query string is from the captured map_embed.
+ */
+const isMapEmbedShaped = (src: string): boolean => src.includes("google.com/maps");
+
 const BRAND_LANDMARK_TAGS = new Set(["header", "footer"]);
 const BRAND_HOOK_RE = /\b(logo|brand)\b/i;
 const BRAND_SKIP = new Set(["script", "style", "noscript", "template", "title", "head", "html", "body", "header", "footer", "nav"]);
@@ -205,21 +216,26 @@ export function extractIdentity(
   }
 
   for (const page of inv.pages) {
-    const iframe = page.root.querySelectorAll("iframe").find((f) => (f.getAttribute("src") ?? "").includes("google.com/maps"));
+    const iframe = page.root.querySelectorAll("iframe").find((f) => isMapEmbedShaped(f.getAttribute("src") ?? ""));
     if (iframe && !identity.map_embed) identity.map_embed = iframe.getAttribute("src")!;
   }
   if (identity.map_embed) replaceEverywhere(inv.pages, identity.map_embed, idToken("map_embed"), false);
 
   // Pass 2b (Phase 4c, Task 6): a SEPARATE Google iframe — the client's
   // Business Profile / reviews widget, never the map — tokenized as
-  // {{id:profile_embed}}. Distinguished from the map purely by pointing at
-  // a DIFFERENT src: the locked operator decision is that the map iframe
-  // always keeps using map_embed_link, so any OTHER Google iframe found is
-  // the profile embed — never a substitute for, or folded into, the map.
+  // {{id:profile_embed}}. A candidate must be Google-hosted AND must NOT
+  // have the map's own "maps query embed" shape — a template can legitimately
+  // carry MORE THAN ONE map-shaped iframe (e.g. a per-neighborhood area page
+  // with its own local map alongside the shared main-location map); those
+  // are all still maps, never a profile, however different their src is
+  // from the captured map_embed. The locked operator decision is that the
+  // map iframe always keeps using map_embed_link, so a genuinely different,
+  // non-map-shaped Google iframe is the profile embed — never a substitute
+  // for, or folded into, the map.
   for (const page of inv.pages) {
     const iframe = page.root.querySelectorAll("iframe").find((f) => {
       const src = f.getAttribute("src") ?? "";
-      return !!src && src !== identity.map_embed && isGoogleHost(src);
+      return !!src && !isMapEmbedShaped(src) && isGoogleHost(src);
     });
     if (iframe && !identity.profile_embed) identity.profile_embed = iframe.getAttribute("src")!;
   }

@@ -113,14 +113,14 @@ describe("extractIdentity (brand block detection, Phase 4c Task 5)", () => {
 });
 
 describe("extractIdentity (profile_embed, Phase 4c Task 6 — the map keeps map_embed, a separate Google iframe is the profile)", () => {
-  it("tokenizes a second Google iframe (not the map) as {{id:profile_embed}}, leaving the map iframe as {{id:map_embed}}", () => {
+  it("tokenizes a second Google iframe (not map-shaped) as {{id:profile_embed}}, leaving the map iframe as {{id:map_embed}}", () => {
     const inv = buildInv(`<html><head><title>Acme Co | Plumbing</title></head><body>
       <iframe src="https://maps.google.com/maps?q=1420%20Larimer&z=13&output=embed"></iframe>
-      <iframe src="https://www.google.com/maps/place/Acme+Co/@39.7,-104.9,15z"></iframe>
+      <iframe src="https://g.page/acme-co/review"></iframe>
     </body></html>`);
     const { identity } = extractIdentity(inv);
     expect(identity.map_embed).toBe("https://maps.google.com/maps?q=1420%20Larimer&z=13&output=embed");
-    expect(identity.profile_embed).toBe("https://www.google.com/maps/place/Acme+Co/@39.7,-104.9,15z");
+    expect(identity.profile_embed).toBe("https://g.page/acme-co/review");
     const out = inv.pages[0].root.toString();
     expect(out).toContain('src="{{id:map_embed}}"');
     expect(out).toContain('src="{{id:profile_embed}}"');
@@ -140,6 +140,16 @@ describe("extractIdentity (profile_embed, Phase 4c Task 6 — the map keeps map_
       <iframe src="https://www.facebook.com/plugins/page.php?href=acme"></iframe>
     </body></html>`);
     const { identity } = extractIdentity(inv);
+    expect(identity.profile_embed).toBeUndefined();
+  });
+
+  it("does NOT treat a second, differently-queried map-shaped iframe (e.g. a per-neighborhood area page's own local map) as a profile embed", () => {
+    const inv = buildInv(`<html><head><title>Acme Co | Plumbing</title></head><body>
+      <iframe src="https://maps.google.com/maps?q=1420%20Larimer&z=13&output=embed"></iframe>
+      <iframe src="https://maps.google.com/maps?q=Cherry%20Creek,%20Denver&t=&z=13&output=embed"></iframe>
+    </body></html>`);
+    const { identity } = extractIdentity(inv);
+    expect(identity.map_embed).toBe("https://maps.google.com/maps?q=1420%20Larimer&z=13&output=embed");
     expect(identity.profile_embed).toBeUndefined();
   });
 
