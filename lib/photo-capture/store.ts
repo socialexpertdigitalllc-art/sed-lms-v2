@@ -142,6 +142,9 @@ export async function failCapture(leadId: string, message: string): Promise<void
   if (error) throw new Error(error.message);
 }
 
+/** A claim sitting in `uploading` past this long is treated as abandoned. */
+const CLAIM_STALE_MS = 10 * 60 * 1000;
+
 /**
  * Atomically claim a candidate for upload. Returns false when someone else got
  * there first.
@@ -155,18 +158,24 @@ export async function failCapture(leadId: string, message: string): Promise<void
  */
 export async function claimCandidate(candidateId: string): Promise<boolean> {
   const admin = createAdminClient();
+  const staleBefore = new Date(Date.now() - CLAIM_STALE_MS).toISOString();
   const { data, error } = await admin
     .from("lead_photo_candidates")
     .update({ status: "uploading", updated_at: new Date().toISOString() })
     .eq("id", candidateId)
-    .eq("status", "pending")
+    // A `finally` in the route cannot run if the platform kills the function
+    // mid-upload (e.g. hitting maxDuration), so a claim that has sat in
+    // `uploading` past the stale window is reclaimable. Without this, one
+    // timeout strands a photo permanently: invisible to the picker and
+    // unclaimable, with nothing to tell the operator why.
+    .or(`status.eq.pending,and(status.eq.uploading,updated_at.lt.${staleBefore})`)
     .select("id");
   // A genuine error (bad connection, missing table, etc.) is NOT the same
   // thing as losing the claim race — that must throw, not silently read as
   // "someone else got there first".
   if (error) throw new Error(error.message);
-  // No error, but zero rows matched: the conditional `where status = pending`
-  // simply matched nothing (already claimed, already uploaded, or gone).
+  // No error, but zero rows matched: the conditional filter simply matched
+  // nothing (already claimed by a live request, already uploaded, or gone).
   // That is a normal, expected outcome — return false, don't throw.
   return (data?.length ?? 0) === 1;
 }

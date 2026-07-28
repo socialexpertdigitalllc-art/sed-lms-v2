@@ -9,7 +9,13 @@ import { imgbbAdapter } from "@/lib/photo-capture/hosts/imgbb";
 import { imgchestAdapter } from "@/lib/photo-capture/hosts/imgchest";
 import { postimagesAdapter } from "@/lib/photo-capture/hosts/postimages";
 import type { HostProvider, UploadAdapter } from "@/lib/photo-capture/hosts/types";
-import { claimCandidate, getCapture, markCandidateFailed, markCandidateUploaded } from "@/lib/photo-capture/store";
+import {
+  claimCandidate,
+  getCapture,
+  markCandidateFailed,
+  markCandidateUploaded,
+  releaseCandidate,
+} from "@/lib/photo-capture/store";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -84,34 +90,66 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     // same lead open must not both spend host quota on the same photo.
     if (!(await claimCandidate(candidate.id))) continue;
 
-    const filename = `${base}_${String(i + 1).padStart(3, "0")}.jpg`;
-    const result = await runUploadChain(
-      {
-        url: candidate.sourceUrl,
-        filename,
-        fetchBytes: async () => {
-          const r = await fetch(candidate.sourceUrl);
-          if (!r.ok) throw new Error(`Could not fetch the source image (HTTP ${r.status})`);
-          return Buffer.from(await r.arrayBuffer());
+    // A claim MUST be handed back if anything unwinds between here and the
+    // markCandidate*/finally below — otherwise the row is stuck in
+    // `uploading` forever: invisible to the picker and unclaimable by anyone.
+    // This `finally` cannot save us from a platform-level kill (e.g. hitting
+    // `maxDuration`), which is why `claimCandidate` itself also treats a
+    // stale `uploading` row as reclaimable — this is the fast path, that is
+    // the fallback.
+    let settled = false;
+    try {
+      const filename = `${base}_${String(i + 1).padStart(3, "0")}.jpg`;
+      const result = await runUploadChain(
+        {
+          url: candidate.sourceUrl,
+          filename,
+          fetchBytes: async () => {
+            const r = await fetch(candidate.sourceUrl);
+            if (!r.ok) throw new Error(`Could not fetch the source image (HTTP ${r.status})`);
+            return Buffer.from(await r.arrayBuffer());
+          },
         },
-      },
-      { hosts, adapters: ADAPTERS, state }
-    );
+        { hosts, adapters: ADAPTERS, state }
+      );
 
-    if (result.directUrl) {
-      await markCandidateUploaded(candidate.id, result.directUrl, result.provider ?? "");
-      uploaded.push(result.directUrl);
-    } else {
-      const message = result.lastError ?? "Every image host refused this photo";
-      await markCandidateFailed(candidate.id, message);
-      failed.push({ photoKey: candidate.photoKey, error: message });
+      if (result.directUrl) {
+        await markCandidateUploaded(candidate.id, result.directUrl, result.provider ?? "");
+        uploaded.push(result.directUrl);
+      } else {
+        const message = result.lastError ?? "Every image host refused this photo";
+        await markCandidateFailed(candidate.id, message);
+        failed.push({ photoKey: candidate.photoKey, error: message });
+      }
+      settled = true;
+    } finally {
+      if (!settled) await releaseCandidate(candidate.id);
     }
   }
 
-  // Append to the EXISTING field every downstream consumer already reads.
+  // Derive image_links from the candidate rows rather than writing the
+  // in-memory `uploaded` delta on top of the snapshot read at the top of this
+  // request. Two concurrent uploads for DIFFERENT photos on the same lead
+  // each start from that same stale snapshot; a plain append-and-write lets
+  // whichever request writes second clobber the first request's additions
+  // outright (last-write-wins). Re-reading both `image_links` and every
+  // `hosted_url` already recorded for this lead right before the write means
+  // each writer produces a superset of everything uploaded before its own
+  // read, so concurrent writers converge instead of losing data. This does
+  // NOT close the race — two writers can still interleave between this read
+  // and their own write — a real fix needs an atomic array-append (e.g. a
+  // Postgres function); that's out of scope here and this is the deliberate
+  // trade-off in the meantime.
   if (uploaded.length > 0) {
-    const existing = Array.isArray(lead.image_links) ? (lead.image_links as string[]) : [];
-    const merged = [...existing, ...uploaded.filter((u) => !existing.includes(u))];
+    const [{ data: freshLead }, { candidates: freshCandidates }] = await Promise.all([
+      admin.from("leads").select("image_links").eq("id", id).single(),
+      getCapture(id),
+    ]);
+    const existing = Array.isArray(freshLead?.image_links) ? (freshLead.image_links as string[]) : [];
+    const fromCandidates = freshCandidates
+      .filter((c) => c.status === "uploaded" && c.hostedUrl)
+      .map((c) => c.hostedUrl as string);
+    const merged = Array.from(new Set([...existing, ...fromCandidates]));
     const { error } = await admin.from("leads").update({ image_links: merged }).eq("id", id);
     if (error) return NextResponse.json({ error: "Uploaded, but could not save the links" }, { status: 500 });
   }
