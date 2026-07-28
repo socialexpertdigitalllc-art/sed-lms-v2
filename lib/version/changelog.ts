@@ -29,6 +29,45 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.9.0",
+    date: "2026-07-28",
+    title: "Photos from Google profiles",
+    changes: [
+      {
+        kind: "feature",
+        text: "Save a lead with a Google Business Profile link and its photos are collected for you automatically — up to 30, at full resolution.",
+      },
+      {
+        kind: "feature",
+        text: "The Images section of a lead now shows the collected photos as thumbnails. Tick the ones worth keeping and they are hosted for you, with their links added to the lead.",
+      },
+      {
+        kind: "feature",
+        text: "A new Image Hosts page under Admin, where you can add as many imgbb and imgchest keys as you like. Uploads work down the list, so a key that hits its limit steps aside for the next one instead of stopping the job.",
+      },
+      {
+        kind: "feature",
+        text: "A one-click download for the browser extension that does the collecting, with setup steps and a prompt when a newer version is available.",
+      },
+      {
+        kind: "improvement",
+        text: "Photos are collected again automatically if you correct a lead's profile link, so a typo fixed later still gets its photos.",
+      },
+      {
+        kind: "improvement",
+        text: "Typing image links by hand still works exactly as before — the picker sits above that field rather than replacing it.",
+      },
+      {
+        kind: "fix",
+        text: "The extension no longer mixes in a few photos from the business you looked at previously when you collect from a second one without reloading.",
+      },
+      {
+        kind: "fix",
+        text: "The extension's selected-photo count no longer counts leftovers from an earlier business.",
+      },
+    ],
+  },
+  {
     version: "2.8.0",
     date: "2026-07-19",
     title: "Notifications & changelog",
