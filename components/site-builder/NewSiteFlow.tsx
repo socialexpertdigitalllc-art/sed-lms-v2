@@ -290,12 +290,13 @@ export function NewSiteFlow() {
     if (candidate.kind === "manual") return candidate.url as string;
     const body =
       candidate.kind === "library"
-        ? { kind: "library", asset_id: candidate.asset_id, lead_id: selectedLead?.id }
+        ? { kind: "link", url: candidate.url, subject: purpose }
         : candidate.kind === "pexels"
           ? {
               kind: "pexels",
               pexels: {
                 download_url: candidate.download_url,
+                thumb_url: candidate.thumb_url,
                 pexels_id: candidate.pexels_id,
                 width: candidate.width,
                 height: candidate.height,
@@ -303,7 +304,7 @@ export function NewSiteFlow() {
                 subject: purpose,
               },
             }
-          : { kind: "client", url: candidate.url, lead_id: selectedLead?.id };
+          : { kind: "client", url: candidate.url, lead_id: selectedLead?.id, subject: purpose };
     const res = await fetch("/api/site-builder/images/pick", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

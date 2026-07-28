@@ -2,28 +2,28 @@
 import { describe, it, expect, vi } from "vitest";
 import { sourceImages, type SourcedCandidate } from "@/lib/site-builder/imageSourcing";
 import type { ImageNeedsResult } from "@/lib/site-builder/imageNeeds";
-import type { AssetRow } from "@/lib/site-studio/assets/types";
 import type { PexelsResult } from "@/lib/site-studio/assets/pexels";
+import type { BuilderImageRow } from "@/lib/site-builder/imageLibrary";
 
 const searchLibraryMock = vi.fn();
-vi.mock("@/lib/site-studio/assets/library", () => ({
-  searchLibrary: (...args: unknown[]) => searchLibraryMock(...args),
+vi.mock("@/lib/site-builder/imageLibrary", () => ({
+  searchBuilderImages: (...args: unknown[]) => searchLibraryMock(...args),
 }));
 
-function libraryRow(id: string, overrides: Partial<AssetRow> = {}): AssetRow {
+/** A stored LINK, the only thing the library holds now — no storage path, no
+ *  bytes, nothing to sign. */
+function libraryRow(id: string, overrides: Partial<BuilderImageRow> = {}): BuilderImageRow {
   return {
     id,
-    kind: "stock",
-    lead_id: null,
+    url: `https://images.pexels.com/library/${id}.jpg`,
+    thumb_url: `https://images.pexels.com/library/${id}-thumb.jpg`,
     subject: "plumber",
-    niche_tags: [],
-    width: 1600,
-    height: 1200,
     source: "pexels",
     pexels_id: null,
     photographer: null,
-    storage_path: `${id}.jpg`,
-    content_type: "image/jpeg",
+    width: 1600,
+    height: 1200,
+    lead_id: null,
     use_count: 0,
     created_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -47,8 +47,13 @@ function needsFor(services: string[]): ImageNeedsResult {
   return { services: services.map((service) => ({ service, query: service })), servicesTruncated: false, droppedServices: [] };
 }
 
+/** The identity of a library candidate, for the dedupe/claim assertions
+ *  below. A library row IS its link now, so this reads the id back out of the
+ *  URL `libraryRow` builds — the assertions are about which row surfaced
+ *  where, not about URL formatting. */
 function libraryAssetId(c: SourcedCandidate): string | null {
-  return c.kind === "library" ? c.asset_id : null;
+  if (c.kind !== "library") return null;
+  return c.url.replace("https://images.pexels.com/library/", "").replace(/\.jpg$/, "");
 }
 
 const admin = {} as never; // never touched directly — only passed through to the mocked searchLibrary
@@ -157,7 +162,9 @@ describe("sourceImages — service rows", () => {
     const result = await sourceImages({ admin, searchPexels }, needs, "lead-1", []);
 
     expect(searchPexels).toHaveBeenCalledWith("Plumbing");
-    expect(result.hero[0]).toMatchObject({ kind: "library", asset_id: "a" });
+    expect(result.hero[0]).toMatchObject({ kind: "library", url: "https://images.pexels.com/library/a.jpg" });
+    // a library candidate carries a public link ready to go into the site
+    expect((result.hero[0] as { url: string }).url).toMatch(/^https:\/\//);
     expect(result.services[0].candidates.map((c) => c.kind)).toEqual(["pexels", "pexels", "pexels"]);
   });
 
@@ -306,9 +313,9 @@ describe("sourceImages — starved-row fallbacks", () => {
     // the fallback candidates are OTHER services' photos, never duplicates of
     // what Service A's own row already shows
     const healthy = result.services.find((r) => r.service === "Service A")!;
-    const healthyIds = new Set(healthy.candidates.map((c) => (c.kind === "library" ? c.asset_id : "")));
+    const healthyIds = new Set(healthy.candidates.map((c) => (c.kind === "library" ? c.url : "")));
     for (const c of starved.candidates) {
-      if (c.kind === "library") expect(healthyIds.has(c.asset_id)).toBe(false);
+      if (c.kind === "library") expect(healthyIds.has(c.url)).toBe(false);
     }
   });
 
