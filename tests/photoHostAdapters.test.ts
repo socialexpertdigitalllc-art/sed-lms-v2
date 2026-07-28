@@ -22,7 +22,9 @@ afterEach(() => {
 
 describe("imgbb adapter", () => {
   it("uploads by URL and never downloads the bytes", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => jsonResponse({ success: true, data: { url: "https://i.ibb.co/abc/acme_001.jpg" } }));
+    const fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () =>
+      jsonResponse({ success: true, data: { url: "https://i.ibb.co/abc/acme_001.jpg" } })
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await imgbbAdapter.upload(source, { credentials: { api_key: "KEY123" } });
@@ -49,7 +51,7 @@ describe("imgbb adapter", () => {
 
 describe("imgchest adapter", () => {
   it("posts multipart with a bearer token and returns the cdn link", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+    const fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () =>
       jsonResponse({ data: { id: "post1", images: [{ id: "img1", link: "https://cdn.imgchest.com/files/img1.jpg" }] } })
     );
     vi.stubGlobal("fetch", fetchMock);
