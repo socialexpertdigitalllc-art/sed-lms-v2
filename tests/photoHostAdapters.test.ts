@@ -22,14 +22,14 @@ afterEach(() => {
 
 describe("imgbb adapter", () => {
   it("uploads by URL and never downloads the bytes", async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ success: true, data: { url: "https://i.ibb.co/abc/acme_001.jpg" } }));
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => jsonResponse({ success: true, data: { url: "https://i.ibb.co/abc/acme_001.jpg" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await imgbbAdapter.upload(source, { credentials: { api_key: "KEY123" } });
 
     expect(res).toEqual({ ok: true, directUrl: "https://i.ibb.co/abc/acme_001.jpg" });
     expect(bytes).not.toHaveBeenCalled();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.imgbb.com/1/upload?key=KEY123");
     expect((init.body as FormData).get("image")).toBe(source.url);
   });
@@ -49,7 +49,7 @@ describe("imgbb adapter", () => {
 
 describe("imgchest adapter", () => {
   it("posts multipart with a bearer token and returns the cdn link", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
       jsonResponse({ data: { id: "post1", images: [{ id: "img1", link: "https://cdn.imgchest.com/files/img1.jpg" }] } })
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -58,7 +58,7 @@ describe("imgchest adapter", () => {
 
     expect(res).toEqual({ ok: true, directUrl: "https://cdn.imgchest.com/files/img1.jpg" });
     expect(bytes).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.imgchest.com/v1/post");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer TOK");
     expect((init.body as FormData).getAll("images[]")).toHaveLength(1);
