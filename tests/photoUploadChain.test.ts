@@ -149,4 +149,37 @@ describe("runUploadChain", () => {
     expect(res.directUrl).toBeNull();
     expect(res.lastError).toBe("No image host is configured");
   });
+
+  it("treats a rejecting adapter as an error outcome and falls through instead of throwing", async () => {
+    const store = fakeStore();
+    const throwing: UploadAdapter = {
+      provider: "imgbb",
+      needsCredentials: true,
+      isConfigured: () => true,
+      upload: vi.fn(async () => { throw new Error("socket hang up"); }),
+    };
+    const res = await runUploadChain(source, {
+      hosts: [host("b1", "imgbb"), host("c1", "imgchest")],
+      adapters: { imgbb: throwing, postimages: adapter("postimages", []), imgchest: adapter("imgchest", [ok("https://cdn.imgchest.com/files/v.jpg")]) },
+      state: store,
+      now: () => NOW,
+    });
+
+    expect(res.directUrl).toBe("https://cdn.imgchest.com/files/v.jpg");
+    expect(res.attempts[0]).toEqual({ hostId: "b1", provider: "imgbb", outcome: "error", message: "socket hang up" });
+  });
+
+  it("still returns the successful upload when the state store's recordSuccess rejects", async () => {
+    const store = fakeStore();
+    const flakyStore: HostStateStore = { ...store, recordSuccess: async () => { throw new Error("supabase down"); } };
+    const res = await runUploadChain(source, {
+      hosts: [host("b1", "imgbb")],
+      adapters: { imgbb: adapter("imgbb", [ok("https://i.ibb.co/3.jpg")]), postimages: adapter("postimages", []), imgchest: adapter("imgchest", []) },
+      state: flakyStore,
+      now: () => NOW,
+    });
+
+    expect(res.directUrl).toBe("https://i.ibb.co/3.jpg");
+    expect(res.hostId).toBe("b1");
+  });
 });

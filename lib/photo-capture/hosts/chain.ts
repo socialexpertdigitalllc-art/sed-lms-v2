@@ -1,5 +1,5 @@
 import { orderHosts } from "./order";
-import type { HostProvider, HostStateStore, ImageHost, UploadAdapter, UploadSource } from "./types";
+import type { HostProvider, HostStateStore, ImageHost, UploadAdapter, UploadResult, UploadSource } from "./types";
 
 /** How long a rate-limited host sits out before the chain tries it again. */
 export const COOLDOWN_MS = 60 * 60 * 1000;
@@ -18,6 +18,15 @@ export type ChainResult = {
   attempts: ChainAttempt[];
   lastError: string | null;
 };
+
+/** Bookkeeping must never sink an upload that already succeeded. */
+async function quietly(op: () => Promise<void>): Promise<void> {
+  try {
+    await op();
+  } catch {
+    /* state is advisory; the upload result is what matters */
+  }
+}
 
 /**
  * Try one photo against every usable host in order — imgbb keys, then
@@ -53,10 +62,18 @@ export async function runUploadChain(
       continue;
     }
 
-    const result = await adapter.upload(source, { credentials: host.credentials });
+    let result: UploadResult;
+    try {
+      result = await adapter.upload(source, { credentials: host.credentials });
+    } catch (e) {
+      // A well-behaved adapter returns failures rather than throwing, but the
+      // chain's contract is that it NEVER throws — one misbehaving adapter must
+      // not lose the rest of the batch.
+      result = { ok: false, reason: "error", message: e instanceof Error ? e.message : "Adapter threw" };
+    }
 
     if (result.ok) {
-      await deps.state.recordSuccess(host.id);
+      await quietly(() => deps.state.recordSuccess(host.id));
       attempts.push({ hostId: host.id, provider: host.provider, outcome: "ok" });
       return { directUrl: result.directUrl, hostId: host.id, provider: host.provider, attempts, lastError: null };
     }
@@ -65,9 +82,13 @@ export async function runUploadChain(
     attempts.push({ hostId: host.id, provider: host.provider, outcome: result.reason, message: result.message });
 
     if (result.reason === "quota") {
-      await deps.state.markExhausted(host.id, new Date(now().getTime() + COOLDOWN_MS), result.message);
+      // Sampled again here rather than reusing the `now()` from the top of the
+      // chain: the cooldown should start when the host actually failed, not
+      // when the chain began, so a fresh read of the clock is the more
+      // correct behaviour, not a bug to fix.
+      await quietly(() => deps.state.markExhausted(host.id, new Date(now().getTime() + COOLDOWN_MS), result.message));
     } else if (result.reason === "auth") {
-      await deps.state.markAuthFailed(host.id, result.message);
+      await quietly(() => deps.state.markAuthFailed(host.id, result.message));
     }
   }
 
