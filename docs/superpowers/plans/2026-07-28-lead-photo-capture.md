@@ -162,7 +162,7 @@ Create `photo-extractor/test/collect-filter.test.js`:
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isRenderedBox, placeKeyFromUrl } from '../core/collect-filter.js';
+import { isRenderedBox } from '../core/collect-filter.js';
 
 test('a laid-out node with an offset parent is rendered', () => {
   assert.equal(isRenderedBox({ width: 120, height: 90, hasOffsetParent: true }), true);
@@ -180,20 +180,14 @@ test('a detached / display:none node is not rendered', () => {
   assert.equal(isRenderedBox({ width: 120, height: 90, hasOffsetParent: false }), false);
 });
 
-test('reads the place key from a maps place url', () => {
-  const u = 'https://www.google.com/maps/place/Joe+Plumbing/@40.7,-73.9,17z/data=!3m1!4b1!4m6';
-  assert.equal(placeKeyFromUrl(u), 'Joe+Plumbing');
-});
-
-test('reads the place key from a data-only url', () => {
-  const u = 'https://www.google.com/maps/place/data=!4m2!3m1!1s0x89c25a:0xabc';
-  assert.equal(placeKeyFromUrl(u), 'data=!4m2!3m1!1s0x89c25a:0xabc');
-});
-
-test('returns null when there is no place segment', () => {
-  assert.equal(placeKeyFromUrl('https://www.google.com/maps/@40.7,-73.9,12z'), null);
-});
 ```
+
+**A note on what is deliberately NOT here.** An earlier draft also tracked the
+place ID from the URL and "reset on place change". That was removed: `collect()`
+rebuilds a fresh `Map` from a live DOM query on every call, so there is no
+accumulated state for a reset to clear. The scoping and the rendered-check are
+the entire fix. Code that records a change and acts on nothing is worse than
+absent, because the next reader assumes the case is handled.
 
 - [ ] **Step 2: Run it and watch it fail**
 
@@ -217,21 +211,12 @@ Create `photo-extractor/core/collect-filter.js`:
 export function isRenderedBox({ width, height, hasOffsetParent }) {
   return width > 0 && height > 0 && hasOffsetParent === true;
 }
-
-/**
- * Identifies which place a Maps URL is showing, so a change can reset state.
- * Returns null when the URL is not on a place (e.g. a bare map view).
- */
-export function placeKeyFromUrl(href) {
-  const m = String(href).match(/\/maps\/place\/([^/@?#]+)/);
-  return m ? m[1] : null;
-}
 ```
 
 - [ ] **Step 4: Run the test and watch it pass**
 
 Run: `cd photo-extractor && node --test test/collect-filter.test.js`
-Expected: PASS, 7 tests.
+Expected: PASS, 4 tests.
 
 - [ ] **Step 5: Apply the fix in the content script**
 
@@ -247,8 +232,14 @@ Add after the `makeMonitor` block (around line 40):
       return r.width > 0 && r.height > 0 && el.offsetParent !== null;
     } catch { return false; }
   };
-  const placeKey = (href) => { const m = String(href).match(/\/maps\/place\/([^/@?#]+)/); return m ? m[1] : null; };
 ```
+
+`isRendered` calls `getBoundingClientRect()`, which forces a layout read, once
+per candidate node per scroll iteration (~550ms). Scoping to the container
+already shrinks the candidate set well below the old document-wide scan, so the
+net cost is lower than before. If a very large gallery ever stutters, checking
+`offsetParent` first — cheap, no forced layout — as a short-circuit before the
+rect call is the obvious next move.
 
 Replace `googleAdapter.collect()` (currently lines 75-85) with a version that searches only inside the live gallery container and only rendered nodes:
 
@@ -275,24 +266,16 @@ Replace `googleAdapter.collect()` (currently lines 75-85) with a version that se
     },
 ```
 
-In `loadAll()`, reset the adapter when the place changes. Replace the first two lines of `loadAll` (currently `adapter = pick();` and the `prepare` line) with:
-
-```js
-  let lastPlace = null;
-
-  async function loadAll() {
-    adapter = pick();
-    const here = placeKey(location.href);
-    if (here !== lastPlace) { lastPlace = here; }
-    try { if (adapter.prepare) await adapter.prepare(); } catch { /* best-effort */ }
-```
-
-(`lastPlace` goes just above `async function loadAll()`, inside the same IIFE.)
+`loadAll()` needs no change. An earlier draft tracked the place ID here and
+"reset on place change"; it was removed because there is nothing to reset —
+`collect()` rebuilds its `Map` from a live DOM query on every call, so no state
+survives between businesses. The scoping and the rendered-check are the whole
+fix.
 
 - [ ] **Step 6: Re-run the full extension suite**
 
 Run: `cd photo-extractor && npm test`
-Expected: all tests pass, including the 7 new ones.
+Expected: all tests pass, including the 4 new ones.
 
 - [ ] **Step 7: Verify against the real bug**
 
