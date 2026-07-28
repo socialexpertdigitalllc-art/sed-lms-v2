@@ -7,10 +7,15 @@ import {
   scaleBudget,
   type RateBudget,
 } from "@/lib/ai-tools/providers/limits";
+import { AI_PROVIDER_REGISTRY } from "@/lib/ai-tools/providers/registry";
 
 describe("resolveBudget", () => {
   it("uses the shipped default when there is no override", () => {
     expect(resolveBudget("minimax", null)).toEqual(DEFAULT_RATE_BUDGETS.minimax);
+  });
+
+  it("ships a budget for every registered provider", () => {
+    for (const p of AI_PROVIDER_REGISTRY) expect(DEFAULT_RATE_BUDGETS[p.key]).toBeDefined();
   });
 
   it("returns an empty budget for an unknown provider rather than inventing one", () => {
@@ -34,6 +39,14 @@ describe("resolveBudget", () => {
     const out = resolveBudget("minimax", { rpm: 0, tpm: Number.NaN });
     expect(out.rpm).toBe(DEFAULT_RATE_BUDGETS.minimax.rpm);
     expect(out.tpm).toBe(DEFAULT_RATE_BUDGETS.minimax.tpm);
+  });
+
+  it("floors a fractional override rather than letting it collapse to zero", () => {
+    // 0.5 > 0 but Math.floor(0.5) is 0 — a fractional override must not sneak
+    // past the "reject nonsense" check and become the exact zero it exists to
+    // prevent, especially for tpd where nothing downstream floors it back up.
+    expect(resolveBudget("minimax", { rpm: 0.5 }).rpm).toBe(DEFAULT_RATE_BUDGETS.minimax.rpm);
+    expect(resolveBudget("webcraft", { tpd: 0.9 }).tpd).toBe(DEFAULT_RATE_BUDGETS.webcraft.tpd);
   });
 
   it("leaves an absent dimension absent — DeepSeek documents no RPM", () => {

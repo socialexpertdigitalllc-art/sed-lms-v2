@@ -50,11 +50,19 @@ export const DEFAULT_RATE_BUDGETS: Record<string, RateBudget> = {
   // Concurrency-only by documentation. The published figure is per-model and
   // large (500+); this is a house floor, not the vendor ceiling.
   deepseek: { concurrency: 8 },
+  // Tier1 figures. Gemini's documented daily ceiling is RPD (requests/day),
+  // which `tpd` (tokens/day) cannot represent — deliberately left undeclared
+  // rather than mapped onto the wrong unit. Do not set gemini.tpd expecting
+  // it to capture that limit; it would enforce a token quota the vendor never
+  // published instead of the request quota the vendor did.
   gemini: { rpm: 150, tpm: 1_000_000 },
 };
 
-/** The floor the adaptive scale may not go below. Keeps at least one request
- *  moving at all times so a throttled provider slows down instead of wedging. */
+/** The lower bound on the adaptive layer's multiplicative decay — each backoff
+ *  multiplies the scale by a fraction, and without a floor repeated backoffs
+ *  would decay toward zero. This bounds that decay away from zero; it is
+ *  `scaleBudget`'s own `Math.max(1, ...)` floors below that keep a scaled
+ *  budget's dimensions from reaching zero. */
 export const MIN_SCALE = 0.05;
 
 const DIMENSIONS = ["concurrency", "rpm", "tpm", "tpd"] as const;
@@ -62,8 +70,11 @@ const DIMENSIONS = ["concurrency", "rpm", "tpm", "tpd"] as const;
 /**
  * The budget actually in force for a provider: the shipped default, with any
  * operator override applied on top. Anything unusable in the override (zero,
- * negative, NaN) is ignored in favour of the default rather than accepted —
- * a typo in a settings field must not silently throttle generation to nothing.
+ * fractional, negative, NaN) is ignored in favour of the default rather than
+ * accepted — a typo in a settings field must not silently throttle generation
+ * to nothing. This matters most for `tpd`: `scaleBudget` never touches it and
+ * the gate has no floor on it, so an override that collapsed to 0 here would
+ * wedge a provider until the next day boundary.
  */
 export function resolveBudget(providerKey: string, override: RateBudgetOverride | null | undefined): RateBudget {
   const out: RateBudget = { ...(DEFAULT_RATE_BUDGETS[providerKey] ?? {}) };
@@ -75,7 +86,7 @@ export function resolveBudget(providerKey: string, override: RateBudgetOverride 
       delete out[key];
       continue;
     }
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) out[key] = Math.floor(value);
+    if (typeof value === "number" && Number.isFinite(value) && value >= 1) out[key] = Math.floor(value);
   }
   return out;
 }
@@ -90,11 +101,14 @@ export function resolveBudget(providerKey: string, override: RateBudgetOverride 
  * entitled to spend for the rest of the day.
  */
 export function scaleBudget(budget: RateBudget, scale: number): RateBudget {
-  const s = Math.min(1, Math.max(MIN_SCALE, scale));
-  const out: RateBudget = {};
+  const s = Number.isFinite(scale) ? Math.min(1, Math.max(MIN_SCALE, scale)) : MIN_SCALE;
+  // Start from a full copy so any dimension this function doesn't know about
+  // (a future `rpd`, say) passes through unscaled instead of being silently
+  // dropped. Only the per-minute fields below are overwritten; `tpd` is left
+  // as copied — see the function doc for why a daily quota is never scaled.
+  const out: RateBudget = { ...budget };
   if (budget.concurrency !== undefined) out.concurrency = Math.max(1, Math.floor(budget.concurrency * s));
   if (budget.rpm !== undefined) out.rpm = Math.max(1, Math.floor(budget.rpm * s));
   if (budget.tpm !== undefined) out.tpm = Math.max(1, Math.floor(budget.tpm * s));
-  if (budget.tpd !== undefined) out.tpd = budget.tpd;
   return out;
 }
