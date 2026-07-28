@@ -12,7 +12,7 @@ type Candidate = {
   id: string;
   photoKey: string;
   thumbUrl: string;
-  status: "pending" | "uploading" | "uploaded" | "failed" | "skipped";
+  status: "pending" | "uploading" | "uploaded" | "failed";
   hostedUrl: string | null;
   error: string | null;
 };
@@ -158,9 +158,13 @@ export function LeadPhotoPicker({
       return;
     }
     const { uploaded, failed } = (await res.json()) as { uploaded: string[]; failed: { error: string }[] };
+    // Counts alone ("0 uploaded · 3 failed") leave the reason reachable only
+    // by hovering a specific thumbnail — surface the first failure's reason
+    // right in the toast so a fully-failed batch (e.g. no image host
+    // configured) is actionable without hunting.
     toast({
       kind: failed.length ? "error" : "success",
-      title: `${uploaded.length} uploaded${failed.length ? ` · ${failed.length} failed` : ""}`,
+      title: `${uploaded.length} uploaded${failed.length ? ` · ${failed.length} failed — ${failed[0].error}` : ""}`,
     });
     setSelected(new Set());
     await load();

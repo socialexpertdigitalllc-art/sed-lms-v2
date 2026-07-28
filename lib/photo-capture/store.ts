@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export type CaptureStatus = "pending" | "ready" | "none_found" | "failed";
 /** `uploading` is a CLAIM state — see `claimCandidate` below. */
-export type CandidateStatus = "pending" | "uploading" | "uploaded" | "failed" | "skipped";
+export type CandidateStatus = "pending" | "uploading" | "uploaded" | "failed";
 
 export type Candidate = {
   id: string;

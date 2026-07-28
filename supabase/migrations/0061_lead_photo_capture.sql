@@ -60,7 +60,7 @@ create table if not exists public.lead_photo_candidates (
   -- `update ... set status = 'uploading' where id = ? and status = 'pending'`
   -- and only proceeds if exactly one row was affected.
   status text not null default 'pending'
-    check (status in ('pending', 'uploading', 'uploaded', 'failed', 'skipped')),
+    check (status in ('pending', 'uploading', 'uploaded', 'failed')),
   hosted_url text,
   -- No CHECK here deliberately: this is a HISTORICAL record of which host
   -- actually served a past upload, not live configuration. If the provider
