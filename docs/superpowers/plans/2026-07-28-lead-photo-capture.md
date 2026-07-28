@@ -2,6 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Reconciliation note (2026-07-28):** the code listings in this document were
+> checked against the code that actually shipped and updated where they had
+> drifted (Tasks 8, 11, 12). Two listings that were being actively rewritten at
+> the time (Tasks 16, 17) were replaced with a pointer to their source files
+> instead of a stale snapshot. **Where a listing and the shipped code disagree,
+> the code wins** — this document explains intent and history, it is not the
+> spec.
+
 **Goal:** Capture up to 30 photos from a lead's Google Business Profile using the agent's own browser, let the agent pick which ones to keep, re-host them through a fallback chain of image hosts, and store the direct URLs in `leads.image_links`.
 
 **Architecture:** The existing `photo-extractor` Chrome extension becomes the capture arm — a content script on the LMS origin announces itself over `window.postMessage`, and the service worker opens an unfocused popup window at the profile URL and drives the existing `googleAdapter`. Harvested URLs are stored as candidate rows; selected candidates are uploaded **server-side** (so credentials never reach a browser) through an ordered host chain modelled on the existing `lib/email-verify/providers/chain.ts`.
@@ -1340,6 +1348,10 @@ create table if not exists public.lead_photo_captures (
   -- WHICH link this capture was for. The Images group compares it against the
   -- lead's current business_profile_link: when they differ, the link has been
   -- edited since and a fresh capture runs automatically.
+  -- Nullable deliberately: failCapture() upserts a row with only lead_id,
+  -- status, error and completed_at when a capture fails before a profile_link
+  -- was ever recorded (e.g. no prior startCapture row). NOT NULL here would
+  -- turn that recoverable failure into a constraint violation.
   profile_link text,
   found_count int not null default 0,
   error text,
@@ -1362,19 +1374,34 @@ create table if not exists public.lead_photo_candidates (
   thumb_url text not null,
   -- the =s0 original that actually gets uploaded
   source_url text not null,
+  -- uploading is a CLAIM state, not a progress indicator. Two operators can
+  -- open the same lead at once; without a claim, both upload routes would
+  -- read the same candidate as pending, both run it through the host chain,
+  -- and both spend quota on hosts we deliberately model as scarce
+  -- (exhausted_until, upload_count) — then the second write silently
+  -- overwrites the first. The route claims a row with a conditional
+  -- `update ... set status = 'uploading' where id = ? and status = 'pending'`
+  -- and only proceeds if exactly one row was affected.
   status text not null default 'pending'
-    check (status in ('pending', 'uploaded', 'failed', 'skipped')),
+    check (status in ('pending', 'uploading', 'uploaded', 'failed', 'skipped')),
   hosted_url text,
+  -- No CHECK here deliberately: this is a HISTORICAL record of which host
+  -- actually served a past upload, not live configuration. If the provider
+  -- list ever loses a value, a CHECK here would invalidate historical rows.
+  -- image_hosts.provider IS CHECK-constrained precisely because that one is
+  -- live config, not history.
   host_provider text,
   error text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
+-- Doubles as the lead_id lookup index (leading column of the composite
+-- serves every `where lead_id = ?`, the only access pattern the application
+-- has) — do not re-add a separate index on (lead_id) alone, it would buy the
+-- planner nothing and cost maintenance on every insert and upsert.
 create unique index if not exists lead_photo_candidates_key
   on public.lead_photo_candidates (lead_id, photo_key);
-create index if not exists lead_photo_candidates_lead
-  on public.lead_photo_candidates (lead_id);
 
 -- --------------------------------------------------------------- host keys
 -- `position` is insertion order within a provider: the key added first is
@@ -2045,6 +2072,7 @@ Create `app/api/leads/[id]/photos/route.ts`:
 ```ts
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { getCapture } from "@/lib/photo-capture/store";
 
@@ -2062,7 +2090,34 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const perms = await getUserPermissions(user.id);
   if (!perms.has("leads.view")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  return NextResponse.json(await getCapture(id));
+  const admin = createAdminClient();
+  const { data: lead } = await admin
+    .from("leads")
+    .select("agent_id")
+    .eq("id", id)
+    .is("deleted_at", null)
+    .single();
+  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  // Ownership scope (defense-in-depth mirror of the leads read policy):
+  // getCapture() uses the service-role admin client, which bypasses RLS
+  // entirely, so this route must re-check by hand what `read leads scoped`
+  // (0004_lead_scoping.sql) would otherwise enforce. Matches
+  // app/api/leads/[id]/route.ts.
+  if (!perms.has("leads.view_all") && lead.agent_id !== user.id) {
+    // Read-specific wording: this route only reads. The shared 403 shape and
+    // the scoping rule match app/api/leads/[id]/route.ts; only the verb differs.
+    return NextResponse.json({ error: "You can only view your own leads." }, { status: 403 });
+  }
+
+  try {
+    return NextResponse.json(await getCapture(id));
+  } catch (e) {
+    // A silent empty state here is indistinguishable from "no capture yet" —
+    // which is exactly what an unapplied migration would look like.
+    console.error(`[photo-capture] getCapture failed for lead ${id}:`, e);
+    return NextResponse.json({ error: "Photo capture is unavailable" }, { status: 500 });
+  }
 }
 ```
 
@@ -2074,9 +2129,10 @@ Create `app/api/leads/[id]/photos/candidates/route.ts`:
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { failCapture, saveHarvest, startCapture } from "@/lib/photo-capture/store";
-import { isGoogleProfileLink } from "@/lib/photo-capture/googleLink";
+import { isGoogleProfileLink, isGooglePhotoSourceUrl } from "@/lib/photo-capture/googleLink";
 
 export const runtime = "nodejs";
 
@@ -2126,34 +2182,57 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: "Invalid input", issues: parsed.error.flatten() }, { status: 422 });
   }
 
-  if (parsed.data.kind === "failed") {
-    await failCapture(id, parsed.data.error);
-    return NextResponse.json({ status: "failed" });
+  const admin = createAdminClient();
+  const { data: lead } = await admin
+    .from("leads")
+    .select("agent_id")
+    .eq("id", id)
+    .is("deleted_at", null)
+    .single();
+  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  // Ownership scope (defense-in-depth mirror of the leads read policy): this
+  // route uses the service-role admin client, which bypasses RLS entirely, so
+  // it must re-check by hand what `read leads scoped` (0004_lead_scoping.sql)
+  // would otherwise enforce. Matches app/api/leads/[id]/route.ts.
+  if (!perms.has("leads.view_all") && lead.agent_id !== user.id) {
+    return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
   }
 
-  // Only a Google profile link may be recorded — it is what the auto-capture
-  // comparison in the Images group is keyed on.
-  if (!isGoogleProfileLink(parsed.data.profileLink)) {
-    return NextResponse.json({ error: "Not a Google Business Profile link" }, { status: 422 });
+  try {
+    if (parsed.data.kind === "failed") {
+      await failCapture(id, parsed.data.error);
+      return NextResponse.json({ status: "failed" });
+    }
+
+    // Only a Google profile link may be recorded — it is what the auto-capture
+    // comparison in the Images group is keyed on.
+    if (!isGoogleProfileLink(parsed.data.profileLink)) {
+      return NextResponse.json({ error: "Not a Google Business Profile link" }, { status: 422 });
+    }
+
+    if (parsed.data.kind === "started") {
+      await startCapture(id, user.id, parsed.data.profileLink);
+      return NextResponse.json({ status: "pending" });
+    }
+
+    // Only Google photo URLs may be stored: the source URL is fetched by our
+    // server (and by imgbb) later, so an arbitrary URL here would be an SSRF.
+    const allowed = parsed.data.photos.filter(
+      (p) => isGooglePhotoSourceUrl(p.sourceUrl) && isGooglePhotoSourceUrl(p.thumbUrl)
+    );
+
+    const result = await saveHarvest(id, allowed, {
+      extensionVersion: parsed.data.extensionVersion ?? null,
+      profileLink: parsed.data.profileLink,
+    });
+    return NextResponse.json(result);
+  } catch (e) {
+    // Log the real error server-side; never hand raw database error text back
+    // to the browser.
+    console.error(`[photo-capture] candidates POST failed for lead ${id}:`, e);
+    return NextResponse.json({ error: "Photo capture is unavailable" }, { status: 500 });
   }
-
-  if (parsed.data.kind === "started") {
-    await startCapture(id, user.id, parsed.data.profileLink);
-    return NextResponse.json({ status: "pending" });
-  }
-
-  // Only Google photo URLs may be stored: the source URL is fetched by our
-  // server (and by imgbb) later, so an arbitrary URL here would be an SSRF.
-  const allowed = parsed.data.photos.filter(
-    (p) => /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i.test(p.sourceUrl) &&
-           /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i.test(p.thumbUrl)
-  );
-
-  const result = await saveHarvest(id, allowed, {
-    extensionVersion: parsed.data.extensionVersion ?? null,
-    profileLink: parsed.data.profileLink,
-  });
-  return NextResponse.json(result);
 }
 ```
 
@@ -2192,7 +2271,14 @@ import { imgbbAdapter } from "@/lib/photo-capture/hosts/imgbb";
 import { imgchestAdapter } from "@/lib/photo-capture/hosts/imgchest";
 import { postimagesAdapter } from "@/lib/photo-capture/hosts/postimages";
 import type { HostProvider, UploadAdapter } from "@/lib/photo-capture/hosts/types";
-import { claimCandidate, getCapture, markCandidateFailed, markCandidateUploaded } from "@/lib/photo-capture/store";
+import { isGooglePhotoSourceUrl } from "@/lib/photo-capture/googleLink";
+import {
+  claimCandidate,
+  getCapture,
+  markCandidateFailed,
+  markCandidateUploaded,
+  releaseCandidate,
+} from "@/lib/photo-capture/store";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -2209,6 +2295,32 @@ const bodySchema = z.object({
 
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "business";
+}
+
+/**
+ * Re-reads `image_links` immediately before writing and unions it with only
+ * THIS request's newly uploaded URLs — never every `uploaded` candidate
+ * recorded for the lead. An earlier version derived the merge from candidate
+ * rows, which meant a photo the operator had manually removed from
+ * `image_links` came back on the very next upload, because its candidate row
+ * stayed `uploaded` forever with no way to record a durable removal.
+ * Restricting the union to this request's own uploads fixes that, and — as a
+ * side effect — narrows (rather than closes) the concurrency window down to
+ * the gap between this read and this write, instead of the whole request. A
+ * genuinely race-free append still needs an atomic Postgres operation; that
+ * is out of scope here and this is the deliberate trade-off in the meantime.
+ */
+async function mergeNewImageLinks(
+  admin: ReturnType<typeof createAdminClient>,
+  leadId: string,
+  newUrls: string[]
+): Promise<void> {
+  if (newUrls.length === 0) return;
+  const { data: freshLead } = await admin.from("leads").select("image_links").eq("id", leadId).single();
+  const existing = Array.isArray(freshLead?.image_links) ? (freshLead.image_links as string[]) : [];
+  const merged = Array.from(new Set([...existing, ...newUrls]));
+  const { error } = await admin.from("leads").update({ image_links: merged }).eq("id", leadId);
+  if (error) throw new Error(error.message);
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -2236,85 +2348,124 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const admin = createAdminClient();
   const { data: lead } = await admin
     .from("leads")
-    .select("business_name, image_links")
+    .select("business_name, image_links, agent_id")
     .eq("id", id)
+    .is("deleted_at", null)
     .single();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
-  const { candidates } = await getCapture(id);
-  const wanted = new Set(parsed.data.photoKeys);
-  const chosen = candidates.filter((c) => wanted.has(c.photoKey));
-  if (chosen.length === 0) return NextResponse.json({ error: "No matching candidates" }, { status: 422 });
-
-  const hosts = await listImageHosts();
-  const state = imageHostStateStore();
-  const base = slug(lead.business_name as string);
+  // Ownership scope (defense-in-depth mirror of the leads read policy): this
+  // route uses the service-role admin client, which bypasses RLS entirely, so
+  // it must re-check by hand what `read leads scoped` (0004_lead_scoping.sql)
+  // would otherwise enforce. Matches app/api/leads/[id]/route.ts.
+  if (!perms.has("leads.view_all") && lead.agent_id !== user.id) {
+    return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
+  }
 
   const uploaded: string[] = [];
   const failed: { photoKey: string; error: string }[] = [];
 
-  // Sequential on purpose: the chain mutates shared host state (cooldowns,
-  // disablement), and racing 30 uploads past an exhausted key would burn every
-  // one of them before the first failure is recorded.
-  for (const [i, candidate] of chosen.entries()) {
-    // Already uploaded — idempotent, and never pay for the same photo twice.
-    if (candidate.status === "uploaded" && candidate.hostedUrl) {
-      uploaded.push(candidate.hostedUrl);
-      continue;
+  try {
+    const { candidates } = await getCapture(id);
+    const wanted = new Set(parsed.data.photoKeys);
+    const chosen = candidates.filter((c) => wanted.has(c.photoKey));
+    if (chosen.length === 0) return NextResponse.json({ error: "No matching candidates" }, { status: 422 });
+
+    const hosts = await listImageHosts();
+    const state = imageHostStateStore();
+    const base = slug(lead.business_name as string);
+
+    // Sequential on purpose: the chain mutates shared host state (cooldowns,
+    // disablement), and racing 30 uploads past an exhausted key would burn
+    // every one of them before the first failure is recorded.
+    for (const [i, candidate] of chosen.entries()) {
+      // Already uploaded — idempotent, and never pay for the same photo twice.
+      if (candidate.status === "uploaded" && candidate.hostedUrl) {
+        uploaded.push(candidate.hostedUrl);
+        continue;
+      }
+
+      // Claim it, or leave it to whoever already has it. Two operators with
+      // the same lead open must not both spend host quota on the same photo.
+      if (!(await claimCandidate(candidate.id))) continue;
+
+      // A claim MUST be handed back if anything unwinds between here and the
+      // markCandidate*/finally below — otherwise the row is stuck in
+      // `uploading` forever: invisible to the picker and unclaimable by
+      // anyone. This `finally` cannot save us from a platform-level kill
+      // (e.g. hitting `maxDuration`), which is why `claimCandidate` itself
+      // also treats a stale `uploading` row as reclaimable — this is the
+      // fast path, that is the fallback.
+      let settled = false;
+      try {
+        // The candidates route only checks this at write time. A stored
+        // sourceUrl is handed straight to `fetch()` (for postimages/imgchest)
+        // and to imgbb (which fetches server-side from whatever URL we give
+        // it) — re-check here too, immediately before either happens, so a
+        // row written before this guard existed (or altered any other way)
+        // can never become an SSRF vector.
+        if (!isGooglePhotoSourceUrl(candidate.sourceUrl)) {
+          const message = "Source URL is not a Google-hosted photo";
+          await markCandidateFailed(candidate.id, message);
+          failed.push({ photoKey: candidate.photoKey, error: message });
+          settled = true;
+        } else {
+          const filename = `${base}_${String(i + 1).padStart(3, "0")}.jpg`;
+          const result = await runUploadChain(
+            {
+              url: candidate.sourceUrl,
+              filename,
+              fetchBytes: async () => {
+                const r = await fetch(candidate.sourceUrl);
+                if (!r.ok) throw new Error(`Could not fetch the source image (HTTP ${r.status})`);
+                return Buffer.from(await r.arrayBuffer());
+              },
+            },
+            { hosts, adapters: ADAPTERS, state }
+          );
+
+          if (result.directUrl) {
+            await markCandidateUploaded(candidate.id, result.directUrl, result.provider ?? "");
+            uploaded.push(result.directUrl);
+          } else {
+            const message = result.lastError ?? "Every image host refused this photo";
+            await markCandidateFailed(candidate.id, message);
+            failed.push({ photoKey: candidate.photoKey, error: message });
+          }
+          settled = true;
+        }
+      } finally {
+        if (!settled) await releaseCandidate(candidate.id);
+      }
     }
 
-    // Claim it, or leave it to whoever already has it. Two operators with the
-    // same lead open must not both spend host quota on the same photo.
-    if (!(await claimCandidate(candidate.id))) continue;
-
-    const filename = `${base}_${String(i + 1).padStart(3, "0")}.jpg`;
-    const result = await runUploadChain(
-      {
-        url: candidate.sourceUrl,
-        filename,
-        fetchBytes: async () => {
-          const r = await fetch(candidate.sourceUrl);
-          if (!r.ok) throw new Error(`Could not fetch the source image (HTTP ${r.status})`);
-          return Buffer.from(await r.arrayBuffer());
-        },
-      },
-      { hosts, adapters: ADAPTERS, state }
-    );
-
-    if (result.directUrl) {
-      await markCandidateUploaded(candidate.id, result.directUrl, result.provider ?? "");
-      uploaded.push(result.directUrl);
-    } else {
-      const message = result.lastError ?? "Every image host refused this photo";
-      await markCandidateFailed(candidate.id, message);
-      failed.push({ photoKey: candidate.photoKey, error: message });
+    if (uploaded.length > 0) {
+      try {
+        await mergeNewImageLinks(admin, id, uploaded);
+      } catch (mergeError) {
+        console.error(`[photo-capture] could not save image_links for lead ${id}:`, mergeError);
+        return NextResponse.json(
+          { error: "Uploaded, but could not save the links", uploaded, failed },
+          { status: 500 }
+        );
+      }
     }
-  }
 
-  // Append to the EXISTING field every downstream consumer already reads.
-  //
-  // DERIVED, not appended. Computing a delta against the snapshot read at the
-  // top of this request means two concurrent uploads on the same lead clobber
-  // each other — last write wins and one set of URLs silently vanishes despite
-  // having cost real host quota. Rebuilding from the candidate rows, which hold
-  // every `hosted_url` authoritatively, does not close the window but makes it
-  // CONVERGE: each writer writes a superset of everything uploaded before its
-  // own read. A perfect fix needs an atomic array append; this is the trade-off.
-  if (uploaded.length > 0) {
-    const [{ data: freshLead }, { candidates: freshCandidates }] = await Promise.all([
-      admin.from("leads").select("image_links").eq("id", id).single(),
-      getCapture(id),
-    ]);
-    const existing = Array.isArray(freshLead?.image_links) ? (freshLead.image_links as string[]) : [];
-    const fromCandidates = freshCandidates
-      .filter((c) => c.status === "uploaded" && c.hostedUrl)
-      .map((c) => c.hostedUrl as string);
-    const merged = Array.from(new Set([...existing, ...fromCandidates]));
-    const { error } = await admin.from("leads").update({ image_links: merged }).eq("id", id);
-    if (error) return NextResponse.json({ error: "Uploaded, but could not save the links" }, { status: 500 });
+    return NextResponse.json({ uploaded, failed });
+  } catch (e) {
+    // Real host quota may already have been spent on whatever made it into
+    // `uploaded` before this threw — a total 500 must not also strand that
+    // paid-for work, so still attempt to persist it before reporting failure.
+    console.error(`[photo-capture] upload POST failed for lead ${id}:`, e);
+    if (uploaded.length > 0) {
+      try {
+        await mergeNewImageLinks(admin, id, uploaded);
+      } catch (mergeError) {
+        console.error(`[photo-capture] could not save partial image_links for lead ${id}:`, mergeError);
+      }
+    }
+    return NextResponse.json({ error: "Photo capture is unavailable" }, { status: 500 });
   }
-
-  return NextResponse.json({ uploaded, failed });
 }
 ```
 
@@ -3167,79 +3318,20 @@ export async function GET() {
 }
 ```
 
-- [ ] **Step 5: Write the hook**
+- [ ] **Step 5: The hook — see source, not this plan**
 
-Create `hooks/usePhotoExtension.ts`:
-
-```ts
-"use client";
-
-import { useCallback, useEffect, useRef, useState } from "react";
-
-/**
- * Client half of the extension bridge (see the design, §4).
- *
- * The extension announces itself with READY, so "installed" is never guessed
- * from a timeout — no handshake simply means not installed yet.
- */
-
-export type WirePhoto = { key: string; thumbUrl: string; sourceUrl: string };
-
-export type ExtensionState = {
-  installed: boolean;
-  version: string | null;
-  capturing: boolean;
-  progress: number;
-};
-
-const PAGE = "sed-lms";
-const EXT = "sed-photo-ext";
-
-export function usePhotoExtension() {
-  const [state, setState] = useState<ExtensionState>({ installed: false, version: null, capturing: false, progress: 0 });
-  const pending = useRef<Map<string, { resolve: (p: WirePhoto[]) => void; reject: (e: Error) => void }>>(new Map());
-
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      if (event.source !== window || event.origin !== window.location.origin) return;
-      const data = event.data as { source?: string; type?: string; [k: string]: unknown };
-      if (data?.source !== EXT) return;
-
-      if (data.type === "READY") {
-        setState((s) => ({ ...s, installed: true, version: (data.version as string) ?? null }));
-      } else if (data.type === "PROGRESS") {
-        setState((s) => ({ ...s, progress: (data.loaded as number) ?? 0 }));
-      } else if (data.type === "DONE") {
-        const entry = pending.current.get(data.requestId as string);
-        pending.current.delete(data.requestId as string);
-        setState((s) => ({ ...s, capturing: false }));
-        entry?.resolve((data.photos as WirePhoto[]) ?? []);
-      } else if (data.type === "ERROR") {
-        const entry = pending.current.get(data.requestId as string);
-        pending.current.delete(data.requestId as string);
-        setState((s) => ({ ...s, capturing: false }));
-        entry?.reject(new Error((data.error as string) ?? "Capture failed"));
-      }
-    }
-
-    window.addEventListener("message", onMessage);
-    // Ask, in case the extension loaded before this component mounted.
-    window.postMessage({ source: PAGE, type: "PING" }, window.location.origin);
-    return () => window.removeEventListener("message", onMessage);
-  }, []);
-
-  const capture = useCallback((url: string): Promise<WirePhoto[]> => {
-    return new Promise((resolve, reject) => {
-      const requestId = `cap_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      pending.current.set(requestId, { resolve, reject });
-      setState((s) => ({ ...s, capturing: true, progress: 0 }));
-      window.postMessage({ source: PAGE, type: "CAPTURE", requestId, url, max: 30 }, window.location.origin);
-    });
-  }, []);
-
-  return { ...state, capture };
-}
-```
+> **2026-07-28 note:** this listing has been intentionally removed. `hooks/usePhotoExtension.ts`
+> is a **module-level singleton bridge**: the `window.addEventListener("message", …)`
+> listener and the pending-request map live at module scope, not inside the hook's
+> component, so the bridge survives navigation between pages/components instead of
+> being torn down and re-attached on every mount (the plan's original per-component
+> `useEffect` listener could not do this, and lost in-flight captures across a route
+> change). The shipped version also adds a capture timeout/watchdog that the version
+> below never had, so a stalled extension can't leave the UI spinning forever.
+>
+> Because this file is a shared singleton with real timing behavior, a static code
+> listing here would drift immediately and mislead. Treat `hooks/usePhotoExtension.ts`
+> in the repo as the sole source of truth for its shape and behavior.
 
 - [ ] **Step 6: Write the install card**
 
@@ -3345,238 +3437,26 @@ This task implements all three capture triggers from the design (§5): (a) autom
 - Modify: `components/leads/LeadDetail.tsx:351-353`
 - Modify: `components/leads/NewLeadForm.tsx:246-248`
 
-- [ ] **Step 1: Write the picker**
+- [ ] **Step 1: The picker — see source, not this plan**
 
-Create `components/leads/LeadPhotoPicker.tsx`:
+> **2026-07-28 note:** this listing has been intentionally removed. The version
+> originally drafted here called a `toast.show(msg)` API that does not exist on
+> this repo's toast context — the real shape is `const { toast } = useToast();
+> toast({ kind, title })` — and it lacked the `alive`-guarded effect this repo's
+> `react-hooks/set-state-in-effect` lint rule requires around the load/auto-capture
+> effects (an unguarded `setState` after an `await` inside `useEffect` can fire
+> after the component has unmounted). `components/leads/LeadPhotoPicker.tsx` is
+> also being actively rewritten at the time of this reconciliation pass, so a
+> fresh listing here would be stale again within the same day. Treat
+> `components/leads/LeadPhotoPicker.tsx` in the repo as the sole source of truth
+> for its shape and behavior — including its exact toast calls and effect guards.
 
-```tsx
-"use client";
+- [ ] **Step 2: Confirm the toast API against the real component**
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Camera, Check, Loader2 } from "lucide-react";
-import { isGoogleProfileLink } from "@/lib/photo-capture/googleLink";
-import { usePhotoExtension } from "@/hooks/usePhotoExtension";
-import { ExtensionInstallCard } from "./ExtensionInstallCard";
-import { useToast } from "@/components/common/Toast";
-
-type Candidate = {
-  id: string;
-  photoKey: string;
-  thumbUrl: string;
-  status: "pending" | "uploading" | "uploaded" | "failed" | "skipped";
-  hostedUrl: string | null;
-  error: string | null;
-};
-
-type CaptureState = {
-  status: "pending" | "ready" | "none_found" | "failed";
-  profileLink: string | null;
-  foundCount: number;
-  error: string | null;
-} | null;
-
-export function LeadPhotoPicker({
-  leadId,
-  profileLink,
-  canEdit,
-}: {
-  leadId: string;
-  profileLink: string | null;
-  canEdit: boolean;
-}) {
-  const router = useRouter();
-  const toast = useToast();
-  const ext = usePhotoExtension();
-  const [capture, setCapture] = useState<CaptureState>(null);
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [uploading, setUploading] = useState(false);
-
-  const [loaded, setLoaded] = useState(false);
-  const autoFired = useRef<string | null>(null);
-
-  const load = useCallback(async () => {
-    const res = await fetch(`/api/leads/${leadId}/photos`);
-    if (!res.ok) return;
-    const data = (await res.json()) as { capture: CaptureState; candidates: Candidate[] };
-    setCapture(data.capture);
-    setCandidates(data.candidates);
-    setLoaded(true);
-  }, [leadId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const runCapture = useCallback(async () => {
-    if (!profileLink) return;
-
-    // EVERY call here must check `ok`. The server now returns a 500 when the
-    // store fails (e.g. the migration is not applied) — ignoring that would
-    // leave the operator watching a spinner, or worse, show "Captured 18
-    // photos" for a harvest that was never saved.
-    const started = await fetch(`/api/leads/${leadId}/photos/candidates`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "started", profileLink }),
-    });
-    if (!started.ok) {
-      toast.show((await started.json().catch(() => ({}))).error ?? "Could not start the capture");
-      return;
-    }
-    setCapture({ status: "pending", profileLink, foundCount: 0, error: null });
-    try {
-      const photos = await ext.capture(profileLink);
-      const saved = await fetch(`/api/leads/${leadId}/photos/candidates`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "done", profileLink, photos, extensionVersion: ext.version }),
-      });
-      if (!saved.ok) {
-        toast.show((await saved.json().catch(() => ({}))).error ?? "Captured, but could not save the photos");
-        await load();
-        return;
-      }
-      toast.show(photos.length ? `Captured ${photos.length} photos` : "No photos found on that profile");
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Capture failed";
-      await fetch(`/api/leads/${leadId}/photos/candidates`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "failed", error: message }),
-      });
-      toast.show(message);
-    }
-    await load();
-  }, [leadId, profileLink, ext, toast, load]);
-
-  /**
-   * Auto-capture. Two cases, one rule: run when this lead has never been
-   * captured, or when the profile link has been EDITED since the last capture
-   * (the design's trigger (b)). `autoFired` keeps it to once per link per
-   * mount, so a failed capture does not spin.
-   */
-  useEffect(() => {
-    if (!loaded || !profileLink || !ext.installed || ext.capturing || !canEdit) return;
-    if (!isGoogleProfileLink(profileLink)) return;
-    if (capture && capture.profileLink === profileLink) return;
-    if (autoFired.current === profileLink) return;
-    autoFired.current = profileLink;
-    void runCapture();
-  }, [loaded, profileLink, ext.installed, ext.capturing, canEdit, capture, runCapture]);
-
-  async function upload() {
-    const photoKeys = candidates.filter((c) => selected.has(c.id)).map((c) => c.photoKey);
-    if (photoKeys.length === 0) return;
-    setUploading(true);
-    const res = await fetch(`/api/leads/${leadId}/photos/upload`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ photoKeys }),
-    });
-    setUploading(false);
-    if (!res.ok) {
-      toast.show((await res.json().catch(() => ({}))).error ?? "Upload failed");
-      return;
-    }
-    const { uploaded, failed } = (await res.json()) as { uploaded: string[]; failed: { error: string }[] };
-    toast.show(`${uploaded.length} uploaded${failed.length ? ` · ${failed.length} failed` : ""}`);
-    setSelected(new Set());
-    await load();
-    router.refresh();
-  }
-
-  if (!profileLink) return null;
-
-  const pickable = candidates.filter((c) => c.status !== "uploaded");
-
-  return (
-    <div className="space-y-3">
-      <ExtensionInstallCard installed={ext.installed} version={ext.version} />
-
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          disabled={!canEdit || ext.capturing || !ext.installed}
-          onClick={runCapture}
-          className="inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
-        >
-          {ext.capturing ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
-          {ext.capturing ? `Capturing… ${ext.progress} found` : candidates.length ? "Re-capture photos" : "Capture photos"}
-        </button>
-        {capture?.status === "failed" && <span className="text-sm text-red-400">{capture.error}</span>}
-        {capture?.status === "none_found" && <span className="text-sm text-text-faint">No photos found on that profile.</span>}
-      </div>
-
-      {candidates.length > 0 && (
-        <>
-          <div className="flex items-center gap-3 text-sm">
-            <button type="button" onClick={() => setSelected(new Set(pickable.map((c) => c.id)))} className="underline">
-              Select all
-            </button>
-            <button type="button" onClick={() => setSelected(new Set())} className="underline">
-              None
-            </button>
-            <span className="text-text-faint">
-              <b>{selected.size}</b> selected
-            </span>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-            {candidates.map((c) => {
-              const done = c.status === "uploaded";
-              const isSelected = selected.has(c.id);
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  disabled={done || !canEdit}
-                  onClick={() =>
-                    setSelected((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(c.id)) next.delete(c.id);
-                      else next.add(c.id);
-                      return next;
-                    })
-                  }
-                  className={`relative aspect-square overflow-hidden rounded border-2 ${
-                    done ? "border-green-500/60 opacity-60" : isSelected ? "border-accent" : "border-transparent"
-                  }`}
-                  title={c.error ?? undefined}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={c.thumbUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="h-full w-full object-cover" />
-                  {(done || isSelected) && (
-                    <span className="absolute right-1 top-1 rounded-full bg-black/70 p-1">
-                      <Check size={12} className={done ? "text-green-400" : "text-white"} />
-                    </span>
-                  )}
-                  {c.status === "failed" && <span className="absolute inset-x-0 bottom-0 bg-red-500/80 text-[10px]">failed</span>}
-                </button>
-              );
-            })}
-          </div>
-
-          <button
-            type="button"
-            disabled={!canEdit || uploading || selected.size === 0}
-            onClick={upload}
-            className="inline-flex items-center gap-2 rounded bg-accent px-3 py-2 text-sm font-medium disabled:opacity-50"
-          >
-            {uploading && <Loader2 size={16} className="animate-spin" />}
-            Use selected photos
-          </button>
-        </>
-      )}
-    </div>
-  );
-}
-```
-
-- [ ] **Step 2: Check the toast API before you rely on it**
-
-Open `components/common/Toast.tsx` and confirm the method name used above (`toast.show(...)`). If the context exposes a different name or signature, fix every call in `LeadPhotoPicker.tsx` to match. Do not change the Toast component.
+`components/common/Toast.tsx` exposes `useToast()` returning `{ toast }`, called as
+`toast({ kind, title })` — not `useToast()` returning a `.show(msg)` method. Every
+call site in `LeadPhotoPicker.tsx` must use the real shape. Do not change the Toast
+component to match a plan listing.
 
 - [ ] **Step 3: Mount the picker in the Images group**
 
