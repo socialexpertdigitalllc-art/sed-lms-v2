@@ -1,4 +1,13 @@
 /**
+ * Google's own hostnames, anchored at BOTH ends. Anchoring only the start —
+ * /^(www\.)?google\./ — accepts google.com.evil.com, because that string does
+ * begin with "google.". The TLD shape here allows google.com, google.de,
+ * google.co.uk and google.com.au, while rejecting google.attacker.tld and
+ * google.com.evil.com, whose extra labels are too long to be a TLD.
+ */
+const GOOGLE_HOST_RE = /^(?:www\.|maps\.)?google\.(?:com|[a-z]{2,3})(?:\.[a-z]{2})?$/;
+
+/**
  * Does `business_profile_link` point at a Google Business Profile?
  *
  * Only these trigger a capture. A Yelp link is deliberately NOT accepted: the
@@ -22,14 +31,11 @@ export function isGoogleProfileLink(link: string | null | undefined): boolean {
 
   // Short links resolve to a place; the extension follows the redirect.
   if (host === "maps.app.goo.gl" || host === "goo.gl" || host === "g.page") return true;
-  // maps.google.com / maps.google.co.uk / ...
-  if (/^maps\.google\./.test(host)) return true;
-  // www.google.<tld>/maps/...
-  // Segment match, NOT a prefix match: `startsWith("/maps")` would also accept
-  // /mapsfoo and friends. This gates a URL we later open in the operator's
-  // browser, so err toward rejecting — a real-but-unusual Google URL just
-  // means the operator captures manually.
-  if (/^(www\.)?google\./.test(host) && (path === "/maps" || path.startsWith("/maps/"))) return true;
 
-  return false;
+  if (!GOOGLE_HOST_RE.test(host)) return false;
+  // maps.google.<tld> is a Maps host whatever the path.
+  if (host.startsWith("maps.")) return true;
+  // On www.google.<tld> only the /maps path is a profile link. Segment match,
+  // NOT a prefix match — startsWith("/maps") would also accept /mapsfoo.
+  return path === "/maps" || path.startsWith("/maps/");
 }

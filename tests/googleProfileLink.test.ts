@@ -63,4 +63,19 @@ describe("isGoogleProfileLink", () => {
     expect(isGoogleProfileLink("javascript:alert(1)")).toBe(false);
     expect(isGoogleProfileLink("data:text/html,<script>alert(1)</script>")).toBe(false);
   });
+
+  it("rejects lookalike domains that merely start with google.", () => {
+    expect(isGoogleProfileLink("https://google.com.evil.com/maps/place/x")).toBe(false);
+    expect(isGoogleProfileLink("https://google.evil.com/maps")).toBe(false);
+    expect(isGoogleProfileLink("https://maps.google.evil.com/maps")).toBe(false);
+    expect(isGoogleProfileLink("https://google.attacker.tld/maps")).toBe(false);
+  });
+
+  it("still accepts genuine Google country domains", () => {
+    expect(isGoogleProfileLink("https://www.google.com/maps/place/Acme")).toBe(true);
+    expect(isGoogleProfileLink("https://www.google.co.uk/maps/place/Acme")).toBe(true);
+    expect(isGoogleProfileLink("https://www.google.de/maps/place/Acme")).toBe(true);
+    expect(isGoogleProfileLink("https://www.google.com.au/maps/place/Acme")).toBe(true);
+    expect(isGoogleProfileLink("https://maps.google.com/?cid=123")).toBe(true);
+  });
 });
