@@ -44,4 +44,23 @@ describe("isGoogleProfileLink", () => {
   it("tolerates surrounding whitespace", () => {
     expect(isGoogleProfileLink("  https://maps.app.goo.gl/xyz  ")).toBe(true);
   });
+
+  it("rejects a path that merely starts with the letters 'maps'", () => {
+    expect(isGoogleProfileLink("https://www.google.com/mapsfoo")).toBe(false);
+    expect(isGoogleProfileLink("https://www.google.com/mapsomething/place/x")).toBe(false);
+  });
+
+  it("accepts the bare /maps path and /maps/ subpaths", () => {
+    expect(isGoogleProfileLink("https://www.google.com/maps")).toBe(true);
+    expect(isGoogleProfileLink("https://www.google.com/maps/place/Acme")).toBe(true);
+  });
+
+  it("ignores a google URL smuggled into another host's query string", () => {
+    expect(isGoogleProfileLink("https://evil.com/?x=https://www.google.com/maps/place/x")).toBe(false);
+  });
+
+  it("rejects non-http protocols", () => {
+    expect(isGoogleProfileLink("javascript:alert(1)")).toBe(false);
+    expect(isGoogleProfileLink("data:text/html,<script>alert(1)</script>")).toBe(false);
+  });
 });

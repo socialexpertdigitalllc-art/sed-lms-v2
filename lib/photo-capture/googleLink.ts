@@ -25,7 +25,11 @@ export function isGoogleProfileLink(link: string | null | undefined): boolean {
   // maps.google.com / maps.google.co.uk / ...
   if (/^maps\.google\./.test(host)) return true;
   // www.google.<tld>/maps/...
-  if (/^(www\.)?google\./.test(host) && path.startsWith("/maps")) return true;
+  // Segment match, NOT a prefix match: `startsWith("/maps")` would also accept
+  // /mapsfoo and friends. This gates a URL we later open in the operator's
+  // browser, so err toward rejecting — a real-but-unusual Google URL just
+  // means the operator captures manually.
+  if (/^(www\.)?google\./.test(host) && (path === "/maps" || path.startsWith("/maps/"))) return true;
 
   return false;
 }
