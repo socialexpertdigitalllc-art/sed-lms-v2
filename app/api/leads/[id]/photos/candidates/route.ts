@@ -53,32 +53,39 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: "Invalid input", issues: parsed.error.flatten() }, { status: 422 });
   }
 
-  if (parsed.data.kind === "failed") {
-    await failCapture(id, parsed.data.error);
-    return NextResponse.json({ status: "failed" });
+  try {
+    if (parsed.data.kind === "failed") {
+      await failCapture(id, parsed.data.error);
+      return NextResponse.json({ status: "failed" });
+    }
+
+    // Only a Google profile link may be recorded — it is what the auto-capture
+    // comparison in the Images group is keyed on.
+    if (!isGoogleProfileLink(parsed.data.profileLink)) {
+      return NextResponse.json({ error: "Not a Google Business Profile link" }, { status: 422 });
+    }
+
+    if (parsed.data.kind === "started") {
+      await startCapture(id, user.id, parsed.data.profileLink);
+      return NextResponse.json({ status: "pending" });
+    }
+
+    // Only Google photo URLs may be stored: the source URL is fetched by our
+    // server (and by imgbb) later, so an arbitrary URL here would be an SSRF.
+    const allowed = parsed.data.photos.filter(
+      (p) => /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i.test(p.sourceUrl) &&
+             /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i.test(p.thumbUrl)
+    );
+
+    const result = await saveHarvest(id, allowed, {
+      extensionVersion: parsed.data.extensionVersion ?? null,
+      profileLink: parsed.data.profileLink,
+    });
+    return NextResponse.json(result);
+  } catch (e) {
+    // Log the real error server-side; never hand raw database error text back
+    // to the browser.
+    console.error(`[photo-capture] candidates POST failed for lead ${id}:`, e);
+    return NextResponse.json({ error: "Photo capture is unavailable" }, { status: 500 });
   }
-
-  // Only a Google profile link may be recorded — it is what the auto-capture
-  // comparison in the Images group is keyed on.
-  if (!isGoogleProfileLink(parsed.data.profileLink)) {
-    return NextResponse.json({ error: "Not a Google Business Profile link" }, { status: 422 });
-  }
-
-  if (parsed.data.kind === "started") {
-    await startCapture(id, user.id, parsed.data.profileLink);
-    return NextResponse.json({ status: "pending" });
-  }
-
-  // Only Google photo URLs may be stored: the source URL is fetched by our
-  // server (and by imgbb) later, so an arbitrary URL here would be an SSRF.
-  const allowed = parsed.data.photos.filter(
-    (p) => /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i.test(p.sourceUrl) &&
-           /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i.test(p.thumbUrl)
-  );
-
-  const result = await saveHarvest(id, allowed, {
-    extensionVersion: parsed.data.extensionVersion ?? null,
-    profileLink: parsed.data.profileLink,
-  });
-  return NextResponse.json(result);
 }

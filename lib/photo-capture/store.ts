@@ -31,17 +31,22 @@ export type HarvestedPhoto = { key: string; thumbUrl: string; sourceUrl: string 
 export async function getCapture(leadId: string): Promise<{ capture: CaptureState; candidates: Candidate[] }> {
   const admin = createAdminClient();
 
-  const { data: cap } = await admin
+  const { data: cap, error: capError } = await admin
     .from("lead_photo_captures")
     .select("status, profile_link, found_count, error, requested_at, completed_at")
     .eq("lead_id", leadId)
     .maybeSingle();
+  // A discarded error here is indistinguishable from "no capture yet" — which
+  // is exactly what an unapplied migration looks like. Throw so the route can
+  // tell the two apart.
+  if (capError) throw new Error(capError.message);
 
-  const { data: rows } = await admin
+  const { data: rows, error: rowsError } = await admin
     .from("lead_photo_candidates")
     .select("id, photo_key, thumb_url, source_url, status, hosted_url, error")
     .eq("lead_id", leadId)
     .order("created_at");
+  if (rowsError) throw new Error(rowsError.message);
 
   return {
     capture: cap
@@ -69,7 +74,7 @@ export async function getCapture(leadId: string): Promise<{ capture: CaptureStat
 /** Mark a capture as started. Called when the page dispatches to the extension. */
 export async function startCapture(leadId: string, userId: string, profileLink: string): Promise<void> {
   const admin = createAdminClient();
-  await admin.from("lead_photo_captures").upsert(
+  const { error } = await admin.from("lead_photo_captures").upsert(
     {
       lead_id: leadId,
       status: "pending",
@@ -81,6 +86,7 @@ export async function startCapture(leadId: string, userId: string, profileLink: 
     },
     { onConflict: "lead_id" }
   );
+  if (error) throw new Error(error.message);
 }
 
 /**
@@ -110,7 +116,7 @@ export async function saveHarvest(
     if (error) throw new Error(error.message);
   }
 
-  await admin.from("lead_photo_captures").upsert(
+  const { error: captureError } = await admin.from("lead_photo_captures").upsert(
     {
       lead_id: leadId,
       status,
@@ -122,16 +128,18 @@ export async function saveHarvest(
     },
     { onConflict: "lead_id" }
   );
+  if (captureError) throw new Error(captureError.message);
 
   return { status, found: photos.length };
 }
 
 export async function failCapture(leadId: string, message: string): Promise<void> {
   const admin = createAdminClient();
-  await admin.from("lead_photo_captures").upsert(
+  const { error } = await admin.from("lead_photo_captures").upsert(
     { lead_id: leadId, status: "failed", error: message.slice(0, 500), completed_at: new Date().toISOString() },
     { onConflict: "lead_id" }
   );
+  if (error) throw new Error(error.message);
 }
 
 /**
@@ -147,23 +155,31 @@ export async function failCapture(leadId: string, message: string): Promise<void
  */
 export async function claimCandidate(candidateId: string): Promise<boolean> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("lead_photo_candidates")
     .update({ status: "uploading", updated_at: new Date().toISOString() })
     .eq("id", candidateId)
     .eq("status", "pending")
     .select("id");
+  // A genuine error (bad connection, missing table, etc.) is NOT the same
+  // thing as losing the claim race — that must throw, not silently read as
+  // "someone else got there first".
+  if (error) throw new Error(error.message);
+  // No error, but zero rows matched: the conditional `where status = pending`
+  // simply matched nothing (already claimed, already uploaded, or gone).
+  // That is a normal, expected outcome — return false, don't throw.
   return (data?.length ?? 0) === 1;
 }
 
 /** Hand a claim back when the upload failed before it started. */
 export async function releaseCandidate(candidateId: string): Promise<void> {
   const admin = createAdminClient();
-  await admin
+  const { error } = await admin
     .from("lead_photo_candidates")
     .update({ status: "pending", updated_at: new Date().toISOString() })
     .eq("id", candidateId)
     .eq("status", "uploading");
+  if (error) throw new Error(error.message);
 }
 
 export async function markCandidateUploaded(
@@ -172,16 +188,18 @@ export async function markCandidateUploaded(
   provider: string
 ): Promise<void> {
   const admin = createAdminClient();
-  await admin
+  const { error } = await admin
     .from("lead_photo_candidates")
     .update({ status: "uploaded", hosted_url: hostedUrl, host_provider: provider, error: null, updated_at: new Date().toISOString() })
     .eq("id", candidateId);
+  if (error) throw new Error(error.message);
 }
 
 export async function markCandidateFailed(candidateId: string, message: string): Promise<void> {
   const admin = createAdminClient();
-  await admin
+  const { error } = await admin
     .from("lead_photo_candidates")
     .update({ status: "failed", error: message.slice(0, 500), updated_at: new Date().toISOString() })
     .eq("id", candidateId);
+  if (error) throw new Error(error.message);
 }

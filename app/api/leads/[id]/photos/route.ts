@@ -17,5 +17,12 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const perms = await getUserPermissions(user.id);
   if (!perms.has("leads.view")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  return NextResponse.json(await getCapture(id));
+  try {
+    return NextResponse.json(await getCapture(id));
+  } catch (e) {
+    // A silent empty state here is indistinguishable from "no capture yet" —
+    // which is exactly what an unapplied migration would look like.
+    console.error(`[photo-capture] getCapture failed for lead ${id}:`, e);
+    return NextResponse.json({ error: "Photo capture is unavailable" }, { status: 500 });
+  }
 }
