@@ -97,7 +97,11 @@ export async function listImageHostStatuses(): Promise<ImageHostStatus[]> {
         position: row.position,
         enabled: row.enabled,
         configured: field === null ? true : !!secret,
-        hint: secret ? `••••${secret.slice(-4)}` : null,
+        // A secret of 4 characters or fewer must not be shown whole: slice(-4)
+        // on a 4-char-or-shorter string returns the ENTIRE value, which would
+        // defeat the mask. Mirrors maskCredentialHint in
+        // lib/ai-tools/providers/registry.ts.
+        hint: secret ? (secret.length <= 4 ? "••••" : `••••${secret.slice(-4)}`) : null,
         exhaustedUntil: row.exhausted_until,
         lastError: row.last_error,
         uploadCount: row.upload_count,
@@ -117,13 +121,16 @@ export async function addImageHost(input: {
   const admin = createAdminClient();
   const field = CREDENTIAL_FIELD[input.provider];
 
-  const { data: last } = await admin
+  const { data: last, error: lastError } = await admin
     .from("image_hosts")
     .select("position")
     .eq("provider", input.provider)
     .order("position", { ascending: false })
     .limit(1)
     .maybeSingle();
+  // A failed read here must not silently restart this provider's ordering at
+  // 0 — that would scramble the operator's configured fallback order.
+  if (lastError) throw new Error(lastError.message);
 
   const encrypted =
     field && input.secret?.trim() ? encryptSecret(JSON.stringify({ [field]: input.secret.trim() })) : null;
@@ -157,8 +164,16 @@ export async function updateImageHost(
     update.exhausted_until = null;
   }
   if (patch.secret !== undefined) {
-    const { data: row } = await admin.from("image_hosts").select("provider").eq("id", id).single();
-    const field = row ? CREDENTIAL_FIELD[row.provider as HostProvider] : null;
+    const { data: row, error: lookupError } = await admin
+      .from("image_hosts")
+      .select("provider")
+      .eq("id", id)
+      .single();
+    // Must NOT continue on failure: `field` would fall to null below and the
+    // update would CLEAR the operator's working credential instead of setting
+    // it — a transient read failure must never be able to wipe a secret.
+    if (lookupError || !row) throw new Error(lookupError?.message ?? "Image host not found");
+    const field = CREDENTIAL_FIELD[row.provider as HostProvider];
     update.encrypted_credentials =
       field && patch.secret?.trim() ? encryptSecret(JSON.stringify({ [field]: patch.secret.trim() })) : null;
   }
@@ -173,22 +188,40 @@ export async function deleteImageHost(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-/** The chain's persistence, backed by the table. */
+/**
+ * The chain's persistence, backed by the table.
+ *
+ * These methods THROW on a write failure rather than swallowing it — bookkeeping
+ * errors must be visible somewhere. It is the CALLER's job to decide how loud
+ * that should be: `runUploadChain` (lib/photo-capture/hosts/chain.ts) already
+ * wraps every one of these calls in its own `quietly()` helper, so a throw
+ * here cannot sink an upload; it is simply swallowed one layer up, on purpose.
+ */
 export function imageHostStateStore(): HostStateStore {
   const admin = createAdminClient();
   return {
     async markExhausted(hostId, until, message) {
-      await admin
+      const { error } = await admin
         .from("image_hosts")
         .update({ exhausted_until: until.toISOString(), last_error: message })
         .eq("id", hostId);
+      if (error) throw new Error(error.message);
     },
     async markAuthFailed(hostId, message) {
-      await admin.from("image_hosts").update({ enabled: false, last_error: message }).eq("id", hostId);
+      const { error } = await admin
+        .from("image_hosts")
+        .update({ enabled: false, last_error: message })
+        .eq("id", hostId);
+      if (error) throw new Error(error.message);
     },
     async recordSuccess(hostId) {
-      const { data } = await admin.from("image_hosts").select("upload_count").eq("id", hostId).single();
-      await admin
+      const { data, error: readError } = await admin
+        .from("image_hosts")
+        .select("upload_count")
+        .eq("id", hostId)
+        .single();
+      if (readError) throw new Error(readError.message);
+      const { error } = await admin
         .from("image_hosts")
         .update({
           upload_count: (data?.upload_count ?? 0) + 1,
@@ -197,6 +230,7 @@ export function imageHostStateStore(): HostStateStore {
           exhausted_until: null,
         })
         .eq("id", hostId);
+      if (error) throw new Error(error.message);
     },
   };
 }
