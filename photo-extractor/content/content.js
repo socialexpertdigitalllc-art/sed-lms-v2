@@ -40,13 +40,16 @@
   };
 
   // ---- render/scope helpers (mirror core/collect-filter.js) ----
+  // getBoundingClientRect() forces layout; called per-node per scroll tick.
+  // If a very large gallery ever makes this feel janky, check el.offsetParent
+  // !== null first (no forced layout) as a cheap short-circuit before the
+  // rect read.
   const isRendered = (el) => {
     try {
       const r = el.getBoundingClientRect();
       return r.width > 0 && r.height > 0 && el.offsetParent !== null;
     } catch { return false; }
   };
-  const placeKey = (href) => { const m = String(href).match(/\/maps\/place\/([^/@?#]+)/); return m ? m[1] : null; };
 
   const bestSrc = (img) => {
     const ss = img.getAttribute('srcset');
@@ -152,12 +155,8 @@
     return true; // async sendResponse
   });
 
-  let lastPlace = null;
-
   async function loadAll() {
     adapter = pick();
-    const here = placeKey(location.href);
-    if (here !== lastPlace) { lastPlace = here; }
     try { if (adapter.prepare) await adapter.prepare(); } catch { /* best-effort */ }
     for (let i = 0; i < 25 && adapter.collect().size === 0; i++) await sleep(200);
     const c = adapter.getScrollContainer();
