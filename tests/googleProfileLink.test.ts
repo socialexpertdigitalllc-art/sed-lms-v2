@@ -78,4 +78,12 @@ describe("isGoogleProfileLink", () => {
     expect(isGoogleProfileLink("https://www.google.com.au/maps/place/Acme")).toBe(true);
     expect(isGoogleProfileLink("https://maps.google.com/?cid=123")).toBe(true);
   });
+
+  it("accepts any short alphabetic TLD — a deliberate trade-off", () => {
+    // Enumerating Google's ~190 ccTLDs would be worse to maintain and would
+    // break whenever the list changes, so the shape is matched instead. The
+    // residual risk is bounded: a URL only ever gets opened in the operator's
+    // own browser, and the extension harvests nothing on a non-Google host.
+    expect(isGoogleProfileLink("https://www.google.xyz/maps/place/x")).toBe(true);
+  });
 });

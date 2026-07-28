@@ -1,11 +1,12 @@
 /**
  * Google's own hostnames, anchored at BOTH ends. Anchoring only the start —
  * /^(www\.)?google\./ — accepts google.com.evil.com, because that string does
- * begin with "google.". The TLD shape here allows google.com, google.de,
- * google.co.uk and google.com.au, while rejecting google.attacker.tld and
+ * begin with "google.". The shape here accepts any 2-3 letter TLD, optionally
+ * followed by a 2-letter second-level domain: google.com, google.de,
+ * google.co.uk, google.com.au. It rejects google.attacker.tld and
  * google.com.evil.com, whose extra labels are too long to be a TLD.
  */
-const GOOGLE_HOST_RE = /^(?:www\.|maps\.)?google\.(?:com|[a-z]{2,3})(?:\.[a-z]{2})?$/;
+const GOOGLE_HOST_RE = /^(?:www\.|maps\.)?google\.[a-z]{2,3}(?:\.[a-z]{2})?$/;
 
 /**
  * Does `business_profile_link` point at a Google Business Profile?
