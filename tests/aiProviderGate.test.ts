@@ -4,6 +4,8 @@ import {
   CHARS_PER_TOKEN,
   IMAGE_TOKEN_ESTIMATE,
   SEED_OUTPUT_RATIO,
+  OUTPUT_SAMPLE_SIZE,
+  MIN_OUTPUT_SAMPLES,
   estimateInputTokens,
   outputRatioFrom,
   OutputRatioEstimator,
@@ -43,8 +45,7 @@ describe("OutputRatioEstimator", () => {
   it("uses the seed ratio before enough samples exist", () => {
     const est = new OutputRatioEstimator();
     expect(est.ratio("minimax:MiniMax-M3")).toBe(SEED_OUTPUT_RATIO);
-    est.record("minimax:MiniMax-M3", 0.2);
-    est.record("minimax:MiniMax-M3", 0.2);
+    for (let i = 0; i < MIN_OUTPUT_SAMPLES - 1; i++) est.record("minimax:MiniMax-M3", 0.2);
     expect(est.ratio("minimax:MiniMax-M3")).toBe(SEED_OUTPUT_RATIO);
   });
 
@@ -63,8 +64,16 @@ describe("OutputRatioEstimator", () => {
 
   it("forgets old samples so a changed workload re-calibrates", () => {
     const est = new OutputRatioEstimator();
-    for (let i = 0; i < 30; i++) est.record("k", 0.1);
-    for (let i = 0; i < 30; i++) est.record("k", 0.9);
-    expect(est.ratio("k")).toBeCloseTo(0.9, 5);
+    for (let i = 0; i < 3; i++) est.record("k", 0.9);
+    for (let i = 0; i < OUTPUT_SAMPLE_SIZE; i++) est.record("k", 0.1);
+    expect(est.ratio("k")).toBeCloseTo(0.1, 5);
+  });
+
+  it("ignores non-finite and negative samples", () => {
+    const est = new OutputRatioEstimator();
+    est.record("k", NaN);
+    est.record("k", -1);
+    est.record("k", Infinity);
+    expect(est.ratio("k")).toBe(SEED_OUTPUT_RATIO);
   });
 });

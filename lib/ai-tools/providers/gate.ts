@@ -15,6 +15,12 @@
  * live traffic rather than from a constant somebody guessed.
  */
 
+/** Rough tokens-per-character. Matches the existing fallback in run.ts.
+ *  This UNDER-counts for dense markup/JSON and for non-Latin scripts, so the
+ *  input side of a reservation errs LOW — the unsafe direction. Tolerable
+ *  because the gate rewrites the ledger entry with the vendor's real
+ *  `total_tokens` on settle, and a resulting 429 backs the budget off; a
+ *  tokenizer dependency on the hot path is not worth the accuracy. */
 export const CHARS_PER_TOKEN = 4;
 
 /** Flat per-image allowance. Vendors tile images differently and none of the
@@ -52,7 +58,7 @@ export function estimateInputTokens(systemPrompt: string, userPrompt: string, im
 export function outputRatioFrom(usage: TokenUsage | null | undefined): number | null {
   if (!usage) return null;
   const prompt = usage.prompt_tokens;
-  if (typeof prompt !== "number" || prompt <= 0) return null;
+  if (typeof prompt !== "number" || !Number.isFinite(prompt) || prompt <= 0) return null;
   const completion =
     typeof usage.completion_tokens === "number"
       ? usage.completion_tokens
@@ -63,7 +69,11 @@ export function outputRatioFrom(usage: TokenUsage | null | undefined): number | 
   return completion / prompt;
 }
 
-/** Rolling p90 of observed output ratios, keyed by `${providerKey}:${model}`. */
+/** Rolling p90 of observed output ratios, keyed by `${providerKey}:${model}`.
+ *  The upper tail is chosen deliberately, not the median: over-reserving on a
+ *  low-ratio call only costs some throughput, whereas under-reserving triggers
+ *  a 429 and a multiplicative backoff of the ENTIRE provider budget — so the
+ *  asymmetry in outcomes justifies an asymmetric (high-percentile) estimate. */
 export class OutputRatioEstimator {
   private readonly samples = new Map<string, number[]>();
 
@@ -79,11 +89,10 @@ export class OutputRatioEstimator {
     const arr = this.samples.get(key);
     if (!arr || arr.length < MIN_OUTPUT_SAMPLES) return SEED_OUTPUT_RATIO;
     const sorted = [...arr].sort((a, b) => a - b);
-    const index = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9));
+    // Nearest-rank p90. Note that below ~10 samples this IS the maximum — that is
+    // inherent to the definition, not a bug, and it errs toward over-reserving,
+    // which costs throughput rather than a 429.
+    const index = Math.max(0, Math.ceil(sorted.length * 0.9) - 1);
     return sorted[index];
-  }
-
-  reset(): void {
-    this.samples.clear();
   }
 }
