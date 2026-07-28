@@ -33,6 +33,9 @@ import {
   buildLeadPayload,
   type NewLeadFormState,
 } from "@/lib/leads/newLeadForm";
+import { usePhotoExtension } from "@/hooks/usePhotoExtension";
+import { isGoogleProfileLink } from "@/lib/photo-capture/googleLink";
+import { ExtensionInstallCard } from "@/components/leads/ExtensionInstallCard";
 import { Field, inputCls } from "@/components/forms/Field";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { ChipGroup } from "@/components/forms/ChipGroup";
@@ -67,6 +70,7 @@ export function NewLeadForm({
   const router = useRouter();
   const { all } = usePermissions();
   const settable = useMemo(() => settableStatuses(all), [all]);
+  const photoExt = usePhotoExtension();
 
   const [f, setF] = useState<NewLeadFormState>(() =>
     emptyNewLead(
@@ -245,6 +249,39 @@ export function NewLeadForm({
       return;
     }
     const { id } = await res.json();
+
+    // Fire-and-forget: the lead is saved either way, and the agent must never
+    // wait on a browser capture. A missing extension simply does nothing —
+    // the lead's Images group offers a Capture photos button instead.
+    if (photoExt.installed && isGoogleProfileLink(f.business_profile_link)) {
+      void (async () => {
+        try {
+          await fetch(`/api/leads/${id}/photos/candidates`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: "started", profileLink: f.business_profile_link }),
+          });
+          const photos = await photoExt.capture(f.business_profile_link);
+          await fetch(`/api/leads/${id}/photos/candidates`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              kind: "done",
+              profileLink: f.business_profile_link,
+              photos,
+              extensionVersion: photoExt.version,
+            }),
+          });
+        } catch (e) {
+          await fetch(`/api/leads/${id}/photos/candidates`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: "failed", error: e instanceof Error ? e.message : "Capture failed" }),
+          });
+        }
+      })();
+    }
+
     router.push(`/leads/${id}`);
     router.refresh();
   }
@@ -339,6 +376,10 @@ export function NewLeadForm({
       )}
 
       <form onSubmit={submit} className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="lg:col-span-2">
+          <ExtensionInstallCard installed={photoExt.installed} version={photoExt.version} />
+        </div>
+
         {/* Form column */}
         <div className="min-w-0 space-y-5">
           {showAssignment && (
