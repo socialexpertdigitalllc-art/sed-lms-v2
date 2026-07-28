@@ -5,7 +5,10 @@ import type { UploadFailure } from "./types";
 // `error` — parking a healthy key for an hour because one photo was too big
 // is far worse than the retry it gets instead.
 const QUOTA_RE = /rate limit|too many requests|quota|limit reached|limit exceeded/i;
-const AUTH_RE = /invalid api key|invalid key|invalid token|unauthorized|unauthenticated|forbidden/i;
+// Deliberately no bare `forbidden` or `unauthorized`: those words show up on
+// WAF/geo/proxy block pages that have nothing to do with our credentials.
+// Only phrasing that specifically names a bad key/token counts as `auth`.
+const AUTH_RE = /invalid api ?key|invalid key|invalid token|unauthenticated|api ?key (?:is )?(?:missing|required|invalid)/i;
 
 /**
  * Decide what a failed upload means for the HOST, not the photo.
@@ -24,9 +27,17 @@ export function classifyUploadError(input: {
   /** imgchest's `X-RateLimit-Remaining` header, when present. */
   rateLimitRemaining?: string | null;
 }): UploadFailure {
+  // Structured signals first, free text last: a header or status code is a
+  // fact the provider reported about itself; a message is prose someone
+  // wrote for humans and is the more fragile signal.
   if (input.rateLimitRemaining === "0") return "quota";
   if (input.status === 429) return "quota";
-  if (input.status === 401 || input.status === 403) return "auth";
+  // 401 only: none of the three providers' real bad-credential responses use
+  // 403 (imgbb: 400 + "Invalid API key"; imgchest: 401 Unauthenticated;
+  // postimages: no auth at all) — 403 is what a WAF/geo-block/policy
+  // rejection returns, and disablement has no cooldown, so a false positive
+  // here permanently benches a healthy key.
+  if (input.status === 401) return "auth";
   const msg = input.message ?? "";
   if (QUOTA_RE.test(msg)) return "quota";
   if (AUTH_RE.test(msg)) return "auth";

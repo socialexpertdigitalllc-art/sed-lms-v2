@@ -15,9 +15,18 @@ describe("classifyUploadError", () => {
     expect(classifyUploadError({ status: 500, rateLimitRemaining: "42" })).toBe("error");
   });
 
-  it("treats 401 and 403 as auth problems", () => {
+  it("treats 401 as an auth problem", () => {
     expect(classifyUploadError({ status: 401 })).toBe("auth");
-    expect(classifyUploadError({ status: 403 })).toBe("auth");
+  });
+
+  it("does not let a WAF-style 403 disable the host", () => {
+    expect(classifyUploadError({ status: 403, message: "Access Forbidden" })).toBe("error");
+  });
+
+  it("still recognizes imgbb's and imgchest's real bad-credential shapes", () => {
+    expect(classifyUploadError({ status: 400, message: "Invalid API key" })).toBe("auth");
+    expect(classifyUploadError({ status: 401 })).toBe("auth");
+    expect(classifyUploadError({ status: 400, message: "Unauthenticated." })).toBe("auth");
   });
 
   it("reads a quota verdict out of the message when the status does not say so", () => {
@@ -44,5 +53,13 @@ describe("classifyUploadError", () => {
   it("still classifies genuine exceeded-limit phrasings as quota", () => {
     expect(classifyUploadError({ status: 400, message: "quota exceeded" })).toBe("quota");
     expect(classifyUploadError({ status: 400, message: "API limit exceeded" })).toBe("quota");
+  });
+
+  it("matches the 'limit reached' alternative on its own", () => {
+    expect(classifyUploadError({ status: 400, message: "monthly limit reached" })).toBe("quota");
+  });
+
+  it("matches the 'invalid key' alternative on its own", () => {
+    expect(classifyUploadError({ status: 400, message: "invalid key" })).toBe("auth");
   });
 });
