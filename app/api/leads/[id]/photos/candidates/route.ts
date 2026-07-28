@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { failCapture, saveHarvest, startCapture } from "@/lib/photo-capture/store";
-import { isGoogleProfileLink } from "@/lib/photo-capture/googleLink";
+import { isGoogleProfileLink, isGooglePhotoSourceUrl } from "@/lib/photo-capture/googleLink";
 
 export const runtime = "nodejs";
 
@@ -53,6 +54,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: "Invalid input", issues: parsed.error.flatten() }, { status: 422 });
   }
 
+  const admin = createAdminClient();
+  const { data: lead } = await admin
+    .from("leads")
+    .select("agent_id")
+    .eq("id", id)
+    .is("deleted_at", null)
+    .single();
+  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  // Ownership scope (defense-in-depth mirror of the leads read policy): this
+  // route uses the service-role admin client, which bypasses RLS entirely, so
+  // it must re-check by hand what `read leads scoped` (0004_lead_scoping.sql)
+  // would otherwise enforce. Matches app/api/leads/[id]/route.ts.
+  if (!perms.has("leads.view_all") && lead.agent_id !== user.id) {
+    return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
+  }
+
   try {
     if (parsed.data.kind === "failed") {
       await failCapture(id, parsed.data.error);
@@ -73,8 +91,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     // Only Google photo URLs may be stored: the source URL is fetched by our
     // server (and by imgbb) later, so an arbitrary URL here would be an SSRF.
     const allowed = parsed.data.photos.filter(
-      (p) => /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i.test(p.sourceUrl) &&
-             /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i.test(p.thumbUrl)
+      (p) => isGooglePhotoSourceUrl(p.sourceUrl) && isGooglePhotoSourceUrl(p.thumbUrl)
     );
 
     const result = await saveHarvest(id, allowed, {

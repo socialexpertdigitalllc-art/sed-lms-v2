@@ -9,6 +9,7 @@ import { imgbbAdapter } from "@/lib/photo-capture/hosts/imgbb";
 import { imgchestAdapter } from "@/lib/photo-capture/hosts/imgchest";
 import { postimagesAdapter } from "@/lib/photo-capture/hosts/postimages";
 import type { HostProvider, UploadAdapter } from "@/lib/photo-capture/hosts/types";
+import { isGooglePhotoSourceUrl } from "@/lib/photo-capture/googleLink";
 import {
   claimCandidate,
   getCapture,
@@ -32,6 +33,32 @@ const bodySchema = z.object({
 
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "business";
+}
+
+/**
+ * Re-reads `image_links` immediately before writing and unions it with only
+ * THIS request's newly uploaded URLs — never every `uploaded` candidate
+ * recorded for the lead. An earlier version derived the merge from candidate
+ * rows, which meant a photo the operator had manually removed from
+ * `image_links` came back on the very next upload, because its candidate row
+ * stayed `uploaded` forever with no way to record a durable removal.
+ * Restricting the union to this request's own uploads fixes that, and — as a
+ * side effect — narrows (rather than closes) the concurrency window down to
+ * the gap between this read and this write, instead of the whole request. A
+ * genuinely race-free append still needs an atomic Postgres operation; that
+ * is out of scope here and this is the deliberate trade-off in the meantime.
+ */
+async function mergeNewImageLinks(
+  admin: ReturnType<typeof createAdminClient>,
+  leadId: string,
+  newUrls: string[]
+): Promise<void> {
+  if (newUrls.length === 0) return;
+  const { data: freshLead } = await admin.from("leads").select("image_links").eq("id", leadId).single();
+  const existing = Array.isArray(freshLead?.image_links) ? (freshLead.image_links as string[]) : [];
+  const merged = Array.from(new Set([...existing, ...newUrls]));
+  const { error } = await admin.from("leads").update({ image_links: merged }).eq("id", leadId);
+  if (error) throw new Error(error.message);
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -59,100 +86,122 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const admin = createAdminClient();
   const { data: lead } = await admin
     .from("leads")
-    .select("business_name, image_links")
+    .select("business_name, image_links, agent_id")
     .eq("id", id)
+    .is("deleted_at", null)
     .single();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
-  const { candidates } = await getCapture(id);
-  const wanted = new Set(parsed.data.photoKeys);
-  const chosen = candidates.filter((c) => wanted.has(c.photoKey));
-  if (chosen.length === 0) return NextResponse.json({ error: "No matching candidates" }, { status: 422 });
-
-  const hosts = await listImageHosts();
-  const state = imageHostStateStore();
-  const base = slug(lead.business_name as string);
+  // Ownership scope (defense-in-depth mirror of the leads read policy): this
+  // route uses the service-role admin client, which bypasses RLS entirely, so
+  // it must re-check by hand what `read leads scoped` (0004_lead_scoping.sql)
+  // would otherwise enforce. Matches app/api/leads/[id]/route.ts.
+  if (!perms.has("leads.view_all") && lead.agent_id !== user.id) {
+    return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
+  }
 
   const uploaded: string[] = [];
   const failed: { photoKey: string; error: string }[] = [];
 
-  // Sequential on purpose: the chain mutates shared host state (cooldowns,
-  // disablement), and racing 30 uploads past an exhausted key would burn every
-  // one of them before the first failure is recorded.
-  for (const [i, candidate] of chosen.entries()) {
-    // Already uploaded — idempotent, and never pay for the same photo twice.
-    if (candidate.status === "uploaded" && candidate.hostedUrl) {
-      uploaded.push(candidate.hostedUrl);
-      continue;
-    }
+  try {
+    const { candidates } = await getCapture(id);
+    const wanted = new Set(parsed.data.photoKeys);
+    const chosen = candidates.filter((c) => wanted.has(c.photoKey));
+    if (chosen.length === 0) return NextResponse.json({ error: "No matching candidates" }, { status: 422 });
 
-    // Claim it, or leave it to whoever already has it. Two operators with the
-    // same lead open must not both spend host quota on the same photo.
-    if (!(await claimCandidate(candidate.id))) continue;
+    const hosts = await listImageHosts();
+    const state = imageHostStateStore();
+    const base = slug(lead.business_name as string);
 
-    // A claim MUST be handed back if anything unwinds between here and the
-    // markCandidate*/finally below — otherwise the row is stuck in
-    // `uploading` forever: invisible to the picker and unclaimable by anyone.
-    // This `finally` cannot save us from a platform-level kill (e.g. hitting
-    // `maxDuration`), which is why `claimCandidate` itself also treats a
-    // stale `uploading` row as reclaimable — this is the fast path, that is
-    // the fallback.
-    let settled = false;
-    try {
-      const filename = `${base}_${String(i + 1).padStart(3, "0")}.jpg`;
-      const result = await runUploadChain(
-        {
-          url: candidate.sourceUrl,
-          filename,
-          fetchBytes: async () => {
-            const r = await fetch(candidate.sourceUrl);
-            if (!r.ok) throw new Error(`Could not fetch the source image (HTTP ${r.status})`);
-            return Buffer.from(await r.arrayBuffer());
-          },
-        },
-        { hosts, adapters: ADAPTERS, state }
-      );
-
-      if (result.directUrl) {
-        await markCandidateUploaded(candidate.id, result.directUrl, result.provider ?? "");
-        uploaded.push(result.directUrl);
-      } else {
-        const message = result.lastError ?? "Every image host refused this photo";
-        await markCandidateFailed(candidate.id, message);
-        failed.push({ photoKey: candidate.photoKey, error: message });
+    // Sequential on purpose: the chain mutates shared host state (cooldowns,
+    // disablement), and racing 30 uploads past an exhausted key would burn
+    // every one of them before the first failure is recorded.
+    for (const [i, candidate] of chosen.entries()) {
+      // Already uploaded — idempotent, and never pay for the same photo twice.
+      if (candidate.status === "uploaded" && candidate.hostedUrl) {
+        uploaded.push(candidate.hostedUrl);
+        continue;
       }
-      settled = true;
-    } finally {
-      if (!settled) await releaseCandidate(candidate.id);
+
+      // Claim it, or leave it to whoever already has it. Two operators with
+      // the same lead open must not both spend host quota on the same photo.
+      if (!(await claimCandidate(candidate.id))) continue;
+
+      // A claim MUST be handed back if anything unwinds between here and the
+      // markCandidate*/finally below — otherwise the row is stuck in
+      // `uploading` forever: invisible to the picker and unclaimable by
+      // anyone. This `finally` cannot save us from a platform-level kill
+      // (e.g. hitting `maxDuration`), which is why `claimCandidate` itself
+      // also treats a stale `uploading` row as reclaimable — this is the
+      // fast path, that is the fallback.
+      let settled = false;
+      try {
+        // The candidates route only checks this at write time. A stored
+        // sourceUrl is handed straight to `fetch()` (for postimages/imgchest)
+        // and to imgbb (which fetches server-side from whatever URL we give
+        // it) — re-check here too, immediately before either happens, so a
+        // row written before this guard existed (or altered any other way)
+        // can never become an SSRF vector.
+        if (!isGooglePhotoSourceUrl(candidate.sourceUrl)) {
+          const message = "Source URL is not a Google-hosted photo";
+          await markCandidateFailed(candidate.id, message);
+          failed.push({ photoKey: candidate.photoKey, error: message });
+          settled = true;
+        } else {
+          const filename = `${base}_${String(i + 1).padStart(3, "0")}.jpg`;
+          const result = await runUploadChain(
+            {
+              url: candidate.sourceUrl,
+              filename,
+              fetchBytes: async () => {
+                const r = await fetch(candidate.sourceUrl);
+                if (!r.ok) throw new Error(`Could not fetch the source image (HTTP ${r.status})`);
+                return Buffer.from(await r.arrayBuffer());
+              },
+            },
+            { hosts, adapters: ADAPTERS, state }
+          );
+
+          if (result.directUrl) {
+            await markCandidateUploaded(candidate.id, result.directUrl, result.provider ?? "");
+            uploaded.push(result.directUrl);
+          } else {
+            const message = result.lastError ?? "Every image host refused this photo";
+            await markCandidateFailed(candidate.id, message);
+            failed.push({ photoKey: candidate.photoKey, error: message });
+          }
+          settled = true;
+        }
+      } finally {
+        if (!settled) await releaseCandidate(candidate.id);
+      }
     }
-  }
 
-  // Derive image_links from the candidate rows rather than writing the
-  // in-memory `uploaded` delta on top of the snapshot read at the top of this
-  // request. Two concurrent uploads for DIFFERENT photos on the same lead
-  // each start from that same stale snapshot; a plain append-and-write lets
-  // whichever request writes second clobber the first request's additions
-  // outright (last-write-wins). Re-reading both `image_links` and every
-  // `hosted_url` already recorded for this lead right before the write means
-  // each writer produces a superset of everything uploaded before its own
-  // read, so concurrent writers converge instead of losing data. This does
-  // NOT close the race — two writers can still interleave between this read
-  // and their own write — a real fix needs an atomic array-append (e.g. a
-  // Postgres function); that's out of scope here and this is the deliberate
-  // trade-off in the meantime.
-  if (uploaded.length > 0) {
-    const [{ data: freshLead }, { candidates: freshCandidates }] = await Promise.all([
-      admin.from("leads").select("image_links").eq("id", id).single(),
-      getCapture(id),
-    ]);
-    const existing = Array.isArray(freshLead?.image_links) ? (freshLead.image_links as string[]) : [];
-    const fromCandidates = freshCandidates
-      .filter((c) => c.status === "uploaded" && c.hostedUrl)
-      .map((c) => c.hostedUrl as string);
-    const merged = Array.from(new Set([...existing, ...fromCandidates]));
-    const { error } = await admin.from("leads").update({ image_links: merged }).eq("id", id);
-    if (error) return NextResponse.json({ error: "Uploaded, but could not save the links" }, { status: 500 });
-  }
+    if (uploaded.length > 0) {
+      try {
+        await mergeNewImageLinks(admin, id, uploaded);
+      } catch (mergeError) {
+        console.error(`[photo-capture] could not save image_links for lead ${id}:`, mergeError);
+        return NextResponse.json(
+          { error: "Uploaded, but could not save the links", uploaded, failed },
+          { status: 500 }
+        );
+      }
+    }
 
-  return NextResponse.json({ uploaded, failed });
+    return NextResponse.json({ uploaded, failed });
+  } catch (e) {
+    // Real host quota may already have been spent on whatever made it into
+    // `uploaded` before this threw — a total 500 must not also strand that
+    // paid-for work, so still attempt to persist it before reporting failure.
+    console.error(`[photo-capture] upload POST failed for lead ${id}:`, e);
+    if (uploaded.length > 0) {
+      try {
+        await mergeNewImageLinks(admin, id, uploaded);
+      } catch (mergeError) {
+        console.error(`[photo-capture] could not save partial image_links for lead ${id}:`, mergeError);
+      }
+    }
+    return NextResponse.json({ error: "Photo capture is unavailable" }, { status: 500 });
+  }
 }

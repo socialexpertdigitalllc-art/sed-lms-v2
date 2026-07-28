@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { getCapture } from "@/lib/photo-capture/store";
 
@@ -16,6 +17,24 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const perms = await getUserPermissions(user.id);
   if (!perms.has("leads.view")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  const admin = createAdminClient();
+  const { data: lead } = await admin
+    .from("leads")
+    .select("agent_id")
+    .eq("id", id)
+    .is("deleted_at", null)
+    .single();
+  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  // Ownership scope (defense-in-depth mirror of the leads read policy):
+  // getCapture() uses the service-role admin client, which bypasses RLS
+  // entirely, so this route must re-check by hand what `read leads scoped`
+  // (0004_lead_scoping.sql) would otherwise enforce. Matches
+  // app/api/leads/[id]/route.ts.
+  if (!perms.has("leads.view_all") && lead.agent_id !== user.id) {
+    return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
+  }
 
   try {
     return NextResponse.json(await getCapture(id));

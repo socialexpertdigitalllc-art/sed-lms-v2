@@ -40,3 +40,24 @@ export function isGoogleProfileLink(link: string | null | undefined): boolean {
   // NOT a prefix match — startsWith("/maps") would also accept /mapsfoo.
   return path === "/maps" || path.startsWith("/maps/");
 }
+
+/**
+ * Google's photo CDN, anchored at the start of the string with a trailing
+ * `/` so the host cannot be followed by anything but a path — a bare
+ * `.../\.googleusercontent\.com/i` WITHOUT that trailing slash would still
+ * need the scheme+host to open the string, but the slash is what stops a
+ * hostname like `googleusercontent.com.evil.com` (no slash right after
+ * `.com`) from slipping through.
+ *
+ * A candidate's `sourceUrl`/`thumbUrl` is written once by the candidates
+ * route and later handed straight to `fetch()` (bytes for postimages and
+ * imgchest) and to imgbb (which fetches server-side from whatever URL we
+ * hand it) — anything other than Google's own CDN here is an SSRF, so both
+ * the write path and every later read of a stored URL must check this.
+ */
+const GOOGLE_PHOTO_SOURCE_RE = /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//i;
+
+/** Is `url` a googleusercontent.com photo URL? */
+export function isGooglePhotoSourceUrl(url: string): boolean {
+  return GOOGLE_PHOTO_SOURCE_RE.test(url);
+}
