@@ -25,6 +25,10 @@ create table if not exists public.lead_photo_captures (
   -- WHICH link this capture was for. The Images group compares it against the
   -- lead's current business_profile_link: when they differ, the link has been
   -- edited since and a fresh capture runs automatically.
+  -- Nullable deliberately: failCapture() upserts a row with only lead_id,
+  -- status, error and completed_at when a capture fails before a profile_link
+  -- was ever recorded (e.g. no prior startCapture row). NOT NULL here would
+  -- turn that recoverable failure into a constraint violation.
   profile_link text,
   found_count int not null default 0,
   error text,
@@ -47,19 +51,34 @@ create table if not exists public.lead_photo_candidates (
   thumb_url text not null,
   -- the =s0 original that actually gets uploaded
   source_url text not null,
+  -- uploading is a CLAIM state, not a progress indicator. Two operators can
+  -- open the same lead at once; without a claim, both upload routes would
+  -- read the same candidate as pending, both run it through the host chain,
+  -- and both spend quota on hosts we deliberately model as scarce
+  -- (exhausted_until, upload_count) — then the second write silently
+  -- overwrites the first. The route claims a row with a conditional
+  -- `update ... set status = 'uploading' where id = ? and status = 'pending'`
+  -- and only proceeds if exactly one row was affected.
   status text not null default 'pending'
-    check (status in ('pending', 'uploaded', 'failed', 'skipped')),
+    check (status in ('pending', 'uploading', 'uploaded', 'failed', 'skipped')),
   hosted_url text,
+  -- No CHECK here deliberately: this is a HISTORICAL record of which host
+  -- actually served a past upload, not live configuration. If the provider
+  -- list ever loses a value, a CHECK here would invalidate historical rows.
+  -- image_hosts.provider IS CHECK-constrained precisely because that one is
+  -- live config, not history.
   host_provider text,
   error text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
+-- Doubles as the lead_id lookup index (leading column of the composite
+-- serves every `where lead_id = ?`, the only access pattern the application
+-- has) — do not re-add a separate index on (lead_id) alone, it would buy the
+-- planner nothing and cost maintenance on every insert and upsert.
 create unique index if not exists lead_photo_candidates_key
   on public.lead_photo_candidates (lead_id, photo_key);
-create index if not exists lead_photo_candidates_lead
-  on public.lead_photo_candidates (lead_id);
 
 -- --------------------------------------------------------------- host keys
 -- `position` is insertion order within a provider: the key added first is
