@@ -5,6 +5,7 @@ import { getWgeConfig } from "./wge";
 import { mapLeadToInput } from "./leadPrefill";
 import { buildPrompt, EMPTY_INPUT, type GenInput } from "./prompt";
 import { AiCallAborted, combineAbortSignals } from "./abort";
+import { callTimedOutMessage } from "./providers/errors";
 
 const BUCKET = "ai-generations";
 
@@ -199,7 +200,7 @@ export async function callWithProvider(
     // than as a timeout (which callers do retry).
     if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
     if (e instanceof Error && e.name === "AbortError") {
-      throw new Error(`${cfg.label} call timed out after ${Math.round(timeoutMs / 1000)}s`);
+      throw new Error(callTimedOutMessage(cfg.label, timeoutMs));
     }
     throw e;
   } finally {
