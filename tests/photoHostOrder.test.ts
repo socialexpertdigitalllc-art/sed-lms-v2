@@ -55,6 +55,14 @@ describe("orderHosts", () => {
     expect(out.map((h) => h.id)).toEqual(["back"]);
   });
 
+  it("treats a cooldown expiring exactly now as over", () => {
+    const out = orderHosts(
+      [host({ id: "boundary", provider: "imgbb", exhaustedUntil: new Date(NOW.getTime()) })],
+      NOW
+    );
+    expect(out.map((h) => h.id)).toEqual(["boundary"]);
+  });
+
   it("breaks a position tie deterministically by id", () => {
     const out = orderHosts(
       [host({ id: "b", provider: "imgbb" }), host({ id: "a", provider: "imgbb" })],

@@ -17,8 +17,9 @@ export const PROVIDER_RANK: Record<HostProvider, number> = {
 export function orderHosts(hosts: ImageHost[], now: Date): ImageHost[] {
   return hosts
     .filter((h) => h.enabled)
+    // Both filters above already return a fresh array, so `sort` here is
+    // non-mutating with respect to the caller's `hosts` — no `.slice()` needed.
     .filter((h) => !h.exhaustedUntil || h.exhaustedUntil.getTime() <= now.getTime())
-    .slice()
     .sort(
       (a, b) =>
         PROVIDER_RANK[a.provider] - PROVIDER_RANK[b.provider] ||
