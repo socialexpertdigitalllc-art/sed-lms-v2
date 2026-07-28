@@ -1987,14 +1987,23 @@ export async function failCapture(leadId: string, message: string): Promise<void
  * conditional update is the whole guard: exactly one caller can move a row out
  * of `pending`.
  */
+const CLAIM_STALE_MS = 10 * 60 * 1000;
+
 export async function claimCandidate(candidateId: string): Promise<boolean> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const staleBefore = new Date(Date.now() - CLAIM_STALE_MS).toISOString();
+  const { data, error } = await admin
     .from("lead_photo_candidates")
     .update({ status: "uploading", updated_at: new Date().toISOString() })
     .eq("id", candidateId)
-    .eq("status", "pending")
+    // A `finally` cannot run if the platform kills the function mid-upload, so
+    // a claim that has sat in `uploading` past the stale window is reclaimable.
+    // Without this, one timeout strands a photo permanently: invisible to the
+    // picker and unclaimable, with nothing to tell the operator why.
+    .or(`status.eq.pending,and(status.eq.uploading,updated_at.lt.${staleBefore})`)
     .select("id");
+  // A genuine error is a failure; zero matched rows is just a lost race.
+  if (error) throw new Error(error.message);
   return (data?.length ?? 0) === 1;
 }
 
@@ -2283,9 +2292,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   // Append to the EXISTING field every downstream consumer already reads.
+  //
+  // DERIVED, not appended. Computing a delta against the snapshot read at the
+  // top of this request means two concurrent uploads on the same lead clobber
+  // each other — last write wins and one set of URLs silently vanishes despite
+  // having cost real host quota. Rebuilding from the candidate rows, which hold
+  // every `hosted_url` authoritatively, does not close the window but makes it
+  // CONVERGE: each writer writes a superset of everything uploaded before its
+  // own read. A perfect fix needs an atomic array append; this is the trade-off.
   if (uploaded.length > 0) {
-    const existing = Array.isArray(lead.image_links) ? (lead.image_links as string[]) : [];
-    const merged = [...existing, ...uploaded.filter((u) => !existing.includes(u))];
+    const [{ data: freshLead }, { candidates: freshCandidates }] = await Promise.all([
+      admin.from("leads").select("image_links").eq("id", id).single(),
+      getCapture(id),
+    ]);
+    const existing = Array.isArray(freshLead?.image_links) ? (freshLead.image_links as string[]) : [];
+    const fromCandidates = freshCandidates
+      .filter((c) => c.status === "uploaded" && c.hostedUrl)
+      .map((c) => c.hostedUrl as string);
+    const merged = Array.from(new Set([...existing, ...fromCandidates]));
     const { error } = await admin.from("leads").update({ image_links: merged }).eq("id", id);
     if (error) return NextResponse.json({ error: "Uploaded, but could not save the links" }, { status: 500 });
   }
@@ -2928,6 +2952,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // async sendResponse
 });
 
+// Relay progress to the LMS tab. `content.js` broadcasts PROGRESS via runtime
+// messaging, which reaches extension pages but NOT content scripts — and the
+// bridge is a content script in a different tab. Without this the operator
+// watches "Capturing… 0 found" for the whole run and assumes it hung.
+// (Track the requesting tab as `activeCaptureTabId` in the CAPTURE handler from
+// `sender.tab?.id`, and clear it in the same `finally` that clears `capturing`.)
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === 'PROGRESS' && activeCaptureTabId != null) {
+    chrome.tabs.sendMessage(activeCaptureTabId, { type: 'CAPTURE_PROGRESS', loaded: msg.loaded }).catch(() => {});
+  }
+});
+
 function waitForLoad(tabId) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); reject(new Error('The profile page did not finish loading')); }, 30_000);
@@ -3375,19 +3411,33 @@ export function LeadPhotoPicker({
 
   const runCapture = useCallback(async () => {
     if (!profileLink) return;
-    await fetch(`/api/leads/${leadId}/photos/candidates`, {
+
+    // EVERY call here must check `ok`. The server now returns a 500 when the
+    // store fails (e.g. the migration is not applied) — ignoring that would
+    // leave the operator watching a spinner, or worse, show "Captured 18
+    // photos" for a harvest that was never saved.
+    const started = await fetch(`/api/leads/${leadId}/photos/candidates`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind: "started", profileLink }),
     });
+    if (!started.ok) {
+      toast.show((await started.json().catch(() => ({}))).error ?? "Could not start the capture");
+      return;
+    }
     setCapture({ status: "pending", profileLink, foundCount: 0, error: null });
     try {
       const photos = await ext.capture(profileLink);
-      await fetch(`/api/leads/${leadId}/photos/candidates`, {
+      const saved = await fetch(`/api/leads/${leadId}/photos/candidates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: "done", profileLink, photos, extensionVersion: ext.version }),
       });
+      if (!saved.ok) {
+        toast.show((await saved.json().catch(() => ({}))).error ?? "Captured, but could not save the photos");
+        await load();
+        return;
+      }
       toast.show(photos.length ? `Captured ${photos.length} photos` : "No photos found on that profile");
     } catch (e) {
       const message = e instanceof Error ? e.message : "Capture failed";
