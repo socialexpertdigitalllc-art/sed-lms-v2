@@ -33,7 +33,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   // (0004_lead_scoping.sql) would otherwise enforce. Matches
   // app/api/leads/[id]/route.ts.
   if (!perms.has("leads.view_all") && lead.agent_id !== user.id) {
-    return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
+    // Read-specific wording: this route only reads. The shared 403 shape and
+    // the scoping rule match app/api/leads/[id]/route.ts; only the verb differs.
+    return NextResponse.json({ error: "You can only view your own leads." }, { status: 403 });
   }
 
   try {
