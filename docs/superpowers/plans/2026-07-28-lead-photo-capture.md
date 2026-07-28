@@ -2637,7 +2637,7 @@ git commit -m "feat(photo-extractor): pure capture normalisation"
 - Modify: `photo-extractor/background/service-worker.js`
 - Modify: `photo-extractor/manifest.json`
 
-Replace `https://lms.example.com/*` below with the LMS's real origin before committing. Ask the operator if you do not know it; do not guess.
+The LMS origin is `https://lms.sedsolutions.online/*` (confirmed by the operator). It must appear in **both** `host_permissions` and `content_scripts.matches` or the bridge silently never loads.
 
 - [ ] **Step 1: Write the bridge content script**
 
@@ -2777,7 +2777,7 @@ Edit `photo-extractor/manifest.json`: bump `version` to `0.2.0`, add the LMS hos
     "https://www.yelp.com/*",
     "https://*.yelpcdn.com/*",
     "https://api.imgbb.com/*",
-    "https://lms.example.com/*"
+    "https://lms.sedsolutions.online/*"
   ],
   "content_scripts": [
     {
@@ -2791,7 +2791,7 @@ Edit `photo-extractor/manifest.json`: bump `version` to `0.2.0`, add the LMS hos
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://lms.example.com/*"],
+      "matches": ["https://lms.sedsolutions.online/*"],
       "js": ["content/lms-bridge.js"],
       "run_at": "document_idle"
     }
@@ -3483,6 +3483,6 @@ Write up what passed, what did not, and anything the operator still needs to do.
 ## Notes for whoever executes this
 
 - **`0061` is not yours to apply.** The DB is shared production. Hand it to the operator.
-- **The LMS origin is a placeholder** in the manifest (`https://lms.example.com/*`). It must be the real origin in both `host_permissions` and `content_scripts` or the bridge silently never loads. Ask; do not guess.
+- **The LMS origin is `https://lms.sedsolutions.online/*`** (confirmed by the operator). It must appear in both `host_permissions` and `content_scripts` or the bridge silently never loads. For local development against `localhost`, add that origin too — the bridge only runs where the manifest says it may.
 - **Do not skip Task 2.** It is the difference between fixing the stale-photo bug and changing code that looked suspicious.
 - Phases 1–3 need no extension at all and can be verified on their own. Phase 4 onward needs Chrome.
