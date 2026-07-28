@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run build:extension && next build",
+    "build:extension": "node scripts/build-extension.mjs",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",

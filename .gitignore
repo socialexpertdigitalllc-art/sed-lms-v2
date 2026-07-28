@@ -69,3 +69,6 @@ backups/
 # Local template-engine test artifacts
 .site_check/
 .te_process.json
+
+# Generated extension download (built by `npm run build:extension`)
+/public/downloads/
