@@ -91,9 +91,6 @@ export async function POST(_req: Request, ctx: Ctx) {
       requestedPages,
       onProgress: persist,
     });
-    if (result.imageFailures.length > 0) {
-      console.warn(`[site-builder] run ${id}: ${result.imageFailures.length} image(s) could not be bundled`, result.imageFailures);
-    }
 
     let outputPath: string | null = null;
     if (result.zipBytes) {
@@ -109,12 +106,6 @@ export async function POST(_req: Request, ctx: Ctx) {
       .update({
         status: result.ok ? "review" : "failed",
         pages: result.pages,
-        // Persist the picks AS THEY NOW LIVE IN THE SITE (relative paths, each
-        // carrying `file`). Regeneration and preview both read this, so they
-        // agree with the generated HTML without re-deriving anything. The
-        // original storage URL is deliberately not kept here — nothing needs
-        // it again, and it is exactly what must never reach a page.
-        images: result.images,
         output_path: outputPath,
         error: result.ok ? null : "Every page failed to generate.",
         updated_at: new Date().toISOString(),

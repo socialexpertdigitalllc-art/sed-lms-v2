@@ -343,66 +343,62 @@ describe("runSite", () => {
     expect(dec.decode(files["components.html"])).toBe("<header>Acme Plumbing</header>");
   });
 
-  it("REGRESSION: bundles picked images into the site and shows the model only relative paths", async () => {
-    // Production bug: picks were passed to the model as long signed Supabase
-    // URLs with a mandatory ?token= JWT, which the model truncated when
-    // writing <img src>, so live pages 400'd on their images.
+  it("passes every picked image URL through to the prompt verbatim, downloading nothing", async () => {
+    // Images are used BY LINK. The URL the operator picked is the URL the
+    // page references — no copy in the zip, no rewriting, no shortening.
     const tpl = bundle({ "index.html": "<html>home</html>" }, { "style.css": "body{}" });
-    const signedUrl =
-      "https://ikuvbxjkoojtgekapbul.supabase.co/storage/v1/object/sign/studio-assets/abc.jpg?token=eyJhbGciOi.SIGNATURE";
+    const pexelsUrl = "https://images.pexels.com/photos/1234/pexels-photo-1234.jpeg?auto=compress&cs=tinysrgb&w=1260";
+    const clientUrl = "https://i.ibb.co/abc123/shop-front.jpg";
     const prompts: string[] = [];
     const call: AiCall = async (_s, u) => {
       prompts.push(u);
       return { text: okHtml("PAGE") };
     };
-    const fetchImage = (async () =>
-      new Response(enc.encode("JPEGBYTES"), { status: 200, headers: { "content-type": "image/jpeg" } })) as typeof fetch;
 
     const result = await runSite({
       aiCall: call,
       brief,
-      images: [{ url: signedUrl, purpose: "Hero" }],
-      fetchImage,
+      images: [
+        { url: pexelsUrl, purpose: "Hero" },
+        { url: clientUrl, purpose: "Gallery" },
+      ],
       template: tpl,
       requestedPages: [],
     });
 
     expect(result.ok).toBe(true);
-    // the prompt names the local file, and never the signed URL or its token
-    expect(prompts[0]).toContain("images/hero-1.jpg");
-    expect(prompts[0]).not.toContain("token=");
-    expect(prompts[0]).not.toContain("supabase.co");
-    // the image really is a file in the built site
+    // the exact URLs reach the model, query string and all
+    expect(prompts[0]).toContain(pexelsUrl);
+    expect(prompts[0]).toContain(clientUrl);
+    // and nothing was copied into the site
     const files = unzipToMap(result.zipBytes!);
-    expect(dec.decode(files["images/hero-1.jpg"])).toBe("JPEGBYTES");
-    // and the run reports the picks as they now live in the site
-    expect(result.images).toEqual([{ url: "images/hero-1.jpg", purpose: "Hero", file: "images/hero-1.jpg" }]);
-    expect(result.imageFailures).toEqual([]);
+    expect(Object.keys(files).some((f) => f.startsWith("images/"))).toBe(false);
+    expect(Object.keys(files).sort()).toEqual(["index.html", "style.css"]);
   });
 
-  it("an image that cannot be downloaded is reported, and never referenced in a prompt", async () => {
+  it("REGRESSION: never hands the model a private-bucket signed URL", async () => {
+    // The production failure: picks were stored as
+    // …/object/sign/studio-assets/<uuid>.jpg?token=<JWT>, the model dropped
+    // the mandatory token when writing <img src>, and the live pages 400'd
+    // with "querystring must have required property 'token'". Picks now
+    // resolve to public links, so such a URL must never be produced at all.
     const tpl = bundle({ "index.html": "<html>home</html>" });
     const prompts: string[] = [];
     const call: AiCall = async (_s, u) => {
       prompts.push(u);
       return { text: okHtml("PAGE") };
     };
-    const fetchImage = (async () => new Response("gone", { status: 404 })) as typeof fetch;
-
-    const result = await runSite({
+    await runSite({
       aiCall: call,
       brief,
-      images: [{ url: "https://x.test/a.jpg", purpose: "Hero" }],
-      fetchImage,
+      images: [{ url: "https://images.pexels.com/photos/9/p.jpeg", purpose: "Hero" }],
       template: tpl,
       requestedPages: [],
     });
-
-    expect(result.ok).toBe(true);
-    expect(result.images).toEqual([]);
-    expect(result.imageFailures).toHaveLength(1);
-    expect(prompts[0]).toContain("No images were supplied");
-    expect(unzipToMap(result.zipBytes!)["images/hero-1.jpg"]).toBeUndefined();
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain("object/sign");
+      expect(prompt).not.toContain("token=");
+    }
   });
 
   it("reports live progress: everything pending first, components before pages, all terminal at the end", async () => {

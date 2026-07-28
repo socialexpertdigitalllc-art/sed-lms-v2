@@ -31,19 +31,15 @@ export interface BusinessBrief {
 
 export interface SuppliedImage {
   /**
-   * What the model is told to use as the `src`. By the time a prompt is
-   * built this is an IN-SITE RELATIVE PATH (`images/hero-1.jpg`), never the
-   * original signed storage URL — see `lib/site-builder/siteImages.ts` for
-   * why handing a model a tokenised URL produced broken images in production.
+   * The image's own DIRECT, PUBLIC URL — a Pexels CDN link, a link already
+   * stored in the library, or the client's own photo link. This exact string
+   * becomes the page's `src`; nothing is downloaded or rehosted (see
+   * `lib/site-builder/imageLibrary.ts`).
    */
   url: string;
   /** What the operator picked it for: "hero", "service: Window Tinting",
    *  "gallery", "about". Free text — it is a hint to the model, not a schema. */
   purpose: string;
-  /** Set once the image has been bundled into the site: its relative path,
-   *  the same value as `url`. Its presence is what marks a pick as localized
-   *  (the run row keeps it so a later regeneration reuses the same names). */
-  file?: string;
 }
 
 /** The template's shared-components file (a `components.js` rendering the
@@ -118,7 +114,7 @@ function briefText(b: BusinessBrief): string {
 function imagesText(images: SuppliedImage[]): string {
   if (!images.length) return "No images were supplied — keep the template's own images.";
   return [
-    "These files already exist inside the site. Reference each one EXACTLY as written below — a plain relative path, copied character for character. Never turn one into an absolute URL, never add a query string to it, and never invent a path that is not on this list.",
+    "Each image below is used by LINKING to it. Copy the URL into the page EXACTLY as written — character for character, complete, including everything after any '?'. Do not shorten it, do not re-encode it, do not wrap it, and do not download or rename it. An image whose URL is altered in any way will not load.",
     ...images.map((i) => `- ${i.purpose}: ${i.url}`),
   ].join("\n");
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Upload, X } from "lucide-react";
+import { Link as LinkIcon, Loader2, X } from "lucide-react";
 import { btnPrimary, btnSecondarySm, iconBtn } from "@/components/common/buttons";
 import { inputCls } from "@/components/forms/Field";
 import { useToast } from "@/components/common/Toast";
@@ -12,21 +12,22 @@ export interface PickedImage {
   purpose: string;
 }
 
-interface LibraryHit { id: string; storage_path: string; subject: string; thumb_url: string | null; }
+interface LibraryHit { id: string; url: string; subject: string; thumb_url: string | null; }
 interface PexelsHit { pexels_id: number; thumb_url: string; download_url: string; width: number; height: number; photographer: string; }
 
 const TABS = [
   { id: "library", label: "Library" },
   { id: "pexels", label: "Pexels" },
   { id: "client", label: "Client photos" },
-  { id: "upload", label: "Upload" },
+  { id: "link", label: "By link" },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
 
 /**
- * The Site Builder image picker: library search, Pexels search, the lead's
- * own photos, and a manual upload — all funnel into `POST /api/site-builder/
- * images/pick`, which rehosts (never hot-links) and hands back a durable URL.
+ * The Site Builder image picker: link-library search, Pexels search, the
+ * lead's own photos, and a pasted URL — all funnel into `POST /api/site-builder/
+ * images/pick`, which downloads nothing and hands back the image's own public
+ * URL, remembering it against its service for reuse.
  * Every picked image is paired with a purpose label right here, in the same
  * dialog (the operator's main creative input for a run — see AGENTS.md) so
  * picking is a single click once the purpose is set, not a two-step chore.
@@ -57,8 +58,7 @@ export function BuilderImagePicker({
   const [pexelsHits, setPexelsHits] = useState<PexelsHit[]>([]);
   const [pexelsLoading, setPexelsLoading] = useState(false);
 
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [pastedUrl, setPastedUrl] = useState("");
 
   const searchLibrary = useCallback(async (subject: string) => {
     setLibraryLoading(true);
@@ -66,10 +66,10 @@ export function BuilderImagePicker({
       const params = new URLSearchParams();
       if (subject.trim()) params.set("subject", subject.trim());
       if (leadId) params.set("lead_id", leadId);
-      const res = await fetch(`/api/site-studio/assets?${params.toString()}`);
+      const res = await fetch(`/api/site-builder/images/library?${params.toString()}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error ?? "Search failed");
-      setLibraryHits((body.assets ?? []) as LibraryHit[]);
+      setLibraryHits((body.images ?? []) as LibraryHit[]);
     } catch (e) {
       toast({ kind: "error", title: e instanceof Error ? e.message : "Search failed" });
     } finally {
@@ -100,14 +100,14 @@ export function BuilderImagePicker({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  async function pickLibrary(assetId: string) {
+  async function pickLibrary(url: string) {
     if (!purpose.trim()) { toast({ kind: "error", title: "Enter a purpose for this image first" }); return; }
     setPicking(true);
     try {
       const res = await fetch("/api/site-builder/images/pick", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "library", asset_id: assetId, lead_id: leadId }),
+        body: JSON.stringify({ kind: "link", url, subject: purpose.trim() }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { toast({ kind: "error", title: body.error ?? "Could not pick this image" }); return; }
@@ -171,24 +171,17 @@ export function BuilderImagePicker({
     }
   }
 
-  async function uploadThenPick() {
-    if (!uploadFile) return;
+  /** Add any image by its own public URL. This replaced a file-upload tab:
+   *  an uploaded file would land in our PRIVATE bucket and could only be
+   *  referenced by a signed, expiring URL — exactly the thing that must never
+   *  reach a client's page. A link the operator already has is public by
+   *  definition, so it can be used directly and remembered for reuse. */
+  async function pickPastedLink() {
+    const url = pastedUrl.trim();
     if (!purpose.trim()) { toast({ kind: "error", title: "Enter a purpose for this image first" }); return; }
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", uploadFile);
-      fd.append("subject", purpose.trim());
-      const res = await fetch("/api/site-studio/assets", { method: "POST", body: fd });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) { toast({ kind: "error", title: body.error ?? "Upload failed" }); return; }
-      await pickLibrary(body.asset.id as string);
-      setUploadFile(null);
-    } catch (e) {
-      toast({ kind: "error", title: e instanceof Error ? e.message : "Upload failed" });
-    } finally {
-      setUploading(false);
-    }
+    if (!/^https?:\/\//i.test(url)) { toast({ kind: "error", title: "Enter a full http(s) image URL" }); return; }
+    await pickLibrary(url);
+    setPastedUrl("");
   }
 
   return (
@@ -264,7 +257,7 @@ export function BuilderImagePicker({
                       key={a.id}
                       type="button"
                       disabled={picking}
-                      onClick={() => void pickLibrary(a.id)}
+                      onClick={() => void pickLibrary(a.url)}
                       className="relative aspect-[4/3] overflow-hidden rounded-md border border-border"
                       title={a.subject}
                     >
@@ -337,17 +330,30 @@ export function BuilderImagePicker({
             )
           ) : null}
 
-          {tab === "upload" ? (
+          {tab === "link" ? (
             <div className="space-y-2">
+              <label className="block text-xs font-medium text-text-muted" htmlFor="sb-paste-url">
+                Image URL
+              </label>
               <input
-                type="file"
-                accept="image/*"
-                aria-label="Upload an image"
-                onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                id="sb-paste-url"
+                className={inputCls}
+                type="url"
+                inputMode="url"
+                placeholder="https://images.pexels.com/photos/…/photo.jpeg"
+                value={pastedUrl}
+                onChange={(e) => setPastedUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void pickPastedLink();
+                }}
               />
-              <button className={btnPrimary} onClick={() => void uploadThenPick()} disabled={uploading || !uploadFile}>
-                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                Upload &amp; add
+              <p className="text-[11px] leading-relaxed text-text-faint">
+                The site links to this URL directly, so it must be publicly reachable — a link that needs a login or an
+                expiring token will not load for visitors.
+              </p>
+              <button className={btnPrimary} onClick={() => void pickPastedLink()} disabled={picking || !pastedUrl.trim()}>
+                {picking ? <Loader2 className="h-4 w-4 animate-spin" /> : <LinkIcon className="h-4 w-4" />}
+                Add this link
               </button>
             </div>
           ) : null}

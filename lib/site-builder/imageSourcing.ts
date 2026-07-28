@@ -1,20 +1,27 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PexelsResult } from "@/lib/site-studio/assets/pexels";
-import { searchLibrary } from "@/lib/site-studio/assets/library";
+import { searchBuilderImages } from "./imageLibrary";
 import type { ImageNeedsResult } from "./imageNeeds";
 
 /** One sourced option, cheap-filtered only (dimensions, dedupe) — no vision
  *  AI, no ranking (that's a separate pass — see `imageRank.ts` — applied by
  *  the route, not here). `key` is stable and unique across the whole
- *  response, for React keys and for matching a UI pick back to what to
- *  rehost. Library candidates carry `thumb_path` (a private-bucket storage
- *  path — the route resolves it to a signed `thumb_url`); Pexels candidates
- *  already carry a hot-linked `thumb_url` straight from Pexels; a `client`
- *  candidate is one of the lead's OWN `image_links`, untouched — none of
- *  these are rehosted until the operator's pick is actually used on
- *  Generate. */
+ *  response, for React keys and for matching a UI pick back to a URL.
+ *
+ *  EVERY candidate carries a direct, public URL — a previously-stored library
+ *  link, a Pexels CDN link, or the client's own photo link. Nothing is ever
+ *  downloaded or rehosted: the URL the operator picks is the URL that goes
+ *  into the site's HTML (see `imageLibrary.ts`). */
 export type SourcedCandidate =
-  | { kind: "library"; key: string; asset_id: string; thumb_path: string; width: number; height: number }
+  | {
+      kind: "library";
+      key: string;
+      /** The stored link — this exact string ends up in the site. */
+      url: string;
+      thumb_url: string;
+      width: number;
+      height: number;
+    }
   | {
       kind: "pexels";
       key: string;
@@ -56,6 +63,10 @@ export interface SourceImagesDeps {
   searchPexels: (query: string) => Promise<PexelsResult>;
 }
 
+/** Library rows are keyed by their own URL, so the same stored link surfacing
+ *  under two services is deduped exactly like a repeated Pexels photo. */
+const libraryKey = (url: string) => `library:${url}`;
+
 // Same thresholds as the old slot-based sourcer (lib/site-studio/run/imageSource.ts)
 // — carried over deliberately, not re-tuned, so behaviour an operator already
 // knows from Site Studio doesn't shift underfoot.
@@ -80,21 +91,24 @@ async function sourceOneService(
   deps: SourceImagesDeps,
   query: string,
   leadId: string | null,
-  seenLibraryIds: Set<string>,
+  seenUrls: Set<string>,
   seenPexelsIds: Set<number>,
 ): Promise<{ candidates: SourcedCandidate[]; pexelsError: string | null }> {
   const candidates: SourcedCandidate[] = [];
 
   try {
-    const rows = await searchLibrary(deps.admin, { subject: query, leadId: leadId ?? undefined });
+    // Links already stored for this service — no API call, and the same photo
+    // reused for another client resolves to the identical URL.
+    const rows = await searchBuilderImages(deps.admin, { subject: query, leadId: leadId ?? undefined });
     for (const r of rows) {
-      if (seenLibraryIds.has(r.id)) continue;
-      seenLibraryIds.add(r.id);
+      if (seenUrls.has(r.url)) continue;
+      seenUrls.add(r.url);
+      if (r.pexels_id != null) seenPexelsIds.add(r.pexels_id);
       candidates.push({
         kind: "library",
-        key: `library:${r.id}`,
-        asset_id: r.id,
-        thumb_path: r.storage_path,
+        key: libraryKey(r.url),
+        url: r.url,
+        thumb_url: r.thumb_url ?? r.url,
         width: r.width,
         height: r.height,
       });
@@ -117,7 +131,11 @@ async function sourceOneService(
         if (candidates.length >= CANDIDATE_CAP) break;
         if (p.width < MIN_WIDTH || p.height < MIN_HEIGHT) continue;
         if (seenPexelsIds.has(p.pexels_id)) continue;
+        // A photo already in the library under this exact URL is the same
+        // candidate, just discovered the other way round.
+        if (seenUrls.has(p.download_url)) continue;
         seenPexelsIds.add(p.pexels_id);
+        seenUrls.add(p.download_url);
         candidates.push({
           kind: "pexels",
           key: `pexels:${p.pexels_id}`,
@@ -171,7 +189,7 @@ export async function sourceImages(
   leadId: string | null,
   clientPhotoUrls: string[],
 ): Promise<SourcedImages> {
-  const seenLibraryIds = new Set<string>();
+  const seenUrls = new Set<string>();
   const seenPexelsIds = new Set<number>();
 
   // Raw per-service pools, sourced in row order so the global dedupe sets
@@ -180,7 +198,7 @@ export async function sourceImages(
   const pools: SourcedCandidate[][] = [];
   const pexelsErrors: (string | null)[] = [];
   for (const svc of needs.services) {
-    const { candidates, pexelsError } = await sourceOneService(deps, svc.query, leadId, seenLibraryIds, seenPexelsIds);
+    const { candidates, pexelsError } = await sourceOneService(deps, svc.query, leadId, seenUrls, seenPexelsIds);
     pools.push(candidates);
     pexelsErrors.push(pexelsError);
   }

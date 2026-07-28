@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { searchPexels } from "@/lib/site-studio/assets/pexels";
-import { STUDIO_ASSETS_BUCKET } from "@/lib/site-studio/assets/rehost";
 import { deriveImageNeeds } from "@/lib/site-builder/imageNeeds";
 import { sourceImages, type SourcedCandidate } from "@/lib/site-builder/imageSourcing";
 import { rankByPeople } from "@/lib/site-builder/imageRank";
@@ -17,10 +16,10 @@ interface CandidateOut {
   thumb_url: string | null;
   width?: number;
   height?: number;
-  asset_id?: string;
   pexels_id?: number;
   download_url?: string;
   photographer?: string;
+  /** The direct, public link that will go into the site's HTML. */
   url?: string;
 }
 
@@ -48,15 +47,18 @@ async function ranked(candidates: CandidateOut[]): Promise<CandidateOut[]> {
   return rankedOut;
 }
 
-function toOut(c: SourcedCandidate, signedByPath: Map<string, string>): CandidateOut {
+/** Every candidate already carries public URLs — nothing needs signing, and
+ *  nothing is fetched. The link shown in the picker is the link that will be
+ *  written into the site. */
+function toOut(c: SourcedCandidate): CandidateOut {
   if (c.kind === "library") {
     return {
       kind: "library",
       key: c.key,
-      asset_id: c.asset_id,
+      url: c.url,
       width: c.width,
       height: c.height,
-      thumb_url: signedByPath.get(c.thumb_path) ?? null,
+      thumb_url: c.thumb_url,
     };
   }
   if (c.kind === "pexels") {
@@ -114,29 +116,14 @@ export async function POST(req: Request) {
   const needs = deriveImageNeeds(brief);
   const sourced = await sourceImages({ admin, searchPexels }, needs, leadId, clientPhotoUrls);
 
-  // Library candidates carry a private-bucket storage path, not a URL a
-  // browser can load — resolve every distinct one to a short-lived signed
-  // URL in one batch (same pattern as GET /api/site-studio/assets).
-  const paths = new Set<string>();
-  for (const c of sourced.hero) if (c.kind === "library") paths.add(c.thumb_path);
-  for (const row of sourced.services) for (const c of row.candidates) if (c.kind === "library") paths.add(c.thumb_path);
-
-  const signedByPath = new Map<string, string>();
-  await Promise.all(
-    [...paths].map(async (path) => {
-      const { data } = await admin.storage.from(STUDIO_ASSETS_BUCKET).createSignedUrl(path, 60 * 60);
-      if (data?.signedUrl) signedByPath.set(path, data.signedUrl);
-    }),
-  );
-
-  const hero = await ranked(sourced.hero.map((c) => toOut(c, signedByPath)));
+  const hero = await ranked(sourced.hero.map(toOut));
   const services = await Promise.all(
     sourced.services.map(async (row) => ({
       service: row.service,
       purpose: row.purpose,
       query: row.query,
       pexelsError: row.pexelsError,
-      candidates: await ranked(row.candidates.map((c) => toOut(c, signedByPath))),
+      candidates: await ranked(row.candidates.map(toOut)),
     })),
   );
 
