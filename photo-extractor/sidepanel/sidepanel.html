@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" href="../icons/32.png" />
+  <title>Photo Extractor</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M14.4 8h6.9M9.2 8.9l3.4-5.9M7.5 12.5l3.5-6M9.6 16h-7M14.8 15.1l-3.4 5.9M16.5 11.5l-3.5 6"/></svg>
+      </span>
+      <div class="brand-text">
+        <span class="wordmark">PHOTO<b>EXTRACTOR</b></span>
+        <span class="tagline">original-resolution capture</span>
+      </div>
+    </div>
+    <div id="status" class="status"><span class="dot"></span><span id="statusText">Checking page…</span></div>
+  </header>
+
+  <main id="app">
+    <section id="empty" class="empty">
+      <div class="ill" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="M21 15.5l-4.5-4.5L5 21"/></svg>
+      </div>
+      <h2>No business detected</h2>
+      <p>Open a business on Google Maps or Yelp, then click the extension icon.</p>
+      <div class="hint">supports <b>Google Maps</b> · <b>Yelp</b></div>
+    </section>
+
+    <div id="toolbar" class="toolbar" hidden>
+      <button id="loadBtn" class="btn btn-primary btn-block">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 17l4 4 4-4M12 21V9"/><path d="M20.9 18.1A5 5 0 0018 9h-1.3A8 8 0 103 16.3"/></svg>
+        Load all photos
+      </button>
+      <button id="stopBtn" class="btn btn-danger-ghost btn-block" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+        Stop
+      </button>
+      <div id="loadbar" class="bar indet" hidden><i></i></div>
+    </div>
+
+    <section id="controls" hidden>
+      <div id="filters" class="filters"></div>
+
+      <div class="gridbar">
+        <span id="selCount" class="count-pill">0 selected</span>
+        <div class="gridbar-actions">
+          <button id="selAll" class="chip-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+            All
+          </button>
+          <button id="selNone" class="chip-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            None
+          </button>
+        </div>
+      </div>
+
+      <div id="grid" class="grid"></div>
+
+      <div class="panel">
+        <h3 class="panel-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/></svg>
+          Download
+        </h3>
+        <div class="field">
+          <label for="resolution">Resolution</label>
+          <select id="resolution">
+            <option value="original">Original (max)</option>
+            <option value="2048">≤ 2048 px (Google)</option>
+            <option value="1024">≤ 1024 px (Google)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="nameTpl">Filename template</label>
+          <input id="nameTpl" type="text" value="{business}/{business}_{index}" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label>Save as</label>
+          <div class="seg">
+            <label><input type="radio" name="mode" value="files" checked />
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+              Files</label>
+            <label><input type="radio" name="mode" value="zip" />
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              ZIP</label>
+          </div>
+        </div>
+        <button id="downloadBtn" class="btn btn-primary btn-block" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/></svg>
+          Download selected
+        </button>
+        <div id="dlbar" class="bar" hidden><i id="dlFill"></i></div>
+        <div id="progress" class="progress-txt"></div>
+        <div id="report" class="report"></div>
+      </div>
+
+      <div class="panel">
+        <h3 class="panel-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16l-4-4-4 4M12 12v9"/><path d="M20.4 18.4A5 5 0 0018 9h-1.3A8 8 0 103 16.3"/></svg>
+          Upload to imgbb
+        </h3>
+        <div class="field">
+          <label for="keySelect">Account</label>
+          <div class="acct-row">
+            <select id="keySelect"></select>
+            <button id="delKey" class="icon-btn" title="Remove this account" aria-label="Remove account">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div id="keyForm" class="keyform" hidden>
+          <div class="field">
+            <label for="keyName">Account name</label>
+            <input id="keyName" type="text" placeholder="e.g. Main account" spellcheck="false" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="imgbbKey">API key</label>
+            <div class="acct-row">
+              <div class="inputwrap">
+                <input id="imgbbKey" type="password" placeholder="paste imgbb API key" spellcheck="false" autocomplete="off" />
+                <button id="toggleKey" class="eye-toggle icon-btn" title="Show/hide" aria-label="Show or hide key">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 4.5 12 4.5 22.5 12 22.5 12 18.5 19.5 12 19.5 1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+              <button id="saveKey" class="icon-btn" title="Save account" aria-label="Save account">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="field" style="margin-top:-2px"><span id="keyState" class="key-state"></span></div>
+        <button id="uploadBtn" class="btn btn-block" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16l-4-4-4 4M12 12v9"/><path d="M20.4 18.4A5 5 0 0018 9h-1.3A8 8 0 103 16.3"/></svg>
+          Upload selected to imgbb
+        </button>
+        <div id="imgbbbar" class="bar" hidden><i id="imgbbFill"></i></div>
+        <div id="imgbbProgress" class="progress-txt"></div>
+        <div id="imgbbResults"></div>
+        <p class="note">No album API on imgbb — images upload to your account titled <code>{business}_NNN</code>; group them into an album on imgbb.com if you want one.</p>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
