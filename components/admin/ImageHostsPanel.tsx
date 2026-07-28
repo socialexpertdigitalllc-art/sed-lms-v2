@@ -117,11 +117,28 @@ export function ImageHostsPanel({ hosts }: { hosts: ImageHostStatus[] }) {
       host.id,
     );
     if (!moved) return; // First write failed: nothing changed, safe to stop.
-    await call(
+
+    const swapped = await call(
       `/api/admin/image-hosts/${neighbour.id}`,
       { method: "PATCH", body: JSON.stringify({ position: host.position }) },
       neighbour.id,
     );
+    if (!swapped) {
+      // The first write landed but the second didn't: both rows now hold
+      // `neighbour.position`, and the operator's chosen order between them
+      // silently falls back to alphabetical-by-id (see orderHosts' tie-break)
+      // until something touches position again. Put the first row back rather
+      // than leave that collision sitting there. This is NOT atomic — this
+      // rollback PATCH can itself fail — it only turns the common case (one
+      // network hiccup) back into a no-op; the residual failure mode is two
+      // consecutive PATCH failures in a row, which the operator will see as
+      // two error toasts and can retry.
+      await call(
+        `/api/admin/image-hosts/${host.id}`,
+        { method: "PATCH", body: JSON.stringify({ position: host.position }) },
+        host.id,
+      );
+    }
   }
 
   async function toggle(host: ImageHostStatus) {
