@@ -147,6 +147,9 @@ async function onDeleteProfile() {
 }
 
 async function onLoadAll() {
+  // Each run is a different business: a selection carried over from the last
+  // one inflates the "N selected" count with ids that are no longer on screen.
+  state.selected.clear();
   el('loadBtn').disabled = true;
   el('stopBtn').hidden = false;
   el('loadbar').hidden = false;
