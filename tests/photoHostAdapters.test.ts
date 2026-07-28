@@ -34,12 +34,19 @@ describe("imgbb adapter", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.imgbb.com/1/upload?key=KEY123");
     expect((init.body as FormData).get("image")).toBe(source.url);
+    expect((init.body as FormData).get("name")).toBe("acme_001");
   });
 
   it("reports imgbb's error message and classifies it", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ status: 400, error: { message: "Invalid API key" } }, { status: 400 })));
     const res = await imgbbAdapter.upload(source, { credentials: { api_key: "bad" } });
     expect(res).toEqual({ ok: false, reason: "auth", message: "Invalid API key" });
+  });
+
+  it("treats an HTTP 200 with success:false as a failure", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ success: false, status_txt: "Bad Request" })));
+    const res = await imgbbAdapter.upload(source, { credentials: { api_key: "KEY123" } });
+    expect(res).toEqual({ ok: false, reason: "error", message: "Bad Request" });
   });
 
   it("is unconfigured without an api key", () => {
@@ -70,6 +77,20 @@ describe("imgchest adapter", () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Too Many Attempts." }, { status: 429, headers: { "x-ratelimit-remaining": "0" } })));
     const res = await imgchestAdapter.upload(source, { credentials: { token: "TOK" } });
     expect(res).toEqual({ ok: false, reason: "quota", message: "Too Many Attempts." });
+  });
+
+  it("is unconfigured without a token", () => {
+    expect(imgchestAdapter.isConfigured(null)).toBe(false);
+    expect(imgchestAdapter.isConfigured({ token: "  " })).toBe(false);
+    expect(imgchestAdapter.isConfigured({ token: "t" })).toBe(true);
+  });
+
+  it("fails fast without calling fetch when no token is configured", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await imgchestAdapter.upload(source, { credentials: null });
+    expect(res).toEqual({ ok: false, reason: "auth", message: "No imgchest token configured" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -124,5 +145,17 @@ describe("postimages adapter", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>redesigned</html>", { headers: { "content-type": "text/html" } })));
     const res = await postimagesAdapter.upload(source, { credentials: null });
     expect(res).toEqual({ ok: false, reason: "error", message: "Could not read an upload token from postimages.org" });
+  });
+
+  it("fails cleanly when the upload succeeds but the view page has no og:image", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('<input name="token" value="tok999aaa">', { headers: { "content-type": "text/html" } }))
+      .mockResolvedValueOnce(jsonResponse({ status: "OK", url: "https://postimages.org/view/xyz" }))
+      .mockResolvedValueOnce(new Response("<html>redesigned</html>", { headers: { "content-type": "text/html" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await postimagesAdapter.upload(source, { credentials: null });
+    expect(res).toEqual({ ok: false, reason: "error", message: "Uploaded, but could not read the direct URL from postimages" });
   });
 });

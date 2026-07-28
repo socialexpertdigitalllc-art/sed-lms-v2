@@ -26,6 +26,8 @@ export const imgchestAdapter: UploadAdapter = {
     try {
       const buf = await source.fetchBytes();
       form = new FormData();
+      // Captured photos are always Google-sourced JPEGs, so the MIME type is
+      // known rather than guessed.
       form.append("images[]", new Blob([new Uint8Array(buf)], { type: "image/jpeg" }), source.filename);
       form.append("privacy", "hidden");
     } catch (e) {
