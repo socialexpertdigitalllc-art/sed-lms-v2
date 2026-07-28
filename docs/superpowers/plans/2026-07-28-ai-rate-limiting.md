@@ -1585,6 +1585,11 @@ Everything between those two edits — the abort guard, the multimodal
 `userContent` assembly, the timeout controller, the `fetch`, the catch block,
 and the `!res.ok` handling from Task 6 — is untouched.
 
+Note: the catch block's timeout message already calls `callTimedOutMessage`
+from `providers/errors.ts` (a Task 1 review fix). `isRetryableError` matches on
+the `CALL_TIMEOUT_MARKER` that builder uses, so the two sides cannot drift.
+Leave that line as it is.
+
 Add the `TokenUsage` type import:
 
 ```ts
