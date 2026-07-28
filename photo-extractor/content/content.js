@@ -39,6 +39,15 @@
     };
   };
 
+  // ---- render/scope helpers (mirror core/collect-filter.js) ----
+  const isRendered = (el) => {
+    try {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && el.offsetParent !== null;
+    } catch { return false; }
+  };
+  const placeKey = (href) => { const m = String(href).match(/\/maps\/place\/([^/@?#]+)/); return m ? m[1] : null; };
+
   const bestSrc = (img) => {
     const ss = img.getAttribute('srcset');
     if (ss) {
@@ -75,8 +84,17 @@
     collect() {
       const map = new Map();
       const add = (u) => { if (!isGoogle(u)) return; const id = gId(u); if (id && !map.has(id)) map.set(id, u); };
-      for (const img of document.querySelectorAll('img[src*="googleusercontent"]')) add(img.currentSrc || img.src);
-      for (const el of document.querySelectorAll('[style*="googleusercontent"], [role="img"], button[jsaction*="pane"] div, a[data-photo-index] div')) {
+      // Scope: the scroll container IS the live gallery. Falling back to
+      // document keeps a first-run-before-scroll case working, but the
+      // isRendered() filter still drops the retained previous place card.
+      let root;
+      try { root = this.getScrollContainer(); } catch { root = null; }
+      if (!root || !root.querySelectorAll) root = document;
+      for (const img of root.querySelectorAll('img[src*="googleusercontent"]')) {
+        if (isRendered(img)) add(img.currentSrc || img.src);
+      }
+      for (const el of root.querySelectorAll('[style*="googleusercontent"], [role="img"], button[jsaction*="pane"] div, a[data-photo-index] div')) {
+        if (!isRendered(el)) continue;
         const inl = (el.getAttribute && el.getAttribute('style')) || ''; let m = inl.match(G_BG);
         if (!m) { try { m = getComputedStyle(el).backgroundImage.match(G_BG); } catch { m = null; } }
         if (m) add(m[1]);
@@ -134,8 +152,12 @@
     return true; // async sendResponse
   });
 
+  let lastPlace = null;
+
   async function loadAll() {
     adapter = pick();
+    const here = placeKey(location.href);
+    if (here !== lastPlace) { lastPlace = here; }
     try { if (adapter.prepare) await adapter.prepare(); } catch { /* best-effort */ }
     for (let i = 0; i < 25 && adapter.collect().size === 0; i++) await sleep(200);
     const c = adapter.getScrollContainer();
