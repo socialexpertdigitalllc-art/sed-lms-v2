@@ -519,9 +519,21 @@ describe("classifyUploadError", () => {
     expect(classifyUploadError({ status: 500, rateLimitRemaining: "42" })).toBe("error");
   });
 
-  it("treats 401 and 403 as auth problems", () => {
+  it("treats 401 as an auth problem", () => {
     expect(classifyUploadError({ status: 401 })).toBe("auth");
-    expect(classifyUploadError({ status: 403 })).toBe("auth");
+  });
+
+  it("does NOT let a 403 block page disable a host", () => {
+    // An `auth` verdict disables the host with no cooldown. A WAF or geo-block
+    // returns 403; none of the three providers reports a bad credential that
+    // way. So a bare 403 must stay `error`.
+    expect(classifyUploadError({ status: 403, message: "Access Forbidden" })).toBe("error");
+  });
+
+  it("still catches each provider's real credential failure", () => {
+    expect(classifyUploadError({ status: 400, message: "Invalid API key" })).toBe("auth"); // imgbb
+    expect(classifyUploadError({ status: 401, message: "Unauthenticated." })).toBe("auth"); // imgchest
+    expect(classifyUploadError({ status: 400, message: "invalid key" })).toBe("auth");
   });
 
   it("reads a quota verdict out of the message when the status does not say so", () => {
@@ -540,6 +552,18 @@ describe("classifyUploadError", () => {
     expect(classifyUploadError({ status: 0, message: "network down" })).toBe("error");
     expect(classifyUploadError({ status: 400 })).toBe("error");
   });
+
+  it("does not mistake a file-size error for a quota error", () => {
+    // Google originals at =s0 routinely approach imgbb's 32 MB ceiling. Parking
+    // a healthy key for an hour because one photo was too big would be far
+    // worse than the retry this gets instead.
+    expect(classifyUploadError({ status: 400, message: "maximum file size exceeded" })).toBe("error");
+  });
+
+  it("still catches the genuine quota phrasings after that narrowing", () => {
+    expect(classifyUploadError({ status: 400, message: "quota exceeded" })).toBe("quota");
+    expect(classifyUploadError({ status: 400, message: "API limit exceeded" })).toBe("quota");
+  });
 });
 ```
 
@@ -555,8 +579,19 @@ Create `lib/photo-capture/hosts/errors.ts`:
 ```ts
 import type { UploadFailure } from "./types";
 
-const QUOTA_RE = /rate limit|too many requests|quota|limit reached|limit exceeded|exceeded/i;
-const AUTH_RE = /invalid api key|invalid key|invalid token|unauthorized|unauthenticated|forbidden/i;
+// NOTE the absence of a bare `exceeded` alternative. It would match imgbb's
+// real "maximum file size exceeded" error and park a perfectly healthy key for
+// an hour — and Google originals at =s0 routinely approach imgbb's 32 MB
+// ceiling, so it would fire in normal use. A size error must stay `error` and
+// take the retry. The genuine quota phrasings are all still covered:
+// "rate limit exceeded" by `rate limit`, "quota exceeded" by `quota`,
+// "API limit exceeded" by `limit exceeded`.
+const QUOTA_RE = /rate limit|too many requests|quota|limit reached|limit exceeded/i;
+// Deliberately credential-SPECIFIC. The bare words `forbidden` and
+// `unauthorized` are absent because an `auth` verdict disables a host with no
+// cooldown — a human has to re-enable it — and those words appear in plenty of
+// non-credential failures (WAF block pages, proxy errors, policy rejections).
+const AUTH_RE = /invalid api ?key|invalid key|invalid token|unauthenticated|api ?key (?:is )?(?:missing|required|invalid)/i;
 
 /**
  * Decide what a failed upload means for the HOST, not the photo.
@@ -575,9 +610,15 @@ export function classifyUploadError(input: {
   /** imgchest's `X-RateLimit-Remaining` header, when present. */
   rateLimitRemaining?: string | null;
 }): UploadFailure {
+  // Structured signals (header, then status) are trusted before free-text
+  // message matching, because message text is the fragile signal.
   if (input.rateLimitRemaining === "0") return "quota";
   if (input.status === 429) return "quota";
-  if (input.status === 401 || input.status === 403) return "auth";
+  // 401 only — NOT 403. None of the three providers reports a bad credential
+  // with a 403 (imgbb uses 400 + "Invalid API key", imgchest uses 401,
+  // postimages has no auth at all), whereas a WAF or geo-block does. Treating
+  // 403 as auth would let one Cloudflare page permanently disable a good key.
+  if (input.status === 401) return "auth";
   const msg = input.message ?? "";
   if (QUOTA_RE.test(msg)) return "quota";
   if (AUTH_RE.test(msg)) return "auth";
@@ -588,7 +629,7 @@ export function classifyUploadError(input: {
 - [ ] **Step 4: Run the test and watch it pass**
 
 Run: `npx vitest run tests/photoHostErrors.test.ts`
-Expected: PASS, 7 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -636,14 +677,18 @@ afterEach(() => {
 
 describe("imgbb adapter", () => {
   it("uploads by URL and never downloads the bytes", async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ success: true, data: { url: "https://i.ibb.co/abc/acme_001.jpg" } }));
+    // Declare the mock's parameters: without them `mock.calls[0]` is typed `[]`
+    // and destructuring it needs a cast that `tsc --noEmit` rejects (TS2352).
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      jsonResponse({ success: true, data: { url: "https://i.ibb.co/abc/acme_001.jpg" } })
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await imgbbAdapter.upload(source, { credentials: { api_key: "KEY123" } });
 
     expect(res).toEqual({ ok: true, directUrl: "https://i.ibb.co/abc/acme_001.jpg" });
     expect(bytes).not.toHaveBeenCalled();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.imgbb.com/1/upload?key=KEY123");
     expect((init.body as FormData).get("image")).toBe(source.url);
   });
@@ -663,7 +708,7 @@ describe("imgbb adapter", () => {
 
 describe("imgchest adapter", () => {
   it("posts multipart with a bearer token and returns the cdn link", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
       jsonResponse({ data: { id: "post1", images: [{ id: "img1", link: "https://cdn.imgchest.com/files/img1.jpg" }] } })
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -672,7 +717,7 @@ describe("imgchest adapter", () => {
 
     expect(res).toEqual({ ok: true, directUrl: "https://cdn.imgchest.com/files/img1.jpg" });
     expect(bytes).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.imgchest.com/v1/post");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer TOK");
     expect((init.body as FormData).getAll("images[]")).toHaveLength(1);
@@ -992,7 +1037,10 @@ function adapter(provider: HostProvider, results: UploadResult[]): UploadAdapter
     provider,
     needsCredentials: true,
     isConfigured: () => true,
-    upload: vi.fn(async () => queue.shift() ?? { ok: false, reason: "error", message: "exhausted fixture" }),
+    // The explicit return type is required: `vi.fn` infers its generic from the
+    // implementation bottom-up, so without it the fallback literal widens to
+    // `{ ok: boolean; ... }` and no longer matches `UploadResult`.
+    upload: vi.fn(async (): Promise<UploadResult> => queue.shift() ?? { ok: false, reason: "error", message: "exhausted fixture" }),
   };
 }
 
@@ -1140,10 +1188,23 @@ Create `lib/photo-capture/hosts/chain.ts`:
 
 ```ts
 import { orderHosts } from "./order";
-import type { HostProvider, HostStateStore, ImageHost, UploadAdapter, UploadSource } from "./types";
+import type { HostProvider, HostStateStore, ImageHost, UploadAdapter, UploadResult, UploadSource } from "./types";
 
 /** How long a rate-limited host sits out before the chain tries it again. */
 export const COOLDOWN_MS = 60 * 60 * 1000;
+
+/**
+ * Bookkeeping must never sink an upload that already succeeded — but it must
+ * not vanish either. A failed `markAuthFailed` leaves a dead key enabled, and
+ * the chain would then burn a round-trip on it for every subsequent photo.
+ */
+async function quietly(label: string, op: () => Promise<void>): Promise<void> {
+  try {
+    await op();
+  } catch (e) {
+    console.error(`[photo-capture] ${label} failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
 
 export type ChainAttempt = {
   hostId: string;
@@ -1194,10 +1255,18 @@ export async function runUploadChain(
       continue;
     }
 
-    const result = await adapter.upload(source, { credentials: host.credentials });
+    let result: UploadResult;
+    try {
+      result = await adapter.upload(source, { credentials: host.credentials });
+    } catch (e) {
+      // A well-behaved adapter returns failures rather than throwing, but the
+      // contract is that this function NEVER throws — one misbehaving adapter
+      // must not lose the rest of the batch.
+      result = { ok: false, reason: "error", message: e instanceof Error ? e.message : "Adapter threw" };
+    }
 
     if (result.ok) {
-      await deps.state.recordSuccess(host.id);
+      await quietly(`recordSuccess(${host.id})`, () => deps.state.recordSuccess(host.id));
       attempts.push({ hostId: host.id, provider: host.provider, outcome: "ok" });
       return { directUrl: result.directUrl, hostId: host.id, provider: host.provider, attempts, lastError: null };
     }
@@ -1206,9 +1275,11 @@ export async function runUploadChain(
     attempts.push({ hostId: host.id, provider: host.provider, outcome: result.reason, message: result.message });
 
     if (result.reason === "quota") {
-      await deps.state.markExhausted(host.id, new Date(now().getTime() + COOLDOWN_MS), result.message);
+      // `now()` is re-sampled deliberately: the cooldown should start when the
+      // host actually failed, not when the chain began.
+      await quietly(`markExhausted(${host.id})`, () => deps.state.markExhausted(host.id, new Date(now().getTime() + COOLDOWN_MS), result.message));
     } else if (result.reason === "auth") {
-      await deps.state.markAuthFailed(host.id, result.message);
+      await quietly(`markAuthFailed(${host.id})`, () => deps.state.markAuthFailed(host.id, result.message));
     }
   }
 
@@ -1410,6 +1481,40 @@ describe("isGoogleProfileLink", () => {
   it("tolerates surrounding whitespace", () => {
     expect(isGoogleProfileLink("  https://maps.app.goo.gl/xyz  ")).toBe(true);
   });
+
+  it("rejects a path that merely starts with the letters 'maps'", () => {
+    expect(isGoogleProfileLink("https://www.google.com/mapsfoo")).toBe(false);
+    expect(isGoogleProfileLink("https://www.google.com/mapsomething/place/x")).toBe(false);
+  });
+
+  it("accepts the bare /maps path and /maps/ subpaths", () => {
+    expect(isGoogleProfileLink("https://www.google.com/maps")).toBe(true);
+    expect(isGoogleProfileLink("https://www.google.com/maps/place/Acme")).toBe(true);
+  });
+
+  it("ignores a google URL smuggled into another host's query string", () => {
+    expect(isGoogleProfileLink("https://evil.com/?x=https://www.google.com/maps/place/x")).toBe(false);
+  });
+
+  it("rejects non-http protocols", () => {
+    expect(isGoogleProfileLink("javascript:alert(1)")).toBe(false);
+    expect(isGoogleProfileLink("data:text/html,<script>alert(1)</script>")).toBe(false);
+  });
+
+  it("rejects lookalike domains that merely start with google.", () => {
+    expect(isGoogleProfileLink("https://google.com.evil.com/maps/place/x")).toBe(false);
+    expect(isGoogleProfileLink("https://google.evil.com/maps")).toBe(false);
+    expect(isGoogleProfileLink("https://maps.google.evil.com/maps")).toBe(false);
+    expect(isGoogleProfileLink("https://google.attacker.tld/maps")).toBe(false);
+  });
+
+  it("still accepts genuine Google country domains", () => {
+    expect(isGoogleProfileLink("https://www.google.com/maps/place/Acme")).toBe(true);
+    expect(isGoogleProfileLink("https://www.google.co.uk/maps/place/Acme")).toBe(true);
+    expect(isGoogleProfileLink("https://www.google.de/maps/place/Acme")).toBe(true);
+    expect(isGoogleProfileLink("https://www.google.com.au/maps/place/Acme")).toBe(true);
+    expect(isGoogleProfileLink("https://maps.google.com/?cid=123")).toBe(true);
+  });
 });
 ```
 
@@ -1430,6 +1535,15 @@ Create `lib/photo-capture/googleLink.ts`:
  * extension has a working Yelp adapter, but Yelp capture is out of scope
  * (see the design, §16) and silently half-supporting it would confuse.
  */
+/**
+ * Google's own hostnames, anchored at BOTH ends. Anchoring only the start —
+ * /^(www\.)?google\./ — accepts google.com.evil.com, because that string does
+ * begin with "google.". The TLD shape here allows google.com, google.de,
+ * google.co.uk and google.com.au, while rejecting google.attacker.tld and
+ * google.com.evil.com, whose extra labels are too long to be a TLD.
+ */
+const GOOGLE_HOST_RE = /^(?:www\.|maps\.)?google\.[a-z]{2,3}(?:\.[a-z]{2})?$/;
+
 export function isGoogleProfileLink(link: string | null | undefined): boolean {
   const raw = (link ?? "").trim();
   if (!raw) return false;
@@ -1446,13 +1560,17 @@ export function isGoogleProfileLink(link: string | null | undefined): boolean {
   const path = url.pathname;
 
   // Short links resolve to a place; the extension follows the redirect.
+  // Exact equality, so these need no anchoring.
   if (host === "maps.app.goo.gl" || host === "goo.gl" || host === "g.page") return true;
-  // maps.google.com / maps.google.co.uk / ...
-  if (/^maps\.google\./.test(host)) return true;
-  // www.google.<tld>/maps/...
-  if (/^(www\.)?google\./.test(host) && path.startsWith("/maps")) return true;
 
-  return false;
+  if (!GOOGLE_HOST_RE.test(host)) return false;
+  // maps.google.<tld> is a Maps host whatever the path.
+  if (host.startsWith("maps.")) return true;
+  // On www.google.<tld> only the /maps path is a profile link. SEGMENT match,
+  // not a prefix match — startsWith("/maps") would also accept /mapsfoo. This
+  // gates a URL we later open in the operator's browser, so err toward
+  // rejecting: a real-but-unusual Google URL just means capturing manually.
+  return path === "/maps" || path.startsWith("/maps/");
 }
 ```
 
@@ -1581,7 +1699,9 @@ export async function listImageHostStatuses(): Promise<ImageHostStatus[]> {
         position: row.position,
         enabled: row.enabled,
         configured: field === null ? true : !!secret,
-        hint: secret ? `••••${secret.slice(-4)}` : null,
+        // `.slice(-4)` on a secret of 4 chars or fewer returns the WHOLE thing,
+        // so short credentials get a bare mask. Mirrors `maskCredentialHint`.
+        hint: secret ? (secret.length <= 4 ? "••••" : `••••${secret.slice(-4)}`) : null,
         exhaustedUntil: row.exhausted_until,
         lastError: row.last_error,
         uploadCount: row.upload_count,
@@ -1641,8 +1761,16 @@ export async function updateImageHost(
     update.exhausted_until = null;
   }
   if (patch.secret !== undefined) {
-    const { data: row } = await admin.from("image_hosts").select("provider").eq("id", id).single();
-    const field = row ? CREDENTIAL_FIELD[row.provider as HostProvider] : null;
+    const { data: row, error: lookupError } = await admin
+      .from("image_hosts")
+      .select("provider")
+      .eq("id", id)
+      .single();
+    // Must NOT continue on failure: `field` would fall to null below and the
+    // update would CLEAR the operator's working credential instead of setting
+    // it — a transient read failure must never be able to wipe a secret.
+    if (lookupError || !row) throw new Error(lookupError?.message ?? "Image host not found");
+    const field = CREDENTIAL_FIELD[row.provider as HostProvider];
     update.encrypted_credentials =
       field && patch.secret?.trim() ? encryptSecret(JSON.stringify({ [field]: patch.secret.trim() })) : null;
   }
@@ -1717,7 +1845,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 /** Capture state and candidate photos for a lead. SERVER ONLY (service role). */
 
 export type CaptureStatus = "pending" | "ready" | "none_found" | "failed";
-export type CandidateStatus = "pending" | "uploaded" | "failed" | "skipped";
+/** `uploading` is a CLAIM state — see `claimCandidate` below. */
+export type CandidateStatus = "pending" | "uploading" | "uploaded" | "failed" | "skipped";
 
 export type Candidate = {
   id: string;
@@ -1845,6 +1974,38 @@ export async function failCapture(leadId: string, message: string): Promise<void
     { lead_id: leadId, status: "failed", error: message.slice(0, 500), completed_at: new Date().toISOString() },
     { onConflict: "lead_id" }
   );
+}
+
+/**
+ * Atomically claim a candidate for upload. Returns false when someone else got
+ * there first.
+ *
+ * WHY THIS EXISTS. Two operators can have the same lead open. Without a claim,
+ * both upload requests read the same candidate as `pending`, both push it
+ * through the host chain, and both spend quota on hosts we deliberately model
+ * as scarce — then the second write silently overwrites the first. The
+ * conditional update is the whole guard: exactly one caller can move a row out
+ * of `pending`.
+ */
+export async function claimCandidate(candidateId: string): Promise<boolean> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("lead_photo_candidates")
+    .update({ status: "uploading", updated_at: new Date().toISOString() })
+    .eq("id", candidateId)
+    .eq("status", "pending")
+    .select("id");
+  return (data?.length ?? 0) === 1;
+}
+
+/** Hand a claim back when the upload failed before it started. */
+export async function releaseCandidate(candidateId: string): Promise<void> {
+  const admin = createAdminClient();
+  await admin
+    .from("lead_photo_candidates")
+    .update({ status: "pending", updated_at: new Date().toISOString() })
+    .eq("id", candidateId)
+    .eq("status", "uploading");
 }
 
 export async function markCandidateUploaded(
@@ -2022,7 +2183,7 @@ import { imgbbAdapter } from "@/lib/photo-capture/hosts/imgbb";
 import { imgchestAdapter } from "@/lib/photo-capture/hosts/imgchest";
 import { postimagesAdapter } from "@/lib/photo-capture/hosts/postimages";
 import type { HostProvider, UploadAdapter } from "@/lib/photo-capture/hosts/types";
-import { getCapture, markCandidateFailed, markCandidateUploaded } from "@/lib/photo-capture/store";
+import { claimCandidate, getCapture, markCandidateFailed, markCandidateUploaded } from "@/lib/photo-capture/store";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -2092,6 +2253,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       uploaded.push(candidate.hostedUrl);
       continue;
     }
+
+    // Claim it, or leave it to whoever already has it. Two operators with the
+    // same lead open must not both spend host quota on the same photo.
+    if (!(await claimCandidate(candidate.id))) continue;
 
     const filename = `${base}_${String(i + 1).padStart(3, "0")}.jpg`;
     const result = await runUploadChain(
@@ -2362,9 +2527,25 @@ export function ImageHostsPanel({ hosts }: { hosts: ImageHostStatus[] }) {
   }
 
   async function move(host: ImageHostStatus, delta: number) {
-    await call(`/api/admin/image-hosts/${host.id}`, {
+    // SWAP with the neighbouring host of the same provider — do not just write
+    // `position + delta`. An absolute write lets two rows share a position,
+    // after which the list silently stops matching what the operator clicked.
+    // (The upload order stays deterministic either way, because `orderHosts`
+    // tie-breaks on id — it just stops being the order they chose.)
+    const siblings = hosts
+      .filter((h) => h.provider === host.provider)
+      .sort((a, b) => a.position - b.position);
+    const neighbour = siblings[siblings.findIndex((h) => h.id === host.id) + delta];
+    if (!neighbour) return;
+
+    const moved = await call(`/api/admin/image-hosts/${host.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ position: Math.max(0, host.position + delta) }),
+      body: JSON.stringify({ position: neighbour.position }),
+    });
+    if (!moved) return;
+    await call(`/api/admin/image-hosts/${neighbour.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ position: host.position }),
     });
   }
 
@@ -2638,6 +2819,24 @@ git commit -m "feat(photo-extractor): pure capture normalisation"
 - Modify: `photo-extractor/manifest.json`
 
 The LMS origin is `https://lms.sedsolutions.online/*` (confirmed by the operator). It must appear in **both** `host_permissions` and `content_scripts.matches` or the bridge silently never loads.
+
+**Country-domain mismatch — handle this in the service worker, not the manifest.** `isGoogleProfileLink` accepts `google.co.uk`, `google.com.au` and every other Google ccTLD, but the extension's content script only matches `https://www.google.com/maps/*` and `https://maps.google.com/*`. Chrome match patterns cannot express `google.*` (the host wildcard is only valid as a leading `*.` label), so widening the manifest would mean enumerating ~190 domains. Instead, **normalise the URL before opening the capture window**: a Maps place URL is portable across ccTLDs, so rewrite the host to `www.google.com`, keeping the path and query:
+
+```js
+function toDotCom(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    // google.co.uk/maps/place/X → www.google.com/maps/place/X. The content
+    // script only matches .com hosts; without this, a ccTLD link opens a window
+    // where nothing is injected and the capture silently returns zero photos.
+    if (/^(?:www\.)?google\./.test(u.hostname)) u.hostname = "www.google.com";
+    else if (/^maps\.google\./.test(u.hostname)) u.hostname = "maps.google.com";
+    return u.toString();
+  } catch { return rawUrl; }
+}
+```
+
+Apply it to `msg.url` in the CAPTURE handler. Short links (`maps.app.goo.gl`, `g.page`) are left alone — they redirect to a `.com` host themselves.
 
 - [ ] **Step 1: Write the bridge content script**
 
@@ -3129,7 +3328,7 @@ type Candidate = {
   id: string;
   photoKey: string;
   thumbUrl: string;
-  status: "pending" | "uploaded" | "failed" | "skipped";
+  status: "pending" | "uploading" | "uploaded" | "failed" | "skipped";
   hostedUrl: string | null;
   error: string | null;
 };
