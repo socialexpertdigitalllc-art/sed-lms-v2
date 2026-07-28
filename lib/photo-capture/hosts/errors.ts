@@ -1,6 +1,10 @@
 import type { UploadFailure } from "./types";
 
-const QUOTA_RE = /rate limit|too many requests|quota|limit reached|limit exceeded|exceeded/i;
+// Deliberately no bare `exceeded` alternative: imgbb's "maximum file size
+// exceeded" is a size error, not a quota one. A size-limit error must stay
+// `error` — parking a healthy key for an hour because one photo was too big
+// is far worse than the retry it gets instead.
+const QUOTA_RE = /rate limit|too many requests|quota|limit reached|limit exceeded/i;
 const AUTH_RE = /invalid api key|invalid key|invalid token|unauthorized|unauthenticated|forbidden/i;
 
 /**

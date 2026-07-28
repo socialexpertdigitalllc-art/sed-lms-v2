@@ -36,4 +36,13 @@ describe("classifyUploadError", () => {
     expect(classifyUploadError({ status: 0, message: "network down" })).toBe("error");
     expect(classifyUploadError({ status: 400 })).toBe("error");
   });
+
+  it("does not mistake a file-size error for a quota error", () => {
+    expect(classifyUploadError({ status: 400, message: "maximum file size exceeded" })).toBe("error");
+  });
+
+  it("still classifies genuine exceeded-limit phrasings as quota", () => {
+    expect(classifyUploadError({ status: 400, message: "quota exceeded" })).toBe("quota");
+    expect(classifyUploadError({ status: 400, message: "API limit exceeded" })).toBe("quota");
+  });
 });
