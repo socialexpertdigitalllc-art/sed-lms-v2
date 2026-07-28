@@ -170,16 +170,97 @@ describe("runUploadChain", () => {
   });
 
   it("still returns the successful upload when the state store's recordSuccess rejects", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const store = fakeStore();
+      const flakyStore: HostStateStore = { ...store, recordSuccess: async () => { throw new Error("supabase down"); } };
+      const res = await runUploadChain(source, {
+        hosts: [host("b1", "imgbb")],
+        adapters: { imgbb: adapter("imgbb", [ok("https://i.ibb.co/3.jpg")]), postimages: adapter("postimages", []), imgchest: adapter("imgchest", []) },
+        state: flakyStore,
+        now: () => NOW,
+      });
+
+      expect(res.directUrl).toBe("https://i.ibb.co/3.jpg");
+      expect(res.hostId).toBe("b1");
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining("recordSuccess(b1) failed: supabase down"));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("still falls through to the next host when the state store's markAuthFailed rejects", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const store = fakeStore();
+      const flakyStore: HostStateStore = { ...store, markAuthFailed: async () => { throw new Error("supabase down"); } };
+      const res = await runUploadChain(source, {
+        hosts: [host("b1", "imgbb"), host("c1", "imgchest")],
+        adapters: {
+          imgbb: adapter("imgbb", [{ ok: false, reason: "auth", message: "Invalid API key" }]),
+          postimages: adapter("postimages", []),
+          imgchest: adapter("imgchest", [ok("https://cdn.imgchest.com/files/u.jpg")]),
+        },
+        state: flakyStore,
+        now: () => NOW,
+      });
+
+      expect(res.directUrl).toBe("https://cdn.imgchest.com/files/u.jpg");
+      expect(res.hostId).toBe("c1");
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining("markAuthFailed(b1) failed: supabase down"));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("still falls through to the next host when the state store's markExhausted rejects", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const store = fakeStore();
+      const flakyStore: HostStateStore = { ...store, markExhausted: async () => { throw new Error("supabase down"); } };
+      const res = await runUploadChain(source, {
+        hosts: [host("b1", "imgbb"), host("c1", "imgchest")],
+        adapters: {
+          imgbb: adapter("imgbb", [{ ok: false, reason: "quota", message: "limit" }]),
+          postimages: adapter("postimages", []),
+          imgchest: adapter("imgchest", [ok("https://cdn.imgchest.com/files/t.jpg")]),
+        },
+        state: flakyStore,
+        now: () => NOW,
+      });
+
+      expect(res.directUrl).toBe("https://cdn.imgchest.com/files/t.jpg");
+      expect(res.hostId).toBe("c1");
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining("markExhausted(b1) failed: supabase down"));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("times the cooldown from the moment the host actually failed, not from chain start", async () => {
     const store = fakeStore();
-    const flakyStore: HostStateStore = { ...store, recordSuccess: async () => { throw new Error("supabase down"); } };
+    const ticks = [
+      new Date("2026-07-28T12:00:00Z"), // orderHosts at chain start
+      new Date("2026-07-28T12:00:05Z"), // sampled again when b1's quota failure is recorded
+    ];
+    let i = 0;
+    const advancing = () => ticks[Math.min(i++, ticks.length - 1)];
+
     const res = await runUploadChain(source, {
-      hosts: [host("b1", "imgbb")],
-      adapters: { imgbb: adapter("imgbb", [ok("https://i.ibb.co/3.jpg")]), postimages: adapter("postimages", []), imgchest: adapter("imgchest", []) },
-      state: flakyStore,
-      now: () => NOW,
+      hosts: [host("b1", "imgbb"), host("c1", "imgchest")],
+      adapters: {
+        imgbb: adapter("imgbb", [{ ok: false, reason: "quota", message: "limit" }]),
+        postimages: adapter("postimages", []),
+        imgchest: adapter("imgchest", [ok("https://cdn.imgchest.com/files/s.jpg")]),
+      },
+      state: store,
+      now: advancing,
     });
 
-    expect(res.directUrl).toBe("https://i.ibb.co/3.jpg");
-    expect(res.hostId).toBe("b1");
+    expect(res.directUrl).toBe("https://cdn.imgchest.com/files/s.jpg");
+    expect(store.calls).toEqual([
+      `exhausted:b1:${new Date(ticks[1].getTime() + COOLDOWN_MS).toISOString()}`,
+      "ok:c1",
+    ]);
   });
 });

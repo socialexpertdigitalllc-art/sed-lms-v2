@@ -19,12 +19,16 @@ export type ChainResult = {
   lastError: string | null;
 };
 
-/** Bookkeeping must never sink an upload that already succeeded. */
-async function quietly(op: () => Promise<void>): Promise<void> {
+/**
+ * Bookkeeping must never sink an upload that already succeeded — but it must
+ * not vanish either. A failed `markAuthFailed` leaves a dead key enabled, and
+ * the chain would then burn a round-trip on it for every subsequent photo.
+ */
+async function quietly(label: string, op: () => Promise<void>): Promise<void> {
   try {
     await op();
-  } catch {
-    /* state is advisory; the upload result is what matters */
+  } catch (e) {
+    console.error(`[photo-capture] ${label} failed: ${e instanceof Error ? e.message : e}`);
   }
 }
 
@@ -73,7 +77,7 @@ export async function runUploadChain(
     }
 
     if (result.ok) {
-      await quietly(() => deps.state.recordSuccess(host.id));
+      await quietly(`recordSuccess(${host.id})`, () => deps.state.recordSuccess(host.id));
       attempts.push({ hostId: host.id, provider: host.provider, outcome: "ok" });
       return { directUrl: result.directUrl, hostId: host.id, provider: host.provider, attempts, lastError: null };
     }
@@ -86,9 +90,11 @@ export async function runUploadChain(
       // chain: the cooldown should start when the host actually failed, not
       // when the chain began, so a fresh read of the clock is the more
       // correct behaviour, not a bug to fix.
-      await quietly(() => deps.state.markExhausted(host.id, new Date(now().getTime() + COOLDOWN_MS), result.message));
+      await quietly(`markExhausted(${host.id})`, () =>
+        deps.state.markExhausted(host.id, new Date(now().getTime() + COOLDOWN_MS), result.message)
+      );
     } else if (result.reason === "auth") {
-      await quietly(() => deps.state.markAuthFailed(host.id, result.message));
+      await quietly(`markAuthFailed(${host.id})`, () => deps.state.markAuthFailed(host.id, result.message));
     }
   }
 
