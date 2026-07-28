@@ -40,6 +40,7 @@ function toBase64(buf) {
 // fine, minimized is not — so we open a real window, unfocused, and close it.
 const CAPTURE_TIMEOUT_MS = 90_000;
 let capturing = false;
+let activeCaptureTabId = null;
 
 function toDotCom(rawUrl) {
   try {
@@ -55,9 +56,13 @@ function toDotCom(rawUrl) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== 'CAPTURE') return;
+  // Captured synchronously, before any await: this is the LMS tab that asked
+  // for the capture, so progress can be routed back to it later.
+  const lmsTabId = sender.tab?.id ?? null;
   (async () => {
     if (capturing) { sendResponse({ ok: false, error: 'Another capture is already running' }); return; }
     capturing = true;
+    activeCaptureTabId = lmsTabId;
     let windowId = null;
     try {
       const url = toDotCom(msg.url);
@@ -75,10 +80,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: String(e?.message || e) });
     } finally {
       capturing = false;
+      activeCaptureTabId = null;
       if (windowId != null) { try { await chrome.windows.remove(windowId); } catch { /* already closed */ } }
     }
   })();
   return true; // async sendResponse
+});
+
+// content.js broadcasts PROGRESS via chrome.runtime.sendMessage while it scrolls
+// the gallery (roughly every 550ms). That reaches extension pages, but the
+// bridge is a content script living in the LMS tab, which runtime messaging does
+// NOT reach — so relay it explicitly via chrome.tabs.sendMessage. Guarding on
+// activeCaptureTabId (cleared in the CAPTURE handler's finally) means a PROGRESS
+// message that arrives after the capture has already finished — or one that was
+// never part of an LMS-driven capture at all — is simply dropped, not queued.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === 'PROGRESS' && activeCaptureTabId != null) {
+    chrome.tabs.sendMessage(activeCaptureTabId, { type: 'CAPTURE_PROGRESS', loaded: msg.loaded }).catch(() => {});
+  }
 });
 
 function waitForLoad(tabId) {
