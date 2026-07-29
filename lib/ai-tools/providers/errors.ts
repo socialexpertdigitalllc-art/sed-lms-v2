@@ -35,6 +35,13 @@ export class ProviderHttpError extends Error {
  * both are handled. A date already in the past yields 0, never a negative
  * wait that would read as "retry before you asked".
  *
+ * FRACTIONAL delta-seconds are accepted even though RFC 9110 says integer.
+ * Vendors send `Retry-After: 1.5`, and matching integers only was not a
+ * harmless strictness: `"1.5"` fell through to the HTTP-date branch, where
+ * V8's `Date.parse` resolves it to 2001-01-04 — long past, so the clamp below
+ * returned 0 and the caller retried FOUR TIMES WITH NO DELAY AT ALL, the exact
+ * inverse of what the vendor asked for.
+ *
  * This applies NO upper bound. The caller owns clamping (a later task caps
  * the wait at 60s) — nobody should assume that clamp lives here, because a
  * vendor sending an absurd value (a stuck clock, a multi-hour outage notice)
@@ -43,7 +50,7 @@ export class ProviderHttpError extends Error {
 export function parseRetryAfter(value: string | null | undefined, now: number = Date.now()): number | null {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return null;
-  if (/^\d+$/.test(trimmed)) {
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
     const seconds = Number(trimmed);
     return Number.isFinite(seconds) ? seconds * 1000 : null;
   }

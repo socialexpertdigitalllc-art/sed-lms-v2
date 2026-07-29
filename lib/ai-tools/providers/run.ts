@@ -59,6 +59,13 @@ export interface TaskCallOptions {
    * `AiCallAborted` and is never retried here or by the caller's own loop.
    */
   signal?: AbortSignal;
+  /**
+   * Attempts, inclusive of the first (default MAX_ATTEMPTS). Pass 1 when the
+   * caller's LATENCY budget, not its success rate, is the binding constraint —
+   * an interactive check or a best-effort pass whose answer is worthless late.
+   * Passed straight through to `callWithProvider`.
+   */
+  maxAttempts?: number;
 }
 
 function budget(opts: TaskCallOptions, resolved: ResolvedTaskModel): ProviderCallOptions {

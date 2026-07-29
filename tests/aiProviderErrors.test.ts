@@ -16,6 +16,16 @@ describe("parseRetryAfter", () => {
     expect(parseRetryAfter("  5 ")).toBe(5_000);
   });
 
+  it("reads FRACTIONAL delta-seconds instead of hot-looping on them", () => {
+    // `Retry-After: 1.5` used to miss the integer-only pattern and fall through
+    // to the HTTP-date branch, where V8 resolves "1.5" to 2001-01-04 — a date
+    // long past, so the clamp returned 0 and the retry loop fired four times
+    // back-to-back with no delay whatsoever: the exact inverse of the vendor's
+    // request, on the one header that exists to slow us down.
+    expect(parseRetryAfter("1.5")).toBe(1500);
+    expect(parseRetryAfter("  0.25 ")).toBe(250);
+  });
+
   it("reads an HTTP-date relative to now", () => {
     const now = Date.parse("2026-07-28T12:00:00Z");
     expect(parseRetryAfter("Tue, 28 Jul 2026 12:00:20 GMT", now)).toBe(20_000);

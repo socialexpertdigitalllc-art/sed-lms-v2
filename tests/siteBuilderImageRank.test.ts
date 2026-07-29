@@ -89,6 +89,23 @@ describe("rankByPeople", () => {
     expect(opts.images).toEqual(["https://example.com/a.jpg", "https://example.com/b.jpg"]);
   });
 
+  it("asks for exactly ONE attempt — this route cannot afford the shared retry loop", async () => {
+    // The seam gained a 4-attempt retry loop with the rate limiter, silently
+    // contradicting this module's "deliberately no retry" contract and turning
+    // a 20s best-effort call into ~87s of timeout-plus-backoff inside a route
+    // that declares maxDuration = 60. Drop `maxAttempts: 1` and the sourcing
+    // request dies to improve an ordering it is happy to do without.
+    mockCall.mockResolvedValue(answer(JSON.stringify([false, false])));
+    await rankByPeople([
+      { key: "a", url: "u1" },
+      { key: "b", url: "u2" },
+    ]);
+    const [, , , opts] = mockCall.mock.calls[0];
+    expect(opts.maxAttempts).toBe(1);
+    // and the tight per-call timeout is still the other half of that budget
+    expect(opts.timeoutMs).toBe(20000);
+  });
+
   it("a failing vision call leaves the original order untouched and still returns every candidate", async () => {
     mockCall.mockRejectedValue(new Error("HTTP 500"));
     const order = await rankByPeople([
