@@ -270,6 +270,47 @@ function withInstruction(user: string, instruction?: string): string {
   return trimmed ? `${user}\n\nOPERATOR INSTRUCTION FOR THIS REGENERATION: ${trimmed}` : user;
 }
 
+/**
+ * The model call, with a THROWN failure turned into an ordinary `ok:false`
+ * outcome.
+ *
+ * THIS IS LOAD-BEARING, not defensive tidiness. `GenerateOutcome` used to carry
+ * only EXTRACTION failures — a reply that arrived and was unusable — so every
+ * caller was written as if `aiCall` could not throw. It can, and since the rate
+ * limiter landed it does so far more often: `callForTask` deliberately refuses
+ * to reroute a RETRYABLE failure to a fallback provider, so a sustained 429
+ * that outlives the retry budget now propagates out of `deps.aiCall` instead of
+ * quietly completing on another model. `runSite` runs its page tasks under
+ * `Promise.all`, so ONE such throw rejected the whole run: the route marked it
+ * `failed`, no zip was uploaded, and every page that had already succeeded was
+ * discarded — flatly contradicting `runSite`'s own "a per-page failure never
+ * kills the run" contract.
+ *
+ * Catching HERE rather than at the `Promise.all` is what makes the two failure
+ * kinds indistinguishable to every caller: `runSite`'s per-page bookkeeping and
+ * the regenerate route's error surface stay byte-for-byte what they were, and
+ * `regeneratePage` — which has no `Promise.all` to fix — is covered by the same
+ * change.
+ *
+ * The underlying message is preserved verbatim: it is the only thing that tells
+ * the operator whether to regenerate now (429, timeout) or fix a setting (bad
+ * key, retired model).
+ */
+async function callOrFail(
+  aiCall: AiCall,
+  system: string,
+  user: string,
+  label: string,
+): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  try {
+    const { text } = await aiCall(system, user);
+    return { ok: true, text };
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `${label}: the model call failed — ${detail}` };
+  }
+}
+
 /** Rewrite the template's shared components file (see SITE_COMPONENTS_SYSTEM).
  *  Always the run's FIRST generation — its result feeds every page prompt. */
 export async function generateComponents(
@@ -293,10 +334,11 @@ export async function generateComponents(
     }),
     args.instruction,
   );
-  const { text } = await deps.aiCall(SITE_COMPONENTS_SYSTEM, user);
+  const reply = await callOrFail(deps.aiCall, SITE_COMPONENTS_SYSTEM, user, args.file);
+  if (!reply.ok) return reply;
   // An HTML components include still ends in </html>-less fragment markup, so
   // the source extractor (marker/fence stripping only) is right for both kinds.
-  const outcome = extractFileSource(text, args.file);
+  const outcome = extractFileSource(reply.text, args.file);
   if (!outcome.ok) return outcome;
 
   // Structural sanity against the ORIGINAL — the one generator that can
@@ -349,8 +391,9 @@ export async function generatePage(
     }),
     args.instruction,
   );
-  const { text } = await deps.aiCall(SITE_BUILD_SYSTEM, user);
-  return extractHtml(text, args.pageFile);
+  const reply = await callOrFail(deps.aiCall, SITE_BUILD_SYSTEM, user, args.pageFile);
+  if (!reply.ok) return reply;
+  return extractHtml(reply.text, args.pageFile);
 }
 
 /** Design and write a page the template does not have. */
@@ -379,6 +422,7 @@ export async function generateNewPage(
     }),
     args.instruction,
   );
-  const { text } = await deps.aiCall(SITE_BUILD_SYSTEM, user);
-  return extractHtml(text, args.newFile);
+  const reply = await callOrFail(deps.aiCall, SITE_BUILD_SYSTEM, user, args.newFile);
+  if (!reply.ok) return reply;
+  return extractHtml(reply.text, args.newFile);
 }

@@ -33,6 +33,10 @@ import {
   buildLeadPayload,
   type NewLeadFormState,
 } from "@/lib/leads/newLeadForm";
+import { usePhotoExtension } from "@/hooks/usePhotoExtension";
+import { isGoogleProfileLink } from "@/lib/photo-capture/googleLink";
+import { ExtensionInstallCard } from "@/components/leads/ExtensionInstallCard";
+import { useToast } from "@/components/common/Toast";
 import { Field, inputCls } from "@/components/forms/Field";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { ChipGroup } from "@/components/forms/ChipGroup";
@@ -65,8 +69,10 @@ export function NewLeadForm({
   canOverrideDuplicate: boolean;
 }) {
   const router = useRouter();
+  const { toast } = useToast();
   const { all } = usePermissions();
   const settable = useMemo(() => settableStatuses(all), [all]);
+  const photoExt = usePhotoExtension();
 
   const [f, setF] = useState<NewLeadFormState>(() =>
     emptyNewLead(
@@ -245,6 +251,72 @@ export function NewLeadForm({
       return;
     }
     const { id } = await res.json();
+
+    // Fire-and-forget: the lead is saved either way, and the agent must never
+    // wait on a browser capture (the redirect below happens unconditionally,
+    // before any of this settles). A missing extension simply does nothing —
+    // the lead's Images group offers a Capture photos button instead.
+    //
+    // Every fetch here is checked for `ok`, matching LeadPhotoPicker's
+    // runCapture: a 500 (e.g. the migration not yet applied) is otherwise
+    // indistinguishable from success, and the extension's DONE message still
+    // routes back through the shared usePhotoExtension singleton even though
+    // this component has already unmounted by the time it arrives — see
+    // hooks/usePhotoExtension.ts.
+    if (photoExt.installed && isGoogleProfileLink(f.business_profile_link)) {
+      void (async () => {
+        const started = await fetch(`/api/leads/${id}/photos/candidates`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "started", profileLink: f.business_profile_link }),
+        });
+        if (!started.ok) {
+          // Do not open the extension popup to scrape photos that cannot be
+          // stored — that is pure waste and confusing to the operator.
+          toast({
+            kind: "error",
+            title: (await started.json().catch(() => ({}))).error ?? "Could not start the photo capture",
+          });
+          return;
+        }
+        try {
+          const photos = await photoExt.capture(f.business_profile_link);
+          const saved = await fetch(`/api/leads/${id}/photos/candidates`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              kind: "done",
+              profileLink: f.business_profile_link,
+              photos,
+              extensionVersion: photoExt.version,
+            }),
+          });
+          if (!saved.ok) {
+            toast({
+              kind: "error",
+              title: (await saved.json().catch(() => ({}))).error ?? "Captured, but could not save the photos",
+            });
+            return;
+          }
+          toast({
+            kind: photos.length ? "success" : "info",
+            title: photos.length ? `Captured ${photos.length} photos` : "No photos found on that profile",
+          });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : "Capture failed";
+          const recorded = await fetch(`/api/leads/${id}/photos/candidates`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: "failed", error: message }),
+          });
+          toast({
+            kind: "error",
+            title: recorded.ok ? message : `${message} (and the failure could not be recorded)`,
+          });
+        }
+      })();
+    }
+
     router.push(`/leads/${id}`);
     router.refresh();
   }
@@ -339,6 +411,10 @@ export function NewLeadForm({
       )}
 
       <form onSubmit={submit} className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="lg:col-span-2">
+          <ExtensionInstallCard installed={photoExt.installed} version={photoExt.version} />
+        </div>
+
         {/* Form column */}
         <div className="min-w-0 space-y-5">
           {showAssignment && (

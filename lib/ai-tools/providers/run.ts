@@ -1,5 +1,6 @@
 import { callWithProvider, type ProviderCallOptions } from "@/lib/ai-tools/run";
 import { isAbortedError } from "@/lib/ai-tools/abort";
+import { isRetryableError } from "./errors";
 import { defaultSpecForTask, resolveTaskModel, type ResolvedTaskModel } from "./config";
 import type { AiTaskKey } from "./registry";
 
@@ -8,13 +9,17 @@ import type { AiTaskKey } from "./registry";
  *
  * It resolves the task's assigned provider/model (falling back to the registry
  * default when the assignment is unusable — see resolveTaskModel), makes the
- * call, and if the ASSIGNED provider throws, retries once on the default before
- * giving up. Together those two levels mean a bad routing choice degrades to
- * today's Gemini behaviour instead of failing a generation.
+ * call, and if the ASSIGNED provider fails TERMINALLY, retries once on the
+ * default before giving up. Together those two levels mean a bad routing choice
+ * degrades to today's Gemini behaviour instead of failing a generation.
  *
  * The caller's own retry loop (regenerate's 3 attempts, vision's 2) sits ABOVE
- * this and is unchanged: this adds at most ONE extra call per attempt, and only
- * when a non-default provider actually failed.
+ * this and is unchanged. BELOW it, `callWithProvider` now retries a retryable
+ * failure itself with backoff, up to MAX_ATTEMPTS (4) requests. So the fallback
+ * no longer costs "one extra call": a failure that reaches the catch below is
+ * terminal and cost exactly one request, but the fallback call it triggers can
+ * spend a full retry budget of its own — at most 1 + MAX_ATTEMPTS requests per
+ * callForTask.
  */
 
 // Resolution hits the DB. A single generation regenerates N files and vets many
@@ -54,6 +59,13 @@ export interface TaskCallOptions {
    * `AiCallAborted` and is never retried here or by the caller's own loop.
    */
   signal?: AbortSignal;
+  /**
+   * Attempts, inclusive of the first (default MAX_ATTEMPTS). Pass 1 when the
+   * caller's LATENCY budget, not its success rate, is the binding constraint —
+   * an interactive check or a best-effort pass whose answer is worthless late.
+   * Passed straight through to `callWithProvider`.
+   */
+  maxAttempts?: number;
 }
 
 function budget(opts: TaskCallOptions, resolved: ResolvedTaskModel): ProviderCallOptions {
@@ -88,6 +100,14 @@ export async function callForTask(
     // fallback call here would be a second paid request against a run that is
     // already over. Rethrow before any retry reasoning runs.
     if (isAbortedError(e)) throw e;
+    // A RETRYABLE failure has already had its full retry budget inside
+    // callWithProvider. Falling back now would move the operator's chosen model
+    // onto a different one because the first was momentarily busy — silently
+    // changing which model wrote a customer's site, with nothing in the run to
+    // say it happened. Fallback exists for CONFIGURATION failures (bad key,
+    // disabled provider, retired model), which are terminal, and those still
+    // fall through to the block below.
+    if (isRetryableError(e)) throw e;
     // Already on the default? Nothing safer to try — let the caller's retry
     // loop and error handling do their job exactly as before.
     if (!resolved.usedFallback) {

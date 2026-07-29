@@ -58,6 +58,14 @@ const STATUS_PILL: Record<BuilderRunStatus, { tone: PillTone; label: string }> =
 
 const IN_FLIGHT = new Set<BuilderRunStatus>(["queued", "generating"]);
 
+/** How long a "generating" run must go without a row write before the operator
+ *  is offered a force-release. Deliberately far below the server's own
+ *  STALE_GENERATING_MS (60 min): a rate-paced run can legitimately be quiet for
+ *  ~21 minutes, so this WILL sometimes appear on a healthy run. That is safe
+ *  only because the server stamps a claim token and a superseded attempt's
+ *  writes are discarded — see migration 0063. The button says as much. */
+const RECOVER_OFFER_MS = 5 * 60 * 1000;
+
 const KIND_LABEL: Record<PageState["kind"], string> = {
   existing: "existing page",
   new: "new page",
@@ -85,6 +93,8 @@ export function BuilderRun({ runId }: { runId: string }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
   const [regeneratingFile, setRegeneratingFile] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [recovering, setRecovering] = useState(false);
   const [approving, setApproving] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -139,13 +149,38 @@ export function BuilderRun({ runId }: { runId: string }) {
 
   // Poll while the run is in flight — this is what makes the per-page
   // progress cards move as the generate route persists each state change.
+  //
+  // …and while a retry we fired is outstanding, which is NOT an in-flight
+  // status from this screen's point of view yet. `retry` POSTs to the generate
+  // route, and that request does not resolve until the whole generation does —
+  // minutes, sometimes far more. Without this the screen would sit on the
+  // failed panel the entire time, showing a spinner and no progress, for a run
+  // that went "generating" server-side a second after the click. The first
+  // poll picks up that status and from then on the IN_FLIGHT clause carries it.
   useEffect(() => {
-    if (!run || !IN_FLIGHT.has(run.status)) return;
+    if (!run || (!IN_FLIGHT.has(run.status) && !retrying)) return;
     const id = setInterval(() => {
       void loadRun().then((row) => { if (row && mountedRef.current) setRun(row); });
     }, 2000);
     return () => clearInterval(id);
-  }, [run, loadRun]);
+  }, [run, loadRun, retrying]);
+
+  /**
+   * A coarse clock, so `recoverable` below (has this run been quiet long enough
+   * to offer a force-release?) can be derived in render WITHOUT calling the
+   * impure `Date.now()` there.
+   *
+   * The tick is not redundant with the poll above. That poll only refreshes
+   * `run`, and the thing that makes a quiet run recoverable is time passing,
+   * not the row changing — indeed a run whose polls are FAILING is precisely
+   * one the operator may need to release, and its `run` would never change at
+   * all. Ten seconds is far finer than the five-minute threshold it feeds.
+   */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(id);
+  }, []);
 
   const pageFiles = useMemo(() => {
     if (!run) return [];
@@ -212,6 +247,53 @@ export function BuilderRun({ runId }: { runId: string }) {
     }
   }
 
+  /**
+   * Retry IS the generate route: it accepts a failed run, and hands the run's
+   * stored `pages` back to the engine as `resume`, so every page that already
+   * finished is carried forward and never re-bought. `loadRun` afterwards
+   * rather than trusting the POST's body — the fetch only resolves when the
+   * whole generation does, but the poll (the run is "generating" by then) is
+   * what keeps the screen live in the meantime.
+   */
+  async function retry() {
+    setRetrying(true);
+    try {
+      const res = await fetch(`/api/site-builder/runs/${runId}/generate`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { toast({ kind: "error", title: body.error ?? "Could not retry this run" }); return; }
+      toast({ kind: "success", title: "Retrying the pages that failed" });
+    } catch (e) {
+      toast({ kind: "error", title: e instanceof Error ? e.message : "Could not retry this run" });
+    } finally {
+      setRetrying(false);
+      const fresh = await loadRun();
+      if (fresh && mountedRef.current) setRun(fresh);
+    }
+  }
+
+  /**
+   * Force-release a run stuck in "generating". Safe to take on a live
+   * generation — the server clears the claim token, so that attempt's writes
+   * are discarded rather than racing us — but it does throw away whatever it
+   * had not yet saved, hence the confirm.
+   */
+  async function recover() {
+    if (!confirm("Stop this run and mark it failed? If it is still working, anything it has not already saved will be lost. Pages it did save are kept and will not be regenerated.")) return;
+    setRecovering(true);
+    try {
+      const res = await fetch(`/api/site-builder/runs/${runId}/recover`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { toast({ kind: "error", title: body.error ?? "Could not recover this run" }); return; }
+      toast({ kind: "success", title: "Run released — retry when you are ready" });
+    } catch (e) {
+      toast({ kind: "error", title: e instanceof Error ? e.message : "Could not recover this run" });
+    } finally {
+      setRecovering(false);
+      const fresh = await loadRun();
+      if (fresh && mountedRef.current) setRun(fresh);
+    }
+  }
+
   async function approve() {
     setApproving(true);
     try {
@@ -264,7 +346,10 @@ export function BuilderRun({ runId }: { runId: string }) {
   }
 
   const pill = STATUS_PILL[run.status];
-  const gate = run.status === "review" || run.status === "approved";
+  // `failed` included: a failed run is exactly where fixing one page matters
+  // most, and the route accepts it.
+  const gate = run.status === "review" || run.status === "approved" || run.status === "failed";
+  const recoverable = run.status === "generating" && now - new Date(run.updated_at).getTime() > RECOVER_OFFER_MS;
   const previewRoot = `/api/site-builder/runs/${runId}/preview/`;
   const previewSrc = selectedFile
     ? `${previewRoot}${encodePathSegments(selectedFile)}?v=${encodeURIComponent(run.updated_at)}`
@@ -320,7 +405,14 @@ export function BuilderRun({ runId }: { runId: string }) {
         <div className="rounded-lg border border-dropped-bg bg-dropped-bg/40 p-4">
           <p className="flex items-center gap-2 font-medium text-dropped-fg"><AlertTriangle className="h-4 w-4" /> This run failed.</p>
           <p className="mt-1 text-sm text-dropped-fg">{run.error ?? "Every page failed to generate."}</p>
-          <p className="mt-2 text-xs text-text-muted">Start a new site for this lead — this run cannot be resumed.</p>
+          <p className="mt-2 text-xs text-text-muted">
+            Pages that already generated are kept — retrying only redoes the ones that failed, so it costs nothing for
+            the work already done.
+          </p>
+          <button className={cn(btnSecondarySm, "mt-2")} onClick={() => void retry()} disabled={retrying}>
+            {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Retry failed pages
+          </button>
         </div>
       ) : null}
 
@@ -336,6 +428,19 @@ export function BuilderRun({ runId }: { runId: string }) {
             <p className="mt-1 text-xs text-text-faint">
               Writing now: {progress.generating.map((f) => run.pages[f]?.name ?? f).join(", ")}
             </p>
+          ) : null}
+          {recoverable ? (
+            <div className="mt-3 border-t border-border pt-3">
+              <p className="text-xs text-text-faint">
+                Nothing has been written for a few minutes. That is not proof it is stuck: a paced run can go quiet for
+                up to about twenty minutes while it waits out a provider&rsquo;s rate limit, so it may still be working.
+                Stopping it is safe either way — the run is released and anything it already saved is kept.
+              </p>
+              <button className={cn(btnGhostSm, "mt-2")} onClick={() => void recover()} disabled={recovering}>
+                {recovering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+                Stop and recover
+              </button>
+            </div>
           ) : null}
         </div>
       ) : null}

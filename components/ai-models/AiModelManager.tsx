@@ -6,6 +6,7 @@ import {
   Cpu,
   ExternalLink,
   Eye,
+  Gauge,
   Image as ImageIcon,
   KeyRound,
   Loader2,
@@ -23,6 +24,7 @@ import { Panel, Pill } from "@/components/common/Panel";
 import { btnPrimary, btnSecondarySm, btnGhostSm } from "@/components/common/buttons";
 import { Field, inputCls } from "@/components/forms/Field";
 import { useToast } from "@/components/common/Toast";
+import { resolveBudget } from "@/lib/ai-tools/providers/limits";
 import type { AiProviderSetting, AiTaskSetting } from "@/lib/ai-tools/providers/adminView";
 
 /**
@@ -177,6 +179,137 @@ function CredentialForm({ provider, onPatch }: { provider: AiProviderSetting; on
   );
 }
 
+/* ------------------------------------------------------------ rate limits */
+
+const DIMENSIONS = [
+  { key: "concurrency" as const, label: "Concurrent", hint: "Requests in flight at once" },
+  { key: "rpm" as const, label: "Requests / min", hint: "RPM" },
+  { key: "tpm" as const, label: "Tokens / min", hint: "TPM, input + output" },
+  { key: "tpd" as const, label: "Tokens / day", hint: "TPD, blank if unlimited" },
+];
+
+type RateBudgetish = AiProviderSetting["effectiveRateBudget"];
+
+/** The four boxes as strings, seeded from whatever override is stored. Written
+ *  once and reused after a save so the boxes always show what was ACTUALLY
+ *  stored rather than what was typed — see `save`. */
+function draftFrom(stored: AiProviderSetting["rateLimits"]): Record<string, string> {
+  return Object.fromEntries(
+    DIMENSIONS.map((d) => {
+      const value = stored?.[d.key];
+      return [d.key, value != null ? String(value) : ""];
+    }),
+  );
+}
+
+/** Only the dimensions this provider actually declares — an omitted one is not
+ *  "zero", it is a limit the vendor never published and the gate never applies. */
+function describeBudget(budget: RateBudgetish): string {
+  const parts: string[] = [];
+  for (const d of DIMENSIONS) {
+    const value = budget[d.key];
+    if (value != null) parts.push(`${d.key} ${formatTokens(value)}`);
+  }
+  return parts.join(" · ");
+}
+
+function RateLimitForm({ provider, onPatch }: { provider: AiProviderSetting; onPatch: (next: Partial<AiProviderSetting>) => void }) {
+  const { toast } = useToast();
+  const [values, setValues] = useState<Record<string, string>>(() => draftFrom(provider.rateLimits));
+  const [saving, setSaving] = useState(false);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      // Blank means "use the shipped default" — send the key OMITTED, not null,
+      // since null carries the distinct meaning "this vendor does not limit
+      // that dimension" (see limits.ts's RateBudgetOverride).
+      const rate_limits: Record<string, number> = {};
+      for (const d of DIMENSIONS) {
+        const raw = (values[d.key] ?? "").trim();
+        if (!raw) continue;
+        const n = Number(raw);
+        // Deliberately the SAME predicate resolveBudget applies server-side,
+        // floor included: a value this drops or rounds must not be left sitting
+        // in the box looking accepted.
+        if (Number.isFinite(n) && n >= 1) rate_limits[d.key] = Math.floor(n);
+      }
+      const res = await fetch(API, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "provider", provider_key: provider.key, rate_limits }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ kind: "error", title: "Could not save limits", body: typeof data.error === "string" ? data.error : undefined });
+        return;
+      }
+      // Echo back what the server STORED, exactly as the task-budget field does,
+      // and resolve the effective budget with the SAME function the call path
+      // uses — so the screen can never claim a ceiling the gate is not given.
+      const p = data.provider as Partial<AiProviderSetting> | null;
+      const stored = p?.rateLimits ?? rate_limits;
+      setValues(draftFrom(stored));
+      onPatch({ rateLimits: stored, effectiveRateBudget: resolveBudget(provider.key, stored) });
+      toast({ kind: "success", title: `${provider.label} limits saved` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const gate = provider.gate;
+
+  return (
+    <form onSubmit={save} className="rounded-md border border-border-subtle bg-surface-2 p-3">
+      <div className="flex items-center gap-2">
+        <Gauge className="h-4 w-4 shrink-0 text-text-faint" aria-hidden />
+        <span className="text-xs font-medium text-text">Rate limits</span>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-text-muted">
+        Your account tier&apos;s ceilings. Leave a box blank to use our conservative default, shown greyed. Every AI call in the app
+        shares one budget per provider, so a blank box is not &ldquo;unlimited&rdquo; — it is &ldquo;we&apos;ll guess low&rdquo;.
+      </p>
+      <div className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {DIMENSIONS.map((d) => (
+          <label key={d.key} className="block">
+            <span className="text-[11px] text-text-muted" title={d.hint}>
+              {d.label}
+            </span>
+            <input
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={values[d.key] ?? ""}
+              placeholder={provider.defaultRateBudget[d.key] != null ? String(provider.defaultRateBudget[d.key]) : "none"}
+              onChange={(e) => setValues((v) => ({ ...v, [d.key]: e.target.value }))}
+              className="tabular mt-1 w-full rounded border border-border bg-surface px-2 py-1 font-mono text-[11px] text-text"
+            />
+          </label>
+        ))}
+      </div>
+      <p className="tabular mt-2 font-mono text-[11px] text-text-faint">
+        In force: {describeBudget(provider.effectiveRateBudget) || "no ceiling declared for this provider"}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <button type="submit" disabled={saving} className={btnSecondarySm}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save limits
+        </button>
+        {gate ? (
+          <span className="tabular font-mono text-[11px] text-text-faint">
+            {gate.inFlight} in flight · {gate.requestsThisMinute}/min · pacing at {Math.round(gate.scale * 100)}%
+            {/* Only when it differs: at full pace the figure above already says it. */}
+            {gate.scale < 1 ? ` (${describeBudget(gate.effectiveBudget)} until it recovers)` : ""}
+            {gate.throttlesLastHour > 0 ? ` · ${gate.throttlesLastHour} throttled in the last hour` : ""}
+          </span>
+        ) : (
+          <span className="text-[11px] text-text-faint">No calls yet this session.</span>
+        )}
+      </div>
+    </form>
+  );
+}
+
 /* -------------------------------------------------------------- provider */
 
 function ProviderCard({ provider, onPatch }: { provider: AiProviderSetting; onPatch: (key: string, next: Partial<AiProviderSetting>) => void }) {
@@ -315,6 +448,10 @@ function ProviderCard({ provider, onPatch }: { provider: AiProviderSetting; onPa
               </p>
             )
           ) : null}
+        </div>
+
+        <div className="lg:col-span-2">
+          <RateLimitForm provider={provider} onPatch={(next) => onPatch(provider.key, next)} />
         </div>
 
         <div className="lg:col-span-2">

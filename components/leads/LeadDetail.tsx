@@ -26,6 +26,7 @@ import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
 import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 import { ColorSchemeAdvice } from "@/components/leads/ColorSchemeField";
+import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
 import type { ContractRow } from "@/lib/contracts/types";
 
 type Agent = { id: string; display_name: string | null };
@@ -349,7 +350,10 @@ export function LeadDetail({
           </SectionCard>
 
           <SectionCard n={5} icon={ImageIcon} title="Images" subtitle="Reference imagery" done={false} delay={240}>
-            <FieldRow label="Image links (one per line)" value={(lead.image_links ?? []).join("\n")} type="textarea" copy={(lead.image_links ?? []).join("\n")} canEdit={canEdit} onSave={(v) => patch({ image_links: lines(v) })} />
+            <div className="space-y-4">
+              <LeadPhotoPicker leadId={lead.id} profileLink={lead.business_profile_link} canEdit={canEdit} />
+              <FieldRow label="Image links (one per line)" value={(lead.image_links ?? []).join("\n")} type="textarea" copy={(lead.image_links ?? []).join("\n")} canEdit={canEdit} onSave={(v) => patch({ image_links: lines(v) })} />
+            </div>
           </SectionCard>
 
           {canViewTags && (

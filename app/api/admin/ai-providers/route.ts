@@ -38,12 +38,28 @@ export async function GET() {
   return NextResponse.json(await listAiRoutingSettings());
 }
 
+/** One rate-limit dimension: a positive integer, or explicit null meaning
+ *  "this vendor does not limit that dimension". Absent means "leave it alone".
+ *  Not range-checked beyond positivity — vendor ceilings span 1 to 1,000,000+
+ *  across tiers, so any bound this schema invented would be wrong for someone.
+ *  `resolveBudget` ignores anything unusable at read time regardless. */
+const dimension = z.number().int().positive().nullable();
+
 const providerSchema = z.object({
   kind: z.literal("provider"),
   provider_key: z.string().trim().min(1).max(64),
   enabled: z.boolean().optional(),
   /** Omit to keep what is stored; null clears it. */
   credentials: z.record(z.string(), z.string().max(500)).nullish(),
+  /** Omit to keep what is stored; null resets to the shipped defaults. */
+  rate_limits: z
+    .object({
+      concurrency: dimension.optional(),
+      rpm: dimension.optional(),
+      tpm: dimension.optional(),
+      tpd: dimension.optional(),
+    })
+    .nullish(),
 });
 
 const assignmentSchema = z.object({
@@ -98,6 +114,7 @@ export async function PUT(req: Request) {
       const provider = await saveAiProvider(parsed.data.provider_key, {
         enabled: parsed.data.enabled,
         credentials,
+        rateLimits: parsed.data.rate_limits,
         updatedBy: auth.userId,
       });
       clearTaskModelCache();

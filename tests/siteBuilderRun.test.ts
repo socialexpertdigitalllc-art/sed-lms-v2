@@ -13,6 +13,7 @@ import {
   type PageState,
 } from "@/lib/site-builder/run";
 import type { AiCall } from "@/lib/site-builder/generate";
+import { SITE_COMPONENTS_SYSTEM } from "@/lib/site-builder/prompt";
 import type { TemplateBundle } from "@/lib/site-builder/templates";
 
 const enc = new TextEncoder();
@@ -242,6 +243,77 @@ describe("runSite", () => {
     const files = unzipToMap(result.zipBytes!);
     expect(files["index.html"]).toBeDefined();
     expect(files["about.html"]).toBeUndefined();
+  });
+
+  it("a THROWN provider failure fails only that page — the run still ships the rest", async () => {
+    // The regression this guards: before the rate limiter, a MiniMax 429 fell
+    // through to a fallback provider and the run quietly completed. `callForTask`
+    // now (correctly) refuses to reroute a retryable failure, so a sustained 429
+    // THROWS out of aiCall. Under a bare `Promise.all` that rejected the whole
+    // run — the route marked it "failed", uploaded no zip, and discarded every
+    // page that had already succeeded. Every other failure test here uses an
+    // aiCall that RESOLVES with bad text, so nothing covered this path.
+    const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
+    const call: AiCall = async (_s, u) => {
+      if (u.includes("THE PAGE TO REWRITE: about.html")) throw new Error("minimax rate limit exceeded (HTTP 429)");
+      return { text: okHtml("NEW INDEX") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["index.html"].status).toBe("ok");
+    expect(result.pages["about.html"].status).toBe("failed");
+    // Names the file AND preserves the provider's own words — the only thing
+    // that tells the operator to regenerate rather than change a setting.
+    expect(result.pages["about.html"].error).toContain("about.html");
+    expect(result.pages["about.html"].error).toContain("minimax rate limit exceeded (HTTP 429)");
+
+    // and the run still produced a zip carrying the pages that DID succeed
+    const files = unzipToMap(result.zipBytes!);
+    expect(files["index.html"]).toBeDefined();
+    expect(files["about.html"]).toBeUndefined();
+  });
+
+  it("a THROWN failure on a designed NEW page is recorded the same way", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" });
+    const call: AiCall = async (_s, u) => {
+      if (u.includes("YOUR JOB: CREATE A NEW PAGE")) throw new Error("provider call timed out after 300s");
+      return { text: okHtml("NEW INDEX") };
+    };
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Pricing"],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["index.html"].status).toBe("ok");
+    expect(result.pages["pricing.html"]).toMatchObject({ status: "failed", kind: "new", name: "Pricing" });
+    expect(result.pages["pricing.html"].error).toContain("pricing.html");
+    expect(result.pages["pricing.html"].error).toContain("timed out");
+  });
+
+  it("a THROWN components failure never kills the run — pages still generate", async () => {
+    // Same contract as the existing "failed components rewrite" test, but for
+    // the throwing path: the components call is awaited OUTSIDE the Promise.all,
+    // so an uncaught throw there killed the run before a single page started.
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "components.js": "const NAME = 'Demo Kitchens';" });
+    const call: AiCall = async (system) => {
+      if (system.includes("shared-components file")) throw new Error("HTTP 429 rate limit exceeded");
+      return { text: okHtml("PAGE") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["components.js"].status).toBe("failed");
+    expect(result.pages["components.js"].error).toContain("components.js");
+    expect(result.pages["components.js"].error).toContain("HTTP 429 rate limit exceeded");
+    expect(result.pages["index.html"].status).toBe("ok");
+    // the template's own copy still ships, exactly as for a non-throwing failure
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["components.js"])).toBe("const NAME = 'Demo Kitchens';");
   });
 
   it("fails the whole run only when every page fails", async () => {
@@ -544,6 +616,205 @@ describe("regeneratePage", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.error).toContain("gone.html");
+  });
+});
+
+describe("runSite resume", () => {
+  const brief = { business_name: "Acme Plumbing", services: [], service_areas: [] };
+
+  /** Records every AI call so a test can assert what was — and was NOT — paid for. */
+  function recorder(reply: (system: string, user: string) => string) {
+    const calls: { system: string; user: string }[] = [];
+    const call: AiCall = async (system, user) => {
+      calls.push({ system, user });
+      return { text: reply(system, user) };
+    };
+    return { calls, call };
+  }
+
+  const pageReply = (_s: string, u: string) => okHtml(u.includes("THE PAGE TO REWRITE: index.html") ? "FRESH INDEX" : "FRESH PAGE");
+
+  it("keeps a page that already succeeded and never calls the AI for it", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
+    const { calls, call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home", "About"],
+      resume: {
+        "index.html": { status: "ok", kind: "existing", html: okHtml("CARRIED INDEX") },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["index.html"]).toMatchObject({ status: "ok", kind: "existing" });
+    expect(result.pages["index.html"].html).toContain("CARRIED INDEX");
+    expect(result.pages["about.html"].status).toBe("ok");
+
+    // the only page paid for was the one that had not finished
+    expect(calls.some((c) => c.user.includes("THE PAGE TO REWRITE: about.html"))).toBe(true);
+    expect(calls.some((c) => c.user.includes("THE PAGE TO REWRITE: index.html"))).toBe(false);
+    expect(calls).toHaveLength(1);
+
+    // and the carried page is what ships
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["index.html"])).toContain("CARRIED INDEX");
+  });
+
+  it("regenerates a page whose carried state is not ok", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>" });
+    const { calls, call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home"],
+      resume: {
+        "index.html": { status: "failed", kind: "existing", error: "minimax rate limit exceeded (HTTP 429)" },
+      },
+    });
+
+    expect(result.pages["index.html"].status).toBe("ok");
+    expect(result.pages["index.html"].html).toContain("FRESH INDEX");
+    expect(result.pages["index.html"].error).toBeUndefined();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("regenerates a page left mid-flight by a killed run", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>" });
+    const { calls, call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home"],
+      resume: {
+        // the process died between "generating" and the outcome — no html was
+        // ever recorded, so there is nothing to carry
+        "index.html": { status: "generating", kind: "existing" },
+      },
+    });
+
+    expect(result.pages["index.html"].status).toBe("ok");
+    expect(result.pages["index.html"].html).toContain("FRESH INDEX");
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("recomputes the plan from the lead, dropping pages no longer requested", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
+    const { call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      // the lead's specify_pages changed between attempts — About is gone
+      requestedPages: ["Home"],
+      resume: {
+        "index.html": { status: "ok", kind: "existing", html: okHtml("CARRIED INDEX") },
+        "about.html": { status: "ok", kind: "existing", html: okHtml("CARRIED ABOUT") },
+      },
+    });
+
+    expect(Object.keys(result.pages)).not.toContain("about.html");
+    expect(result.pages["index.html"].html).toContain("CARRIED INDEX");
+    const files = unzipToMap(result.zipBytes!);
+    expect(files["about.html"]).toBeUndefined();
+  });
+
+  it("reuses a carried components file as context without re-calling for it", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "js/components.js": "const NAME = 'Demo Kitchens';" });
+    const { calls, call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home"],
+      resume: {
+        "js/components.js": { status: "ok", kind: "component", name: "Shared components", html: "const NAME = 'Acme Plumbing';" },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["js/components.js"]).toMatchObject({ status: "ok", kind: "component" });
+    // nothing was paid for the components file
+    expect(calls.some((c) => c.system === SITE_COMPONENTS_SYSTEM)).toBe(false);
+    // ...and the carried source still reached the page prompt as context
+    expect(calls).toHaveLength(1);
+    expect(calls[0].user).toContain("SHARED COMPONENTS FILE — js/components.js");
+    expect(calls[0].user).toContain("const NAME = 'Acme Plumbing';");
+    // the carried rewrite is what ships, not the template's demo copy
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["js/components.js"])).toBe("const NAME = 'Acme Plumbing';");
+  });
+
+  it("takes kind and name from the fresh plan, not from the carried entry", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>" });
+    const { call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home"],
+      resume: {
+        // a stale entry describing index.html as a designed page
+        "index.html": { status: "ok", kind: "new", name: "Stale Name", html: okHtml("CARRIED INDEX") },
+      },
+    });
+
+    expect(result.pages["index.html"].kind).toBe("existing");
+    expect(result.pages["index.html"].name).toBeUndefined();
+    expect(result.pages["index.html"].html).toContain("CARRIED INDEX");
+  });
+
+  it("keeps a carried DESIGNED page too, and never re-designs it", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>" });
+    const { calls, call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home", "Pricing"],
+      resume: {
+        "pricing.html": { status: "ok", kind: "new", name: "Pricing", html: okHtml("CARRIED PRICING") },
+      },
+    });
+
+    expect(result.pages["pricing.html"]).toMatchObject({ status: "ok", kind: "new", name: "Pricing" });
+    expect(result.pages["pricing.html"].html).toContain("CARRIED PRICING");
+    // only the page that had not finished was paid for
+    expect(calls).toHaveLength(1);
+    expect(calls[0].user).toContain("THE PAGE TO REWRITE: index.html");
+    expect(calls.some((c) => c.user.includes("YOUR JOB: CREATE A NEW PAGE"))).toBe(false);
+  });
+
+  it("makes no AI call at all when every requested page is already ok", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>" }, { "js/components.js": "const NAME = 'Demo Kitchens';" });
+    const { calls, call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home"],
+      resume: {
+        "js/components.js": { status: "ok", kind: "component", name: "Shared components", html: "const NAME = 'Acme Plumbing';" },
+        "index.html": { status: "ok", kind: "existing", html: okHtml("CARRIED INDEX") },
+      },
+    });
+
+    expect(calls).toHaveLength(0);
+    expect(result.ok).toBe(true);
+    expect(result.zipBytes).toBeDefined();
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["index.html"])).toContain("CARRIED INDEX");
   });
 });
 

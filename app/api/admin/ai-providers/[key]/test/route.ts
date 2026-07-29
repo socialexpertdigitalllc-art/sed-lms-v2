@@ -56,7 +56,12 @@ export async function POST(_req: Request, { params }: { params: Promise<{ key: s
       model.id,
       "You are a connectivity probe. Reply with one word.",
       "Reply with the single word: ok",
-      { maxTokens: 16, temperature: 0, timeoutMs: TEST_TIMEOUT_MS },
+      // ONE attempt. `timeoutMs` is per attempt, so inheriting the default
+      // retry budget would make a probe of a dead or throttled provider take
+      // 4 x 30s plus backoff — minutes — where the operator is a human waiting
+      // on a button. A liveness probe reports the first answer it gets; whether
+      // to retry is the caller's call, and this caller can just click again.
+      { maxTokens: 16, temperature: 0, timeoutMs: TEST_TIMEOUT_MS, maxAttempts: 1 },
     );
     return NextResponse.json({
       ok: true,

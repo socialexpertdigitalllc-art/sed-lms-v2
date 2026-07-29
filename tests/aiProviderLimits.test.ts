@@ -1,0 +1,100 @@
+// @vitest-environment node
+import { describe, it, expect } from "vitest";
+import {
+  DEFAULT_RATE_BUDGETS,
+  MIN_SCALE,
+  resolveBudget,
+  scaleBudget,
+  type RateBudget,
+} from "@/lib/ai-tools/providers/limits";
+import { AI_PROVIDER_REGISTRY } from "@/lib/ai-tools/providers/registry";
+
+describe("resolveBudget", () => {
+  it("uses the shipped default when there is no override", () => {
+    expect(resolveBudget("minimax", null)).toEqual(DEFAULT_RATE_BUDGETS.minimax);
+  });
+
+  it("ships a budget for every registered provider", () => {
+    for (const p of AI_PROVIDER_REGISTRY) expect(DEFAULT_RATE_BUDGETS[p.key]).toBeDefined();
+  });
+
+  it("returns an empty budget for an unknown provider rather than inventing one", () => {
+    expect(resolveBudget("nobody", null)).toEqual({});
+  });
+
+  it("lets an operator raise a dimension", () => {
+    expect(resolveBudget("webcraft", { concurrency: 100, rpm: 500 })).toMatchObject({
+      concurrency: 100,
+      rpm: 500,
+    });
+  });
+
+  it("treats an explicit null as 'this vendor does not limit that dimension'", () => {
+    const out = resolveBudget("webcraft", { concurrency: null });
+    expect(out.concurrency).toBeUndefined();
+    expect(out.rpm).toBe(DEFAULT_RATE_BUDGETS.webcraft.rpm);
+  });
+
+  it("ignores nonsense rather than throttling to zero", () => {
+    const out = resolveBudget("minimax", { rpm: 0, tpm: Number.NaN });
+    expect(out.rpm).toBe(DEFAULT_RATE_BUDGETS.minimax.rpm);
+    expect(out.tpm).toBe(DEFAULT_RATE_BUDGETS.minimax.tpm);
+  });
+
+  it("floors a fractional override rather than letting it collapse to zero", () => {
+    // 0.5 > 0 but Math.floor(0.5) is 0 — a fractional override must not sneak
+    // past the "reject nonsense" check and become the exact zero it exists to
+    // prevent, especially for tpd where nothing downstream floors it back up.
+    expect(resolveBudget("minimax", { rpm: 0.5 }).rpm).toBe(DEFAULT_RATE_BUDGETS.minimax.rpm);
+    expect(resolveBudget("webcraft", { tpd: 0.9 }).tpd).toBe(DEFAULT_RATE_BUDGETS.webcraft.tpd);
+  });
+
+  it("declares a MiniMax concurrency ceiling, so one run cannot burst", () => {
+    // RPM and TPM pace ACROSS runs but not WITHIN one: a 7-page site fires 7
+    // calls at once, which is far under rpm 60 and under tpm 500k, and with
+    // concurrency undeclared the gate skips that dimension entirely. 4 is the
+    // operator's plan figure ("Run 3-4 concurrent agents"), not an API limit —
+    // see the comment on DEFAULT_RATE_BUDGETS.minimax for why it is honoured.
+    expect(DEFAULT_RATE_BUDGETS.minimax.concurrency).toBe(4);
+    // and it survives resolution, so it actually reaches the gate
+    expect(resolveBudget("minimax", null).concurrency).toBe(4);
+    // an operator who knows their tier can still lift it, or clear it outright
+    expect(resolveBudget("minimax", { concurrency: 8 }).concurrency).toBe(8);
+    expect(resolveBudget("minimax", { concurrency: null }).concurrency).toBeUndefined();
+  });
+
+  it("leaves an absent dimension absent — DeepSeek documents no RPM", () => {
+    expect(DEFAULT_RATE_BUDGETS.deepseek.rpm).toBeUndefined();
+    expect(resolveBudget("deepseek", null).rpm).toBeUndefined();
+  });
+});
+
+describe("scaleBudget", () => {
+  const budget: RateBudget = { concurrency: 10, rpm: 100, tpm: 1_000_000, tpd: 5_000_000 };
+
+  it("is a no-op at full scale", () => {
+    expect(scaleBudget(budget, 1)).toEqual(budget);
+  });
+
+  it("shrinks the per-minute dimensions", () => {
+    expect(scaleBudget(budget, 0.5)).toMatchObject({ concurrency: 5, rpm: 50, tpm: 500_000 });
+  });
+
+  it("never scales a daily cap — a quota is absolute, not a rate", () => {
+    expect(scaleBudget(budget, 0.25).tpd).toBe(5_000_000);
+  });
+
+  it("floors every scaled dimension at 1 so the gate can never wedge", () => {
+    const tiny = scaleBudget({ concurrency: 2, rpm: 3 }, MIN_SCALE);
+    expect(tiny.concurrency).toBeGreaterThanOrEqual(1);
+    expect(tiny.rpm).toBeGreaterThanOrEqual(1);
+  });
+
+  it("clamps a scale above 1 — adaptation may only lower a stated limit", () => {
+    expect(scaleBudget(budget, 5)).toEqual(budget);
+  });
+
+  it("leaves undeclared dimensions undeclared", () => {
+    expect(scaleBudget({ concurrency: 4 }, 0.5).rpm).toBeUndefined();
+  });
+});

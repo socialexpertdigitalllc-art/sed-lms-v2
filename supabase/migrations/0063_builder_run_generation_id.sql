@@ -1,0 +1,37 @@
+-- 0063_builder_run_generation_id.sql — which attempt currently owns a builder run.
+--
+-- ADDITIVE ONLY. Shared prod DB: one nullable column, no drops, no type
+-- changes, no edits to existing columns or data.
+--
+-- WHY. `/api/site-builder/runs/[id]/generate` claims a run by CAS on
+-- (status, updated_at) and then writes to that row REPEATEDLY over several
+-- minutes — per-page progress first, a terminal status last. The CAS only
+-- makes the CLAIM single-winner; it does nothing about a SECOND attempt
+-- claiming the same run while the first is still running, and two paths lead
+-- there:
+--
+--   * the 60-minute stale reclaim (STALE_GENERATING_MS) is genuinely
+--     reachable by a LIVE run — generation is paced behind each provider's
+--     rate budget, and a single page can sit ~21 minutes (gate waits, vendor
+--     Retry-After backoffs, per-call timeouts across 4 attempts) without
+--     anything being written to the row; and
+--   * the operator-driven /recover action deliberately frees a stuck run.
+--
+-- Two live attempts then race on one `pages` column, at double the AI spend,
+-- and whichever finishes last silently wins.
+--
+-- HOW. The claim now stamps a fresh uuid here, and every subsequent write by
+-- that attempt carries `.eq("generation_id", <the id it claimed>)`. An attempt
+-- that has been superseded matches ZERO rows, so it DISCARDS its own result
+-- (answering 409) instead of overwriting a state somebody else deliberately
+-- set. This is the same optimistic-concurrency discipline
+-- lib/site-studio/run/engine.ts#persistRun applies to its step writes.
+--
+-- NULL means "no attempt owns this run". That is correct for every existing
+-- row — none is mid-flight under a token — so applying this changes no
+-- behaviour. It is also what a terminal write and /recover write back: the
+-- terminal write clears the token because the run is no longer owned, and
+-- /recover clears it precisely to evict a still-running attempt, whose next
+-- write then matches nothing.
+alter table public.builder_runs
+  add column if not exists generation_id uuid;

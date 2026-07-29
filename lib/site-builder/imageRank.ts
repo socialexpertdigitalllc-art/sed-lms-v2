@@ -20,9 +20,14 @@
  *
  * Sourcing must never block or fail because of this: a failed, timed-out, or
  * unconfigured vision call is swallowed here and returns the candidates in
- * their ORIGINAL order, logging why. There is deliberately no retry loop —
- * this is a nice-to-have ordering pass, not a correctness-critical step, and
- * the caller (the images/source route) has nothing worth waiting twice for.
+ * their ORIGINAL order, logging why. There is deliberately no retry — this is
+ * a nice-to-have ordering pass, not a correctness-critical step, and the
+ * caller (the images/source route) has nothing worth waiting twice for. That
+ * is now enforced with `maxAttempts: 1` rather than merely stated: the shared
+ * seam gained its own retry loop with the rate limiter, so this call silently
+ * became four attempts — up to ~87s of timeout plus backoff inside a route
+ * that declares `maxDuration = 60`, killing the whole sourcing request to
+ * improve an ordering it is happy to do without.
  */
 
 import { callForTask } from "@/lib/ai-tools/providers/run";
@@ -101,6 +106,9 @@ export async function rankByPeople(images: RankableImage[]): Promise<string[]> {
       temperature: 0,
       images: images.map((i) => i.url),
       timeoutMs: RANK_TIMEOUT_MS,
+      // One shot. See the module docblock: retrying blows this route's
+      // maxDuration to reorder a list we will happily leave as-is.
+      maxAttempts: 1,
     });
     const people = parsePeopleVerdicts(text, images.length);
     return images

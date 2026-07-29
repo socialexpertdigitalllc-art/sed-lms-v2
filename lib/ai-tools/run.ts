@@ -4,7 +4,17 @@ import { countImages, countWords, parseFiles, type GeneratedFile } from "./parse
 import { getWgeConfig } from "./wge";
 import { mapLeadToInput } from "./leadPrefill";
 import { buildPrompt, EMPTY_INPUT, type GenInput } from "./prompt";
-import { AiCallAborted, combineAbortSignals } from "./abort";
+import { AiCallAborted, combineAbortSignals, isAbortedError } from "./abort";
+import {
+  callTimedOutMessage,
+  isRateLimitError,
+  isRetryableError,
+  parseRetryAfter,
+  ProviderHttpError,
+  rateLimitHeadersFrom,
+} from "./providers/errors";
+import type { RateBudget } from "./providers/limits";
+import { estimateInputTokens, getGate, sleep, WINDOW_MS, type TokenUsage } from "./providers/gate";
 
 const BUCKET = "ai-generations";
 
@@ -107,6 +117,11 @@ export interface ProviderCallOptions {
   images?: string[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * Attempts, inclusive of the first. Defaults to MAX_ATTEMPTS. Tests pin it
+   * to 1 to assert single-shot behaviour without waiting out backoff.
+   */
+  maxAttempts?: number;
 }
 
 export async function callProvider(
@@ -120,7 +135,27 @@ export async function callProvider(
   const apiKey = process.env[cfg.envKey];
   if (!apiKey) throw new Error(`${cfg.label} is not configured (missing ${cfg.envKey}).`);
   return callWithProvider(
-    { label: cfg.label, endpoint: cfg.endpoint, apiKey, maxOutputTokens: cfg.maxOutputTokens },
+    {
+      label: cfg.label,
+      endpoint: cfg.endpoint,
+      apiKey,
+      maxOutputTokens: cfg.maxOutputTokens,
+      // MUST be the same string the routed path uses (the registry descriptor
+      // key), or one vendor quota is split across two gates and the vendor sees
+      // up to double the intended rate. Every `ToolId` — webcraft, deepseek,
+      // gemini — is byte-identical to a registry key and to a
+      // DEFAULT_RATE_BUDGETS key, so this is a total mapping, not a coincidence
+      // that happens to hold today.
+      //
+      // NO `rateBudget`, deliberately: this path is DB-free (keys from env), so
+      // it knows the provider but not the operator's stored override. It JOINS
+      // the bucket without describing it — see `getGate`, which leaves an
+      // existing gate's budget alone when a caller supplies none. Stating the
+      // shipped default here instead would differ from the routed path's
+      // default-plus-override on any tuned provider and reset the learned
+      // adaptive state on every alternation.
+      providerKey: tool,
+    },
     model,
     systemPrompt,
     userPrompt,
@@ -149,20 +184,76 @@ export interface ProviderSpec {
    * descriptor. See `AiProviderDescriptor.outputTokenParam`.
    */
   outputTokenParam?: "max_tokens" | "max_completion_tokens";
+  /**
+   * Which rate-budget bucket this call draws from. Every provider pools its
+   * quota across models and modalities, so this is the provider, never the
+   * model. Absent falls back to the endpoint host, which is the same thing by
+   * another name and keeps legacy env-configured tools working.
+   */
+  providerKey?: string;
+  /**
+   * The budget in force for that bucket, resolved by the caller. OMIT IT to
+   * join the bucket without describing it: a caller that does not know the
+   * operator's stored override must not overwrite it with a guess. See
+   * `getGate`.
+   */
+  rateBudget?: RateBudget;
+}
+
+/** Attempts per call, inclusive of the first. Four means three retries, which
+ *  clears a typical per-minute window without letting one wedged call hold a
+ *  gate slot for minutes. */
+export const MAX_ATTEMPTS = 4;
+/** Ceiling on a vendor-supplied Retry-After. A vendor that asks for ten
+ *  minutes must not be able to wedge a generation. */
+export const RETRY_AFTER_CAP_MS = 60_000;
+/**
+ * Ceiling on how long one attempt may sit PARKED in the rate gate waiting for
+ * budget, before it fails instead.
+ *
+ * Two rolling windows. Every rate dimension the gate enforces resets inside one
+ * WINDOW_MS, so a wait that outlives two of them is not ordinary pacing — it
+ * means this budget cannot satisfy this call any time soon, and failing fast is
+ * strictly better than parking. The factor of two rather than one is deliberate
+ * headroom: a call queued behind a full window of other calls legitimately
+ * waits a little over one window, and must not be failed for it.
+ */
+export const GATE_MAX_WAIT_MS = 2 * WINDOW_MS;
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_CAP_MS = 30_000;
+
+/**
+ * How long to wait before the next attempt.
+ *
+ * The vendor's own `Retry-After` wins whenever it sends one — it knows when the
+ * window resets and we are guessing. Otherwise: exponential from 1s with FULL
+ * jitter, which matters more than it looks. Every page of a site is retrying at
+ * once; a fixed schedule would have them all wake together and re-throttle each
+ * other indefinitely.
+ *
+ * `random` is injectable purely so the schedule is testable.
+ */
+export function backoffDelayMs(attempt: number, error: unknown, random: () => number = Math.random): number {
+  if (error instanceof ProviderHttpError && error.retryAfterMs !== null) {
+    return Math.min(error.retryAfterMs, RETRY_AFTER_CAP_MS);
+  }
+  const ceiling = Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_CAP_MS);
+  return Math.round(ceiling * random());
 }
 
 /**
- * The actual OpenAI-compatible call. Identical wire format for every provider
- * we support (Gemini's compat surface, DeepSeek, Moonshot, MiniMax), which is
- * why adding a provider is a descriptor and nothing else.
+ * ONE attempt at the OpenAI-compatible call — no retries, no gating; those are
+ * `callWithProvider`'s job. Identical wire format for every provider we support
+ * (Gemini's compat surface, DeepSeek, Moonshot, MiniMax), which is why adding a
+ * provider is a descriptor and nothing else.
  */
-export async function callWithProvider(
+async function attemptCall(
   cfg: ProviderSpec,
   model: string,
   systemPrompt: string,
   userPrompt: string,
   opts: ProviderCallOptions
-): Promise<{ text: string; tokens: number }> {
+): Promise<{ text: string; tokens: number; usage: TokenUsage | null }> {
   // Already stopped before we even dialled — do not spend the call.
   if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
 
@@ -199,7 +290,7 @@ export async function callWithProvider(
     // than as a timeout (which callers do retry).
     if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
     if (e instanceof Error && e.name === "AbortError") {
-      throw new Error(`${cfg.label} call timed out after ${Math.round(timeoutMs / 1000)}s`);
+      throw new Error(callTimedOutMessage(cfg.label, timeoutMs));
     }
     throw e;
   } finally {
@@ -214,12 +305,134 @@ export async function callWithProvider(
     } catch {
       /* ignore */
     }
-    throw new Error(msg);
+    // The status is the whole point: a 429 is "wait, then this call would have
+    // worked", a 400 is "this call can never work". Flattening both into
+    // Error(msg) is what made rate limiting look like permanent failure.
+    // The human-readable message is preserved verbatim so no existing error
+    // surface regresses.
+    throw new ProviderHttpError(
+      msg,
+      res.status,
+      parseRetryAfter(res.headers.get("retry-after")),
+      rateLimitHeadersFrom(res.headers),
+    );
   }
   const j = await res.json();
   const text: string = j?.choices?.[0]?.message?.content ?? "";
-  const tokens: number = j?.usage?.total_tokens ?? Math.ceil(text.length / 4);
-  return { text, tokens };
+  // The raw usage block, not just the total: the gate's TPM accounting learns
+  // an output-to-input ratio from prompt/completion, which the total alone
+  // cannot supply.
+  const usage = (j?.usage ?? null) as TokenUsage | null;
+  const tokens: number = usage?.total_tokens ?? Math.ceil(text.length / 4);
+  return { text, tokens, usage };
+}
+
+/**
+ * Which rate bucket a spec draws from. The endpoint HOST is the fallback and
+ * is not a compromise: two specs pointing at the same host really do share one
+ * vendor quota, so bucketing by host is correct for every legacy caller that
+ * predates `providerKey`.
+ */
+function gateKeyFor(cfg: ProviderSpec): string {
+  if (cfg.providerKey) return cfg.providerKey;
+  try {
+    return new URL(cfg.endpoint).host;
+  } catch {
+    return cfg.endpoint;
+  }
+}
+
+/**
+ * The actual OpenAI-compatible call, with retries.
+ *
+ * A retryable failure (429, transient 5xx, timeout, network fault) is retried
+ * with backoff; a terminal one (bad request, bad key) is thrown immediately
+ * because retrying it cannot succeed and spends quota a concurrent run needs.
+ * An operator abort is never retried.
+ */
+export async function callWithProvider(
+  cfg: ProviderSpec,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  opts: ProviderCallOptions,
+): Promise<{ text: string; tokens: number }> {
+  const attempts = Math.max(1, opts.maxAttempts ?? MAX_ATTEMPTS);
+  // `cfg.rateBudget` is passed THROUGH, not defaulted: an absent budget must
+  // stay absent so `getGate` can tell "I do not know this provider's budget"
+  // (the legacy env-keyed path) from "this provider has no declared limits".
+  // Coercing it to `{}` here would clobber the routed path's budget — see the
+  // `getGate` docblock. The routed path (lib/ai-tools/providers/config.ts)
+  // always supplies one.
+  const gate = getGate(gateKeyFor(cfg), cfg.rateBudget);
+  const inputTokens = estimateInputTokens(systemPrompt, userPrompt, opts.images?.length ?? 0);
+  const maxTokens = Math.min(opts.maxTokens, cfg.maxOutputTokens);
+  let lastError: unknown;
+  /** Has a 429 from THIS call already been counted against the budget? Only
+   *  then is a later 429 a repeat of a wall the gate has already seen. */
+  let throttleCounted = false;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    // Acquired per ATTEMPT, not per call: a retry is a fresh request against
+    // the vendor's budget and must queue behind everything else rather than
+    // riding in on a slot it reserved a minute ago.
+    //
+    // BOUNDED by `GATE_MAX_WAIT_MS`, and the bound is not optional. Time parked
+    // here is not covered by this call's timeout — that starts only once the
+    // request is on the wire — so the wait's only other escape is `opts.signal`,
+    // which Site Builder's `productionSiteBuildCall` does not pass.
+    //
+    // This used to be unbounded, justified by "`tpd` is the sole dimension that
+    // can compute a multi-hour wait and no shipped budget declares one". THAT
+    // JUSTIFICATION IS DEAD: the same release that added this ships the AI
+    // Models settings screen, whose "Tokens / day" box writes any positive
+    // integer straight into the budget. Once one is set, a blocked call computes
+    // a wait of up to DAY_MS and polls it out in 1s slices — roughly 86,400
+    // wakeups holding a caller for a day, with the run screen showing nothing
+    // but "generating".
+    //
+    // `GateTimeoutError` is worded through `callTimedOutMessage`, so
+    // `isRetryableError` classifies it retryable — which is what stops
+    // `callForTask` rerouting a merely-busy provider onto a different model.
+    // It is NOT, however, retried by the loop below: `acquire` sits outside the
+    // `try` (see the adjacency note), so a gate timeout leaves this function at
+    // once. That is intended — a retry would re-park for another two windows
+    // against a budget that has just demonstrated it has no room.
+    //
+    // LOAD-BEARING ADJACENCY: the slot is released only by `settle`/
+    // `settleError`; no statement may go between this line and the `try`, and
+    // `settleError` must stay first in the catch (only the non-throwing
+    // computation of its own arguments may precede it). Either edit would leak
+    // a slot on the path it interrupts, and a leaked slot permanently lowers
+    // this provider's concurrency with nothing to log it.
+    const slot = await gate.acquire({ inputTokens, model, maxTokens }, opts.signal, GATE_MAX_WAIT_MS);
+    try {
+      const out = await attemptCall(cfg, model, systemPrompt, userPrompt, opts);
+      slot.settle(out.usage);
+      return { text: out.text, tokens: out.tokens };
+    } catch (e) {
+      // A 429 is a repeat only once THIS call has already had one COUNTED —
+      // not merely because an earlier attempt failed. "Attempt 2 or later" is
+      // the weaker claim and it silently disables backoff: a 503 on attempt 1
+      // counts nothing, so flagging the genuine 429 on attempt 2 as a repeat
+      // skips the halving entirely, and it still stamps `lastThrottleAt`,
+      // suppressing backoff for every concurrent call for a cooldown window.
+      // A 5xx-then-429 interleaving is exactly what a provider under load
+      // produces, which is the case this exists for.
+      //
+      // The gate cannot infer this itself: its wall-clock cooldown reads
+      // "same event" from proximity, and a vendor `Retry-After` can space
+      // these attempts far wider than that (see recordThrottle).
+      const throttled = isRateLimitError(e);
+      slot.settleError(e, { sameCongestionEvent: throttled && throttleCounted });
+      if (throttled) throttleCounted = true;
+      lastError = e;
+      if (isAbortedError(e)) throw e;
+      if (!isRetryableError(e) || attempt === attempts) throw e;
+      await sleep(backoffDelayMs(attempt, e), opts.signal);
+    }
+  }
+  throw lastError;
 }
 
 // Headlessly generate a lead's website end-to-end. Throws on failure.

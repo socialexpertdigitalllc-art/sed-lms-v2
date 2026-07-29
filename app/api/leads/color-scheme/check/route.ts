@@ -122,6 +122,10 @@ export async function POST(req: Request) {
       maxTokens: MAX_TOKENS,
       temperature: 0.2,
       timeoutMs: TIMEOUT_MS,
+      // An interactive check reports the first answer it gets: the shared seam
+      // now retries by default, which would turn this 12s field check into up
+      // to ~55s of spinner on a path designed to soft-fail instantly.
+      maxAttempts: 1,
     }));
   } catch {
     return NextResponse.json(SOFT);

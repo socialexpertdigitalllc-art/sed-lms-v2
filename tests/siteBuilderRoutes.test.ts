@@ -24,8 +24,33 @@ vi.mock("@/lib/site-studio/service/guard", () => ({
     NextResponse.json({ error: status === 401 ? "Unauthorized" : "Forbidden" }, { status }),
 }));
 
+/**
+ * `runSite` is the one seam the POST tests stub: it is the AI-calling engine,
+ * and these tests are about the ROUTE's claim/persist/terminal bookkeeping.
+ * Everything else stays REAL — notably `loadTemplateBundle`, which reads only
+ * from the storage stub below (`builder-templates/tpl-1/source.zip`); stubbing
+ * it instead would break the preview GET tests, which need the real bundle.
+ *
+ * The factory only CLOSES OVER `runSiteMock` (it returns a wrapper that reads
+ * it at call time). A factory that touched the mock directly would hit its
+ * TDZ, since the hoisted route import below runs before this file's consts.
+ */
+const runSiteMock = vi.fn();
+const regeneratePageMock = vi.fn();
+vi.mock("@/lib/site-builder/run", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/site-builder/run")>()),
+  runSite: (args: unknown) => runSiteMock(args),
+  // The per-page sibling of the seam above, stubbed for the same reason and
+  // in the same lazy way: `regeneratePage` is the AI call, and the regenerate
+  // tests are about the ROUTE's status gate and promotion.
+  regeneratePage: (args: unknown) => regeneratePageMock(args),
+}));
+
 import { GET as previewGet } from "@/app/api/site-builder/runs/[id]/preview/[[...path]]/route";
 import { GET as downloadGet } from "@/app/api/site-builder/runs/[id]/download/route";
+import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/route";
+import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
+import { POST as recoverPost } from "@/app/api/site-builder/runs/[id]/recover/route";
 
 const enc = new TextEncoder();
 
@@ -87,8 +112,131 @@ function makeAdmin() {
   };
 }
 
+type Row = Record<string, unknown>;
+
+/**
+ * A writable fake of the tables the POST routes touch.
+ *
+ * `.eq()` filters are HONOURED on update — that is the whole point. The
+ * mechanism under test is "a superseded attempt's write matches zero rows", so
+ * a fake that applied updates regardless of filters would report success for
+ * exactly the bug these tests exist to catch.
+ */
+function makeWritableAdmin(
+  rows: Row[],
+  leads: Row[] = [{ id: "lead-1", business_name: "Acme", specify_pages: ["Home"] }],
+) {
+  const state = { runs: rows.map((r) => ({ ...r })), leads, activity: [] as Row[] };
+
+  const from = (table: string) => {
+    if (table === "activity_log") {
+      return {
+        insert: async (payload: Row) => {
+          state.activity.push(payload);
+          return { error: null };
+        },
+      };
+    }
+
+    const source = table === "builder_runs" ? state.runs : table === "leads" ? state.leads : null;
+    if (!source) throw new Error(`unexpected table "${table}"`);
+
+    const filters: ((r: Row) => boolean)[] = [];
+    let patch: Row | null = null;
+    const apply = () => {
+      const hits = source.filter((r) => filters.every((f) => f(r)));
+      if (patch) for (const r of hits) Object.assign(r, patch);
+      return hits;
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const api: any = {
+      select: () => api,
+      update: (p: Row) => {
+        patch = p;
+        return api;
+      },
+      eq: (col: string, val: unknown) => {
+        filters.push((r) => r[col] === val);
+        return api;
+      },
+      /**
+       * `.is()` is HONOURED too, for the same reason `.eq()` is: the regenerate
+       * route stands aside from a live generation with `.is("generation_id",
+       * null)`, so a fake that ignored it would report success for exactly the
+       * clobber that guard exists to prevent.
+       *
+       * An ABSENT key counts as null. A real row always has the column, so a
+       * fixture that omits it is a row whose column is NULL — which is what
+       * Postgres `IS NULL` matches (this is what keeps the leads fixture, which
+       * carries no `deleted_at`, passing the generate route's own `.is()`).
+       */
+      is: (col: string, val: unknown) => {
+        filters.push((r) => (val === null ? r[col] === undefined || r[col] === null : r[col] === val));
+        return api;
+      },
+      single: async () => {
+        const hits = apply();
+        return hits.length === 1 ? { data: { ...hits[0] }, error: null } : { data: null, error: { message: "no rows" } };
+      },
+      maybeSingle: async () => {
+        const hits = apply();
+        return { data: hits.length ? { ...hits[0] } : null, error: null };
+      },
+      // An update with no .select() is awaited directly (the progress chain and
+      // the catch-block failure write both do this).
+      then: (res: (v: { data: null; error: null }) => unknown) => {
+        apply();
+        return Promise.resolve({ data: null, error: null }).then(res);
+      },
+    };
+    return api;
+  };
+
+  /**
+   * Spy-able upload over the read-only storage stub. It is a spy because the
+   * ordering fix is "a superseded attempt does not upload AT ALL" — that is an
+   * assertion about a call that must NOT happen, so the call has to be
+   * observable. `mockResolvedValue({ error: {...} })` makes packaging fail.
+   */
+  const baseStorage = makeAdmin().storage;
+  const uploadMock = vi.fn(async (_bucket: string, _path: string) => ({ error: null as { message: string } | null }));
+  const storage = {
+    from(bucket: string) {
+      return { ...baseStorage.from(bucket), upload: (path: string) => uploadMock(bucket, path) };
+    },
+  };
+
+  return { admin: { from, storage }, state, uploadMock };
+}
+
+const RUN = (over: Row = {}): Row => ({
+  id: "run-1",
+  lead_id: "lead-1",
+  template_id: "tpl-1",
+  status: "queued",
+  options: {},
+  images: [],
+  pages: {},
+  output_path: null,
+  error: null,
+  generation_id: null,
+  updated_at: "2026-07-29T12:00:00.000Z",
+  ...over,
+});
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 beforeEach(() => {
   adminHolder.admin = makeAdmin();
+  runSiteMock.mockReset();
+  runSiteMock.mockResolvedValue({
+    ok: true,
+    pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+    zipBytes: new Uint8Array([1, 2, 3]),
+  });
+  regeneratePageMock.mockReset();
+  regeneratePageMock.mockResolvedValue({ ok: true, html: "<html>regenerated</html>" });
 });
 
 const ctx = (path?: string[]) => ({ params: Promise.resolve({ id: "run-1", path }) });
@@ -177,5 +325,546 @@ describe("GET /api/site-builder/runs/[id]/download", () => {
     expect(res.headers.get("content-disposition")).toBe('attachment; filename="acme-plumbing-site.zip"');
     const bytes = new Uint8Array(await res.arrayBuffer());
     expect(bytes.length).toBe(SITE_ZIP.length);
+  });
+});
+
+const runCtx = () => ({ params: Promise.resolve({ id: "run-1" }) });
+
+describe("POST /api/site-builder/runs/[id]/generate — generation ownership", () => {
+  it("stamps a fresh generation_id on the claim", async () => {
+    const { admin, state } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+
+    // runSite runs AFTER the claim and BEFORE the terminal write, so the row
+    // as seen from in here is the row the claim left behind. Asserting only on
+    // the final row would pass whether or not the token was ever stamped.
+    let midFlight: Row | null = null;
+    runSiteMock.mockImplementation(async () => {
+      midFlight = { ...state.runs[0] };
+      return {
+        ok: true,
+        pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+        zipBytes: new Uint8Array([1, 2, 3]),
+      };
+    });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    // runSite having been called at all is what proves the claim succeeded;
+    // assert the token BEFORE the response status so an unstamped claim fails
+    // here — naming the real defect — rather than downstream on the 409 the
+    // guarded terminal write would then produce.
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    expect(midFlight).not.toBeNull();
+    expect(midFlight!.status).toBe("generating");
+    expect(midFlight!.generation_id).toEqual(expect.any(String));
+    expect(String(midFlight!.generation_id)).toMatch(UUID_RE);
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("review");
+  });
+
+  it("discards a superseded attempt's terminal write instead of clobbering", async () => {
+    const { admin, state } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+
+    // Simulate /recover landing mid-flight: it evicts the live attempt by
+    // clearing the token and setting a status of its own.
+    runSiteMock.mockImplementation(async () => {
+      state.runs[0].generation_id = null;
+      state.runs[0].status = "failed";
+      return {
+        ok: true,
+        pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+        zipBytes: new Uint8Array([1, 2, 3]),
+      };
+    });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(409);
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.activity).toHaveLength(0);
+  });
+});
+
+describe("POST /api/site-builder/runs/[id]/generate — packaging order", () => {
+  it("a superseded attempt does not upload at all", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+
+    runSiteMock.mockImplementation(async () => {
+      state.runs[0].generation_id = null;
+      state.runs[0].status = "failed";
+      return {
+        ok: true,
+        pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+        zipBytes: new Uint8Array([1, 2, 3]),
+      };
+    });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    // The DB guard alone never stopped this: the upload path is shared by
+    // every attempt and upserts, so a loser that uploaded would have replaced
+    // the winner's archive while its row write was correctly discarded.
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(409);
+    expect(state.runs[0].status).toBe("failed");
+  });
+
+  it("the winner uploads once and is released afterwards", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(200);
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(uploadMock).toHaveBeenCalledWith("builder-sites", "run-1/site.zip");
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].output_path).toBe("run-1/site.zip");
+    // Released only in the LAST write — holding the token across the upload is
+    // what makes "row says review, bytes not up yet" a safe intermediate state.
+    expect(state.runs[0].generation_id).toBeNull();
+  });
+
+  it("a failed upload leaves a run that is failed, released and free to retry", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(500);
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].generation_id).toBeNull();
+    const message = String(state.runs[0].error);
+    expect(message).toContain("storage unreachable");
+    expect(message).toMatch(/retry/i);
+    expect(message).toMatch(/no AI calls/i);
+    // …and that promise is only true because the finished pages survived the
+    // failure: `resume` carries every `ok` page forward, so the retry re-zips
+    // rather than regenerating.
+    const pages = state.runs[0].pages as Record<string, { status: string }>;
+    expect(Object.keys(pages)).toHaveLength(1);
+    expect(Object.values(pages).every((p) => p.status === "ok")).toBe(true);
+  });
+});
+
+describe("POST /api/site-builder/runs/[id]/generate — which runs may be claimed", () => {
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60 * 1000).toISOString();
+
+  it("claims a failed run, clears its error, and leaves it at review", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "failed", error: "Every page failed to generate." })]);
+    adminHolder.admin = admin;
+
+    // Mid-flight, not final: the claim is the thing under test, and the final
+    // row would read "review" with a null error whether or not the claim ever
+    // touched the failed run's message.
+    let midFlight: Row | null = null;
+    runSiteMock.mockImplementation(async () => {
+      midFlight = { ...state.runs[0] };
+      return {
+        ok: true,
+        pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+        zipBytes: new Uint8Array([1, 2, 3]),
+      };
+    });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    expect(midFlight).not.toBeNull();
+    expect(midFlight!.status).toBe("generating");
+    expect(midFlight!.error).toBeNull();
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].error).toBeNull();
+  });
+
+  it("still claims a queued run", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "queued" })]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(200);
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    expect(state.runs[0].status).toBe("review");
+  });
+
+  it("claims a generating run whose row has not moved for 61 minutes", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "generating", updated_at: minutesAgo(61) })]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(200);
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    expect(state.runs[0].status).toBe("review");
+  });
+
+  it("refuses a generating run that moved a minute ago", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "generating", updated_at: minutesAgo(1) })]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(409);
+    expect(runSiteMock).not.toHaveBeenCalled();
+    expect(state.runs[0].status).toBe("generating");
+  });
+
+  for (const status of ["review", "approved", "deployed"]) {
+    it(`refuses a ${status} run — it has a zip, and the per-page route is the right tool`, async () => {
+      const { admin, state } = makeWritableAdmin([RUN({ status })]);
+      adminHolder.admin = admin;
+
+      const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+      expect(res.status).toBe(409);
+      const message = String((await res.json()).error);
+      // The message has to name BOTH the state it found and the states it
+      // would accept, or the operator cannot tell why the button did nothing.
+      expect(message).toContain(`"${status}"`);
+      expect(message).toMatch(/queued/);
+      expect(message).toMatch(/failed/);
+      expect(runSiteMock).not.toHaveBeenCalled();
+      expect(state.runs[0].status).toBe(status);
+    });
+  }
+
+  it("hands the run's STORED pages to runSite as `resume`", async () => {
+    // Recognisable, and deliberately not the shape runSite returns: if the
+    // route passed anything else — `{}`, the result, the claimed row's pages
+    // as re-derived — this assertion fails.
+    const stored = {
+      "index.html": { status: "ok", kind: "existing", html: "<html>CARRIED FROM THE LAST ATTEMPT</html>" },
+      "about.html": { status: "failed", kind: "existing", error: "boom" },
+    };
+    const { admin } = makeWritableAdmin([RUN({ status: "failed", pages: stored })]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(200);
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    const args = runSiteMock.mock.calls[0][0] as { resume?: unknown };
+    expect(args.resume).toEqual(stored);
+  });
+
+  it("passes an empty `resume` for a run that has never generated anything", async () => {
+    const { admin } = makeWritableAdmin([RUN({ status: "queued", pages: {} })]);
+    adminHolder.admin = admin;
+
+    await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    const args = runSiteMock.mock.calls[0][0] as { resume?: unknown };
+    expect(args.resume).toEqual({});
+  });
+});
+
+describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed run is fixable", () => {
+  const pageCtx = (file: string) => ({ params: Promise.resolve({ id: "run-1", file }) });
+  const post = (file: string) =>
+    regeneratePost(new Request("http://test.local/x", { method: "POST" }), pageCtx(file));
+
+  /** A run that died with its components rewritten and no page standing. */
+  const AFTER_FAILURE = {
+    "components.js": { status: "ok", kind: "component", name: "Shared components", html: "// REWRITTEN" },
+    "index.html": { status: "failed", kind: "existing", error: "boom" },
+  };
+
+  it("accepts a page regeneration on a failed run", async () => {
+    const { admin } = makeWritableAdmin([RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).not.toBe(409);
+    expect(regeneratePageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("promotes the run to review once a REAL page is ok again, clearing the error", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].error).toBeNull();
+    const pages = state.runs[0].pages as Record<string, { status: string }>;
+    expect(pages["index.html"].status).toBe("ok");
+  });
+
+  it("leaves the run failed when the only thing ok is the components file", async () => {
+    // The mirror image of the case above: the components file regenerates
+    // fine, every actual PAGE is still failed. A components file is not a
+    // site, and a run promoted to review here would offer the operator a zip
+    // with nothing in it to look at.
+    const componentsDown = {
+      "components.js": { status: "failed", kind: "component", name: "Shared components", error: "boom" },
+      "index.html": { status: "failed", kind: "existing", error: "boom" },
+    };
+    const { admin, state } = makeWritableAdmin([RUN({ status: "failed", pages: componentsDown, error: "boom" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("components.js");
+
+    expect(res.status).toBe(200);
+    const pages = state.runs[0].pages as Record<string, { status: string }>;
+    // The regeneration itself landed — so "still failed" below is about the
+    // promotion rule, not about a regeneration that quietly did nothing.
+    expect(pages["components.js"].status).toBe("ok");
+    expect(pages["index.html"].status).toBe("failed");
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].error).toBe("boom");
+  });
+
+  it("leaves the run failed, and still answers 502, when the regeneration fails", async () => {
+    regeneratePageMock.mockResolvedValue({ ok: false, error: "the model refused" });
+    const { admin, state } = makeWritableAdmin([RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(502);
+    expect(String((await res.json()).error)).toContain("the model refused");
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].error).toBe("boom");
+  });
+
+  it("does not touch the status of a review run", async () => {
+    // The sentinel `error` is the assertion that matters: promotion writes
+    // `error: null` alongside `status`, so a promotion rule that ignored the
+    // run's CURRENT status would wipe this even though "review" → "review"
+    // would look like a no-op.
+    const reviewPages = {
+      "components.js": { status: "ok", kind: "component", name: "Shared components", html: "// REWRITTEN" },
+      "index.html": { status: "ok", kind: "existing", html: "<html>a</html>" },
+    };
+    const { admin, state } = makeWritableAdmin([
+      RUN({ status: "review", pages: reviewPages, error: "a stale note from an earlier attempt" }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].error).toBe("a stale note from an earlier attempt");
+  });
+
+  it("stands aside for a live generation instead of clobbering its progress", async () => {
+    // The window is MINUTES wide: the status read happens before a paced AI
+    // call that can take a quarter of an hour (hence maxDuration 900), so a
+    // "Retry failed pages" click ten seconds later claims the run legitimately
+    // and this write would land on top of everything it has since done.
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", generation_id: "gen-in-flight" }),
+    ]);
+    adminHolder.admin = admin;
+    const before = JSON.parse(JSON.stringify(state.runs[0].pages));
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toMatch(/generation/i);
+    expect(state.runs[0].pages).toEqual(before);
+    expect(state.runs[0].status).toBe("failed");
+    // And nothing reached the object store: the zip path is shared with the
+    // live generation, so an upload here would replace ITS archive even though
+    // the row write was correctly refused.
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it("regenerates normally once the run is released", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", generation_id: null }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(200);
+    const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
+    expect(pages["index.html"].status).toBe("ok");
+    expect(pages["index.html"].html).toBe("<html>regenerated</html>");
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(uploadMock).toHaveBeenCalledWith("builder-sites", "run-1/site.zip");
+    expect(state.runs[0].output_path).toBe("run-1/site.zip");
+  });
+
+  it("keeps the saved page when re-packaging fails afterwards", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom" }),
+    ]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(500);
+    expect(String((await res.json()).error)).toContain("storage unreachable");
+    // The page is the expensive part and it is already stored — rolling the
+    // row back to keep it consistent with a stale zip would throw away the
+    // only thing this request paid for.
+    const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
+    expect(pages["index.html"].status).toBe("ok");
+    expect(pages["index.html"].html).toBe("<html>regenerated</html>");
+  });
+
+  it("still refuses a queued run", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "queued", pages: AFTER_FAILURE })]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toContain(`"queued"`);
+    expect(regeneratePageMock).not.toHaveBeenCalled();
+    expect(state.runs[0].status).toBe("queued");
+  });
+});
+
+describe("POST /api/site-builder/runs/[id]/recover — releasing a wedged run", () => {
+  const post = () => recoverPost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+  /**
+   * The run this route exists for: claimed by an attempt that is gone (or that
+   * the operator no longer wants), so the token is set and the status is stuck.
+   */
+  const WEDGED = { status: "generating", generation_id: "gen-in-flight", error: null };
+
+  it("releases a generating run to failed, clearing the claim token", async () => {
+    const { admin, state } = makeWritableAdmin([
+      RUN({ ...WEDGED, pages: { "index.html": { status: "ok", kind: "existing", html: "<html>a</html>" } } }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post();
+
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("failed");
+    /**
+     * The token is the whole safety story: nulling it is what makes an attempt
+     * that is STILL RUNNING discard its own writes instead of racing whatever
+     * the operator does next. A recover that flipped the status but left the
+     * token would hand the run back to the very attempt it just disowned.
+     */
+    expect(state.runs[0].generation_id).toBeNull();
+
+    const message = String(state.runs[0].error);
+    expect(message).toMatch(/generating/i);
+    expect(message).toMatch(/retry/i);
+    // The response carries the released row, so the screen can render it
+    // without a second round trip.
+    const body = (await res.json()) as { run: Row };
+    expect(body.run.status).toBe("failed");
+    expect(body.run.generation_id).toBeNull();
+
+    // Pages are DELIBERATELY untouched — they are what makes the retry cheap.
+    expect(Object.keys(state.runs[0].pages as Row)).toEqual(["index.html"]);
+  });
+
+  it("writes an activity_log row naming the transition", async () => {
+    const { admin, state } = makeWritableAdmin([RUN(WEDGED)]);
+    adminHolder.admin = admin;
+
+    const res = await post();
+
+    expect(res.status).toBe(200);
+    expect(state.activity).toHaveLength(1);
+    expect(state.activity[0]).toMatchObject({
+      user_id: "user-1",
+      action: "site_builder.run.recovered",
+      entity_type: "builder_run",
+      entity_id: "run-1",
+    });
+  });
+
+  for (const status of ["queued", "review", "approved", "deployed", "failed"]) {
+    it(`refuses a ${status} run, naming what it found`, async () => {
+      const { admin, state } = makeWritableAdmin([RUN({ status, generation_id: null })]);
+      adminHolder.admin = admin;
+
+      const res = await post();
+
+      expect(res.status).toBe(409);
+      const message = String((await res.json()).error);
+      expect(message).toContain(`"${status}"`);
+      expect(message).toContain(`"generating"`);
+      expect(state.runs[0].status).toBe(status);
+      expect(state.activity).toHaveLength(0);
+    });
+  }
+
+  it("404s for a run that is not there", async () => {
+    const { admin } = makeWritableAdmin([]);
+    adminHolder.admin = admin;
+
+    const res = await post();
+
+    expect(res.status).toBe(404);
+  });
+
+  it("409s rather than forcing it when the row moves between the read and the write", async () => {
+    const { admin, state } = makeWritableAdmin([RUN(WEDGED)]);
+    adminHolder.admin = admin;
+
+    /**
+     * The race this route is most likely to lose, and the one that matters: the
+     * very generation it is about to disown finishes on its own in the gap
+     * between the handler's status read and its CAS write. Without the
+     * `.eq("status", "generating")` on the update, this recover would stamp
+     * "failed" over a run that had just reached "review" — with a zip in the
+     * bucket and no way back.
+     *
+     * Driven by hooking the handler's READ (the only `.single()` on this path)
+     * and mutating the row the instant it returns, which is exactly that gap.
+     * The chain object is rebuilt rather than spread because the underlying
+     * fake's methods return ITS api, not ours — a spread would lose the hook
+     * the moment the handler called `.select()`.
+     */
+    let hooked = false;
+    adminHolder.admin = {
+      ...admin,
+      from(table: string) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const inner: any = admin.from(table);
+        if (table !== "builder_runs") return inner;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const wrap: any = {
+          select: (...a: unknown[]) => { inner.select(...a); return wrap; },
+          update: (...a: unknown[]) => { inner.update(...a); return wrap; },
+          eq: (...a: unknown[]) => { inner.eq(...a); return wrap; },
+          is: (...a: unknown[]) => { inner.is(...a); return wrap; },
+          maybeSingle: () => inner.maybeSingle(),
+          then: (res: unknown) => inner.then(res),
+          single: async () => {
+            const out = await inner.single();
+            if (!hooked) {
+              hooked = true;
+              // …the generation finished and published while we were deciding.
+              state.runs[0].status = "review";
+              state.runs[0].generation_id = null;
+            }
+            return out;
+          },
+        };
+        return wrap;
+      },
+    };
+
+    const res = await post();
+
+    // The hook fired — otherwise this test proves nothing about the CAS.
+    expect(hooked).toBe(true);
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toMatch(/changed/i);
+    // Untouched: the run kept the state the winner set.
+    expect(state.runs[0].status).toBe("review");
+    expect(state.activity).toHaveLength(0);
   });
 });

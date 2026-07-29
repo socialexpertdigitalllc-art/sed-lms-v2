@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Building2, PhoneCall, Ticket, BarChart3, MessageSquare,
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
-  Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer,
+  Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer, Images,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -71,6 +71,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/contract-templates", label: "Contract Templates", icon: LayoutTemplate, perm: "integrations.manage" },
   { href: "/admin/email-providers", label: "Email Verification", icon: ShieldCheck, perm: "integrations.manage" },
   { href: "/admin/ai-models", label: "AI Models", icon: Cpu, perm: "integrations.manage" },
+  { href: "/admin/image-hosts", label: "Image Hosts", icon: Images, perm: "integrations.manage" },
   { href: "/admin/notifications", label: "Notifications", icon: BellRing, perm: "admin.notifications.manage" },
 ];
 
