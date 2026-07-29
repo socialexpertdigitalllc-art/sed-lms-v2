@@ -449,6 +449,17 @@ describe("gate registry", () => {
     expect(getGate("minimax", {})).not.toBe(getGate("gemini", {}));
   });
 
+  // Asserted directly rather than left to be implied by the "reports every
+  // live gate" test below, which only catches a no-op reset because of the
+  // order the tests happen to be declared in. That is fragile documentation
+  // of an invariant every other test in this block depends on.
+  it("drops every gate and its learned state", () => {
+    const first = getGate("p", {});
+    resetGates();
+    expect(gateSnapshots()).toEqual([]);
+    expect(getGate("p", {})).not.toBe(first);
+  });
+
   it("updates the budget of an existing gate rather than replacing it", async () => {
     const first = getGate("p", { concurrency: 1 });
     const slot = await first.acquire({ inputTokens: 1, model: "m", maxTokens: 1 });

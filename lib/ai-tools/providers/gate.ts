@@ -587,6 +587,16 @@ export class ProviderGate {
  * Module-level state is the point: every AI call in the app must draw from the
  * SAME bucket per provider, whichever subsystem made it. A gate created per
  * request would enforce nothing.
+ *
+ * ONE MAP PER NODE MODULE REGISTRY, which is the assumption this rests on.
+ * Production is a single `next start` process and every route here pins the
+ * nodejs runtime, so there is exactly one. Dev HMR mints a fresh Map on edit —
+ * harmless, it just forgets the learned pacing. But putting a caller behind a
+ * second server runtime (an edge route, a separately bundled entry) would give
+ * that caller its OWN Map and therefore its own full budget, so the vendor
+ * would see double. The failure mode is over-admission, not deadlock, but it
+ * would silently undo this subsystem — check this assumption before moving any
+ * AI call off the nodejs runtime.
  */
 const gates = new Map<string, ProviderGate>();
 
@@ -612,7 +622,17 @@ export function gateSnapshots(): GateSnapshot[] {
   return [...gates.values()].map((g) => g.snapshot());
 }
 
-/** Drop all gates. Tests only — production shares one process for its lifetime. */
+/**
+ * Drop all gates. TESTS ONLY — and the restriction is a correctness one, not a
+ * convention. Clearing the map orphans the `inFlight` counters of calls that
+ * are still outstanding, so the replacement gates would over-admit by exactly
+ * that many requests — the failure this subsystem exists to prevent.
+ *
+ * An operator's settings change needs no reset: `getGate` re-applies the
+ * budget on every lookup, so an edit takes effect on the very next call. That
+ * is why there is no production counterpart here to `clearTaskModelCache`
+ * (providers/run.ts), which exists only because that memo caches a DB read.
+ */
 export function resetGates(): void {
   gates.clear();
 }
