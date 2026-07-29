@@ -25,13 +25,14 @@ type Ctx = { params: Promise<{ id: string; file: string }> };
  * `promoted` below). Re-assembles and re-uploads the output zip afterward so
  * the run's `output_path` always reflects the latest per-page state.
  *
- * OWNERSHIP. A single-page write stands aside for a whole-run generation: the
- * update is guarded on `generation_id IS NULL`, so if one was claimed during
- * the minutes this route spent in its AI call, this result is discarded with a
- * 409 rather than overwriting a `pages` snapshot that is now stale. This route
- * takes no token of its own — it is one short write, not an owner of the run,
- * and giving it one would only raise the question of what a generation should
- * do when a regeneration holds it.
+ * OWNERSHIP. A single-page write stands aside for EVERY other writer: it is
+ * guarded on `generation_id IS NULL` (a whole-run generation claimed the run)
+ * AND on the `updated_at` this request read (anything else moved the row —
+ * another regeneration, a progress frame, /recover). Either way this result is
+ * discarded with a 409 rather than overwriting a `pages` snapshot that is now
+ * stale. This route takes no token of its own — it is one short write, not an
+ * owner of the run, and giving it one would only raise the question of what a
+ * generation should do when a regeneration holds it.
  *
  * The zip is uploaded only AFTER that write proves nobody took over, for the
  * same reason as in the generate route: every writer shares one upsert path,
@@ -121,22 +122,35 @@ export async function POST(req: Request, ctx: Ctx) {
   const outputPath = outputPathFor(id);
 
   /**
-   * STEP 1 — the write, and it stands aside for a live generation.
+   * STEP 1 — the write, and it stands aside for ANY intervening writer.
    *
-   * `.is("generation_id", null)` is the whole guard. Everything above this
-   * point read the run MINUTES ago — a paced, retried page call is why this
-   * route's maxDuration is 900 — and in that gap the operator can perfectly
-   * legitimately hit "Retry failed pages", which claims the run and stamps a
-   * token. Landing `newPages` then would overwrite a snapshot taken before
-   * that attempt existed, discarding everything it has generated since and
-   * possibly flipping a mid-flight run to "review".
+   * Everything above this point read the run MINUTES ago — a paced, retried
+   * page call is why this route's maxDuration is 900 — and `newPages` is the
+   * WHOLE pages blob rebuilt from that stale snapshot. Landing it blind would
+   * revert every change made in the gap.
+   *
+   * Two guards, and both are load-bearing:
+   *
+   *  - `.is("generation_id", null)` stands aside for a whole-run generation.
+   *    The operator can perfectly legitimately hit "Retry failed pages" ten
+   *    seconds after starting this, which claims the run and stamps a token.
+   *  - `.eq("updated_at", …)` is the optimistic CAS the sibling generate route
+   *    already relies on, and it catches everything the token does not — most
+   *    importantly ANOTHER REGENERATION. The mainline partial failure lands at
+   *    "review", not "failed" (runSite calls a run ok when any real page
+   *    succeeded), where per-page Retry is the only tool; two failed pages mean
+   *    the operator can start two regenerations, both reading the same snapshot,
+   *    and without this the second would revert the first's page and upload a
+   *    zip without it. It also catches a progress frame, a terminal write, and
+   *    /recover — every one of which bumps `updated_at`.
    *
    * This route deliberately takes NO token of its own (see the docblock): it
    * is one short write, not a multi-minute owner, and the asymmetry is the
    * point. A run whose process died between claim and release keeps a stale
    * non-null token and would block regeneration forever — that is precisely
-   * what /recover exists to clear, since it nulls the token, so the guard has
-   * a defined escape hatch rather than being a trap.
+   * what /recover exists to clear, since it nulls the token whether the run is
+   * still "generating" or already past it, so the guard has a defined escape
+   * hatch rather than being a trap.
    */
   const { data: updated, error: updErr } = await admin
     .from("builder_runs")
@@ -147,6 +161,7 @@ export async function POST(req: Request, ctx: Ctx) {
       ...(promoted ? { status: "review", error: null } : {}),
     })
     .eq("id", id)
+    .eq("updated_at", run.updated_at as string)
     .is("generation_id", null)
     .select("*")
     .maybeSingle();
@@ -155,8 +170,8 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json(
       {
         error:
-          "A generation took over this run while this page was being rewritten, so the regenerated page was discarded. " +
-          "Wait for it to finish, then regenerate this page again.",
+          "This run changed while the page was being rewritten; the regenerated page was discarded. " +
+          "Reload and try again.",
       },
       { status: 409 },
     );

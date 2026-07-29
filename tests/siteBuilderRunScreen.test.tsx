@@ -213,6 +213,52 @@ describe("BuilderRun — getting a broken run moving again", () => {
     expect(perPage).toBeEnabled();
   });
 
+  it("disables EVERY regenerate control while one page is being rewritten", async () => {
+    /**
+     * Two failed pages on a "review" run is the ORDINARY partial failure —
+     * runSite calls a run ok when any real page succeeded — and per-page Retry
+     * is the only tool there. Each regeneration rewrites the run's whole page
+     * set from the snapshot it read minutes ago, so letting the operator start
+     * a second one invites an AI call the server will (correctly) refuse.
+     */
+    const run = {
+      ...runFixture("review"),
+      pages: {
+        "index.html": { status: "ok", kind: "existing", html: "<html>a</html>" },
+        "about.html": { status: "failed", kind: "existing", error: "boom" },
+        "contact.html": { status: "failed", kind: "existing", error: "boom" },
+      },
+    };
+    // The regenerate POST never resolves — one rewrite in flight, as in life.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "POST") await new Promise<void>(() => {});
+        return { ok: true, json: async () => ({ run }) } as Response;
+      }),
+    );
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    render(<BuilderRun runId="run-1" />);
+
+    const retries = await screen.findAllByRole("button", { name: /^retry$/i });
+    expect(retries).toHaveLength(2);
+    // Both start enabled, so the disabling below is caused by the click.
+    expect(retries[0]).toBeEnabled();
+    expect(retries[1]).toBeEnabled();
+    const panel = screen.getByRole("button", { name: /regenerate this page/i });
+    expect(panel).toBeEnabled();
+
+    await user.click(retries[0]);
+
+    // The OTHER page's Retry, and the instruction panel's button, are what
+    // used to stay clickable — `busy` was keyed on the file, not on "any".
+    await waitFor(() => expect(retries[1]).toBeDisabled());
+    expect(retries[0]).toBeDisabled();
+    expect(panel).toBeDisabled();
+    expect(retries[1]).toHaveAttribute("title", expect.stringMatching(/one page.*at a time/i));
+  });
+
   it("offers Stop and recover once a generating run has been quiet for six minutes", async () => {
     const run = { ...runFixture("generating"), updated_at: minutesAgo(6) };
     const fetchMock = recordingFetch(run);

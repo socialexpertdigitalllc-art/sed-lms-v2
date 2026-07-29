@@ -66,6 +66,10 @@ const IN_FLIGHT = new Set<BuilderRunStatus>(["queued", "generating"]);
  *  writes are discarded — see migration 0063. The button says as much. */
 const RECOVER_OFFER_MS = 5 * 60 * 1000;
 
+/** Hint on every regenerate control — see `anyRegenerating`. */
+const REGEN_ONE_AT_A_TIME =
+  "Only one page can be rewritten at a time — a regeneration rewrites the whole run's page set, so a second one would discard the first.";
+
 const KIND_LABEL: Record<PageState["kind"], string> = {
   existing: "existing page",
   new: "new page",
@@ -346,6 +350,19 @@ export function BuilderRun({ runId }: { runId: string }) {
   }
 
   const pill = STATUS_PILL[run.status];
+  /**
+   * EVERY regenerate control is disabled while ANY page is being rewritten —
+   * not just the one that is running.
+   *
+   * A regeneration rebuilds and writes the run's WHOLE `pages` blob from the
+   * snapshot it read minutes earlier, so two of them overlapping means the
+   * second reverts the first's page and re-uploads a zip without it — an AI
+   * call paid for and thrown away. The server now refuses that second write
+   * (it CASes on `updated_at`), so nothing is corrupted either way; this is
+   * about not INVITING the operator to spend money on a request that will be
+   * refused.
+   */
+  const anyRegenerating = regeneratingFile !== null;
   // `failed` included: a failed run is exactly where fixing one page matters
   // most, and the route accepts it.
   const gate = run.status === "review" || run.status === "approved" || run.status === "failed";
@@ -474,7 +491,12 @@ export function BuilderRun({ runId }: { runId: string }) {
                 {p.status === "failed" ? (
                   <div className="mt-2 rounded-md border border-dropped-bg bg-dropped-bg/30 p-2 text-xs text-dropped-fg">
                     <p className="mb-1">{p.error ?? "Generation failed."}</p>
-                    <button className={btnSecondarySm} onClick={() => void regenerate(file, false)} disabled={!gate || busy}>
+                    <button
+                      className={btnSecondarySm}
+                      onClick={() => void regenerate(file, false)}
+                      disabled={!gate || anyRegenerating}
+                      title={REGEN_ONE_AT_A_TIME}
+                    >
                       {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                       Retry
                     </button>
@@ -536,7 +558,8 @@ export function BuilderRun({ runId }: { runId: string }) {
               <button
                 className={btnGhostSm}
                 onClick={() => void regenerate(selectedFile, true)}
-                disabled={regeneratingFile === selectedFile}
+                disabled={anyRegenerating}
+                title={REGEN_ONE_AT_A_TIME}
               >
                 {regeneratingFile === selectedFile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                 Regenerate this page

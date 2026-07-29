@@ -670,7 +670,7 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     const res = await post("index.html");
 
     expect(res.status).toBe(409);
-    expect(String((await res.json()).error)).toMatch(/generation/i);
+    expect(String((await res.json()).error)).toMatch(/changed while the page was being rewritten/i);
     expect(state.runs[0].pages).toEqual(before);
     expect(state.runs[0].status).toBe("failed");
     // And nothing reached the object store: the zip path is shared with the
@@ -713,6 +713,95 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
     expect(pages["index.html"].status).toBe("ok");
     expect(pages["index.html"].html).toBe("<html>regenerated</html>");
+  });
+
+  /**
+   * TWO REGENERATIONS AT ONCE — the mainline hazard, not an exotic one.
+   *
+   * `runSite` marks a run "ok" when ANY real page succeeded, so the ordinary
+   * partial failure (5 of 7 pages) lands at "review", where per-page Retry is
+   * the only tool. Each regeneration rebuilds the WHOLE `pages` blob from the
+   * snapshot it read minutes earlier, so the second to land would revert the
+   * first's page and upload a zip without it — an AI call paid for and thrown
+   * away.
+   */
+  describe("two at once", () => {
+    const TWO_DOWN = {
+      "components.js": { status: "ok", kind: "component", name: "Shared components", html: "// REWRITTEN" },
+      "index.html": { status: "failed", kind: "existing", error: "boom" },
+      "about.html": { status: "failed", kind: "existing", error: "boom" },
+    };
+
+    /** A promise a test resolves by hand, so both handlers can be held INSIDE
+     *  their AI call — the minutes-wide window where they overlap for real. */
+    const defer = <T,>() => {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => (resolve = r));
+      return { promise, resolve };
+    };
+
+    it("refuses the second write and keeps the first's page", async () => {
+      const { admin, state, uploadMock } = makeWritableAdmin([RUN({ status: "review", pages: TWO_DOWN })]);
+      adminHolder.admin = admin;
+
+      const forIndex = defer<{ ok: boolean; html: string }>();
+      const forAbout = defer<{ ok: boolean; html: string }>();
+      regeneratePageMock.mockImplementation(async (args: { file: string }) =>
+        args.file === "index.html" ? forIndex.promise : forAbout.promise,
+      );
+
+      const indexReq = post("index.html");
+      const aboutReq = post("about.html");
+      // Both are past their row READ and sitting in the AI call — which is the
+      // whole premise: they share one stale snapshot.
+      await vi.waitFor(() => expect(regeneratePageMock).toHaveBeenCalledTimes(2));
+
+      forAbout.resolve({ ok: true, html: "<html>ABOUT REWRITTEN</html>" });
+      const aboutRes = await aboutReq;
+      forIndex.resolve({ ok: true, html: "<html>INDEX REWRITTEN</html>" });
+      const indexRes = await indexReq;
+
+      expect(aboutRes.status).toBe(200);
+      expect(indexRes.status).toBe(409);
+      expect(String((await indexRes.json()).error)).toMatch(/changed while the page was being rewritten/i);
+
+      // The winner's page survived — that is the paid-for work the loser would
+      // have reverted — and the loser's own page never landed.
+      const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
+      expect(pages["about.html"].status).toBe("ok");
+      expect(pages["about.html"].html).toBe("<html>ABOUT REWRITTEN</html>");
+      expect(pages["index.html"].status).toBe("failed");
+      // …and the zip in the bucket is the winner's, uploaded once.
+      expect(uploadMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("refuses a regeneration whose run moved under it, and uploads nothing", async () => {
+    // The residual race, and it is reachable: a retry AFTER a packaging failure
+    // makes no AI calls at all and finishes in seconds, so it can start and
+    // finish entirely inside one regeneration's call. `generation_id` stays
+    // null throughout, so this is the `updated_at` CAS and nothing else.
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", generation_id: null }),
+    ]);
+    adminHolder.admin = admin;
+    const before = JSON.parse(JSON.stringify(state.runs[0].pages));
+
+    regeneratePageMock.mockImplementation(async () => {
+      // …a fast retry claimed, ran and released the run while we were writing.
+      state.runs[0].updated_at = "2026-07-29T12:07:00.000Z";
+      return { ok: true, html: "<html>regenerated</html>" };
+    });
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toMatch(/changed while the page was being rewritten/i);
+    expect(state.runs[0].pages).toEqual(before);
+    expect(state.runs[0].status).toBe("failed");
+    // The zip path is shared with whoever moved the row, so an upload here
+    // would replace THEIR archive even though the row write was refused.
+    expect(uploadMock).not.toHaveBeenCalled();
   });
 
   it("still refuses a queued run", async () => {
