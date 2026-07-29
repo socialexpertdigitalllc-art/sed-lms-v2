@@ -5,7 +5,8 @@ import { getWgeConfig } from "./wge";
 import { mapLeadToInput } from "./leadPrefill";
 import { buildPrompt, EMPTY_INPUT, type GenInput } from "./prompt";
 import { AiCallAborted, combineAbortSignals } from "./abort";
-import { callTimedOutMessage } from "./providers/errors";
+import { callTimedOutMessage, parseRetryAfter, ProviderHttpError, rateLimitHeadersFrom } from "./providers/errors";
+import type { RateBudget } from "./providers/limits";
 
 const BUCKET = "ai-generations";
 
@@ -108,6 +109,11 @@ export interface ProviderCallOptions {
   images?: string[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * Attempts, inclusive of the first. Defaults to MAX_ATTEMPTS. Tests pin it
+   * to 1 to assert single-shot behaviour without waiting out backoff.
+   */
+  maxAttempts?: number;
 }
 
 export async function callProvider(
@@ -150,6 +156,15 @@ export interface ProviderSpec {
    * descriptor. See `AiProviderDescriptor.outputTokenParam`.
    */
   outputTokenParam?: "max_tokens" | "max_completion_tokens";
+  /**
+   * Which rate-budget bucket this call draws from. Every provider pools its
+   * quota across models and modalities, so this is the provider, never the
+   * model. Absent falls back to the endpoint host, which is the same thing by
+   * another name and keeps legacy env-configured tools working.
+   */
+  providerKey?: string;
+  /** The budget in force for that bucket, resolved by the caller. */
+  rateBudget?: RateBudget;
 }
 
 /**
@@ -215,7 +230,17 @@ export async function callWithProvider(
     } catch {
       /* ignore */
     }
-    throw new Error(msg);
+    // The status is the whole point: a 429 is "wait, then this call would have
+    // worked", a 400 is "this call can never work". Flattening both into
+    // Error(msg) is what made rate limiting look like permanent failure.
+    // The human-readable message is preserved verbatim so no existing error
+    // surface regresses.
+    throw new ProviderHttpError(
+      msg,
+      res.status,
+      parseRetryAfter(res.headers.get("retry-after")),
+      rateLimitHeadersFrom(res.headers),
+    );
   }
   const j = await res.json();
   const text: string = j?.choices?.[0]?.message?.content ?? "";
