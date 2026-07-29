@@ -873,8 +873,96 @@ describe("POST /api/site-builder/runs/[id]/recover — releasing a wedged run", 
     });
   });
 
+  /**
+   * The other wedge, and the one nothing else could clear: /generate's terminal
+   * write sets "review" and deliberately KEEPS its token across the zip upload,
+   * so a process that dies in that window leaves "review" + a token nobody
+   * owns. /regenerate then 409s forever (`generation_id IS NULL` never matches),
+   * /generate refuses "review", and before this the only escape was deleting
+   * the run.
+   */
+  describe("a dangling token on a run that is no longer generating", () => {
+    it("clears the token and leaves the run at review", async () => {
+      const pages = { "index.html": { status: "ok", kind: "existing", html: "<html>a</html>" } };
+      const { admin, state } = makeWritableAdmin([
+        RUN({ status: "review", generation_id: "gen-orphaned", pages, output_path: "run-1/site.zip", error: null }),
+      ]);
+      adminHolder.admin = admin;
+
+      const res = await post();
+
+      expect(res.status).toBe(200);
+      expect(state.runs[0].generation_id).toBeNull();
+      // NOT demoted: this run has a reviewable site, and the leak was
+      // bookkeeping. Demoting it would cost the operator their place in the
+      // flow to fix a token nobody owns.
+      expect(state.runs[0].status).toBe("review");
+      expect(state.runs[0].error).toBeNull();
+      expect(state.runs[0].pages).toEqual(pages);
+      expect(state.runs[0].output_path).toBe("run-1/site.zip");
+
+      const body = (await res.json()) as { run: Row };
+      expect(body.run.status).toBe("review");
+      expect(body.run.generation_id).toBeNull();
+      expect(state.activity[0]).toMatchObject({ new_value: { from: "review", to: "review" } });
+    });
+
+    it("still demotes a generating run to failed — the status rule is not blanket", async () => {
+      // The discriminating pair for the case above: same route, same clearing
+      // of the token, opposite status handling.
+      const { admin, state } = makeWritableAdmin([RUN(WEDGED)]);
+      adminHolder.admin = admin;
+
+      const res = await post();
+
+      expect(res.status).toBe(200);
+      expect(state.runs[0].status).toBe("failed");
+      expect(state.runs[0].generation_id).toBeNull();
+    });
+
+    it("409s when the token is cleared by someone else first", async () => {
+      const { admin, state } = makeWritableAdmin([RUN({ status: "review", generation_id: "gen-orphaned" })]);
+      adminHolder.admin = admin;
+      // The dying attempt's step-3 release landing late, or a second operator
+      // recovering the same run — either way our CAS must not force it.
+      const original = admin.from;
+      let hooked = false;
+      adminHolder.admin = {
+        ...admin,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        from(table: string): any {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const inner: any = original(table);
+          if (table !== "builder_runs") return inner;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const wrap: any = {
+            select: (...a: unknown[]) => { inner.select(...a); return wrap; },
+            update: (...a: unknown[]) => { inner.update(...a); return wrap; },
+            eq: (...a: unknown[]) => { inner.eq(...a); return wrap; },
+            is: (...a: unknown[]) => { inner.is(...a); return wrap; },
+            maybeSingle: () => inner.maybeSingle(),
+            then: (r: unknown) => inner.then(r),
+            single: async () => {
+              const out = await inner.single();
+              if (!hooked) { hooked = true; state.runs[0].generation_id = null; }
+              return out;
+            },
+          };
+          return wrap;
+        },
+      };
+
+      const res = await post();
+
+      expect(hooked).toBe(true);
+      expect(res.status).toBe(409);
+      expect(String((await res.json()).error)).toMatch(/changed/i);
+      expect(state.activity).toHaveLength(0);
+    });
+  });
+
   for (const status of ["queued", "review", "approved", "deployed", "failed"]) {
-    it(`refuses a ${status} run, naming what it found`, async () => {
+    it(`refuses a ${status} run with no claim to release, naming what it found`, async () => {
       const { admin, state } = makeWritableAdmin([RUN({ status, generation_id: null })]);
       adminHolder.admin = admin;
 

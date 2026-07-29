@@ -146,11 +146,13 @@ export async function POST(req: Request, ctx: Ctx) {
    *
    * This route deliberately takes NO token of its own (see the docblock): it
    * is one short write, not a multi-minute owner, and the asymmetry is the
-   * point. A run whose process died between claim and release keeps a stale
-   * non-null token and would block regeneration forever — that is precisely
-   * what /recover exists to clear, since it nulls the token whether the run is
-   * still "generating" or already past it, so the guard has a defined escape
-   * hatch rather than being a trap.
+   * point. A run whose process died between /generate's terminal write and its
+   * release keeps a stale non-null token — typically at "review", since that
+   * write sets the status and holds the token across the upload — and this
+   * guard would then refuse every regeneration forever. That is precisely what
+   * /recover clears: it accepts a dangling token on ANY status, not only
+   * "generating", and leaves a "review" run at "review". So the guard has a
+   * real escape hatch rather than being a trap.
    */
   const { data: updated, error: updErr } = await admin
     .from("builder_runs")
