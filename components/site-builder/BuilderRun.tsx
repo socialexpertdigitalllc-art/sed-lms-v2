@@ -280,9 +280,15 @@ export function BuilderRun({ runId }: { runId: string }) {
    * generation — the server clears the claim token, so that attempt's writes
    * are discarded rather than racing us — but it does throw away whatever it
    * had not yet saved, hence the confirm.
+   *
+   * It does NOT stop anything. /recover DISOWNS the attempt; nothing aborts
+   * it, so it keeps running under the generate route's maxDuration of an hour,
+   * keeps making paced AI calls, and keeps spending the same provider's rate
+   * budget — which makes the operator's own retry slower. The copy says so
+   * rather than promising a cancellation this cannot deliver.
    */
   async function recover() {
-    if (!confirm("Stop this run and mark it failed? If it is still working, anything it has not already saved will be lost. Pages it did save are kept and will not be regenerated.")) return;
+    if (!confirm("Release this run and mark it failed? Pages it already saved are kept and will not be regenerated; anything it had not saved is lost. Note that this does not actually stop the previous attempt — it can keep working, and keep costing, for a while yet, and it may slow down your retry.")) return;
     setRecovering(true);
     try {
       const res = await fetch(`/api/site-builder/runs/${runId}/recover`, { method: "POST" });
@@ -451,7 +457,9 @@ export function BuilderRun({ runId }: { runId: string }) {
               <p className="text-xs text-text-faint">
                 Nothing has been written for a few minutes. That is not proof it is stuck: a paced run can go quiet for
                 up to about twenty minutes while it waits out a provider&rsquo;s rate limit, so it may still be working.
-                Stopping it is safe either way — the run is released and anything it already saved is kept.
+                Releasing it is safe either way — anything it already saved is kept, and its later writes are ignored.
+                It does not actually stop the attempt, though: that can keep working, and keep costing, for a while
+                yet, and it may slow your retry down while it does.
               </p>
               <button className={cn(btnGhostSm, "mt-2")} onClick={() => void recover()} disabled={recovering}>
                 {recovering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5" />}

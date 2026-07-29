@@ -273,6 +273,38 @@ describe("BuilderRun — getting a broken run moving again", () => {
     await waitFor(() => expect(posted(fetchMock, "/api/site-builder/runs/run-1/recover")).toBe(true));
   });
 
+  it("does not claim the previous attempt is stopped — it is only disowned", async () => {
+    /**
+     * /recover clears the claim token; NOTHING aborts the attempt. It keeps
+     * running under the generate route's maxDuration of an hour, keeps making
+     * paced AI calls, and keeps spending the same provider's rate budget — so
+     * it costs money after the click and can make the operator's own retry
+     * slower. Copy that says "stopped" is a promise the system cannot keep.
+     */
+    const run = { ...runFixture("generating"), updated_at: minutesAgo(6) };
+    recordingFetch(run);
+    const confirmMock = vi.fn((_message?: string) => true);
+    vi.stubGlobal("confirm", confirmMock);
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    render(<BuilderRun runId="run-1" />);
+
+    const btn = await screen.findByRole("button", { name: /stop and recover/i });
+
+    // The panel copy, right above the button.
+    const panel = screen.getByText(/Nothing has been written for a few minutes/);
+    expect(panel.textContent).toMatch(/does not actually stop/i);
+    expect(panel.textContent).toMatch(/keep costing|keep working/i);
+
+    await user.click(btn);
+
+    const asked = String(confirmMock.mock.calls[0]?.[0] ?? "");
+    expect(asked).toMatch(/does not actually stop/i);
+    expect(asked).toMatch(/costing/i);
+    // …and it still says what IS true: saved pages survive.
+    expect(asked).toMatch(/already saved are kept/i);
+  });
+
   it("does NOT offer Stop and recover on a generating run that wrote a minute ago", async () => {
     const run = { ...runFixture("generating"), updated_at: minutesAgo(1) };
     recordingFetch(run);

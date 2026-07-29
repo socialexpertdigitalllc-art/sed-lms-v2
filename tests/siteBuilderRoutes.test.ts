@@ -51,6 +51,7 @@ import { GET as downloadGet } from "@/app/api/site-builder/runs/[id]/download/ro
 import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/route";
 import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
 import { POST as recoverPost } from "@/app/api/site-builder/runs/[id]/recover/route";
+import { DELETE as runDelete } from "@/app/api/site-builder/runs/[id]/route";
 
 const enc = new TextEncoder();
 
@@ -143,9 +144,12 @@ function makeWritableAdmin(
 
     const filters: ((r: Row) => boolean)[] = [];
     let patch: Row | null = null;
+    let removing = false;
     const apply = () => {
       const hits = source.filter((r) => filters.every((f) => f(r)));
       if (patch) for (const r of hits) Object.assign(r, patch);
+      // Filters are honoured on DELETE for the same reason they are on update.
+      if (removing) for (const r of hits) source.splice(source.indexOf(r), 1);
       return hits;
     };
 
@@ -154,6 +158,10 @@ function makeWritableAdmin(
       select: () => api,
       update: (p: Row) => {
         patch = p;
+        return api;
+      },
+      delete: () => {
+        removing = true;
         return api;
       },
       eq: (col: string, val: unknown) => {
@@ -201,13 +209,21 @@ function makeWritableAdmin(
    */
   const baseStorage = makeAdmin().storage;
   const uploadMock = vi.fn(async (_bucket: string, _path: string) => ({ error: null as { message: string } | null }));
+  const removed: string[] = [];
   const storage = {
     from(bucket: string) {
-      return { ...baseStorage.from(bucket), upload: (path: string) => uploadMock(bucket, path) };
+      return {
+        ...baseStorage.from(bucket),
+        upload: (path: string) => uploadMock(bucket, path),
+        remove: async (paths: string[]) => {
+          removed.push(...paths);
+          return { error: null };
+        },
+      };
     },
   };
 
-  return { admin: { from, storage }, state, uploadMock };
+  return { admin: { from, storage }, state, uploadMock, removed };
 }
 
 const RUN = (over: Row = {}): Row => ({
@@ -894,6 +910,57 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     expect(String((await res.json()).error)).toContain(`"queued"`);
     expect(regeneratePageMock).not.toHaveBeenCalled();
     expect(state.runs[0].status).toBe("queued");
+  });
+});
+
+describe("DELETE /api/site-builder/runs/[id] — a live run is not debris", () => {
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60 * 1000).toISOString();
+  const del = () => runDelete(new Request("http://test.local/x", { method: "DELETE" }), runCtx());
+
+  it("refuses a generating run quiet for 40 minutes — well inside the reclaim window", async () => {
+    /**
+     * The exact gap this closes. Deletion's grace was ten minutes while the
+     * generate route's reclaim rule had been raised to sixty, so a HEALTHY
+     * paced run — one that can legitimately write nothing for ~21 minutes while
+     * it waits out a provider's rate limit — was deletable out from under
+     * itself, taking its zip with it.
+     */
+    const { admin, state, removed } = makeWritableAdmin([
+      RUN({ status: "generating", generation_id: "gen-live", updated_at: minutesAgo(40) }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await del();
+
+    expect(res.status).toBe(409);
+    expect(state.runs).toHaveLength(1);
+    expect(removed).toHaveLength(0);
+  });
+
+  it("still deletes a generating run whose row has not moved for 61 minutes", async () => {
+    // The discriminating half: past the reclaim window the generation really is
+    // presumed dead, and the run is debris the operator may clear.
+    const { admin, state, removed } = makeWritableAdmin([
+      RUN({ status: "generating", output_path: "run-1/site.zip", updated_at: minutesAgo(61) }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await del();
+
+    expect(res.status).toBe(200);
+    expect(state.runs).toHaveLength(0);
+    // Storage first, row second — an orphaned zip with no row is invisible debris.
+    expect(removed).toEqual(["run-1/site.zip"]);
+  });
+
+  it("deletes a review run at once — the grace is only for runs that may still be working", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "review", updated_at: minutesAgo(0) })]);
+    adminHolder.admin = admin;
+
+    const res = await del();
+
+    expect(res.status).toBe(200);
+    expect(state.runs).toHaveLength(0);
   });
 });
 

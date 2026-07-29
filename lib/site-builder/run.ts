@@ -9,6 +9,36 @@ export const BUILDER_SITES_BUCKET = "builder-sites";
 export const outputPathFor = (runId: string) => `${runId}/site.zip`;
 
 /**
+ * A "generating" run whose row hasn't moved for this long is presumed dead
+ * (server restart mid-generation): the generate route may claim it again, and
+ * the run route may delete it.
+ *
+ * IT LIVES HERE, not in either route, because those two decisions have to
+ * agree. They were separately-declared numbers and they drifted — deletion
+ * used ten minutes long after claiming had been raised to sixty — which made a
+ * perfectly healthy paced run deletable eleven minutes into a quiet stretch.
+ *
+ * SIZED WITH the generate route's `maxDuration`, and it has to be. Its
+ * `persist` only fires on a PAGE-STATE change, so the row's quiet period is the
+ * gap between the last "generating" emit and the first page to finish — and
+ * pacing made that gap long. Worst case for a single page: it can sit in the
+ * rate gate for up to GATE_MAX_WAIT_MS (2 min) per attempt, and between
+ * attempts wait out a vendor Retry-After capped at 60s, across MAX_ATTEMPTS (4)
+ * attempts, each of which may then burn the 5-minute call timeout — call it
+ * 4x(2+1+5) minutes, about 21 minutes with nothing written to the row. 60
+ * minutes clears that with room for a slower vendor, and still trips long
+ * before `maxDuration` (3600s) does.
+ *
+ * Sizing this too LOW is the dangerous direction: a second tab or a re-click
+ * would pass the stale check, win a fresh CAS claim, and run a SECOND
+ * concurrent `runSite` against the same throttled provider with two writers
+ * racing on `pages`. Too high merely delays recovery from a real crash, which
+ * the operator can already force by re-queuing the run — or, faster, with
+ * /recover.
+ */
+export const STALE_GENERATING_MS = 60 * 60 * 1000;
+
+/**
  * Build the BusinessBrief the prompt needs from a raw lead row, by reusing
  * `buildDossier` (lib/site-studio/run/dossier.ts) and projecting it down to
  * BusinessBrief's fields.
@@ -337,11 +367,18 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
    * the PLAN, never from the carried entry: a stale entry describing a file
    * that has since changed kind would otherwise mislabel it for the rest of
    * the run. Only `status` and `html` are carried, and only together — an
-   * `ok` entry without html is not a usable page and is regenerated.
+   * `ok` entry without USABLE html is not a page and is regenerated.
+   *
+   * Usable means truthy, not merely present. An `ok` entry carrying an empty
+   * string would otherwise be honoured: no AI call is made for it, a zero-byte
+   * file goes in the zip, and it counts toward `result.ok` — so a run whose
+   * every page was empty would report success. No current extractor can produce
+   * that; this is defence against a corrupted row, which is exactly the kind of
+   * row `resume` exists to read.
    */
   const withCarried = (file: string, planned: PageState): PageState => {
     const prev = resume?.[file];
-    return prev?.status === "ok" && prev.html !== undefined ? { ...planned, status: "ok", html: prev.html } : planned;
+    return prev?.status === "ok" && prev.html ? { ...planned, status: "ok", html: prev.html } : planned;
   };
 
   const pages: Record<string, PageState> = {};
