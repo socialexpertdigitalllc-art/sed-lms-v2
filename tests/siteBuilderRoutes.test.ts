@@ -140,10 +140,10 @@ function makeWritableAdmin(
     const source = table === "builder_runs" ? state.runs : table === "leads" ? state.leads : null;
     if (!source) throw new Error(`unexpected table "${table}"`);
 
-    const filters: [string, unknown][] = [];
+    const filters: ((r: Row) => boolean)[] = [];
     let patch: Row | null = null;
     const apply = () => {
-      const hits = source.filter((r) => filters.every(([c, v]) => r[c] === v));
+      const hits = source.filter((r) => filters.every((f) => f(r)));
       if (patch) for (const r of hits) Object.assign(r, patch);
       return hits;
     };
@@ -156,10 +156,24 @@ function makeWritableAdmin(
         return api;
       },
       eq: (col: string, val: unknown) => {
-        filters.push([col, val]);
+        filters.push((r) => r[col] === val);
         return api;
       },
-      is: () => api,
+      /**
+       * `.is()` is HONOURED too, for the same reason `.eq()` is: the regenerate
+       * route stands aside from a live generation with `.is("generation_id",
+       * null)`, so a fake that ignored it would report success for exactly the
+       * clobber that guard exists to prevent.
+       *
+       * An ABSENT key counts as null. A real row always has the column, so a
+       * fixture that omits it is a row whose column is NULL — which is what
+       * Postgres `IS NULL` matches (this is what keeps the leads fixture, which
+       * carries no `deleted_at`, passing the generate route's own `.is()`).
+       */
+      is: (col: string, val: unknown) => {
+        filters.push((r) => (val === null ? r[col] === undefined || r[col] === null : r[col] === val));
+        return api;
+      },
       single: async () => {
         const hits = apply();
         return hits.length === 1 ? { data: { ...hits[0] }, error: null } : { data: null, error: { message: "no rows" } };
@@ -639,6 +653,65 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     expect(res.status).toBe(200);
     expect(state.runs[0].status).toBe("review");
     expect(state.runs[0].error).toBe("a stale note from an earlier attempt");
+  });
+
+  it("stands aside for a live generation instead of clobbering its progress", async () => {
+    // The window is MINUTES wide: the status read happens before a paced AI
+    // call that can take a quarter of an hour (hence maxDuration 900), so a
+    // "Retry failed pages" click ten seconds later claims the run legitimately
+    // and this write would land on top of everything it has since done.
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", generation_id: "gen-in-flight" }),
+    ]);
+    adminHolder.admin = admin;
+    const before = JSON.parse(JSON.stringify(state.runs[0].pages));
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toMatch(/generation/i);
+    expect(state.runs[0].pages).toEqual(before);
+    expect(state.runs[0].status).toBe("failed");
+    // And nothing reached the object store: the zip path is shared with the
+    // live generation, so an upload here would replace ITS archive even though
+    // the row write was correctly refused.
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it("regenerates normally once the run is released", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", generation_id: null }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(200);
+    const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
+    expect(pages["index.html"].status).toBe("ok");
+    expect(pages["index.html"].html).toBe("<html>regenerated</html>");
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(uploadMock).toHaveBeenCalledWith("builder-sites", "run-1/site.zip");
+    expect(state.runs[0].output_path).toBe("run-1/site.zip");
+  });
+
+  it("keeps the saved page when re-packaging fails afterwards", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom" }),
+    ]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(500);
+    expect(String((await res.json()).error)).toContain("storage unreachable");
+    // The page is the expensive part and it is already stored — rolling the
+    // row back to keep it consistent with a stale zip would throw away the
+    // only thing this request paid for.
+    const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
+    expect(pages["index.html"].status).toBe("ok");
+    expect(pages["index.html"].html).toBe("<html>regenerated</html>");
   });
 
   it("still refuses a queued run", async () => {
