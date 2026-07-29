@@ -266,6 +266,19 @@ export interface RunSiteArgs {
    *  live-progress seam. The caller persists it (serialised however it
    *  likes); runSite awaits each call so persistence can't fall behind. */
   onProgress?: (pages: Record<string, PageState>) => void | Promise<void>;
+  /**
+   * Pages carried over from a PREVIOUS attempt at this run. Any entry already
+   * `ok` is kept verbatim and never regenerated; everything else is
+   * (re)generated from scratch.
+   *
+   * The page PLAN is still recomputed from `requestedPages` — this map is only
+   * consulted for files the fresh plan already contains. A lead whose
+   * `specify_pages` changed between attempts therefore gets its CURRENT set,
+   * with still-relevant successes carried and dropped pages simply absent.
+   * Reading the plan back out of this map instead would quietly pin a run to
+   * whatever specification it was first started with.
+   */
+  resume?: Record<string, PageState>;
 }
 
 export interface RunSiteResult {
@@ -296,9 +309,20 @@ export interface RunSiteResult {
  * outcome, so the `Promise.all` below cannot reject and take a run's already-
  * finished pages down with it. Do not move that catch here without reading
  * `callOrFail`'s docblock — `regeneratePage` has no `Promise.all` to guard.
+ *
+ * RESUMING. `args.resume` carries the page map of a PREVIOUS attempt at this
+ * same run, so retrying a failed run costs only what actually failed: a page
+ * already `ok` is kept verbatim and no AI call is ever made for it — not for
+ * the page, and not for a carried components file, whose stored source is
+ * reused as every page prompt's context instead. The plan itself is still
+ * recomputed from `requestedPages`, so a lead whose pages changed between
+ * attempts gets its current set rather than the one the run first started
+ * with. A run whose every requested page is already carried therefore makes
+ * NO model call at all and simply re-assembles the zip — which is also how an
+ * interrupted upload is recovered without paying for the site twice.
  */
 export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
-  const { aiCall, brief, images, template, requestedPages, onProgress } = args;
+  const { aiCall, brief, images, template, requestedPages, onProgress, resume } = args;
 
   const components = findComponentsFile(template);
   // A components.html is a page FILE but never a page of the site — it must
@@ -307,10 +331,29 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
   const plan = selectPages(selectablePages, requestedPages);
   const siteFiles = [...plan.existing, ...plan.newPages.map((p) => p.file)];
 
+  /**
+   * The fresh plan's entry for a file, upgraded to the carried result when a
+   * previous attempt already finished it. `kind` and `name` always come from
+   * the PLAN, never from the carried entry: a stale entry describing a file
+   * that has since changed kind would otherwise mislabel it for the rest of
+   * the run. Only `status` and `html` are carried, and only together — an
+   * `ok` entry without html is not a usable page and is regenerated.
+   */
+  const withCarried = (file: string, planned: PageState): PageState => {
+    const prev = resume?.[file];
+    return prev?.status === "ok" && prev.html !== undefined ? { ...planned, status: "ok", html: prev.html } : planned;
+  };
+
   const pages: Record<string, PageState> = {};
-  if (components) pages[components.file] = { status: "pending", kind: "component", name: "Shared components" };
-  for (const f of plan.existing) pages[f] = { status: "pending", kind: "existing" };
-  for (const p of plan.newPages) pages[p.file] = { status: "pending", kind: "new", name: p.name };
+  if (components) {
+    pages[components.file] = withCarried(components.file, {
+      status: "pending",
+      kind: "component",
+      name: "Shared components",
+    });
+  }
+  for (const f of plan.existing) pages[f] = withCarried(f, { status: "pending", kind: "existing" });
+  for (const p of plan.newPages) pages[p.file] = withCarried(p.file, { status: "pending", kind: "new", name: p.name });
 
   const emit = async () => {
     if (onProgress) await onProgress(pages);
@@ -320,17 +363,25 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
   // ---- 1. components, first and alone ----
   let shared: SharedComponents | undefined;
   if (components) {
-    pages[components.file] = { ...pages[components.file], status: "generating" };
-    await emit();
-    const outcome = await generateComponents(
-      { aiCall },
-      { brief, images, file: components.file, source: components.source, siteFiles },
-    );
-    pages[components.file] = outcome.ok
-      ? { status: "ok", kind: "component", name: "Shared components", html: outcome.html }
-      : { status: "failed", kind: "component", name: "Shared components", error: outcome.error };
-    if (outcome.ok) shared = { file: components.file, source: outcome.html };
-    await emit();
+    const carried = pages[components.file];
+    if (carried.status === "ok" && carried.html !== undefined) {
+      // A previous attempt already rewrote it. Reuse its source as page
+      // context rather than paying for it again — every page prompt below
+      // wants the SAME components content this run's pages will ship with.
+      shared = { file: components.file, source: carried.html };
+    } else {
+      pages[components.file] = { ...pages[components.file], status: "generating" };
+      await emit();
+      const outcome = await generateComponents(
+        { aiCall },
+        { brief, images, file: components.file, source: components.source, siteFiles },
+      );
+      pages[components.file] = outcome.ok
+        ? { status: "ok", kind: "component", name: "Shared components", html: outcome.html }
+        : { status: "failed", kind: "component", name: "Shared components", error: outcome.error };
+      if (outcome.ok) shared = { file: components.file, source: outcome.html };
+      await emit();
+    }
   }
 
   // References come from the WHOLE template (minus the components file) —
@@ -343,6 +394,8 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
 
   // ---- 2. the pages, in parallel ----
   const runExisting = async (file: string) => {
+    // Carried from a previous attempt — nothing to do, and nothing to pay for.
+    if (pages[file].status === "ok") return;
     pages[file] = { ...pages[file], status: "generating" };
     await emit();
     const outcome = await generatePage({ aiCall }, {
@@ -360,6 +413,8 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
   };
 
   const runNew = async ({ name, file }: { name: string; file: string }) => {
+    // Carried from a previous attempt — nothing to do, and nothing to pay for.
+    if (pages[file].status === "ok") return;
     pages[file] = { ...pages[file], status: "generating" };
     await emit();
     const outcome = await generateNewPage({ aiCall }, {
