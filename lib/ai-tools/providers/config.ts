@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptSecret, encryptSecret } from "@/lib/mail/crypto";
 import type { ProviderSpec } from "@/lib/ai-tools/run";
+import { resolveBudget, type RateBudgetOverride } from "./limits";
 import {
   AI_PROVIDER_REGISTRY,
   AI_TASK_REGISTRY,
@@ -37,6 +38,13 @@ export interface AiProviderConfigEntry {
   enabled: boolean;
   /** Decrypted. NEVER serialise this into an HTTP response. */
   credentials: Record<string, string> | null;
+  /**
+   * The operator's stored rate-budget override, or null for "shipped defaults
+   * only". Unlike `credentials` this holds no secret — it is four numbers the
+   * vendor publishes — so it is safe to project to a client, and
+   * `AiProviderStatus` does exactly that.
+   */
+  rateLimits: RateBudgetOverride | null;
 }
 
 /** Client-safe projection: says whether a credential exists, never what it is. */
@@ -46,6 +54,8 @@ export interface AiProviderStatus {
   configured: boolean;
   /** The last 4 of an API key. Never the secret. */
   hint: string | null;
+  /** Operator override, or null for "shipped defaults only". Not a secret. */
+  rateLimits: RateBudgetOverride | null;
   updatedAt: string | null;
 }
 
@@ -67,6 +77,8 @@ type ProviderRow = {
   provider_key: string;
   enabled: boolean;
   encrypted_credentials: string | null;
+  /** Optional: absent until 0062 is applied — see `readProviderRows`. */
+  rate_limits?: RateBudgetOverride | null;
   updated_at: string | null;
 };
 
@@ -147,11 +159,29 @@ export async function seedAiProvidersFromEnv(existingKeys: Set<string>): Promise
 async function readProviderRows(): Promise<ProviderRow[]> {
   try {
     const admin = createAdminClient();
-    const { data } = await admin.from(PROVIDER_TABLE).select("provider_key, enabled, encrypted_credentials, updated_at");
+    // `*` ON PURPOSE, not a column list — the same hazard `readAssignmentRows`
+    // already documents, and here it is worse. A column list breaks the moment
+    // the code knows about a column the DB has not been migrated to yet: the
+    // query errors, the catch below swallows it, and EVERY provider reads as
+    // unconfigured — taking ALL AI routing down until the migration lands.
+    // With `*`, a column the DB lacks simply reads as undefined.
+    const { data } = await admin.from(PROVIDER_TABLE).select("*");
     return (data ?? []) as ProviderRow[];
   } catch {
     return [];
   }
+}
+
+/**
+ * A stored override, or null when the column is absent (pre-0062) or holds
+ * something that is not a JSON object. The 0062 check constraint already
+ * enforces "object or null", so this is belt-and-braces for a row written
+ * before it — but a cheap one: `resolveBudget` uses the `in` operator, which
+ * THROWS on a scalar, and that throw would surface as a failed generation.
+ */
+function asRateLimits(value: unknown): RateBudgetOverride | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as RateBudgetOverride;
 }
 
 async function readAssignmentRows(): Promise<AssignmentRow[]> {
@@ -184,6 +214,7 @@ export async function getAiProviderConfigs(): Promise<AiProviderConfigEntry[]> {
       key: r.provider_key,
       enabled: r.enabled !== false,
       credentials: decodeCredentials(r.encrypted_credentials),
+      rateLimits: asRateLimits(r.rate_limits),
     }));
 }
 
@@ -202,6 +233,7 @@ export async function getAiProviderStatuses(): Promise<AiProviderStatus[]> {
       enabled: row ? row.enabled !== false : false,
       configured: hasCompleteCredentials(d, creds),
       hint: maskCredentialHint(d, creds),
+      rateLimits: asRateLimits(row?.rate_limits),
       updatedAt: row?.updated_at ?? null,
     };
   });
@@ -211,6 +243,8 @@ export interface SaveAiProviderInput {
   enabled?: boolean;
   /** Omit to keep the stored credentials; `null` clears them. */
   credentials?: Record<string, string> | null;
+  /** Omit to keep what is stored; null resets to the shipped defaults. */
+  rateLimits?: RateBudgetOverride | null;
   updatedBy?: string | null;
 }
 
@@ -220,9 +254,14 @@ export async function saveAiProvider(key: string, input: SaveAiProviderInput): P
   if (!descriptor) return null;
 
   const admin = createAdminClient();
+  // `*`, for the reason `readProviderRows` documents, plus a second one: this
+  // read is what "omit to keep what is stored" is built on, so any column left
+  // off the list would be read as undefined and then written back as null —
+  // silently wiping the operator's rate budget every time they toggled
+  // `enabled` or re-entered a key.
   const { data: existing } = await admin
     .from(PROVIDER_TABLE)
-    .select("provider_key, enabled, encrypted_credentials, updated_at")
+    .select("*")
     .eq("provider_key", key)
     .maybeSingle();
   const row = (existing ?? null) as ProviderRow | null;
@@ -238,10 +277,13 @@ export async function saveAiProvider(key: string, input: SaveAiProviderInput): P
     encrypted = Object.keys(trimmed).length ? encodeCredentials(trimmed) : null;
   }
 
+  const rateLimits = input.rateLimits === undefined ? asRateLimits(row?.rate_limits) : input.rateLimits;
+
   const patch = {
     provider_key: key,
     enabled: input.enabled ?? (row ? row.enabled !== false : true),
     encrypted_credentials: encrypted,
+    rate_limits: rateLimits,
     updated_by: input.updatedBy ?? null,
     updated_at: new Date().toISOString(),
   };
@@ -255,6 +297,7 @@ export async function saveAiProvider(key: string, input: SaveAiProviderInput): P
     enabled: patch.enabled,
     configured: hasCompleteCredentials(descriptor, creds),
     hint: maskCredentialHint(descriptor, creds),
+    rateLimits,
     updatedAt: patch.updated_at,
   };
 }
@@ -367,6 +410,10 @@ function specFor(
       apiKey,
       maxOutputTokens: model.maxOutputTokens,
       outputTokenParam: descriptor.outputTokenParam,
+      // The bucket is the PROVIDER, never the model: a vendor pools its quota
+      // across every model and modality on the account.
+      providerKey: descriptor.key,
+      rateBudget: resolveBudget(descriptor.key, config?.rateLimits ?? null),
     },
     outputTokens: clampOutputTokens(model, overrideTokens),
     reason: null,
@@ -442,6 +489,10 @@ export async function resolveTaskModel(taskKey: AiTaskKey): Promise<ResolvedTask
         apiKey: envKey,
         maxOutputTokens: model.maxOutputTokens,
         outputTokenParam: descriptor.outputTokenParam,
+        // Same bucket as the DB-configured path above — this branch runs when
+        // the DB is unreadable, which must not double the vendor's rate.
+        providerKey: descriptor.key,
+        rateBudget: resolveBudget(descriptor.key, null),
       },
       outputTokens: defaultOutputTokens(model),
       usedFallback: assignment !== undefined,
@@ -481,6 +532,9 @@ export async function defaultSpecForTask(taskKey: AiTaskKey): Promise<ResolvedTa
       apiKey: envKey,
       maxOutputTokens: model.maxOutputTokens,
       outputTokenParam: descriptor.outputTokenParam,
+      // See the identical branch in `resolveTaskModel`.
+      providerKey: descriptor.key,
+      rateBudget: resolveBudget(descriptor.key, null),
     },
     usedFallback: true,
     fallbackReason: null,
