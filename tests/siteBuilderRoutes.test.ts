@@ -427,3 +427,116 @@ describe("POST /api/site-builder/runs/[id]/generate — packaging order", () => 
     expect(Object.values(pages).every((p) => p.status === "ok")).toBe(true);
   });
 });
+
+describe("POST /api/site-builder/runs/[id]/generate — which runs may be claimed", () => {
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60 * 1000).toISOString();
+
+  it("claims a failed run, clears its error, and leaves it at review", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "failed", error: "Every page failed to generate." })]);
+    adminHolder.admin = admin;
+
+    // Mid-flight, not final: the claim is the thing under test, and the final
+    // row would read "review" with a null error whether or not the claim ever
+    // touched the failed run's message.
+    let midFlight: Row | null = null;
+    runSiteMock.mockImplementation(async () => {
+      midFlight = { ...state.runs[0] };
+      return {
+        ok: true,
+        pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+        zipBytes: new Uint8Array([1, 2, 3]),
+      };
+    });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    expect(midFlight).not.toBeNull();
+    expect(midFlight!.status).toBe("generating");
+    expect(midFlight!.error).toBeNull();
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].error).toBeNull();
+  });
+
+  it("still claims a queued run", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "queued" })]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(200);
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    expect(state.runs[0].status).toBe("review");
+  });
+
+  it("claims a generating run whose row has not moved for 61 minutes", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "generating", updated_at: minutesAgo(61) })]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(200);
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    expect(state.runs[0].status).toBe("review");
+  });
+
+  it("refuses a generating run that moved a minute ago", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "generating", updated_at: minutesAgo(1) })]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(409);
+    expect(runSiteMock).not.toHaveBeenCalled();
+    expect(state.runs[0].status).toBe("generating");
+  });
+
+  for (const status of ["review", "approved", "deployed"]) {
+    it(`refuses a ${status} run — it has a zip, and the per-page route is the right tool`, async () => {
+      const { admin, state } = makeWritableAdmin([RUN({ status })]);
+      adminHolder.admin = admin;
+
+      const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+      expect(res.status).toBe(409);
+      const message = String((await res.json()).error);
+      // The message has to name BOTH the state it found and the states it
+      // would accept, or the operator cannot tell why the button did nothing.
+      expect(message).toContain(`"${status}"`);
+      expect(message).toMatch(/queued/);
+      expect(message).toMatch(/failed/);
+      expect(runSiteMock).not.toHaveBeenCalled();
+      expect(state.runs[0].status).toBe(status);
+    });
+  }
+
+  it("hands the run's STORED pages to runSite as `resume`", async () => {
+    // Recognisable, and deliberately not the shape runSite returns: if the
+    // route passed anything else — `{}`, the result, the claimed row's pages
+    // as re-derived — this assertion fails.
+    const stored = {
+      "index.html": { status: "ok", kind: "existing", html: "<html>CARRIED FROM THE LAST ATTEMPT</html>" },
+      "about.html": { status: "failed", kind: "existing", error: "boom" },
+    };
+    const { admin } = makeWritableAdmin([RUN({ status: "failed", pages: stored })]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(200);
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    const args = runSiteMock.mock.calls[0][0] as { resume?: unknown };
+    expect(args.resume).toEqual(stored);
+  });
+
+  it("passes an empty `resume` for a run that has never generated anything", async () => {
+    const { admin } = makeWritableAdmin([RUN({ status: "queued", pages: {} })]);
+    adminHolder.admin = admin;
+
+    await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    const args = runSiteMock.mock.calls[0][0] as { resume?: unknown };
+    expect(args.resume).toEqual({});
+  });
+});

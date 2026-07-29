@@ -47,14 +47,26 @@ type Ctx = { params: Promise<{ id: string }> };
 const STALE_GENERATING_MS = 60 * 60 * 1000;
 
 /**
- * Run the generation for a queued run, persisting per-page progress to the
- * row as it happens — the run screen polls the row and shows exactly which
- * pages are done, generating, or still pending (see `PageState.status`).
+ * Statuses `/generate` will claim. `failed` is here because retry IS this
+ * route: a failed run is re-claimed and, thanks to `resume` below, only the
+ * pages that did not finish are regenerated. `review`/`approved`/`deployed`
+ * are deliberately absent — those have a packaged zip, and the right tool for
+ * changing one page there is the per-page regenerate route.
+ */
+const RESUMABLE = new Set(["queued", "failed"]);
+
+/**
+ * Run the generation for a queued run — or RETRY a failed one — persisting
+ * per-page progress to the row as it happens; the run screen polls the row and
+ * shows exactly which pages are done, generating, or still pending (see
+ * `PageState.status`).
  *
- * Claimed by CAS on status ("queued" → "generating"), so the run screen and
- * a second tab can both fire this idempotently — one wins, the rest 409 and
+ * Claimed by CAS on status (see RESUMABLE, → "generating"), so the run screen
+ * and a second tab can both fire this idempotently — one wins, the rest 409 and
  * simply keep polling. A stale "generating" run (see STALE_GENERATING_MS)
- * may be re-claimed the same way.
+ * may be re-claimed the same way. Retry costs only what actually failed: the
+ * run's stored `pages` go in as `resume`, so an already-`ok` page is carried
+ * forward verbatim and never re-bought.
  *
  * The claim also stamps a `generation_id` (migration 0063) that every write
  * below filters on, so an attempt that gets superseded mid-flight discards
@@ -77,8 +89,11 @@ export async function POST(_req: Request, ctx: Ctx) {
   const stale =
     run.status === "generating" &&
     Date.now() - new Date(run.updated_at as string).getTime() > STALE_GENERATING_MS;
-  if (run.status !== "queued" && !stale) {
-    return NextResponse.json({ error: `Cannot generate: this run is "${run.status}", not "queued".` }, { status: 409 });
+  if (!RESUMABLE.has(run.status as string) && !stale) {
+    return NextResponse.json(
+      { error: `Cannot generate: this run is "${run.status}", not "queued" or "failed".` },
+      { status: 409 },
+    );
   }
 
   /**
@@ -149,6 +164,10 @@ export async function POST(_req: Request, ctx: Ctx) {
       template: bundle,
       requestedPages,
       onProgress: persist,
+      // Retry, and stale-reclaim, both land here. Whatever a previous attempt
+      // finished is carried through untouched; only the rest is regenerated.
+      // On a first run this is `{}` and changes nothing.
+      resume: (run.pages ?? {}) as Record<string, PageState>,
     });
 
     const outputPath = result.zipBytes ? outputPathFor(id) : null;
