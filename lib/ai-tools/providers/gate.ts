@@ -578,3 +578,41 @@ export class ProviderGate {
     );
   }
 }
+
+/* ----------------------------------------------------------- the registry */
+
+/**
+ * Process-wide gates, one per provider key.
+ *
+ * Module-level state is the point: every AI call in the app must draw from the
+ * SAME bucket per provider, whichever subsystem made it. A gate created per
+ * request would enforce nothing.
+ */
+const gates = new Map<string, ProviderGate>();
+
+/**
+ * The gate for a provider, creating it on first use. An existing gate has its
+ * budget UPDATED rather than being replaced — replacing it would discard the
+ * in-flight count and the learned adaptive scale every time an operator saved
+ * a settings change, which is exactly when accurate state matters most.
+ */
+export function getGate(providerKey: string, budget: RateBudget): ProviderGate {
+  const existing = gates.get(providerKey);
+  if (existing) {
+    existing.setBudget(budget);
+    return existing;
+  }
+  const created = new ProviderGate(providerKey, budget);
+  gates.set(providerKey, created);
+  return created;
+}
+
+/** Every live gate's state, for the admin screen. */
+export function gateSnapshots(): GateSnapshot[] {
+  return [...gates.values()].map((g) => g.snapshot());
+}
+
+/** Drop all gates. Tests only — production shares one process for its lifetime. */
+export function resetGates(): void {
+  gates.clear();
+}

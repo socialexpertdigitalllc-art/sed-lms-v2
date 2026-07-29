@@ -16,6 +16,9 @@ import {
   RAMP_STEP,
   THROTTLE_COOLDOWN_MS,
   GATE_SLOW_WAIT_WARN_MS,
+  getGate,
+  gateSnapshots,
+  resetGates,
 } from "@/lib/ai-tools/providers/gate";
 import { isRetryableError, ProviderHttpError } from "@/lib/ai-tools/providers/errors";
 import { scaleBudget } from "@/lib/ai-tools/providers/limits";
@@ -432,6 +435,54 @@ describe("throttle logging", () => {
     expect(gate.snapshot().scale).toBe(0.5); // it still paced off it
     expect(warn).toHaveBeenCalled();
     expect(warn.mock.calls.every((c) => !String(c[0]).includes("NaN"))).toBe(true);
+  });
+});
+
+describe("gate registry", () => {
+  beforeEach(() => resetGates());
+
+  it("returns the same gate for the same provider key", () => {
+    expect(getGate("minimax", {})).toBe(getGate("minimax", {}));
+  });
+
+  it("keeps different providers on separate budgets", () => {
+    expect(getGate("minimax", {})).not.toBe(getGate("gemini", {}));
+  });
+
+  it("updates the budget of an existing gate rather than replacing it", async () => {
+    const first = getGate("p", { concurrency: 1 });
+    const slot = await first.acquire({ inputTokens: 1, model: "m", maxTokens: 1 });
+    const second = getGate("p", { concurrency: 9 });
+    expect(second).toBe(first);
+    expect(second.snapshot().inFlight).toBe(1);
+    slot.settle(null);
+  });
+
+  it("reports every live gate for the settings screen", () => {
+    getGate("minimax", {});
+    getGate("gemini", {});
+    expect(gateSnapshots().map((s) => s.key).sort()).toEqual(["gemini", "minimax"]);
+  });
+
+  // CRITICAL: getGate calls setBudget on every lookup, including the common
+  // case where the caller (e.g. resolveBudget) builds a fresh but VALUE-EQUAL
+  // budget object each time. If setBudget compared budgets by reference rather
+  // than by value, every single getGate call would look like a "changed"
+  // budget and would reset the learned adaptive scale — silently destroying
+  // all rate-limit adaptation while every other test still passed.
+  it("does not reset learned pacing when repeatedly handed a fresh but equal budget object", async () => {
+    const gate = getGate("minimax", { rpm: 60, tpm: 500_000 });
+    const slot = await gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 });
+    slot.settleError(new ProviderHttpError("rate limited", 429, null, null));
+    expect(gate.snapshot().scale).toBe(0.5);
+
+    // Each call constructs a brand-new object, equal by value but never the
+    // same reference as the one before it — exactly what resolveBudget() does.
+    for (let i = 0; i < 5; i++) {
+      const same = getGate("minimax", { rpm: 60, tpm: 500_000 });
+      expect(same).toBe(gate);
+      expect(same.snapshot().scale).toBe(0.5);
+    }
   });
 });
 
