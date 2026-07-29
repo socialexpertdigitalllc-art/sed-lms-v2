@@ -4,9 +4,16 @@ import { countImages, countWords, parseFiles, type GeneratedFile } from "./parse
 import { getWgeConfig } from "./wge";
 import { mapLeadToInput } from "./leadPrefill";
 import { buildPrompt, EMPTY_INPUT, type GenInput } from "./prompt";
-import { AiCallAborted, combineAbortSignals } from "./abort";
-import { callTimedOutMessage, parseRetryAfter, ProviderHttpError, rateLimitHeadersFrom } from "./providers/errors";
+import { AiCallAborted, combineAbortSignals, isAbortedError } from "./abort";
+import {
+  callTimedOutMessage,
+  isRetryableError,
+  parseRetryAfter,
+  ProviderHttpError,
+  rateLimitHeadersFrom,
+} from "./providers/errors";
 import type { RateBudget } from "./providers/limits";
+import { sleep, type TokenUsage } from "./providers/gate";
 
 const BUCKET = "ai-generations";
 
@@ -167,18 +174,48 @@ export interface ProviderSpec {
   rateBudget?: RateBudget;
 }
 
+/** Attempts per call, inclusive of the first. Four means three retries, which
+ *  clears a typical per-minute window without letting one wedged call hold a
+ *  gate slot for minutes. */
+export const MAX_ATTEMPTS = 4;
+/** Ceiling on a vendor-supplied Retry-After. A vendor that asks for ten
+ *  minutes must not be able to wedge a generation. */
+export const RETRY_AFTER_CAP_MS = 60_000;
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_CAP_MS = 30_000;
+
 /**
- * The actual OpenAI-compatible call. Identical wire format for every provider
- * we support (Gemini's compat surface, DeepSeek, Moonshot, MiniMax), which is
- * why adding a provider is a descriptor and nothing else.
+ * How long to wait before the next attempt.
+ *
+ * The vendor's own `Retry-After` wins whenever it sends one — it knows when the
+ * window resets and we are guessing. Otherwise: exponential from 1s with FULL
+ * jitter, which matters more than it looks. Every page of a site is retrying at
+ * once; a fixed schedule would have them all wake together and re-throttle each
+ * other indefinitely.
+ *
+ * `random` is injectable purely so the schedule is testable.
  */
-export async function callWithProvider(
+export function backoffDelayMs(attempt: number, error: unknown, random: () => number = Math.random): number {
+  if (error instanceof ProviderHttpError && error.retryAfterMs !== null) {
+    return Math.min(error.retryAfterMs, RETRY_AFTER_CAP_MS);
+  }
+  const ceiling = Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_CAP_MS);
+  return Math.round(ceiling * random());
+}
+
+/**
+ * ONE attempt at the OpenAI-compatible call — no retries, no gating; those are
+ * `callWithProvider`'s job. Identical wire format for every provider we support
+ * (Gemini's compat surface, DeepSeek, Moonshot, MiniMax), which is why adding a
+ * provider is a descriptor and nothing else.
+ */
+async function attemptCall(
   cfg: ProviderSpec,
   model: string,
   systemPrompt: string,
   userPrompt: string,
   opts: ProviderCallOptions
-): Promise<{ text: string; tokens: number }> {
+): Promise<{ text: string; tokens: number; usage: TokenUsage | null }> {
   // Already stopped before we even dialled — do not spend the call.
   if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
 
@@ -244,8 +281,46 @@ export async function callWithProvider(
   }
   const j = await res.json();
   const text: string = j?.choices?.[0]?.message?.content ?? "";
-  const tokens: number = j?.usage?.total_tokens ?? Math.ceil(text.length / 4);
-  return { text, tokens };
+  // The raw usage block, not just the total: the gate's TPM accounting learns
+  // an output-to-input ratio from prompt/completion, which the total alone
+  // cannot supply.
+  const usage = (j?.usage ?? null) as TokenUsage | null;
+  const tokens: number = usage?.total_tokens ?? Math.ceil(text.length / 4);
+  return { text, tokens, usage };
+}
+
+/**
+ * The actual OpenAI-compatible call, with retries. Identical wire format for
+ * every provider we support, which is why adding a provider is a descriptor
+ * and nothing else.
+ *
+ * A retryable failure (429, transient 5xx, timeout, network fault) is retried
+ * with backoff; a terminal one (bad request, bad key) is thrown immediately
+ * because retrying it cannot succeed and spends quota a concurrent run needs.
+ * An operator abort is never retried.
+ */
+export async function callWithProvider(
+  cfg: ProviderSpec,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  opts: ProviderCallOptions,
+): Promise<{ text: string; tokens: number }> {
+  const attempts = Math.max(1, opts.maxAttempts ?? MAX_ATTEMPTS);
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const out = await attemptCall(cfg, model, systemPrompt, userPrompt, opts);
+      return { text: out.text, tokens: out.tokens };
+    } catch (e) {
+      lastError = e;
+      if (isAbortedError(e)) throw e;
+      if (!isRetryableError(e) || attempt === attempts) throw e;
+      await sleep(backoffDelayMs(attempt, e), opts.signal);
+    }
+  }
+  throw lastError;
 }
 
 // Headlessly generate a lead's website end-to-end. Throws on failure.
