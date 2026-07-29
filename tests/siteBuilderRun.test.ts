@@ -10,8 +10,11 @@ import {
   selectPages,
   matchTemplatePage,
   findComponentsFile,
+  retryablePages,
+  allFailuresTerminal,
   type PageState,
 } from "@/lib/site-builder/run";
+import { ProviderHttpError } from "@/lib/ai-tools/providers/errors";
 import type { AiCall } from "@/lib/site-builder/generate";
 import { SITE_COMPONENTS_SYSTEM } from "@/lib/site-builder/prompt";
 import type { TemplateBundle } from "@/lib/site-builder/templates";
@@ -314,6 +317,47 @@ describe("runSite", () => {
     // the template's own copy still ships, exactly as for a non-throwing failure
     const files = unzipToMap(result.zipBytes!);
     expect(dec.decode(files["components.js"])).toBe("const NAME = 'Demo Kitchens';");
+  });
+
+  it("persists the failure classification — a thrown 429's retryable flag and vendor wait land in PageState", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
+    const call: AiCall = async (_s, u) => {
+      if (u.includes("THE PAGE TO REWRITE: about.html")) throw new ProviderHttpError("rate limited", 429, 7000, null);
+      return { text: okHtml("NEW INDEX") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.pages["about.html"]).toMatchObject({
+      status: "failed",
+      retryable: true,
+      retryAfterMs: 7000,
+    });
+    expect(result.pages["about.html"].error).toContain("about.html");
+  });
+
+  it("persists a terminal classification — a thrown 401 is retryable:false with no retryAfterMs", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
+    const call: AiCall = async (_s, u) => {
+      if (u.includes("THE PAGE TO REWRITE: about.html")) throw new ProviderHttpError("bad key", 401, null, null);
+      return { text: okHtml("NEW INDEX") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.pages["about.html"]).toMatchObject({ status: "failed", retryable: false });
+    expect(result.pages["about.html"].retryAfterMs).toBeUndefined();
+  });
+
+  it("an extraction failure's PageState carries NO retryable field — absent means retryable by nature", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
+    const call: AiCall = async (_s, u) => {
+      if (u.includes("THE PAGE TO REWRITE: about.html")) return { text: "sorry, I can't do that" };
+      return { text: okHtml("NEW INDEX") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.pages["about.html"].status).toBe("failed");
+    expect(result.pages["about.html"]).not.toHaveProperty("retryable");
+    expect(result.pages["about.html"]).not.toHaveProperty("retryAfterMs");
   });
 
   it("fails the whole run only when every page fails", async () => {
@@ -824,6 +868,64 @@ describe("runSite resume", () => {
     expect(calls.some((c) => c.user.includes("YOUR JOB: CREATE A NEW PAGE"))).toBe(false);
   });
 
+  it("never carries a previous attempt's failure metadata — a carried page is only ever ok", async () => {
+    // A corrupted/stale row could hold an ok entry that still wears the failure
+    // fields of an earlier attempt. Carrying them would make a finished page
+    // look classified — and a "terminal" flag on an ok page would poison the
+    // coming retry loop's every read of the map.
+    const tpl = bundle({ "index.html": "<html>old index</html>" });
+    const { calls, call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home"],
+      resume: {
+        "index.html": {
+          status: "ok",
+          kind: "existing",
+          html: okHtml("CARRIED INDEX"),
+          error: "minimax rate limit exceeded (HTTP 429)",
+          retryable: false,
+          retryAfterMs: 7000,
+        },
+      },
+    });
+
+    expect(calls).toHaveLength(0);
+    expect(result.pages["index.html"]).toMatchObject({ status: "ok", kind: "existing" });
+    expect(result.pages["index.html"]).not.toHaveProperty("error");
+    expect(result.pages["index.html"]).not.toHaveProperty("retryable");
+    expect(result.pages["index.html"]).not.toHaveProperty("retryAfterMs");
+  });
+
+  it("a regenerated page sheds the failed attempt's classification along with its error", async () => {
+    const tpl = bundle({ "index.html": "<html>old index</html>" });
+    const { call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home"],
+      resume: {
+        "index.html": {
+          status: "failed",
+          kind: "existing",
+          error: "minimax rate limit exceeded (HTTP 429)",
+          retryable: true,
+          retryAfterMs: 7000,
+        },
+      },
+    });
+
+    expect(result.pages["index.html"].status).toBe("ok");
+    expect(result.pages["index.html"]).not.toHaveProperty("error");
+    expect(result.pages["index.html"]).not.toHaveProperty("retryable");
+    expect(result.pages["index.html"]).not.toHaveProperty("retryAfterMs");
+  });
+
   it("makes no AI call at all when every requested page is already ok", async () => {
     const tpl = bundle({ "index.html": "<html>old index</html>" }, { "js/components.js": "const NAME = 'Demo Kitchens';" });
     const { calls, call } = recorder(pageReply);
@@ -844,6 +946,45 @@ describe("runSite resume", () => {
     expect(result.zipBytes).toBeDefined();
     const files = unzipToMap(result.zipBytes!);
     expect(dec.decode(files["index.html"])).toContain("CARRIED INDEX");
+  });
+});
+
+describe("retryablePages / allFailuresTerminal", () => {
+  const okPage: PageState = { status: "ok", kind: "existing", html: "<html>fine</html>" };
+  const terminal: PageState = { status: "failed", kind: "existing", error: "bad key", retryable: false };
+  const throttled: PageState = { status: "failed", kind: "existing", error: "429", retryable: true, retryAfterMs: 7000 };
+  const unclassified: PageState = { status: "failed", kind: "new", name: "Pricing", error: "no HTML in reply" };
+
+  it("retryablePages returns only failed pages not marked terminal — absent retryable counts as retryable", () => {
+    const pages: Record<string, PageState> = {
+      "index.html": okPage,
+      "about.html": terminal,
+      "services.html": throttled,
+      "pricing.html": unclassified,
+      "gallery.html": { status: "pending", kind: "existing" },
+      "contact.html": { status: "generating", kind: "existing" },
+    };
+    expect(retryablePages(pages).sort()).toEqual(["pricing.html", "services.html"]);
+  });
+
+  it("retryablePages is empty for an all-ok map and for an all-terminal map", () => {
+    expect(retryablePages({ "index.html": okPage })).toEqual([]);
+    expect(retryablePages({ "about.html": terminal })).toEqual([]);
+    expect(retryablePages({})).toEqual([]);
+  });
+
+  it("allFailuresTerminal is true when the only failures are terminal", () => {
+    expect(allFailuresTerminal({ "index.html": okPage, "about.html": terminal })).toBe(true);
+  });
+
+  it("allFailuresTerminal is false when any failure is retryable — classified or unclassified", () => {
+    expect(allFailuresTerminal({ "about.html": terminal, "services.html": throttled })).toBe(false);
+    expect(allFailuresTerminal({ "about.html": terminal, "pricing.html": unclassified })).toBe(false);
+  });
+
+  it("allFailuresTerminal is false when nothing failed — an all-ok map is done, not terminal", () => {
+    expect(allFailuresTerminal({ "index.html": okPage })).toBe(false);
+    expect(allFailuresTerminal({})).toBe(false);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   generateNewPage,
   generateComponents,
 } from "@/lib/site-builder/generate";
+import { ProviderHttpError, isRetryableError } from "@/lib/ai-tools/providers/errors";
 import type { BusinessBrief } from "@/lib/site-builder/prompt";
 
 const brief: BusinessBrief = {
@@ -386,6 +387,67 @@ describe("generatePage", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain("gallery.html");
+  });
+});
+
+describe("thrown-failure classification (callOrFail)", () => {
+  const gen = (call: (system: string, user: string) => Promise<{ text: string }>) =>
+    generatePage({ aiCall: call }, {
+      brief,
+      images: [],
+      pageFile: "index.html",
+      pageHtml: "<html>old</html>",
+      siteFiles: ["index.html"],
+    });
+
+  it("a thrown 429 with a vendor Retry-After is retryable and carries the wait", async () => {
+    const call = async () => {
+      throw new ProviderHttpError("rate limited", 429, 7000, null);
+    };
+    const r = await gen(call);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.retryable).toBe(true);
+    expect(r.retryAfterMs).toBe(7000);
+    // the message still names the file — the operator-facing contract
+    expect(r.error).toContain("index.html");
+    expect(r.error).toContain("rate limited");
+  });
+
+  it("a thrown 401 is terminal — retryable false, no retryAfterMs", async () => {
+    const call = async () => {
+      throw new ProviderHttpError("bad key", 401, null, null);
+    };
+    const r = await gen(call);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.retryable).toBe(false);
+    expect(r.retryAfterMs).toBeUndefined();
+    expect(r).not.toHaveProperty("retryAfterMs");
+  });
+
+  it("a thrown plain Error is classified exactly as isRetryableError classifies it", async () => {
+    // Checked, not guessed: a bare Error("boom") has no status, no timeout
+    // marker, no errno — isRetryableError returns false for it. If that
+    // classification ever changes, this test changes with it, in lockstep.
+    expect(isRetryableError(new Error("boom"))).toBe(false);
+    const call = async () => {
+      throw new Error("boom");
+    };
+    const r = await gen(call);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.retryable).toBe(isRetryableError(new Error("boom")));
+    expect(r.error).toContain("boom");
+  });
+
+  it("an EXTRACTION failure carries NO retryable field — absent means retryable by nature", async () => {
+    const call = async () => ({ text: "sorry, I cannot help with that" });
+    const r = await gen(call);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r).not.toHaveProperty("retryable");
+    expect(r).not.toHaveProperty("retryAfterMs");
   });
 });
 
