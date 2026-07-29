@@ -290,7 +290,12 @@ export interface RunSiteResult {
  *     reference pages.
  *
  * A per-page failure is recorded in `pages` and never kills the run — only
- * when EVERY page fails does the run itself fail.
+ * when EVERY page fails does the run itself fail. That holds for a THROWN
+ * provider failure too (a sustained 429, a timeout), not just an unusable
+ * reply: `generate.ts` catches the call itself and returns the same `ok:false`
+ * outcome, so the `Promise.all` below cannot reject and take a run's already-
+ * finished pages down with it. Do not move that catch here without reading
+ * `callOrFail`'s docblock — `regeneratePage` has no `Promise.all` to guard.
  */
 export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
   const { aiCall, brief, images, template, requestedPages, onProgress } = args;

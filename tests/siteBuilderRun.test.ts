@@ -244,6 +244,77 @@ describe("runSite", () => {
     expect(files["about.html"]).toBeUndefined();
   });
 
+  it("a THROWN provider failure fails only that page — the run still ships the rest", async () => {
+    // The regression this guards: before the rate limiter, a MiniMax 429 fell
+    // through to a fallback provider and the run quietly completed. `callForTask`
+    // now (correctly) refuses to reroute a retryable failure, so a sustained 429
+    // THROWS out of aiCall. Under a bare `Promise.all` that rejected the whole
+    // run — the route marked it "failed", uploaded no zip, and discarded every
+    // page that had already succeeded. Every other failure test here uses an
+    // aiCall that RESOLVES with bad text, so nothing covered this path.
+    const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
+    const call: AiCall = async (_s, u) => {
+      if (u.includes("THE PAGE TO REWRITE: about.html")) throw new Error("minimax rate limit exceeded (HTTP 429)");
+      return { text: okHtml("NEW INDEX") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["index.html"].status).toBe("ok");
+    expect(result.pages["about.html"].status).toBe("failed");
+    // Names the file AND preserves the provider's own words — the only thing
+    // that tells the operator to regenerate rather than change a setting.
+    expect(result.pages["about.html"].error).toContain("about.html");
+    expect(result.pages["about.html"].error).toContain("minimax rate limit exceeded (HTTP 429)");
+
+    // and the run still produced a zip carrying the pages that DID succeed
+    const files = unzipToMap(result.zipBytes!);
+    expect(files["index.html"]).toBeDefined();
+    expect(files["about.html"]).toBeUndefined();
+  });
+
+  it("a THROWN failure on a designed NEW page is recorded the same way", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" });
+    const call: AiCall = async (_s, u) => {
+      if (u.includes("YOUR JOB: CREATE A NEW PAGE")) throw new Error("provider call timed out after 300s");
+      return { text: okHtml("NEW INDEX") };
+    };
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Pricing"],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["index.html"].status).toBe("ok");
+    expect(result.pages["pricing.html"]).toMatchObject({ status: "failed", kind: "new", name: "Pricing" });
+    expect(result.pages["pricing.html"].error).toContain("pricing.html");
+    expect(result.pages["pricing.html"].error).toContain("timed out");
+  });
+
+  it("a THROWN components failure never kills the run — pages still generate", async () => {
+    // Same contract as the existing "failed components rewrite" test, but for
+    // the throwing path: the components call is awaited OUTSIDE the Promise.all,
+    // so an uncaught throw there killed the run before a single page started.
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "components.js": "const NAME = 'Demo Kitchens';" });
+    const call: AiCall = async (system) => {
+      if (system.includes("shared-components file")) throw new Error("HTTP 429 rate limit exceeded");
+      return { text: okHtml("PAGE") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    expect(result.ok).toBe(true);
+    expect(result.pages["components.js"].status).toBe("failed");
+    expect(result.pages["components.js"].error).toContain("components.js");
+    expect(result.pages["components.js"].error).toContain("HTTP 429 rate limit exceeded");
+    expect(result.pages["index.html"].status).toBe("ok");
+    // the template's own copy still ships, exactly as for a non-throwing failure
+    const files = unzipToMap(result.zipBytes!);
+    expect(dec.decode(files["components.js"])).toBe("const NAME = 'Demo Kitchens';");
+  });
+
   it("fails the whole run only when every page fails", async () => {
     const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
     const call: AiCall = async () => ({ text: "nope, cannot help" });
