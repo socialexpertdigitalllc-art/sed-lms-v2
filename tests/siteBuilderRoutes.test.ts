@@ -90,7 +90,6 @@ function makeAdmin() {
     storage: {
       from(bucket: string) {
         return {
-          upload: async () => ({ error: null }),
           download: async (path: string) => {
             if (bucket === "builder-templates" && path === "tpl-1/source.zip") {
               return { data: { arrayBuffer: async () => TEMPLATE_ZIP.buffer }, error: null };
@@ -173,7 +172,21 @@ function makeWritableAdmin(
     return api;
   };
 
-  return { admin: { from, storage: makeAdmin().storage }, state };
+  /**
+   * Spy-able upload over the read-only storage stub. It is a spy because the
+   * ordering fix is "a superseded attempt does not upload AT ALL" — that is an
+   * assertion about a call that must NOT happen, so the call has to be
+   * observable. `mockResolvedValue({ error: {...} })` makes packaging fail.
+   */
+  const baseStorage = makeAdmin().storage;
+  const uploadMock = vi.fn(async (_bucket: string, _path: string) => ({ error: null as { message: string } | null }));
+  const storage = {
+    from(bucket: string) {
+      return { ...baseStorage.from(bucket), upload: (path: string) => uploadMock(bucket, path) };
+    },
+  };
+
+  return { admin: { from, storage }, state, uploadMock };
 }
 
 const RUN = (over: Row = {}): Row => ({
@@ -348,5 +361,69 @@ describe("POST /api/site-builder/runs/[id]/generate — generation ownership", (
     expect(res.status).toBe(409);
     expect(state.runs[0].status).toBe("failed");
     expect(state.activity).toHaveLength(0);
+  });
+});
+
+describe("POST /api/site-builder/runs/[id]/generate — packaging order", () => {
+  it("a superseded attempt does not upload at all", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+
+    runSiteMock.mockImplementation(async () => {
+      state.runs[0].generation_id = null;
+      state.runs[0].status = "failed";
+      return {
+        ok: true,
+        pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+        zipBytes: new Uint8Array([1, 2, 3]),
+      };
+    });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    // The DB guard alone never stopped this: the upload path is shared by
+    // every attempt and upserts, so a loser that uploaded would have replaced
+    // the winner's archive while its row write was correctly discarded.
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(409);
+    expect(state.runs[0].status).toBe("failed");
+  });
+
+  it("the winner uploads once and is released afterwards", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(200);
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+    expect(uploadMock).toHaveBeenCalledWith("builder-sites", "run-1/site.zip");
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].output_path).toBe("run-1/site.zip");
+    // Released only in the LAST write — holding the token across the upload is
+    // what makes "row says review, bytes not up yet" a safe intermediate state.
+    expect(state.runs[0].generation_id).toBeNull();
+  });
+
+  it("a failed upload leaves a run that is failed, released and free to retry", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(500);
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].generation_id).toBeNull();
+    const message = String(state.runs[0].error);
+    expect(message).toContain("storage unreachable");
+    expect(message).toMatch(/retry/i);
+    expect(message).toMatch(/no AI calls/i);
+    // …and that promise is only true because the finished pages survived the
+    // failure: `resume` carries every `ok` page forward, so the retry re-zips
+    // rather than regenerating.
+    const pages = state.runs[0].pages as Record<string, { status: string }>;
+    expect(Object.keys(pages)).toHaveLength(1);
+    expect(Object.values(pages).every((p) => p.status === "ok")).toBe(true);
   });
 });

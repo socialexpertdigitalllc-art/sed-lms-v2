@@ -59,7 +59,11 @@ const STALE_GENERATING_MS = 60 * 60 * 1000;
  * The claim also stamps a `generation_id` (migration 0063) that every write
  * below filters on, so an attempt that gets superseded mid-flight discards
  * its own result instead of overwriting the winner's. See the comment on
- * `generationId` for why the claim CAS alone is not enough.
+ * `generationId` for why the claim CAS alone is not enough. The zip is
+ * uploaded only AFTER this attempt's terminal write has proven it still owns
+ * the run, so a superseded attempt cannot overwrite the winner's archive
+ * either — the DB guard alone would not have stopped that, since the upload
+ * path is shared by every attempt.
  */
 export async function POST(_req: Request, ctx: Ctx) {
   const auth = await guard();
@@ -147,18 +151,25 @@ export async function POST(_req: Request, ctx: Ctx) {
       onProgress: persist,
     });
 
-    let outputPath: string | null = null;
-    if (result.zipBytes) {
-      outputPath = outputPathFor(id);
-      const { error: upErr } = await admin.storage
-        .from(BUILDER_SITES_BUCKET)
-        .upload(outputPath, result.zipBytes, { contentType: "application/zip", upsert: true });
-      if (upErr) throw new Error(`zip upload failed: ${upErr.message}`);
-    }
+    const outputPath = result.zipBytes ? outputPathFor(id) : null;
 
-    // The terminal write, guarded on the token this attempt claimed. It also
-    // RELEASES the run (`generation_id: null`) — the generation is over, so
-    // nothing owns the row any more.
+    /**
+     * STEP 1 — the terminal write, guarded on the token this attempt claimed.
+     *
+     * This runs BEFORE the zip upload, and the order is the point. The upload
+     * targets one path shared by every attempt at this run, with `upsert:
+     * true`; done first, a superseded attempt would have its DB write
+     * correctly discarded and STILL overwrite the winner's archive — leaving
+     * the row saying "review" with the winner's `pages` while the object store
+     * held the loser's zip, which can be missing pages that failed in that
+     * attempt but succeeded in the winner's. So ownership is established
+     * before any object-store side effect, not after.
+     *
+     * DELIBERATELY does not null `generation_id`: this attempt still owns the
+     * run while it packages, which is what makes the intermediate state below
+     * safe. Releasing here would also strand the run — step 3's guarded write
+     * would then match nothing and the token would belong to no attempt.
+     */
     const { data: updated, error: updErr } = await admin
       .from("builder_runs")
       .update({
@@ -166,7 +177,6 @@ export async function POST(_req: Request, ctx: Ctx) {
         pages: result.pages,
         output_path: outputPath,
         error: result.ok ? null : "Every page failed to generate.",
-        generation_id: null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", id)
@@ -178,7 +188,8 @@ export async function POST(_req: Request, ctx: Ctx) {
      * Zero rows means this attempt was superseded while it was running —
      * /recover, or another attempt that won a stale reclaim, cleared the token
      * deliberately. Discard this result rather than clobber the state that
-     * actor set.
+     * actor set, and return WITHOUT uploading: that early return is what keeps
+     * a loser's bytes off the winner's archive.
      *
      * 409, not 500: nothing malfunctioned and the operator did not cause it.
      * This is a lost race with a decision somebody else made, which is exactly
@@ -192,15 +203,67 @@ export async function POST(_req: Request, ctx: Ctx) {
       );
     }
 
+    /**
+     * STEP 2 — we own the run, so now package it.
+     *
+     * The row already says "review" while these bytes are not up yet. That
+     * intermediate state is safe for exactly one reason, and it is the
+     * non-obvious part of this ordering: we still hold `generation_id`, so no
+     * other attempt can write to this row, upload to this path, or be claimed
+     * in between. The window closes at step 3.
+     */
+    let uploadError: string | null = null;
+    if (result.zipBytes && outputPath) {
+      const { error: upErr } = await admin.storage
+        .from(BUILDER_SITES_BUCKET)
+        .upload(outputPath, result.zipBytes, { contentType: "application/zip", upsert: true });
+      if (upErr) {
+        // Worth spelling out, because it is true and it is cheap: `resume`
+        // carries every already-`ok` page forward, so retrying after a
+        // packaging failure makes NO model calls at all — it just re-zips
+        // what is already stored and uploads again.
+        uploadError =
+          `The site generated successfully but packaging it failed (${upErr.message}). ` +
+          `Retry this run to re-package it — every finished page is carried forward, so no AI calls are made and it costs nothing.`;
+      }
+    }
+
+    /**
+     * STEP 3 — release the run, guarded on the same token. Kept as its own
+     * write (see step 1): nulling the token earlier would make this match
+     * nothing. On a packaging failure this also flips the run to "failed" with
+     * the retryable message, so the operator never sees a "review" run whose
+     * download 404s.
+     */
+    const { data: released } = await admin
+      .from("builder_runs")
+      .update(
+        uploadError
+          ? { generation_id: null, status: "failed", error: uploadError, updated_at: new Date().toISOString() }
+          : { generation_id: null, updated_at: new Date().toISOString() },
+      )
+      .eq("id", id)
+      .eq("generation_id", generationId)
+      .select("*")
+      .maybeSingle();
+    // Superseded during packaging — same discard-don't-clobber rule as above.
+    if (!released) {
+      return NextResponse.json(
+        { error: "This generation was superseded (the run was recovered or re-claimed); its result was discarded." },
+        { status: 409 },
+      );
+    }
+    if (uploadError) return NextResponse.json({ error: uploadError }, { status: 500 });
+
     await admin.from("activity_log").insert({
       user_id: auth.userId,
       action: "site_builder.run.generated",
       entity_type: "builder_run",
       entity_id: id,
-      new_value: { status: updated.status, pages: Object.keys(result.pages).length },
+      new_value: { status: released.status, pages: Object.keys(result.pages).length },
     });
 
-    return NextResponse.json({ run: updated });
+    return NextResponse.json({ run: released });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Generation failed";
     // Guarded the same way as the terminal write: a superseded attempt must
