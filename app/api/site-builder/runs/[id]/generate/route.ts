@@ -3,7 +3,17 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { loadTemplateBundle } from "@/lib/site-builder/templates";
 import { productionSiteBuildCall } from "@/lib/site-builder/generate";
-import { runSite, buildBrief, outputPathFor, BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
+import {
+  runSite,
+  buildBrief,
+  outputPathFor,
+  BUILDER_SITES_BUCKET,
+  // How long a quiet "generating" run may be presumed dead and re-claimed. It
+  // is defined in lib/ because the DELETE handler in ../route.ts needs the same
+  // number; see its docblock for the sizing.
+  STALE_GENERATING_MS,
+  type PageState,
+} from "@/lib/site-builder/run";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
 export const runtime = "nodejs";
@@ -23,28 +33,6 @@ export const runtime = "nodejs";
 export const maxDuration = 3600;
 
 type Ctx = { params: Promise<{ id: string }> };
-
-/**
- * A "generating" run whose row hasn't moved for this long is presumed dead
- * (server restart mid-generation) and may be claimed again.
- *
- * RAISED WITH `maxDuration`, and it has to be. `persist` only fires on a
- * PAGE-STATE change, so the row's quiet period is the gap between the last
- * "generating" emit and the first page to finish — and pacing made that gap
- * long. Worst case for a single page: it can sit in the rate gate for up to
- * GATE_MAX_WAIT_MS (2 min) per attempt, and between attempts wait out a vendor
- * Retry-After capped at 60s, across MAX_ATTEMPTS (4) attempts, each of which
- * may then burn the 5-minute call timeout — call it 4x(2+1+5) minutes, about
- * 21 minutes with nothing written to the row. 60 minutes clears that with room
- * for a slower vendor, and still trips long before `maxDuration` (3600s) does.
- *
- * Sizing this too LOW is the dangerous direction: a second tab or a re-click
- * would pass the stale check, win a fresh CAS claim, and run a SECOND
- * concurrent `runSite` against the same throttled provider with two writers
- * racing on `pages`. Too high merely delays recovery from a real crash, which
- * the operator can already force by re-queuing the run.
- */
-const STALE_GENERATING_MS = 60 * 60 * 1000;
 
 /**
  * Statuses `/generate` will claim. `failed` is here because retry IS this
@@ -253,12 +241,26 @@ export async function POST(_req: Request, ctx: Ctx) {
      * nothing. On a packaging failure this also flips the run to "failed" with
      * the retryable message, so the operator never sees a "review" run whose
      * download 404s.
+     *
+     * …and it RESTORES the pre-attempt `output_path`. Step 1 wrote the new one
+     * before the upload (deliberately — ownership is established before any
+     * object-store side effect), so a failed upload would otherwise leave the
+     * row pointing at an object that does not exist. The run screen renders
+     * "Download zip" on `output_path` alone, so that link would 404. Restoring
+     * rather than nulling is the point: a re-run whose upload fails still has
+     * the PREVIOUS attempt's zip sitting at that path, and that one is real.
      */
     const { data: released } = await admin
       .from("builder_runs")
       .update(
         uploadError
-          ? { generation_id: null, status: "failed", error: uploadError, updated_at: new Date().toISOString() }
+          ? {
+              generation_id: null,
+              status: "failed",
+              error: uploadError,
+              output_path: (run.output_path as string | null) ?? null,
+              updated_at: new Date().toISOString(),
+            }
           : { generation_id: null, updated_at: new Date().toISOString() },
       )
       .eq("id", id)

@@ -704,6 +704,35 @@ describe("runSite resume", () => {
     expect(calls.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("regenerates a carried page whose stored html is empty", async () => {
+    /**
+     * An `ok` entry with an empty string is not a page. Honouring it would skip
+     * the AI call, put a zero-byte file in the zip, and still count toward
+     * `result.ok` — so a row corrupted this way would package a site of empty
+     * files and report success. Not reachable from today's extractors; `resume`
+     * reads a persisted row, which is precisely where that stops being a
+     * guarantee.
+     */
+    const tpl = bundle({ "index.html": "<html>old index</html>" });
+    const { calls, call } = recorder(pageReply);
+    const result = await runSite({
+      aiCall: call,
+      brief,
+      images: [],
+      template: tpl,
+      requestedPages: ["Home"],
+      resume: {
+        "index.html": { status: "ok", kind: "existing", html: "" },
+      },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(result.pages["index.html"].status).toBe("ok");
+    expect(result.pages["index.html"].html).toContain("FRESH INDEX");
+    const files = unzipToMap(result.zipBytes!);
+    expect(files["index.html"].length).toBeGreaterThan(0);
+  });
+
   it("recomputes the plan from the lead, dropping pages no longer requested", async () => {
     const tpl = bundle({ "index.html": "<html>old index</html>", "about.html": "<html>old about</html>" });
     const { call } = recorder(pageReply);

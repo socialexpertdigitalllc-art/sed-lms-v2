@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { BUILDER_SITES_BUCKET, outputPathFor } from "@/lib/site-builder/run";
+import { BUILDER_SITES_BUCKET, outputPathFor, STALE_GENERATING_MS } from "@/lib/site-builder/run";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -21,9 +21,15 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 /** An actively-generating run may not be deleted out from under itself —
  *  unless its row hasn't moved for this long, in which case the generation
- *  is presumed dead (server restart) and the run is just debris. Matches
- *  the generate route's own staleness rule. */
-const ACTIVE_GRACE_MS = 10 * 60 * 1000;
+ *  is presumed dead (server restart) and the run is just debris.
+ *
+ *  This IS the generate route's staleness rule, shared rather than restated:
+ *  the two used to be separate literals and drifted apart, leaving deletion at
+ *  ten minutes long after claiming was raised to sixty — so a healthy paced run
+ *  (which can legitimately write nothing for ~21 minutes) was deletable while
+ *  still working. Anything shorter than the reclaim window is wrong here by
+ *  construction. */
+const ACTIVE_GRACE_MS = STALE_GENERATING_MS;
 
 /**
  * DELETE — remove a run entirely: its output zip in storage, then its row.
@@ -48,7 +54,10 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   const fresh = Date.now() - new Date(run.updated_at as string).getTime() < ACTIVE_GRACE_MS;
   if (active && fresh) {
     return NextResponse.json(
-      { error: "This run is still generating — wait for it to finish (or stall for 10 minutes), then delete it." },
+      {
+        error:
+          "This run is still generating — wait for it to finish, or use Stop and recover to release it, then delete it.",
+      },
       { status: 409 },
     );
   }

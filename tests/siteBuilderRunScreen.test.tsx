@@ -213,6 +213,52 @@ describe("BuilderRun — getting a broken run moving again", () => {
     expect(perPage).toBeEnabled();
   });
 
+  it("disables EVERY regenerate control while one page is being rewritten", async () => {
+    /**
+     * Two failed pages on a "review" run is the ORDINARY partial failure —
+     * runSite calls a run ok when any real page succeeded — and per-page Retry
+     * is the only tool there. Each regeneration rewrites the run's whole page
+     * set from the snapshot it read minutes ago, so letting the operator start
+     * a second one invites an AI call the server will (correctly) refuse.
+     */
+    const run = {
+      ...runFixture("review"),
+      pages: {
+        "index.html": { status: "ok", kind: "existing", html: "<html>a</html>" },
+        "about.html": { status: "failed", kind: "existing", error: "boom" },
+        "contact.html": { status: "failed", kind: "existing", error: "boom" },
+      },
+    };
+    // The regenerate POST never resolves — one rewrite in flight, as in life.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "POST") await new Promise<void>(() => {});
+        return { ok: true, json: async () => ({ run }) } as Response;
+      }),
+    );
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    render(<BuilderRun runId="run-1" />);
+
+    const retries = await screen.findAllByRole("button", { name: /^retry$/i });
+    expect(retries).toHaveLength(2);
+    // Both start enabled, so the disabling below is caused by the click.
+    expect(retries[0]).toBeEnabled();
+    expect(retries[1]).toBeEnabled();
+    const panel = screen.getByRole("button", { name: /regenerate this page/i });
+    expect(panel).toBeEnabled();
+
+    await user.click(retries[0]);
+
+    // The OTHER page's Retry, and the instruction panel's button, are what
+    // used to stay clickable — `busy` was keyed on the file, not on "any".
+    await waitFor(() => expect(retries[1]).toBeDisabled());
+    expect(retries[0]).toBeDisabled();
+    expect(panel).toBeDisabled();
+    expect(retries[1]).toHaveAttribute("title", expect.stringMatching(/one page.*at a time/i));
+  });
+
   it("offers Stop and recover once a generating run has been quiet for six minutes", async () => {
     const run = { ...runFixture("generating"), updated_at: minutesAgo(6) };
     const fetchMock = recordingFetch(run);
@@ -225,6 +271,38 @@ describe("BuilderRun — getting a broken run moving again", () => {
     await user.click(btn);
 
     await waitFor(() => expect(posted(fetchMock, "/api/site-builder/runs/run-1/recover")).toBe(true));
+  });
+
+  it("does not claim the previous attempt is stopped — it is only disowned", async () => {
+    /**
+     * /recover clears the claim token; NOTHING aborts the attempt. It keeps
+     * running under the generate route's maxDuration of an hour, keeps making
+     * paced AI calls, and keeps spending the same provider's rate budget — so
+     * it costs money after the click and can make the operator's own retry
+     * slower. Copy that says "stopped" is a promise the system cannot keep.
+     */
+    const run = { ...runFixture("generating"), updated_at: minutesAgo(6) };
+    recordingFetch(run);
+    const confirmMock = vi.fn((_message?: string) => true);
+    vi.stubGlobal("confirm", confirmMock);
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    render(<BuilderRun runId="run-1" />);
+
+    const btn = await screen.findByRole("button", { name: /stop and recover/i });
+
+    // The panel copy, right above the button.
+    const panel = screen.getByText(/Nothing has been written for a few minutes/);
+    expect(panel.textContent).toMatch(/does not actually stop/i);
+    expect(panel.textContent).toMatch(/keep costing|keep working/i);
+
+    await user.click(btn);
+
+    const asked = String(confirmMock.mock.calls[0]?.[0] ?? "");
+    expect(asked).toMatch(/does not actually stop/i);
+    expect(asked).toMatch(/costing/i);
+    // …and it still says what IS true: saved pages survive.
+    expect(asked).toMatch(/already saved are kept/i);
   });
 
   it("does NOT offer Stop and recover on a generating run that wrote a minute ago", async () => {

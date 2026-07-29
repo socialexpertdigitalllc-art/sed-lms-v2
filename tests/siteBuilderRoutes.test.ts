@@ -51,6 +51,7 @@ import { GET as downloadGet } from "@/app/api/site-builder/runs/[id]/download/ro
 import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/route";
 import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
 import { POST as recoverPost } from "@/app/api/site-builder/runs/[id]/recover/route";
+import { DELETE as runDelete } from "@/app/api/site-builder/runs/[id]/route";
 
 const enc = new TextEncoder();
 
@@ -143,9 +144,12 @@ function makeWritableAdmin(
 
     const filters: ((r: Row) => boolean)[] = [];
     let patch: Row | null = null;
+    let removing = false;
     const apply = () => {
       const hits = source.filter((r) => filters.every((f) => f(r)));
       if (patch) for (const r of hits) Object.assign(r, patch);
+      // Filters are honoured on DELETE for the same reason they are on update.
+      if (removing) for (const r of hits) source.splice(source.indexOf(r), 1);
       return hits;
     };
 
@@ -154,6 +158,10 @@ function makeWritableAdmin(
       select: () => api,
       update: (p: Row) => {
         patch = p;
+        return api;
+      },
+      delete: () => {
+        removing = true;
         return api;
       },
       eq: (col: string, val: unknown) => {
@@ -201,13 +209,21 @@ function makeWritableAdmin(
    */
   const baseStorage = makeAdmin().storage;
   const uploadMock = vi.fn(async (_bucket: string, _path: string) => ({ error: null as { message: string } | null }));
+  const removed: string[] = [];
   const storage = {
     from(bucket: string) {
-      return { ...baseStorage.from(bucket), upload: (path: string) => uploadMock(bucket, path) };
+      return {
+        ...baseStorage.from(bucket),
+        upload: (path: string) => uploadMock(bucket, path),
+        remove: async (paths: string[]) => {
+          removed.push(...paths);
+          return { error: null };
+        },
+      };
     },
   };
 
-  return { admin: { from, storage }, state, uploadMock };
+  return { admin: { from, storage }, state, uploadMock, removed };
 }
 
 const RUN = (over: Row = {}): Row => ({
@@ -449,6 +465,42 @@ describe("POST /api/site-builder/runs/[id]/generate — packaging order", () => 
     expect(Object.keys(pages)).toHaveLength(1);
     expect(Object.values(pages).every((p) => p.status === "ok")).toBe(true);
   });
+
+  /**
+   * `output_path` is written BEFORE the upload — deliberately, so ownership is
+   * established before any object-store side effect — which means a failed
+   * upload would otherwise leave the row naming an object that is not there.
+   * The run screen renders "Download zip" on `output_path` alone, so that link
+   * 404s.
+   */
+  it("puts output_path back where it was when packaging fails", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN({ output_path: null })]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(500);
+    // A first run had no zip, so it must end with none — not with a path to
+    // bytes that were never uploaded.
+    expect(state.runs[0].output_path).toBeNull();
+  });
+
+  it("restores the PREVIOUS zip's path, rather than nulling it, when a re-run's packaging fails", async () => {
+    // The discriminating half: an implementation that just wrote null on
+    // failure would drop a download that still works. The prior attempt's
+    // object is untouched by a failed upsert.
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", output_path: "run-1/site.zip", error: "Every page failed to generate." }),
+    ]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(500);
+    expect(state.runs[0].output_path).toBe("run-1/site.zip");
+  });
 });
 
 describe("POST /api/site-builder/runs/[id]/generate — which runs may be claimed", () => {
@@ -670,7 +722,7 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     const res = await post("index.html");
 
     expect(res.status).toBe(409);
-    expect(String((await res.json()).error)).toMatch(/generation/i);
+    expect(String((await res.json()).error)).toMatch(/changed while the page was being rewritten/i);
     expect(state.runs[0].pages).toEqual(before);
     expect(state.runs[0].status).toBe("failed");
     // And nothing reached the object store: the zip path is shared with the
@@ -715,6 +767,139 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     expect(pages["index.html"].html).toBe("<html>regenerated</html>");
   });
 
+  it("does NOT promote a failed run when the packaging that would give it a zip fails", async () => {
+    /**
+     * Promotion and `output_path` are written BEFORE the upload (ownership
+     * first), so an upload failure on a run that never had a zip would leave
+     * "review" plus a path to nothing — and Approve → Deploy would then run,
+     * with deploy creating the subdomain BEFORE downloading the zip. A stray
+     * empty subdomain and a failed deployment row, for a site never packaged.
+     */
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", output_path: null }),
+    ]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(500);
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].error).toBe("boom");
+    expect(state.runs[0].output_path).toBeNull();
+    // The regenerated page itself is still kept — it is the expensive part,
+    // and the next attempt re-packages rather than re-buying it.
+    const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
+    expect(pages["index.html"].status).toBe("ok");
+    expect(pages["index.html"].html).toBe("<html>regenerated</html>");
+  });
+
+  it("keeps the promotion when the run already had a zip to fall back on", async () => {
+    // The discriminating half: a run WITH a prior object is not left worse off
+    // by a failed re-package — the path still names real bytes, one revision
+    // out of date, so nothing is undone.
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", output_path: "run-1/site.zip" }),
+    ]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(500);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].output_path).toBe("run-1/site.zip");
+  });
+
+  /**
+   * TWO REGENERATIONS AT ONCE — the mainline hazard, not an exotic one.
+   *
+   * `runSite` marks a run "ok" when ANY real page succeeded, so the ordinary
+   * partial failure (5 of 7 pages) lands at "review", where per-page Retry is
+   * the only tool. Each regeneration rebuilds the WHOLE `pages` blob from the
+   * snapshot it read minutes earlier, so the second to land would revert the
+   * first's page and upload a zip without it — an AI call paid for and thrown
+   * away.
+   */
+  describe("two at once", () => {
+    const TWO_DOWN = {
+      "components.js": { status: "ok", kind: "component", name: "Shared components", html: "// REWRITTEN" },
+      "index.html": { status: "failed", kind: "existing", error: "boom" },
+      "about.html": { status: "failed", kind: "existing", error: "boom" },
+    };
+
+    /** A promise a test resolves by hand, so both handlers can be held INSIDE
+     *  their AI call — the minutes-wide window where they overlap for real. */
+    const defer = <T,>() => {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => (resolve = r));
+      return { promise, resolve };
+    };
+
+    it("refuses the second write and keeps the first's page", async () => {
+      const { admin, state, uploadMock } = makeWritableAdmin([RUN({ status: "review", pages: TWO_DOWN })]);
+      adminHolder.admin = admin;
+
+      const forIndex = defer<{ ok: boolean; html: string }>();
+      const forAbout = defer<{ ok: boolean; html: string }>();
+      regeneratePageMock.mockImplementation(async (args: { file: string }) =>
+        args.file === "index.html" ? forIndex.promise : forAbout.promise,
+      );
+
+      const indexReq = post("index.html");
+      const aboutReq = post("about.html");
+      // Both are past their row READ and sitting in the AI call — which is the
+      // whole premise: they share one stale snapshot.
+      await vi.waitFor(() => expect(regeneratePageMock).toHaveBeenCalledTimes(2));
+
+      forAbout.resolve({ ok: true, html: "<html>ABOUT REWRITTEN</html>" });
+      const aboutRes = await aboutReq;
+      forIndex.resolve({ ok: true, html: "<html>INDEX REWRITTEN</html>" });
+      const indexRes = await indexReq;
+
+      expect(aboutRes.status).toBe(200);
+      expect(indexRes.status).toBe(409);
+      expect(String((await indexRes.json()).error)).toMatch(/changed while the page was being rewritten/i);
+
+      // The winner's page survived — that is the paid-for work the loser would
+      // have reverted — and the loser's own page never landed.
+      const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
+      expect(pages["about.html"].status).toBe("ok");
+      expect(pages["about.html"].html).toBe("<html>ABOUT REWRITTEN</html>");
+      expect(pages["index.html"].status).toBe("failed");
+      // …and the zip in the bucket is the winner's, uploaded once.
+      expect(uploadMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("refuses a regeneration whose run moved under it, and uploads nothing", async () => {
+    // The residual race, and it is reachable: a retry AFTER a packaging failure
+    // makes no AI calls at all and finishes in seconds, so it can start and
+    // finish entirely inside one regeneration's call. `generation_id` stays
+    // null throughout, so this is the `updated_at` CAS and nothing else.
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", generation_id: null }),
+    ]);
+    adminHolder.admin = admin;
+    const before = JSON.parse(JSON.stringify(state.runs[0].pages));
+
+    regeneratePageMock.mockImplementation(async () => {
+      // …a fast retry claimed, ran and released the run while we were writing.
+      state.runs[0].updated_at = "2026-07-29T12:07:00.000Z";
+      return { ok: true, html: "<html>regenerated</html>" };
+    });
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toMatch(/changed while the page was being rewritten/i);
+    expect(state.runs[0].pages).toEqual(before);
+    expect(state.runs[0].status).toBe("failed");
+    // The zip path is shared with whoever moved the row, so an upload here
+    // would replace THEIR archive even though the row write was refused.
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
   it("still refuses a queued run", async () => {
     const { admin, state } = makeWritableAdmin([RUN({ status: "queued", pages: AFTER_FAILURE })]);
     adminHolder.admin = admin;
@@ -725,6 +910,57 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     expect(String((await res.json()).error)).toContain(`"queued"`);
     expect(regeneratePageMock).not.toHaveBeenCalled();
     expect(state.runs[0].status).toBe("queued");
+  });
+});
+
+describe("DELETE /api/site-builder/runs/[id] — a live run is not debris", () => {
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60 * 1000).toISOString();
+  const del = () => runDelete(new Request("http://test.local/x", { method: "DELETE" }), runCtx());
+
+  it("refuses a generating run quiet for 40 minutes — well inside the reclaim window", async () => {
+    /**
+     * The exact gap this closes. Deletion's grace was ten minutes while the
+     * generate route's reclaim rule had been raised to sixty, so a HEALTHY
+     * paced run — one that can legitimately write nothing for ~21 minutes while
+     * it waits out a provider's rate limit — was deletable out from under
+     * itself, taking its zip with it.
+     */
+    const { admin, state, removed } = makeWritableAdmin([
+      RUN({ status: "generating", generation_id: "gen-live", updated_at: minutesAgo(40) }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await del();
+
+    expect(res.status).toBe(409);
+    expect(state.runs).toHaveLength(1);
+    expect(removed).toHaveLength(0);
+  });
+
+  it("still deletes a generating run whose row has not moved for 61 minutes", async () => {
+    // The discriminating half: past the reclaim window the generation really is
+    // presumed dead, and the run is debris the operator may clear.
+    const { admin, state, removed } = makeWritableAdmin([
+      RUN({ status: "generating", output_path: "run-1/site.zip", updated_at: minutesAgo(61) }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await del();
+
+    expect(res.status).toBe(200);
+    expect(state.runs).toHaveLength(0);
+    // Storage first, row second — an orphaned zip with no row is invisible debris.
+    expect(removed).toEqual(["run-1/site.zip"]);
+  });
+
+  it("deletes a review run at once — the grace is only for runs that may still be working", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "review", updated_at: minutesAgo(0) })]);
+    adminHolder.admin = admin;
+
+    const res = await del();
+
+    expect(res.status).toBe(200);
+    expect(state.runs).toHaveLength(0);
   });
 });
 
@@ -784,8 +1020,96 @@ describe("POST /api/site-builder/runs/[id]/recover — releasing a wedged run", 
     });
   });
 
+  /**
+   * The other wedge, and the one nothing else could clear: /generate's terminal
+   * write sets "review" and deliberately KEEPS its token across the zip upload,
+   * so a process that dies in that window leaves "review" + a token nobody
+   * owns. /regenerate then 409s forever (`generation_id IS NULL` never matches),
+   * /generate refuses "review", and before this the only escape was deleting
+   * the run.
+   */
+  describe("a dangling token on a run that is no longer generating", () => {
+    it("clears the token and leaves the run at review", async () => {
+      const pages = { "index.html": { status: "ok", kind: "existing", html: "<html>a</html>" } };
+      const { admin, state } = makeWritableAdmin([
+        RUN({ status: "review", generation_id: "gen-orphaned", pages, output_path: "run-1/site.zip", error: null }),
+      ]);
+      adminHolder.admin = admin;
+
+      const res = await post();
+
+      expect(res.status).toBe(200);
+      expect(state.runs[0].generation_id).toBeNull();
+      // NOT demoted: this run has a reviewable site, and the leak was
+      // bookkeeping. Demoting it would cost the operator their place in the
+      // flow to fix a token nobody owns.
+      expect(state.runs[0].status).toBe("review");
+      expect(state.runs[0].error).toBeNull();
+      expect(state.runs[0].pages).toEqual(pages);
+      expect(state.runs[0].output_path).toBe("run-1/site.zip");
+
+      const body = (await res.json()) as { run: Row };
+      expect(body.run.status).toBe("review");
+      expect(body.run.generation_id).toBeNull();
+      expect(state.activity[0]).toMatchObject({ new_value: { from: "review", to: "review" } });
+    });
+
+    it("still demotes a generating run to failed — the status rule is not blanket", async () => {
+      // The discriminating pair for the case above: same route, same clearing
+      // of the token, opposite status handling.
+      const { admin, state } = makeWritableAdmin([RUN(WEDGED)]);
+      adminHolder.admin = admin;
+
+      const res = await post();
+
+      expect(res.status).toBe(200);
+      expect(state.runs[0].status).toBe("failed");
+      expect(state.runs[0].generation_id).toBeNull();
+    });
+
+    it("409s when the token is cleared by someone else first", async () => {
+      const { admin, state } = makeWritableAdmin([RUN({ status: "review", generation_id: "gen-orphaned" })]);
+      adminHolder.admin = admin;
+      // The dying attempt's step-3 release landing late, or a second operator
+      // recovering the same run — either way our CAS must not force it.
+      const original = admin.from;
+      let hooked = false;
+      adminHolder.admin = {
+        ...admin,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        from(table: string): any {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const inner: any = original(table);
+          if (table !== "builder_runs") return inner;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const wrap: any = {
+            select: (...a: unknown[]) => { inner.select(...a); return wrap; },
+            update: (...a: unknown[]) => { inner.update(...a); return wrap; },
+            eq: (...a: unknown[]) => { inner.eq(...a); return wrap; },
+            is: (...a: unknown[]) => { inner.is(...a); return wrap; },
+            maybeSingle: () => inner.maybeSingle(),
+            then: (r: unknown) => inner.then(r),
+            single: async () => {
+              const out = await inner.single();
+              if (!hooked) { hooked = true; state.runs[0].generation_id = null; }
+              return out;
+            },
+          };
+          return wrap;
+        },
+      };
+
+      const res = await post();
+
+      expect(hooked).toBe(true);
+      expect(res.status).toBe(409);
+      expect(String((await res.json()).error)).toMatch(/changed/i);
+      expect(state.activity).toHaveLength(0);
+    });
+  });
+
   for (const status of ["queued", "review", "approved", "deployed", "failed"]) {
-    it(`refuses a ${status} run, naming what it found`, async () => {
+    it(`refuses a ${status} run with no claim to release, naming what it found`, async () => {
       const { admin, state } = makeWritableAdmin([RUN({ status, generation_id: null })]);
       adminHolder.admin = admin;
 
