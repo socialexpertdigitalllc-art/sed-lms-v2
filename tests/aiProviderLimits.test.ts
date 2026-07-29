@@ -49,6 +49,20 @@ describe("resolveBudget", () => {
     expect(resolveBudget("webcraft", { tpd: 0.9 }).tpd).toBe(DEFAULT_RATE_BUDGETS.webcraft.tpd);
   });
 
+  it("declares a MiniMax concurrency ceiling, so one run cannot burst", () => {
+    // RPM and TPM pace ACROSS runs but not WITHIN one: a 7-page site fires 7
+    // calls at once, which is far under rpm 60 and under tpm 500k, and with
+    // concurrency undeclared the gate skips that dimension entirely. 4 is the
+    // operator's plan figure ("Run 3-4 concurrent agents"), not an API limit —
+    // see the comment on DEFAULT_RATE_BUDGETS.minimax for why it is honoured.
+    expect(DEFAULT_RATE_BUDGETS.minimax.concurrency).toBe(4);
+    // and it survives resolution, so it actually reaches the gate
+    expect(resolveBudget("minimax", null).concurrency).toBe(4);
+    // an operator who knows their tier can still lift it, or clear it outright
+    expect(resolveBudget("minimax", { concurrency: 8 }).concurrency).toBe(8);
+    expect(resolveBudget("minimax", { concurrency: null }).concurrency).toBeUndefined();
+  });
+
   it("leaves an absent dimension absent — DeepSeek documents no RPM", () => {
     expect(DEFAULT_RATE_BUDGETS.deepseek.rpm).toBeUndefined();
     expect(resolveBudget("deepseek", null).rpm).toBeUndefined();

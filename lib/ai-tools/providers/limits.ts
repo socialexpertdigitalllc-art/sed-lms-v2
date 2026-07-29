@@ -39,11 +39,19 @@ export type RateBudgetOverride = { [K in keyof RateBudget]?: number | null };
  */
 export const DEFAULT_RATE_BUDGETS: Record<string, RateBudget> = {
   // Docs publish RPM/TPM but no chat concurrency (CONN 20 is Music Generation
-  // only). The operator's plan advertises "3-4 concurrent agents", which is a
-  // plan-marketing figure rather than an API limit — so concurrency is left
-  // undeclared and pacing is done on RPM, which fits the observed failure
-  // (several runs succeeding, then throttling) far better.
-  minimax: { rpm: 60, tpm: 500_000 },
+  // only). `concurrency: 4` is therefore NOT a documented API limit — it is the
+  // "Run 3-4 concurrent agents" figure on the operator's own MiniMax plan, and
+  // it is the only concurrency number the vendor has ever given this account.
+  //
+  // It is respected anyway, because RPM and TPM alone do not pace a run from
+  // the INSIDE. A 7-page site dispatches 7 calls at once: with concurrency
+  // undeclared that dimension is skipped entirely, 7 requests is nowhere near
+  // 60 rpm, and 7 x ~40k estimated tokens is under 500k tpm — so the gate paced
+  // across runs (the reported "429 after 5-9 runs") while doing nothing within
+  // one. Declaring 4 makes an in-run burst structurally impossible instead of
+  // something the adaptive layer can only discover by being throttled first.
+  // The cost is small and bounded: a 7-page run becomes two waves, not one.
+  minimax: { concurrency: 4, rpm: 60, tpm: 500_000 },
   // Kimi/Moonshot, keyed "webcraft" in the registry. Tier1 figures; the
   // operator is on Tier2 (100 / 500 / 3M) and can raise these in settings.
   webcraft: { concurrency: 50, rpm: 200, tpm: 2_000_000 },
