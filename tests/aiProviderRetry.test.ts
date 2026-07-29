@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { backoffDelayMs, callWithProvider, MAX_ATTEMPTS, type ProviderSpec } from "@/lib/ai-tools/run";
 import { ProviderHttpError } from "@/lib/ai-tools/providers/errors";
-import { resetGates } from "@/lib/ai-tools/providers/gate";
+import { getGate, resetGates } from "@/lib/ai-tools/providers/gate";
 import { AiCallAborted } from "@/lib/ai-tools/abort";
 
 const spec: ProviderSpec = {
@@ -148,5 +148,89 @@ describe("callWithProvider retry", () => {
     const promise = callWithProvider(spec, "m1", "s", "u", { maxTokens: 100, temperature: 0, signal: ac.signal });
     await expect(promise).rejects.toBeInstanceOf(AiCallAborted);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("callWithProvider gating", () => {
+  beforeEach(() => {
+    resetGates();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("never exceeds the provider's concurrency ceiling", async () => {
+    let concurrent = 0;
+    let peak = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      concurrent += 1;
+      peak = Math.max(peak, concurrent);
+      await new Promise((r) => setTimeout(r, 100));
+      concurrent -= 1;
+      return jsonResponse(okBody);
+    });
+
+    const gated: ProviderSpec = { ...spec, rateBudget: { concurrency: 2 } };
+    const calls = Array.from({ length: 6 }, () =>
+      callWithProvider(gated, "m1", "s", "u", { maxTokens: 100, temperature: 0 }),
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    await Promise.all(calls);
+
+    expect(peak).toBeLessThanOrEqual(2);
+  });
+
+  it("halves the provider's scale after a 429", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ error: { message: "limited" } }, { status: 429 }));
+    const gated: ProviderSpec = { ...spec, rateBudget: { concurrency: 4 } };
+
+    await callWithProvider(gated, "m1", "s", "u", { maxTokens: 100, temperature: 0, maxAttempts: 1 }).catch(() => {});
+
+    // Looked up with the SAME budget the call installed. `getGate` re-applies
+    // whatever budget it is handed, and a CHANGED budget deliberately resets
+    // the adaptive scale to 1 (see ProviderGate.setBudget) — so asserting
+    // through `getGate(key, {})` would read a scale the assertion itself had
+    // just wiped, and pass no matter what the production code did.
+    expect(getGate("testprov", { concurrency: 4 }).snapshot().scale).toBe(0.5);
+  });
+
+  it("releases its slot even when the call throws", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ error: { message: "nope" } }, { status: 400 }));
+    const gated: ProviderSpec = { ...spec, rateBudget: { concurrency: 1 } };
+
+    await callWithProvider(gated, "m1", "s", "u", { maxTokens: 100, temperature: 0 }).catch(() => {});
+
+    expect(getGate("testprov", { concurrency: 1 }).snapshot().inFlight).toBe(0);
+  });
+
+  it("buckets by endpoint host when no provider key is given", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(okBody));
+    const keyless: ProviderSpec = { label: "L", endpoint: "https://api.example.com/v1/x", apiKey: "k", maxOutputTokens: 100 };
+    await callWithProvider(keyless, "m1", "s", "u", { maxTokens: 10, temperature: 0 });
+    expect(getGate("api.example.com", {}).snapshot().requestsThisMinute).toBe(1);
+  });
+
+  it("counts a retried burst of 429s as ONE congestion event, not four", async () => {
+    // Four attempts each throttled. The gate's THROTTLE_COOLDOWN_MS (5s) is
+    // what keeps this from compounding, and the retry schedule is what has to
+    // stay inside it: with no vendor Retry-After the gaps are jittered at most
+    // 1s, 2s and 4s, so every retry lands within the cooldown of the previous
+    // 429 and only the FIRST backs the budget off. Without that guard four
+    // reports of one wall would take the scale to 0.0625 and effectively pin
+    // the provider for the rest of the run.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ error: { message: "limited" } }, { status: 429 }));
+    const gated: ProviderSpec = { ...spec, rateBudget: { concurrency: 4 } };
+
+    const settled = callWithProvider(gated, "m1", "s", "u", { maxTokens: 100, temperature: 0 }).catch((e) => e);
+    // Long enough for all three backoffs (<=7s), short enough to stay well
+    // inside RAMP_QUIET_MS (60s) so the quiet ramp cannot mask the result.
+    await vi.advanceTimersByTimeAsync(20_000);
+    await settled;
+
+    const snap = getGate("testprov", { concurrency: 4 }).snapshot();
+    expect(snap.throttlesLastHour).toBe(MAX_ATTEMPTS);
+    expect(snap.scale).toBe(0.5);
   });
 });

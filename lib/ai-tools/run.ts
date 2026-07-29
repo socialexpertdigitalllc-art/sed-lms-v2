@@ -13,7 +13,7 @@ import {
   rateLimitHeadersFrom,
 } from "./providers/errors";
 import type { RateBudget } from "./providers/limits";
-import { sleep, type TokenUsage } from "./providers/gate";
+import { estimateInputTokens, getGate, sleep, type TokenUsage } from "./providers/gate";
 
 const BUCKET = "ai-generations";
 
@@ -290,6 +290,21 @@ async function attemptCall(
 }
 
 /**
+ * Which rate bucket a spec draws from. The endpoint HOST is the fallback and
+ * is not a compromise: two specs pointing at the same host really do share one
+ * vendor quota, so bucketing by host is correct for every legacy caller that
+ * predates `providerKey`.
+ */
+function gateKeyFor(cfg: ProviderSpec): string {
+  if (cfg.providerKey) return cfg.providerKey;
+  try {
+    return new URL(cfg.endpoint).host;
+  } catch {
+    return cfg.endpoint;
+  }
+}
+
+/**
  * The actual OpenAI-compatible call, with retries. Identical wire format for
  * every provider we support, which is why adding a provider is a descriptor
  * and nothing else.
@@ -307,13 +322,22 @@ export async function callWithProvider(
   opts: ProviderCallOptions,
 ): Promise<{ text: string; tokens: number }> {
   const attempts = Math.max(1, opts.maxAttempts ?? MAX_ATTEMPTS);
+  const gate = getGate(gateKeyFor(cfg), cfg.rateBudget ?? {});
+  const inputTokens = estimateInputTokens(systemPrompt, userPrompt, opts.images?.length ?? 0);
+  const maxTokens = Math.min(opts.maxTokens, cfg.maxOutputTokens);
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    // Acquired per ATTEMPT, not per call: a retry is a fresh request against
+    // the vendor's budget and must queue behind everything else rather than
+    // riding in on a slot it reserved a minute ago.
+    const slot = await gate.acquire({ inputTokens, model, maxTokens }, opts.signal);
     try {
       const out = await attemptCall(cfg, model, systemPrompt, userPrompt, opts);
+      slot.settle(out.usage);
       return { text: out.text, tokens: out.tokens };
     } catch (e) {
+      slot.settleError(e);
       lastError = e;
       if (isAbortedError(e)) throw e;
       if (!isRetryableError(e) || attempt === attempts) throw e;
