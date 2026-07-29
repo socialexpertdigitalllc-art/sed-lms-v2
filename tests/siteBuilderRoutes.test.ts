@@ -24,8 +24,26 @@ vi.mock("@/lib/site-studio/service/guard", () => ({
     NextResponse.json({ error: status === 401 ? "Unauthorized" : "Forbidden" }, { status }),
 }));
 
+/**
+ * `runSite` is the one seam the POST tests stub: it is the AI-calling engine,
+ * and these tests are about the ROUTE's claim/persist/terminal bookkeeping.
+ * Everything else stays REAL — notably `loadTemplateBundle`, which reads only
+ * from the storage stub below (`builder-templates/tpl-1/source.zip`); stubbing
+ * it instead would break the preview GET tests, which need the real bundle.
+ *
+ * The factory only CLOSES OVER `runSiteMock` (it returns a wrapper that reads
+ * it at call time). A factory that touched the mock directly would hit its
+ * TDZ, since the hoisted route import below runs before this file's consts.
+ */
+const runSiteMock = vi.fn();
+vi.mock("@/lib/site-builder/run", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/site-builder/run")>()),
+  runSite: (args: unknown) => runSiteMock(args),
+}));
+
 import { GET as previewGet } from "@/app/api/site-builder/runs/[id]/preview/[[...path]]/route";
 import { GET as downloadGet } from "@/app/api/site-builder/runs/[id]/download/route";
+import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/route";
 
 const enc = new TextEncoder();
 
@@ -72,6 +90,7 @@ function makeAdmin() {
     storage: {
       from(bucket: string) {
         return {
+          upload: async () => ({ error: null }),
           download: async (path: string) => {
             if (bucket === "builder-templates" && path === "tpl-1/source.zip") {
               return { data: { arrayBuffer: async () => TEMPLATE_ZIP.buffer }, error: null };
@@ -87,8 +106,101 @@ function makeAdmin() {
   };
 }
 
+type Row = Record<string, unknown>;
+
+/**
+ * A writable fake of the tables the POST routes touch.
+ *
+ * `.eq()` filters are HONOURED on update — that is the whole point. The
+ * mechanism under test is "a superseded attempt's write matches zero rows", so
+ * a fake that applied updates regardless of filters would report success for
+ * exactly the bug these tests exist to catch.
+ */
+function makeWritableAdmin(
+  rows: Row[],
+  leads: Row[] = [{ id: "lead-1", business_name: "Acme", specify_pages: ["Home"] }],
+) {
+  const state = { runs: rows.map((r) => ({ ...r })), leads, activity: [] as Row[] };
+
+  const from = (table: string) => {
+    if (table === "activity_log") {
+      return {
+        insert: async (payload: Row) => {
+          state.activity.push(payload);
+          return { error: null };
+        },
+      };
+    }
+
+    const source = table === "builder_runs" ? state.runs : table === "leads" ? state.leads : null;
+    if (!source) throw new Error(`unexpected table "${table}"`);
+
+    const filters: [string, unknown][] = [];
+    let patch: Row | null = null;
+    const apply = () => {
+      const hits = source.filter((r) => filters.every(([c, v]) => r[c] === v));
+      if (patch) for (const r of hits) Object.assign(r, patch);
+      return hits;
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const api: any = {
+      select: () => api,
+      update: (p: Row) => {
+        patch = p;
+        return api;
+      },
+      eq: (col: string, val: unknown) => {
+        filters.push([col, val]);
+        return api;
+      },
+      is: () => api,
+      single: async () => {
+        const hits = apply();
+        return hits.length === 1 ? { data: { ...hits[0] }, error: null } : { data: null, error: { message: "no rows" } };
+      },
+      maybeSingle: async () => {
+        const hits = apply();
+        return { data: hits.length ? { ...hits[0] } : null, error: null };
+      },
+      // An update with no .select() is awaited directly (the progress chain and
+      // the catch-block failure write both do this).
+      then: (res: (v: { data: null; error: null }) => unknown) => {
+        apply();
+        return Promise.resolve({ data: null, error: null }).then(res);
+      },
+    };
+    return api;
+  };
+
+  return { admin: { from, storage: makeAdmin().storage }, state };
+}
+
+const RUN = (over: Row = {}): Row => ({
+  id: "run-1",
+  lead_id: "lead-1",
+  template_id: "tpl-1",
+  status: "queued",
+  options: {},
+  images: [],
+  pages: {},
+  output_path: null,
+  error: null,
+  generation_id: null,
+  updated_at: "2026-07-29T12:00:00.000Z",
+  ...over,
+});
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 beforeEach(() => {
   adminHolder.admin = makeAdmin();
+  runSiteMock.mockReset();
+  runSiteMock.mockResolvedValue({
+    ok: true,
+    pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+    zipBytes: new Uint8Array([1, 2, 3]),
+  });
 });
 
 const ctx = (path?: string[]) => ({ params: Promise.resolve({ id: "run-1", path }) });
@@ -177,5 +289,64 @@ describe("GET /api/site-builder/runs/[id]/download", () => {
     expect(res.headers.get("content-disposition")).toBe('attachment; filename="acme-plumbing-site.zip"');
     const bytes = new Uint8Array(await res.arrayBuffer());
     expect(bytes.length).toBe(SITE_ZIP.length);
+  });
+});
+
+const runCtx = () => ({ params: Promise.resolve({ id: "run-1" }) });
+
+describe("POST /api/site-builder/runs/[id]/generate — generation ownership", () => {
+  it("stamps a fresh generation_id on the claim", async () => {
+    const { admin, state } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+
+    // runSite runs AFTER the claim and BEFORE the terminal write, so the row
+    // as seen from in here is the row the claim left behind. Asserting only on
+    // the final row would pass whether or not the token was ever stamped.
+    let midFlight: Row | null = null;
+    runSiteMock.mockImplementation(async () => {
+      midFlight = { ...state.runs[0] };
+      return {
+        ok: true,
+        pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+        zipBytes: new Uint8Array([1, 2, 3]),
+      };
+    });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    // runSite having been called at all is what proves the claim succeeded;
+    // assert the token BEFORE the response status so an unstamped claim fails
+    // here — naming the real defect — rather than downstream on the 409 the
+    // guarded terminal write would then produce.
+    expect(runSiteMock).toHaveBeenCalledTimes(1);
+    expect(midFlight).not.toBeNull();
+    expect(midFlight!.status).toBe("generating");
+    expect(midFlight!.generation_id).toEqual(expect.any(String));
+    expect(String(midFlight!.generation_id)).toMatch(UUID_RE);
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("review");
+  });
+
+  it("discards a superseded attempt's terminal write instead of clobbering", async () => {
+    const { admin, state } = makeWritableAdmin([RUN()]);
+    adminHolder.admin = admin;
+
+    // Simulate /recover landing mid-flight: it evicts the live attempt by
+    // clearing the token and setting a status of its own.
+    runSiteMock.mockImplementation(async () => {
+      state.runs[0].generation_id = null;
+      state.runs[0].status = "failed";
+      return {
+        ok: true,
+        pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
+        zipBytes: new Uint8Array([1, 2, 3]),
+      };
+    });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(409);
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.activity).toHaveLength(0);
   });
 });

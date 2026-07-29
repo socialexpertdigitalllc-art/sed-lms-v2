@@ -55,6 +55,11 @@ const STALE_GENERATING_MS = 60 * 60 * 1000;
  * a second tab can both fire this idempotently — one wins, the rest 409 and
  * simply keep polling. A stale "generating" run (see STALE_GENERATING_MS)
  * may be re-claimed the same way.
+ *
+ * The claim also stamps a `generation_id` (migration 0063) that every write
+ * below filters on, so an attempt that gets superseded mid-flight discards
+ * its own result instead of overwriting the winner's. See the comment on
+ * `generationId` for why the claim CAS alone is not enough.
  */
 export async function POST(_req: Request, ctx: Ctx) {
   const auth = await guard();
@@ -72,9 +77,27 @@ export async function POST(_req: Request, ctx: Ctx) {
     return NextResponse.json({ error: `Cannot generate: this run is "${run.status}", not "queued".` }, { status: 409 });
   }
 
+  /**
+   * The token that says "THIS attempt owns the run" (migration 0063).
+   *
+   * The CAS below only makes the CLAIM single-winner; it says nothing about
+   * the several MINUTES of writes that follow it. A second attempt can still
+   * claim this run legitimately — via the stale reclaim above (a paced run can
+   * go ~21 minutes without touching its row) or, later, via the operator's
+   * /recover — and two live attempts racing on one `pages` column, at double
+   * the AI spend, would silently let whichever finishes LAST win.
+   *
+   * So every write from here on carries `.eq("generation_id", generationId)`.
+   * A superseded attempt matches zero rows and DISCARDS its own result rather
+   * than overwriting a state somebody else deliberately set. `error` is
+   * cleared here because this attempt supersedes any previous failure's
+   * message — leaving it would show a stale error beside a live generation.
+   */
+  const generationId = crypto.randomUUID();
+
   const { data: claimed } = await admin
     .from("builder_runs")
-    .update({ status: "generating", updated_at: new Date().toISOString() })
+    .update({ status: "generating", generation_id: generationId, error: null, updated_at: new Date().toISOString() })
     .eq("id", id)
     .eq("status", run.status)
     .eq("updated_at", run.updated_at as string)
@@ -98,6 +121,8 @@ export async function POST(_req: Request, ctx: Ctx) {
     // page tasks each await onProgress, and every write carries a fresh
     // snapshot, so the row's `pages` only ever moves forward. A failed write
     // is swallowed — losing one progress frame must never kill a generation.
+    // Guarded by `generation_id` like every other write here: once this
+    // attempt is superseded its progress frames simply stop landing.
     let chain: Promise<unknown> = Promise.resolve();
     const persist = (pages: Record<string, PageState>) => {
       const snapshot = JSON.parse(JSON.stringify(pages)) as Record<string, PageState>;
@@ -106,7 +131,8 @@ export async function POST(_req: Request, ctx: Ctx) {
           admin
             .from("builder_runs")
             .update({ pages: snapshot, updated_at: new Date().toISOString() })
-            .eq("id", id),
+            .eq("id", id)
+            .eq("generation_id", generationId),
         )
         .catch(() => {});
       return chain.then(() => {});
@@ -130,6 +156,9 @@ export async function POST(_req: Request, ctx: Ctx) {
       if (upErr) throw new Error(`zip upload failed: ${upErr.message}`);
     }
 
+    // The terminal write, guarded on the token this attempt claimed. It also
+    // RELEASES the run (`generation_id: null`) — the generation is over, so
+    // nothing owns the row any more.
     const { data: updated, error: updErr } = await admin
       .from("builder_runs")
       .update({
@@ -137,12 +166,31 @@ export async function POST(_req: Request, ctx: Ctx) {
         pages: result.pages,
         output_path: outputPath,
         error: result.ok ? null : "Every page failed to generate.",
+        generation_id: null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", id)
+      .eq("generation_id", generationId)
       .select("*")
-      .single();
-    if (updErr || !updated) return NextResponse.json({ error: updErr?.message ?? "Update failed" }, { status: 400 });
+      .maybeSingle();
+    if (updErr) return NextResponse.json({ error: updErr.message }, { status: 400 });
+    /**
+     * Zero rows means this attempt was superseded while it was running —
+     * /recover, or another attempt that won a stale reclaim, cleared the token
+     * deliberately. Discard this result rather than clobber the state that
+     * actor set.
+     *
+     * 409, not 500: nothing malfunctioned and the operator did not cause it.
+     * This is a lost race with a decision somebody else made, which is exactly
+     * what a conflict status is for — and it keeps this off the error paths
+     * that page an operator about broken generations.
+     */
+    if (!updated) {
+      return NextResponse.json(
+        { error: "This generation was superseded (the run was recovered or re-claimed); its result was discarded." },
+        { status: 409 },
+      );
+    }
 
     await admin.from("activity_log").insert({
       user_id: auth.userId,
@@ -155,10 +203,15 @@ export async function POST(_req: Request, ctx: Ctx) {
     return NextResponse.json({ run: updated });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Generation failed";
+    // Guarded the same way as the terminal write: a superseded attempt must
+    // not be able to mark the run failed either. If the token no longer
+    // matches this update touches nothing, and the caller still gets its own
+    // error back.
     await admin
       .from("builder_runs")
-      .update({ status: "failed", error: message, updated_at: new Date().toISOString() })
-      .eq("id", id);
+      .update({ status: "failed", error: message, generation_id: null, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("generation_id", generationId);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
