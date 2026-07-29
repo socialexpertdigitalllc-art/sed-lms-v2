@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { backoffDelayMs, callWithProvider, MAX_ATTEMPTS, type ProviderSpec } from "@/lib/ai-tools/run";
-import { ProviderHttpError } from "@/lib/ai-tools/providers/errors";
-import { gateSnapshots, getGate, resetGates } from "@/lib/ai-tools/providers/gate";
+import { backoffDelayMs, callWithProvider, GATE_MAX_WAIT_MS, MAX_ATTEMPTS, type ProviderSpec } from "@/lib/ai-tools/run";
+import { isRetryableError, ProviderHttpError } from "@/lib/ai-tools/providers/errors";
+import { GateTimeoutError, gateSnapshots, getGate, resetGates } from "@/lib/ai-tools/providers/gate";
 import { AiCallAborted } from "@/lib/ai-tools/abort";
 
 const spec: ProviderSpec = {
@@ -291,6 +291,39 @@ describe("callWithProvider gating", () => {
     const keyless: ProviderSpec = { label: "L", endpoint: "https://api.example.com/v1/x", apiKey: "k", maxOutputTokens: 100 };
     await callWithProvider(keyless, "m1", "s", "u", { maxTokens: 10, temperature: 0 });
     expect(getGate("api.example.com", {}).snapshot().requestsThisMinute).toBe(1);
+  });
+
+  it("fails a call the budget cannot admit soon, instead of parking it for hours", async () => {
+    // `tpd` is the dimension that can compute a multi-hour wait: a call larger
+    // than the whole daily quota blocks until the 24h window rolls. Unbounded,
+    // `acquire` dutifully polled that out in 1s slices — ~86,400 wakeups, a
+    // caller parked for a day, and nothing to break it since Site Builder
+    // passes no signal. Now the wait is capped at GATE_MAX_WAIT_MS.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(okBody));
+    const capped: ProviderSpec = { ...spec, rateBudget: { tpd: 1 } };
+
+    let settled = false;
+    const outcome = callWithProvider(capped, "m1", "s", "u", { maxTokens: 100, temperature: 0 }).catch((e) => {
+      settled = true;
+      return e;
+    });
+
+    // Still parked just short of the bound — the cap is what ends this, not
+    // some unrelated early exit.
+    await vi.advanceTimersByTimeAsync(GATE_MAX_WAIT_MS - 2000);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(settled).toBe(true);
+
+    const err = await outcome;
+    expect(err).toBeInstanceOf(GateTimeoutError);
+    expect((err as GateTimeoutError).dimension).toBe("tpd");
+    // Retryable, so callForTask does not silently reroute a merely-busy
+    // provider onto a different model (see providers/run.ts).
+    expect(isRetryableError(err)).toBe(true);
+    // And no request was ever paid for — the gate never admitted one.
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("counts a retried burst of 429s as ONE congestion event, not four", async () => {

@@ -14,7 +14,7 @@ import {
   rateLimitHeadersFrom,
 } from "./providers/errors";
 import type { RateBudget } from "./providers/limits";
-import { estimateInputTokens, getGate, sleep, type TokenUsage } from "./providers/gate";
+import { estimateInputTokens, getGate, sleep, WINDOW_MS, type TokenUsage } from "./providers/gate";
 
 const BUCKET = "ai-generations";
 
@@ -207,6 +207,18 @@ export const MAX_ATTEMPTS = 4;
 /** Ceiling on a vendor-supplied Retry-After. A vendor that asks for ten
  *  minutes must not be able to wedge a generation. */
 export const RETRY_AFTER_CAP_MS = 60_000;
+/**
+ * Ceiling on how long one attempt may sit PARKED in the rate gate waiting for
+ * budget, before it fails instead.
+ *
+ * Two rolling windows. Every rate dimension the gate enforces resets inside one
+ * WINDOW_MS, so a wait that outlives two of them is not ordinary pacing — it
+ * means this budget cannot satisfy this call any time soon, and failing fast is
+ * strictly better than parking. The factor of two rather than one is deliberate
+ * headroom: a call queued behind a full window of other calls legitimately
+ * waits a little over one window, and must not be failed for it.
+ */
+export const GATE_MAX_WAIT_MS = 2 * WINDOW_MS;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_CAP_MS = 30_000;
 
@@ -365,12 +377,27 @@ export async function callWithProvider(
     // the vendor's budget and must queue behind everything else rather than
     // riding in on a slot it reserved a minute ago.
     //
-    // No `maxWaitMs`, DELIBERATELY. Time parked here is not covered by this
-    // call's timeout, which only starts once the request is on the wire, so an
-    // unbounded wait is breakable only by `opts.signal`. That is accepted for
-    // now: `tpd` is the sole dimension that can compute a multi-hour wait and
-    // no shipped budget declares one, leaving a worst case of about a minute.
-    // A deadline should be set once a real paced run shows what it costs.
+    // BOUNDED by `GATE_MAX_WAIT_MS`, and the bound is not optional. Time parked
+    // here is not covered by this call's timeout — that starts only once the
+    // request is on the wire — so the wait's only other escape is `opts.signal`,
+    // which Site Builder's `productionSiteBuildCall` does not pass.
+    //
+    // This used to be unbounded, justified by "`tpd` is the sole dimension that
+    // can compute a multi-hour wait and no shipped budget declares one". THAT
+    // JUSTIFICATION IS DEAD: the same release that added this ships the AI
+    // Models settings screen, whose "Tokens / day" box writes any positive
+    // integer straight into the budget. Once one is set, a blocked call computes
+    // a wait of up to DAY_MS and polls it out in 1s slices — roughly 86,400
+    // wakeups holding a caller for a day, with the run screen showing nothing
+    // but "generating".
+    //
+    // `GateTimeoutError` is worded through `callTimedOutMessage`, so
+    // `isRetryableError` classifies it retryable — which is what stops
+    // `callForTask` rerouting a merely-busy provider onto a different model.
+    // It is NOT, however, retried by the loop below: `acquire` sits outside the
+    // `try` (see the adjacency note), so a gate timeout leaves this function at
+    // once. That is intended — a retry would re-park for another two windows
+    // against a budget that has just demonstrated it has no room.
     //
     // LOAD-BEARING ADJACENCY: the slot is released only by `settle`/
     // `settleError`; no statement may go between this line and the `try`, and
@@ -378,7 +405,7 @@ export async function callWithProvider(
     // computation of its own arguments may precede it). Either edit would leak
     // a slot on the path it interrupts, and a leaked slot permanently lowers
     // this provider's concurrency with nothing to log it.
-    const slot = await gate.acquire({ inputTokens, model, maxTokens }, opts.signal);
+    const slot = await gate.acquire({ inputTokens, model, maxTokens }, opts.signal, GATE_MAX_WAIT_MS);
     try {
       const out = await attemptCall(cfg, model, systemPrompt, userPrompt, opts);
       slot.settle(out.usage);
