@@ -7,7 +7,20 @@ import { runSite, buildBrief, outputPathFor, BUILDER_SITES_BUCKET, type PageStat
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+/**
+ * Generation is now PACED behind each provider's rate budget (see
+ * lib/ai-tools/providers/gate.ts), so a site's pages no longer all dispatch at
+ * once — they queue, and a throttled call additionally waits out its backoff.
+ * A seven-call run against a low per-minute ceiling comfortably exceeds five
+ * minutes, and the old 300s ceiling would have killed it mid-flight, leaving a
+ * "generating" row nothing could recover.
+ *
+ * Self-hosted `next start` does not enforce this the way a serverless platform
+ * does; it is raised anyway so the intent is explicit rather than incidental.
+ * The run screen polls per-page progress throughout (see the `persist` chain
+ * below), so a long run stays observable rather than looking hung.
+ */
+export const maxDuration = 3600;
 
 type Ctx = { params: Promise<{ id: string }> };
 

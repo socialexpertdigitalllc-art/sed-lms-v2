@@ -7,7 +7,11 @@ import { regeneratePage, buildBrief, assembleZip, findComponentsFile, outputPath
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+/** One page, but the same paced-and-retried AI call the full generation makes
+ *  (see the sibling generate route). Up to 4 attempts at 300s each plus
+ *  backoff does not fit in 120s — and a regeneration killed mid-flight leaves
+ *  the operator staring at the failed page they were trying to replace. */
+export const maxDuration = 900;
 
 type Ctx = { params: Promise<{ id: string; file: string }> };
 
