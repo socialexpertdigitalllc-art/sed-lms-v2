@@ -7,6 +7,7 @@ import { buildPrompt, EMPTY_INPUT, type GenInput } from "./prompt";
 import { AiCallAborted, combineAbortSignals, isAbortedError } from "./abort";
 import {
   callTimedOutMessage,
+  isRateLimitError,
   isRetryableError,
   parseRetryAfter,
   ProviderHttpError,
@@ -305,9 +306,7 @@ function gateKeyFor(cfg: ProviderSpec): string {
 }
 
 /**
- * The actual OpenAI-compatible call, with retries. Identical wire format for
- * every provider we support, which is why adding a provider is a descriptor
- * and nothing else.
+ * The actual OpenAI-compatible call, with retries.
  *
  * A retryable failure (429, transient 5xx, timeout, network fault) is retried
  * with backoff; a terminal one (bad request, bad key) is thrown immediately
@@ -322,10 +321,16 @@ export async function callWithProvider(
   opts: ProviderCallOptions,
 ): Promise<{ text: string; tokens: number }> {
   const attempts = Math.max(1, opts.maxAttempts ?? MAX_ATTEMPTS);
+  // NOTE: until Task 10 wires operator budgets into config.ts, `cfg.rateBudget`
+  // is undefined for every production spec, so the gate admits immediately and
+  // only the retry loop below is doing work.
   const gate = getGate(gateKeyFor(cfg), cfg.rateBudget ?? {});
   const inputTokens = estimateInputTokens(systemPrompt, userPrompt, opts.images?.length ?? 0);
   const maxTokens = Math.min(opts.maxTokens, cfg.maxOutputTokens);
   let lastError: unknown;
+  /** Has a 429 from THIS call already been counted against the budget? Only
+   *  then is a later 429 a repeat of a wall the gate has already seen. */
+  let throttleCounted = false;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     // Acquired per ATTEMPT, not per call: a retry is a fresh request against
@@ -338,19 +343,34 @@ export async function callWithProvider(
     // now: `tpd` is the sole dimension that can compute a multi-hour wait and
     // no shipped budget declares one, leaving a worst case of about a minute.
     // A deadline should be set once a real paced run shows what it costs.
+    //
+    // LOAD-BEARING ADJACENCY: the slot is released only by `settle`/
+    // `settleError`; no statement may go between this line and the `try`, and
+    // `settleError` must stay first in the catch (only the non-throwing
+    // computation of its own arguments may precede it). Either edit would leak
+    // a slot on the path it interrupts, and a leaked slot permanently lowers
+    // this provider's concurrency with nothing to log it.
     const slot = await gate.acquire({ inputTokens, model, maxTokens }, opts.signal);
     try {
       const out = await attemptCall(cfg, model, systemPrompt, userPrompt, opts);
       slot.settle(out.usage);
       return { text: out.text, tokens: out.tokens };
     } catch (e) {
-      // Every attempt after the first is, with certainty, this same call
-      // hitting the same wall — so it is counted as a health signal but must
-      // not back the provider off again. The gate cannot work this out for
-      // itself: its wall-clock cooldown infers "same event" from proximity,
-      // and a vendor-supplied `Retry-After` can space these attempts far
-      // wider than that (see recordThrottle).
-      slot.settleError(e, { sameCongestionEvent: attempt > 1 });
+      // A 429 is a repeat only once THIS call has already had one COUNTED —
+      // not merely because an earlier attempt failed. "Attempt 2 or later" is
+      // the weaker claim and it silently disables backoff: a 503 on attempt 1
+      // counts nothing, so flagging the genuine 429 on attempt 2 as a repeat
+      // skips the halving entirely, and it still stamps `lastThrottleAt`,
+      // suppressing backoff for every concurrent call for a cooldown window.
+      // A 5xx-then-429 interleaving is exactly what a provider under load
+      // produces, which is the case this exists for.
+      //
+      // The gate cannot infer this itself: its wall-clock cooldown reads
+      // "same event" from proximity, and a vendor `Retry-After` can space
+      // these attempts far wider than that (see recordThrottle).
+      const throttled = isRateLimitError(e);
+      slot.settleError(e, { sameCongestionEvent: throttled && throttleCounted });
+      if (throttled) throttleCounted = true;
       lastError = e;
       if (isAbortedError(e)) throw e;
       if (!isRetryableError(e) || attempt === attempts) throw e;

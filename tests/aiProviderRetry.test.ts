@@ -138,7 +138,16 @@ describe("callWithProvider retry", () => {
     expect(fetchMock).toHaveBeenCalledTimes(MAX_ATTEMPTS);
   });
 
-  it("never retries an operator abort", async () => {
+  it("surfaces an operator abort as AiCallAborted after exactly one call", async () => {
+    // What this actually proves is the end-to-end contract, NOT the loop's
+    // `isAbortedError` guard. That guard is belt-and-braces: `isRetryableError`
+    // itself opens with `if (isAbortedError(e)) return false;`, so the two
+    // classify an identical set and no test can discriminate the guard without
+    // editing errors.ts. Verified — the loop can be stripped of BOTH and this
+    // still passes, because an aborted signal is sticky and `attemptCall`'s
+    // pre-flight check then throws before reaching the wire on every later
+    // attempt. The test below ("abandons a pending backoff") covers the abort
+    // behaviour that IS falsifiable here.
     const ac = new AbortController();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
       ac.abort();
@@ -147,6 +156,42 @@ describe("callWithProvider retry", () => {
 
     const promise = callWithProvider(spec, "m1", "s", "u", { maxTokens: 100, temperature: 0, signal: ac.signal });
     await expect(promise).rejects.toBeInstanceOf(AiCallAborted);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("abandons a pending backoff the moment the operator stops the run", async () => {
+    // The backoff sleep is handed `opts.signal` so a Stop is honoured while a
+    // call is PARKED, not only while it is on the wire. Drop that argument and
+    // an aborted run sits out the vendor's full 60s Retry-After and then fires
+    // another PAID request. Note the failure is one of TIMING, not outcome:
+    // without the signal the run still ends in AiCallAborted, because the next
+    // attempt's `gate.acquire` sees the aborted signal — just a minute later,
+    // which is why this asserts WHEN it settles rather than only how.
+    const ac = new AbortController();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ error: { message: "limited" } }, { status: 429, headers: { "retry-after": "60" } }));
+
+    let settled = false;
+    const outcome = callWithProvider(spec, "m1", "s", "u", {
+      maxTokens: 100,
+      temperature: 0,
+      signal: ac.signal,
+    }).catch((e) => {
+      settled = true;
+      return e;
+    });
+
+    // Deep inside the 60s backoff, and nowhere near its end.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(settled).toBe(false);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(settled).toBe(true);
+    expect(await outcome).toBeInstanceOf(AiCallAborted);
+    // Crucially: the second request was never paid for.
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -257,5 +302,28 @@ describe("callWithProvider gating", () => {
     expect(snap.scale).toBe(0.5);
     // Still every one of them on the operator's health counter.
     expect(snap.throttlesLastHour).toBe(MAX_ATTEMPTS);
+  });
+
+  it("still backs off when the first failure of the call was NOT a 429", async () => {
+    // A provider under load returns 5xx and 429 interleaved, and "this call
+    // already failed" is not the same claim as "this call already had a 429
+    // COUNTED". Flagging on attempt number alone, the 503 here counts nothing
+    // and the real 429 that follows is dismissed as a repeat of it — the call
+    // takes three genuine 429s and backs the budget off by NOTHING. It also
+    // stamps `lastThrottleAt`, so every concurrent call's own first 429 reads
+    // as a repeat for the next cooldown window too.
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "upstream blip" } }, { status: 503 }))
+      .mockResolvedValue(jsonResponse({ error: { message: "limited" } }, { status: 429 }));
+    const gated: ProviderSpec = { ...spec, rateBudget: { concurrency: 4 } };
+
+    const settled = callWithProvider(gated, "m1", "s", "u", { maxTokens: 100, temperature: 0 }).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await settled;
+
+    const snap = getGate("testprov", { concurrency: 4 }).snapshot();
+    expect(snap.scale).toBe(0.5);
+    // Three 429s; the 503 is not a throttle and must not be counted as one.
+    expect(snap.throttlesLastHour).toBe(3);
   });
 });
