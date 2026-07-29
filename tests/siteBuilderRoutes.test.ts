@@ -52,6 +52,7 @@ import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/
 import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
 import { POST as recoverPost } from "@/app/api/site-builder/runs/[id]/recover/route";
 import { DELETE as runDelete } from "@/app/api/site-builder/runs/[id]/route";
+import { generateRunNow, type GenerateRunDeps } from "@/lib/site-builder/generateRun";
 
 const enc = new TextEncoder();
 
@@ -1190,5 +1191,219 @@ describe("POST /api/site-builder/runs/[id]/recover — releasing a wedged run", 
     // Untouched: the run kept the state the winner set.
     expect(state.runs[0].status).toBe("review");
     expect(state.activity).toHaveLength(0);
+  });
+});
+
+/**
+ * The rounds loop inside `generateRunNow` (lib/site-builder/generateRun.ts),
+ * driven directly with injected deps — instant `sleep` that records requested
+ * waits, a fixed clock, a tiny escalation schedule, and stubbed `runSite` /
+ * `probeQuota` — so no test here ever actually waits, probes, or touches the
+ * DB/crypto behind the production quota lookup. The HTTP mapping above stays
+ * the routes' own tests; these are about when the loop retries, how long it
+ * chooses to wait, and when it parks.
+ */
+describe("generateRunNow — retry rounds, quota-aware waits, parking", () => {
+  /** The fixed "now" every test runs at. */
+  const T0 = 1_000_000;
+
+  const okPage = (html = "<html>gen</html>") => ({ status: "ok", kind: "existing", html });
+  const throttled = (retryAfterMs?: number) => ({
+    status: "failed",
+    kind: "existing",
+    error: "429: too many requests",
+    retryable: true,
+    ...(retryAfterMs !== undefined && { retryAfterMs }),
+  });
+  const dead = (error = "401: API key not valid") => ({
+    status: "failed",
+    kind: "existing",
+    error,
+    retryable: false,
+  });
+
+  /** A finished pass: one ok page, zip ready. */
+  const finished = () => ({
+    ok: true,
+    pages: { "index.html": okPage(), "about.html": okPage("<html>about</html>") },
+    zipBytes: new Uint8Array([9]),
+  });
+  /** A pass that left one throttled page standing. */
+  const oneThrottled = (retryAfterMs?: number) => ({
+    ok: true,
+    pages: { "index.html": okPage(), "about.html": throttled(retryAfterMs) },
+  });
+
+  function harness(results: unknown[], over: Partial<GenerateRunDeps> = {}) {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN()]);
+    const impl = vi.fn();
+    for (const r of results) impl.mockResolvedValueOnce(r);
+    const waits: number[] = [];
+    const sleepMock = vi.fn(async (ms: number) => {
+      waits.push(ms);
+    });
+    const deps: GenerateRunDeps = {
+      runSiteImpl: impl as unknown as GenerateRunDeps["runSiteImpl"],
+      // No provider identity by default: the loop must run purely on the
+      // schedule without ever reaching for the production DB/crypto lookup.
+      quotaTarget: async () => null,
+      sleep: sleepMock,
+      now: () => T0,
+      waitsMs: [10, 20],
+      budgetMs: 100_000,
+      ...over,
+    };
+    const call = () => generateRunNow(admin as unknown as Parameters<typeof generateRunNow>[0], "run-1", deps);
+    return { admin, state, uploadMock, impl, waits, sleepMock, deps, call };
+  }
+
+  /** A quota lookup that "knows" the provider, for the probe tests. */
+  const minimaxTarget = async () => ({ providerKey: "minimax", credentials: { api_key: "k" } });
+  const exhaustedSnapshot = (resetAt: Date) => async () => ({
+    providerKey: "minimax",
+    windows: [{ label: "5-hour window", remainingTokens: 0, resetAt }],
+    fetchedAt: new Date(T0),
+  });
+
+  it("retries a retryable failure in a second round, resuming from the first round's pages", async () => {
+    const round1 = oneThrottled();
+    const { state, impl, waits, call } = harness([round1, finished()]);
+
+    const outcome = await call();
+
+    expect(outcome.kind).toBe("done");
+    expect(impl).toHaveBeenCalledTimes(2);
+    // The second round resumes from the FIRST round's pages — the carried
+    // `ok` page is what makes round two cost only the page that failed.
+    expect((impl.mock.calls[1][0] as { resume: unknown }).resume).toEqual(round1.pages);
+    expect(waits).toEqual([10]);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].error).toBeNull();
+    expect(state.runs[0].resume_at).toBeNull();
+    expect(state.runs[0].generation_id).toBeNull();
+  });
+
+  it("stops after one round when every failure is terminal — no wait, and the real reason", async () => {
+    const { state, impl, waits, uploadMock, call } = harness([
+      { ok: false, pages: { "index.html": dead("401: API key not valid") } },
+    ]);
+
+    const outcome = await call();
+
+    expect(outcome.kind).toBe("done");
+    expect((outcome as { run: Row }).run.status).toBe("failed");
+    expect(impl).toHaveBeenCalledTimes(1);
+    expect(waits).toEqual([]);
+    // The page's own terminal error, not the generic "Every page failed" —
+    // retrying cannot fix a bad key, so the operator needs the actual reason.
+    expect(String(state.runs[0].error)).toContain("401: API key not valid");
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].generation_id).toBeNull();
+    expect(state.runs[0].resume_at).toBeNull();
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it("waits out a vendor Retry-After larger than the schedule", async () => {
+    const { waits, call } = harness([oneThrottled(45_000), finished()]);
+
+    const outcome = await call();
+
+    expect(outcome.kind).toBe("done");
+    // 45s from the vendor beats 10ms from the schedule — dropping the max()
+    // would retry into the very throttle the vendor priced.
+    expect(waits).toEqual([45_000]);
+  });
+
+  it("waits for the probed quota reset, not the schedule, when the reset fits the budget", async () => {
+    const resetAt = new Date(T0 + 5_000);
+    const { state, waits, call } = harness([oneThrottled(), finished()], {
+      quotaTarget: minimaxTarget,
+      probeQuotaImpl: exhaustedSnapshot(resetAt) as unknown as GenerateRunDeps["probeQuotaImpl"],
+    });
+
+    const outcome = await call();
+
+    expect(outcome.kind).toBe("done");
+    expect(waits).toEqual([5_000]);
+    expect(state.runs[0].status).toBe("review");
+  });
+
+  it("parks the run — released, with resume_at at the reset — when the window resets beyond the budget", async () => {
+    const resetAt = new Date(T0 + 60_000);
+    const { state, impl, waits, uploadMock, call } = harness([oneThrottled()], {
+      budgetMs: 10_000,
+      quotaTarget: minimaxTarget,
+      probeQuotaImpl: exhaustedSnapshot(resetAt) as unknown as GenerateRunDeps["probeQuotaImpl"],
+    });
+
+    const outcome = await call();
+
+    expect(outcome.kind).toBe("parked");
+    expect(impl).toHaveBeenCalledTimes(1);
+    expect(waits).toEqual([]);
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].resume_at).toBe(resetAt.toISOString());
+    // The token is RELEASED by the park write — a parked run left claimed
+    // could never be resumed by the processor or the operator.
+    expect(state.runs[0].generation_id).toBeNull();
+    expect(String(state.runs[0].error)).toContain("quota is exhausted");
+    expect(String(state.runs[0].error)).toContain(resetAt.toISOString());
+    expect(uploadMock).not.toHaveBeenCalled();
+    // The round's finished page rides the park write, so the resume costs
+    // only the page that failed.
+    expect((state.runs[0].pages as Record<string, { status: string }>)["index.html"].status).toBe("ok");
+  });
+
+  it("parks with resume_at = now + wait when the schedule itself would blow the budget", async () => {
+    const { state, impl, sleepMock, call } = harness([oneThrottled()], { budgetMs: 5, waitsMs: [10] });
+
+    const outcome = await call();
+
+    expect(outcome.kind).toBe("parked");
+    expect(impl).toHaveBeenCalledTimes(1);
+    expect(sleepMock).not.toHaveBeenCalled();
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].resume_at).toBe(new Date(T0 + 10).toISOString());
+    expect(state.runs[0].generation_id).toBeNull();
+    expect(String(state.runs[0].error)).toMatch(/kept throttling/);
+  });
+
+  it("proceeds on the schedule when the probe throws or knows nothing — the probe can never fail a run", async () => {
+    const probes = [
+      async () => {
+        throw new Error("probe endpoint down");
+      },
+      async () => null,
+    ];
+    for (const probe of probes) {
+      const { state, waits, call } = harness([oneThrottled(), finished()], {
+        quotaTarget: minimaxTarget,
+        probeQuotaImpl: probe as unknown as GenerateRunDeps["probeQuotaImpl"],
+      });
+
+      const outcome = await call();
+
+      expect(outcome.kind).toBe("done");
+      expect(waits).toEqual([10]);
+      expect(state.runs[0].status).toBe("review");
+    }
+  });
+
+  it("marks the next attempt on the still-generating row during a wait, and clears it at the end", async () => {
+    const h = harness([oneThrottled(), finished()]);
+    const seen: { resume_at: unknown; status: unknown }[] = [];
+    // Captured AT the sleep — the only moment the marker is meaningful: the
+    // run screen reads `resume_at` on a "generating" row as "next attempt at".
+    h.deps.sleep = async () => {
+      seen.push({ resume_at: h.state.runs[0].resume_at, status: h.state.runs[0].status });
+    };
+
+    const outcome = await h.call();
+
+    expect(outcome.kind).toBe("done");
+    expect(seen).toEqual([{ resume_at: new Date(T0 + 10).toISOString(), status: "generating" }]);
+    // …and the terminal write cleared it: a finished run with a leftover
+    // "next attempt" time would show a countdown to nothing.
+    expect(h.state.runs[0].resume_at).toBeNull();
   });
 });
