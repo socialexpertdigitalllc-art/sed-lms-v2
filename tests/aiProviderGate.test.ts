@@ -10,8 +10,18 @@ import {
   outputRatioFrom,
   OutputRatioEstimator,
   ProviderGate,
+  GateTimeoutError,
   sleep,
+  RAMP_QUIET_MS,
+  RAMP_STEP,
+  THROTTLE_COOLDOWN_MS,
+  GATE_SLOW_WAIT_WARN_MS,
 } from "@/lib/ai-tools/providers/gate";
+import { isRetryableError, ProviderHttpError } from "@/lib/ai-tools/providers/errors";
+import { scaleBudget } from "@/lib/ai-tools/providers/limits";
+
+/** A 429 as the provider layer reports it. */
+const throttled = () => new ProviderHttpError("rate limited", 429, null, null);
 
 describe("estimateInputTokens", () => {
   it("counts both prompts at the chars-per-token rate", () => {
@@ -175,6 +185,256 @@ describe("ProviderGate enforcement", () => {
   });
 });
 
+describe("ProviderGate adaptive pacing", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Drive one 429 through the gate, `gap` ms after the previous one. */
+  const throttleOnce = async (gate: ProviderGate, gap = 0) => {
+    if (gap) vi.advanceTimersByTime(gap);
+    const slot = await gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 });
+    slot.settleError(throttled());
+  };
+
+  it("treats a burst of 429s as ONE congestion event", async () => {
+    const gate = new ProviderGate("minimax", { rpm: 60 });
+    // Four calls hit the same wall milliseconds apart, as concurrent pages do.
+    for (let i = 0; i < 4; i++) await throttleOnce(gate, 100);
+    // Halved once, not four times: rpm 30, not the rpm 3 this used to give.
+    expect(gate.snapshot().scale).toBe(0.5);
+    expect(scaleBudget({ rpm: 60 }, gate.snapshot().scale).rpm).toBe(30);
+    // But all four are still counted as health signal.
+    expect(gate.snapshot().throttlesLastHour).toBe(4);
+  });
+
+  it("backs off again for a genuinely separate congestion event", async () => {
+    const gate = new ProviderGate("minimax", { rpm: 60 });
+    await throttleOnce(gate);
+    expect(gate.snapshot().scale).toBe(0.5);
+    // Past the cooldown, but before the quiet period would ramp anything back.
+    await throttleOnce(gate, THROTTLE_COOLDOWN_MS + 1);
+    expect(gate.snapshot().scale).toBe(0.25);
+  });
+
+  it("keeps the burst window rolling so a steady stream is not re-halved", async () => {
+    const gate = new ProviderGate("p", { rpm: 60 });
+    await throttleOnce(gate);
+    // Five 429s, each inside the cooldown relative to the one before it but
+    // spanning longer than the cooldown in total: still one event.
+    for (let i = 0; i < 5; i++) await throttleOnce(gate, THROTTLE_COOLDOWN_MS - 500);
+    expect(gate.snapshot().scale).toBe(0.5);
+  });
+
+  it("recovers on elapsed quiet time alone, with no traffic at all", async () => {
+    const gate = new ProviderGate("minimax", { rpm: 60 });
+    await throttleOnce(gate);
+    expect(gate.snapshot().scale).toBe(0.5);
+
+    // Not a single further call — the next run has not started yet.
+    vi.advanceTimersByTime(RAMP_QUIET_MS);
+    expect(gate.snapshot().scale).toBeCloseTo(0.5 + RAMP_STEP, 5);
+
+    // Multiple quiet periods bank multiple steps rather than only one.
+    vi.advanceTimersByTime(RAMP_QUIET_MS * 3);
+    expect(gate.snapshot().scale).toBeCloseTo(0.5 + RAMP_STEP * 4, 5);
+  });
+
+  it("ramps back to exactly 1 and stops there", async () => {
+    const gate = new ProviderGate("p", { rpm: 60 });
+    await throttleOnce(gate);
+    vi.advanceTimersByTime(RAMP_QUIET_MS * 50);
+    expect(gate.snapshot().scale).toBe(1);
+    expect(scaleBudget({ rpm: 60 }, gate.snapshot().scale).rpm).toBe(60);
+  });
+
+  it("counts quiet time from the last 429 of a burst, not the first", async () => {
+    const gate = new ProviderGate("p", { rpm: 60 });
+    await throttleOnce(gate);
+    await throttleOnce(gate, 3000); // duplicate report, 3s into the event
+    // 59s after the FIRST 429 but only 56s after the last: no ramp yet.
+    vi.advanceTimersByTime(RAMP_QUIET_MS - 4000);
+    expect(gate.snapshot().scale).toBe(0.5);
+    vi.advanceTimersByTime(5000);
+    expect(gate.snapshot().scale).toBeCloseTo(0.5 + RAMP_STEP, 5);
+  });
+
+  it("clears pacing learned against an old budget when the operator changes it", async () => {
+    const gate = new ProviderGate("minimax", { rpm: 60, tpm: 500_000 });
+    for (let i = 0; i < 4; i++) await throttleOnce(gate, 100);
+    expect(gate.snapshot().scale).toBe(0.5);
+
+    gate.setBudget({ rpm: 600, tpm: 500_000 });
+    expect(gate.snapshot().scale).toBe(1);
+    expect(scaleBudget({ rpm: 600 }, gate.snapshot().scale).rpm).toBe(600);
+    // The health signal is not pacing state and must survive the change.
+    expect(gate.snapshot().throttlesLastHour).toBe(4);
+  });
+
+  it("keeps its learned pacing when handed an equal budget", async () => {
+    // The registry re-applies a freshly built but equal budget on every lookup;
+    // resetting on that would disable adaptation entirely.
+    const gate = new ProviderGate("minimax", { rpm: 60, tpm: 500_000 });
+    await throttleOnce(gate);
+    expect(gate.snapshot().scale).toBe(0.5);
+    gate.setBudget({ rpm: 60, tpm: 500_000 });
+    expect(gate.snapshot().scale).toBe(0.5);
+  });
+
+  it("notices a dimension being cleared, not just changed", async () => {
+    const gate = new ProviderGate("p", { rpm: 60, tpm: 500_000 });
+    await throttleOnce(gate);
+    gate.setBudget({ rpm: 60 }); // tpm dropped: undefined vs a number
+    expect(gate.snapshot().scale).toBe(1);
+  });
+});
+
+describe("ProviderGate wait deadline", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("gives up rather than parking a caller for a day on a TPD block", async () => {
+    const gate = new ProviderGate("kimi", { tpd: 1000 });
+    const first = await gate.acquire({ inputTokens: 900, model: "m", maxTokens: 10 });
+
+    const blocked = gate.acquire({ inputTokens: 900, model: "m", maxTokens: 10 }, undefined, 5000);
+    const assertion = expect(blocked).rejects.toBeInstanceOf(GateTimeoutError);
+    await vi.advanceTimersByTimeAsync(6000);
+    await assertion;
+    first.settle(null);
+  });
+
+  it("names the provider and the blocking dimension, and reads as retryable", async () => {
+    const gate = new ProviderGate("deepseek", { concurrency: 1 });
+    const held = await gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 });
+
+    const blocked = gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 }, undefined, 2000).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(3000);
+    const err = (await blocked) as GateTimeoutError;
+
+    expect(err).toBeInstanceOf(GateTimeoutError);
+    expect(err.providerKey).toBe("deepseek");
+    expect(err.dimension).toBe("concurrency");
+    // errors.ts must classify it as worth retrying, without errors.ts knowing
+    // this class exists.
+    expect(isRetryableError(err)).toBe(true);
+    held.settle(null);
+  });
+
+  it("waits indefinitely when no deadline is given", async () => {
+    const gate = new ProviderGate("p", { concurrency: 1 });
+    const held = await gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 });
+    let acquired = false;
+    const second = gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 }).then((s) => {
+      acquired = true;
+      return s;
+    });
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(acquired).toBe(false);
+    held.settle(null);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(acquired).toBe(true);
+    (await second).settle(null);
+  });
+
+  it("warns once — not once per poll — when a caller is parked a long time", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const gate = new ProviderGate("minimax", { concurrency: 1 });
+    const held = await gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 });
+    void gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 }).then((s) => s.settle(null));
+
+    await vi.advanceTimersByTimeAsync(GATE_SLOW_WAIT_WARN_MS + 5000);
+    const waitWarnings = warn.mock.calls.filter((c) => String(c[0]).includes("waited"));
+    // Thousands of polls elapsed; exactly one line.
+    expect(waitWarnings).toHaveLength(1);
+    expect(String(waitWarnings[0][0])).toMatch(/minimax/);
+    expect(String(waitWarnings[0][0])).toMatch(/concurrency/);
+    held.settle(null);
+  });
+});
+
+describe("ProviderGate token accounting", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("bills a long call's overspend to the minute it landed in", async () => {
+    const gate = new ProviderGate("p", { tpm: 1_000_000 });
+    const slot = await gate.acquire({ inputTokens: 10_000, model: "m", maxTokens: 400_000 });
+    expect(gate.snapshot().tokensThisMinute).toBe(22_000);
+
+    // A model-max rewrite outlives the window; its reservation is pruned.
+    vi.advanceTimersByTime(70_000);
+    expect(gate.snapshot().tokensThisMinute).toBe(0);
+
+    slot.settle({ prompt_tokens: 10_000, completion_tokens: 400_000, total_tokens: 410_000 });
+    // The 388k that overran the reservation is charged, not silently dropped.
+    expect(gate.snapshot().tokensThisMinute).toBe(410_000 - 22_000);
+  });
+
+  it("does not double-charge a call that settles inside the window", async () => {
+    const gate = new ProviderGate("p", { tpm: 1_000_000 });
+    const slot = await gate.acquire({ inputTokens: 10_000, model: "m", maxTokens: 400_000 });
+    vi.advanceTimersByTime(5000);
+    slot.settle({ prompt_tokens: 10_000, completion_tokens: 400_000, total_tokens: 410_000 });
+    // Corrected in place — one entry of 410k, not 410k plus an excess event.
+    expect(gate.snapshot().tokensThisMinute).toBe(410_000);
+  });
+
+  it("does not credit a new day for a call charged to the previous one", async () => {
+    const gate = new ProviderGate("p", { tpd: 10_000_000 });
+    const slot = await gate.acquire({ inputTokens: 10_000, model: "m", maxTokens: 50_000 });
+    expect(gate.snapshot().dayTokens).toBe(22_000);
+
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000 + 1000);
+    expect(gate.snapshot().dayTokens).toBe(0); // rolled, even while idle
+
+    slot.settle({ prompt_tokens: 10_000, completion_tokens: 1_000, total_tokens: 11_000 });
+    // Was -10998 before the guard: a false credit against the new day's quota.
+    expect(gate.snapshot().dayTokens).toBe(0);
+  });
+
+  it("still reconciles the day counter within the same day", async () => {
+    const gate = new ProviderGate("p", { tpd: 10_000_000 });
+    const slot = await gate.acquire({ inputTokens: 10_000, model: "m", maxTokens: 50_000 });
+    slot.settle({ prompt_tokens: 10_000, completion_tokens: 1_000, total_tokens: 11_000 });
+    expect(gate.snapshot().dayTokens).toBe(11_000);
+  });
+});
+
+describe("throttle logging", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("never prints NaN when a same-shaped error lacks retryAfterMs", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const gate = new ProviderGate("p", { rpm: 60 });
+    // A copy that crossed a module boundary: right name and status, missing
+    // the optional fields.
+    const copy = Object.assign(new Error("429"), { name: "ProviderHttpError", status: 429 });
+    const slot = await gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 });
+    slot.settleError(copy);
+
+    expect(gate.snapshot().scale).toBe(0.5); // it still paced off it
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls.every((c) => !String(c[0]).includes("NaN"))).toBe(true);
+  });
+});
+
 describe("sleep", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
@@ -183,5 +443,19 @@ describe("sleep", () => {
     const ac = new AbortController();
     ac.abort();
     await expect(sleep(1000, ac.signal)).rejects.toThrow(/aborted/i);
+  });
+
+  it("carries the caller's label so the provider is named in the abort", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(sleep(1000, ac.signal, "minimax rate gate")).rejects.toThrow(/minimax rate gate/);
+  });
+
+  it("rejects an in-flight sleep when the signal fires later", async () => {
+    const ac = new AbortController();
+    const pending = sleep(60_000, ac.signal, "minimax rate gate");
+    const assertion = expect(pending).rejects.toThrow(/minimax rate gate/);
+    ac.abort();
+    await assertion;
   });
 });
