@@ -449,6 +449,42 @@ describe("POST /api/site-builder/runs/[id]/generate — packaging order", () => 
     expect(Object.keys(pages)).toHaveLength(1);
     expect(Object.values(pages).every((p) => p.status === "ok")).toBe(true);
   });
+
+  /**
+   * `output_path` is written BEFORE the upload — deliberately, so ownership is
+   * established before any object-store side effect — which means a failed
+   * upload would otherwise leave the row naming an object that is not there.
+   * The run screen renders "Download zip" on `output_path` alone, so that link
+   * 404s.
+   */
+  it("puts output_path back where it was when packaging fails", async () => {
+    const { admin, state, uploadMock } = makeWritableAdmin([RUN({ output_path: null })]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(500);
+    // A first run had no zip, so it must end with none — not with a path to
+    // bytes that were never uploaded.
+    expect(state.runs[0].output_path).toBeNull();
+  });
+
+  it("restores the PREVIOUS zip's path, rather than nulling it, when a re-run's packaging fails", async () => {
+    // The discriminating half: an implementation that just wrote null on
+    // failure would drop a download that still works. The prior attempt's
+    // object is untouched by a failed upsert.
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", output_path: "run-1/site.zip", error: "Every page failed to generate." }),
+    ]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await generatePost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+    expect(res.status).toBe(500);
+    expect(state.runs[0].output_path).toBe("run-1/site.zip");
+  });
 });
 
 describe("POST /api/site-builder/runs/[id]/generate — which runs may be claimed", () => {
@@ -713,6 +749,50 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
     expect(pages["index.html"].status).toBe("ok");
     expect(pages["index.html"].html).toBe("<html>regenerated</html>");
+  });
+
+  it("does NOT promote a failed run when the packaging that would give it a zip fails", async () => {
+    /**
+     * Promotion and `output_path` are written BEFORE the upload (ownership
+     * first), so an upload failure on a run that never had a zip would leave
+     * "review" plus a path to nothing — and Approve → Deploy would then run,
+     * with deploy creating the subdomain BEFORE downloading the zip. A stray
+     * empty subdomain and a failed deployment row, for a site never packaged.
+     */
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", output_path: null }),
+    ]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(500);
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].error).toBe("boom");
+    expect(state.runs[0].output_path).toBeNull();
+    // The regenerated page itself is still kept — it is the expensive part,
+    // and the next attempt re-packages rather than re-buying it.
+    const pages = state.runs[0].pages as Record<string, { status: string; html?: string }>;
+    expect(pages["index.html"].status).toBe("ok");
+    expect(pages["index.html"].html).toBe("<html>regenerated</html>");
+  });
+
+  it("keeps the promotion when the run already had a zip to fall back on", async () => {
+    // The discriminating half: a run WITH a prior object is not left worse off
+    // by a failed re-package — the path still names real bytes, one revision
+    // out of date, so nothing is undone.
+    const { admin, state, uploadMock } = makeWritableAdmin([
+      RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", output_path: "run-1/site.zip" }),
+    ]);
+    adminHolder.admin = admin;
+    uploadMock.mockResolvedValue({ error: { message: "storage unreachable" } });
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(500);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].output_path).toBe("run-1/site.zip");
   });
 
   /**

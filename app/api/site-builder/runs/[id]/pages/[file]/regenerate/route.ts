@@ -22,8 +22,9 @@ type Ctx = { params: Promise<{ id: string; file: string }> };
  * describes, kept open a little past approval since nothing has deployed
  * yet — and ALSO at "failed", where fixing one page is the whole point; such
  * a run is promoted back to "review" as soon as it has a real page again (see
- * `promoted` below). Re-assembles and re-uploads the output zip afterward so
- * the run's `output_path` always reflects the latest per-page state.
+ * `promoted` below). Re-assembles and re-uploads the output zip afterward, so
+ * `output_path` names a real object — and if that upload fails on a run that
+ * never had one, the path and the promotion are put back (see step 2).
  *
  * OWNERSHIP. A single-page write stands aside for EVERY other writer: it is
  * guarded on `generation_id IS NULL` (a whole-run generation claimed the run)
@@ -209,16 +210,45 @@ export async function POST(req: Request, ctx: Ctx) {
     .from(BUILDER_SITES_BUCKET)
     .upload(outputPath, zipBytes, { contentType: "application/zip", upsert: true });
   if (upErr) {
-    // NOT rolled back. The regenerated page is the expensive part and it is
-    // already stored; reverting the row to stay consistent with a stale zip
-    // would throw away the only thing this request paid for. `output_path` is
-    // deterministic, so it is already correct — the object behind it is merely
-    // one regeneration out of date until this is re-run.
+    /**
+     * The PAGE is never rolled back: it is the expensive part and it is already
+     * stored, and reverting the row to stay consistent with a stale zip would
+     * throw away the only thing this request paid for.
+     *
+     * But the two things step 1 wrote ON THE STRENGTH of an upload that then
+     * failed are. When this run already had a zip at `output_path`, nothing
+     * needs undoing — that object is real, merely one regeneration out of date.
+     * When it did NOT (`run.output_path` was null — a run that has never
+     * packaged, which is the normal state of the `failed` run this route exists
+     * to rescue), the row is now claiming a zip that does not exist, and the
+     * promotion to "review" hands that claim to Approve → Deploy. Deploy
+     * creates the subdomain BEFORE it downloads the zip, so the operator would
+     * be left with a stray empty subdomain and a failed deployment row for a
+     * site that was never packaged. So both are put back.
+     *
+     * Guarded on the `updated_at` step 1 left, for the same reason step 1 is
+     * guarded: if anything has moved the row since, this compensation is stale
+     * and simply does not land.
+     */
+    const hadPriorZip = (run.output_path as string | null) != null;
+    if (!hadPriorZip) {
+      await admin
+        .from("builder_runs")
+        .update({
+          output_path: null,
+          ...(promoted ? { status: run.status, error: run.error } : {}),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .eq("updated_at", updated.updated_at as string);
+    }
     return NextResponse.json(
       {
         error:
           `The page was regenerated and saved, but re-packaging the site zip failed (${upErr.message}). ` +
-          `The download is one revision out of date — regenerate this page again to re-package it.`,
+          (hadPriorZip
+            ? `The download is one revision out of date — regenerate this page again to re-package it.`
+            : `This run still has no downloadable site — regenerate this page again to package it.`),
       },
       { status: 500 },
     );

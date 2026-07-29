@@ -253,12 +253,26 @@ export async function POST(_req: Request, ctx: Ctx) {
      * nothing. On a packaging failure this also flips the run to "failed" with
      * the retryable message, so the operator never sees a "review" run whose
      * download 404s.
+     *
+     * …and it RESTORES the pre-attempt `output_path`. Step 1 wrote the new one
+     * before the upload (deliberately — ownership is established before any
+     * object-store side effect), so a failed upload would otherwise leave the
+     * row pointing at an object that does not exist. The run screen renders
+     * "Download zip" on `output_path` alone, so that link would 404. Restoring
+     * rather than nulling is the point: a re-run whose upload fails still has
+     * the PREVIOUS attempt's zip sitting at that path, and that one is real.
      */
     const { data: released } = await admin
       .from("builder_runs")
       .update(
         uploadError
-          ? { generation_id: null, status: "failed", error: uploadError, updated_at: new Date().toISOString() }
+          ? {
+              generation_id: null,
+              status: "failed",
+              error: uploadError,
+              output_path: (run.output_path as string | null) ?? null,
+              updated_at: new Date().toISOString(),
+            }
           : { generation_id: null, updated_at: new Date().toISOString() },
       )
       .eq("id", id)
