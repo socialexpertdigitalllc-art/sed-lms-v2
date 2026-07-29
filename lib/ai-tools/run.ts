@@ -13,7 +13,7 @@ import {
   ProviderHttpError,
   rateLimitHeadersFrom,
 } from "./providers/errors";
-import { resolveBudget, type RateBudget } from "./providers/limits";
+import type { RateBudget } from "./providers/limits";
 import { estimateInputTokens, getGate, sleep, type TokenUsage } from "./providers/gate";
 
 const BUCKET = "ai-generations";
@@ -146,21 +146,15 @@ export async function callProvider(
       // gemini — is byte-identical to a registry key and to a
       // DEFAULT_RATE_BUDGETS key, so this is a total mapping, not a coincidence
       // that happens to hold today.
+      //
+      // NO `rateBudget`, deliberately: this path is DB-free (keys from env), so
+      // it knows the provider but not the operator's stored override. It JOINS
+      // the bucket without describing it — see `getGate`, which leaves an
+      // existing gate's budget alone when a caller supplies none. Stating the
+      // shipped default here instead would differ from the routed path's
+      // default-plus-override on any tuned provider and reset the learned
+      // adaptive state on every alternation.
       providerKey: tool,
-      // Sharing the bucket means sharing the BUDGET too. `getGate` re-installs
-      // whatever budget it is handed on every lookup, so leaving this off would
-      // let one legacy call overwrite the routed path's budget with `{}` —
-      // un-pacing the whole provider until the next routed call. The shipped
-      // default is used rather than the operator's stored override because this
-      // path is deliberately DB-free (it is the "keys from env, no database"
-      // path); a provider the operator has widened is therefore paced at the
-      // shipped floor by a legacy call, which is conservative in the safe
-      // direction. KNOWN COST: on a provider used by both paths, alternating
-      // calls install two different budgets, and `setBudget` resets the learned
-      // adaptive scale each time it sees a change — so AIMD backoff does not
-      // accumulate there. Fix by resolving this spec through
-      // providers/config.ts rather than by widening the gate.
-      rateBudget: resolveBudget(tool, null),
     },
     model,
     systemPrompt,
@@ -197,7 +191,12 @@ export interface ProviderSpec {
    * another name and keeps legacy env-configured tools working.
    */
   providerKey?: string;
-  /** The budget in force for that bucket, resolved by the caller. */
+  /**
+   * The budget in force for that bucket, resolved by the caller. OMIT IT to
+   * join the bucket without describing it: a caller that does not know the
+   * operator's stored override must not overwrite it with a guess. See
+   * `getGate`.
+   */
   rateBudget?: RateBudget;
 }
 
@@ -347,12 +346,13 @@ export async function callWithProvider(
   opts: ProviderCallOptions,
 ): Promise<{ text: string; tokens: number }> {
   const attempts = Math.max(1, opts.maxAttempts ?? MAX_ATTEMPTS);
-  // An absent `rateBudget` means "no declared limits", which admits
-  // immediately. Every production caller now supplies one — the routed path
-  // from the operator's stored override (lib/ai-tools/providers/config.ts) and
-  // `callProvider` above from the shipped defaults — so this fallback is for
-  // tests and for a spec built by hand.
-  const gate = getGate(gateKeyFor(cfg), cfg.rateBudget ?? {});
+  // `cfg.rateBudget` is passed THROUGH, not defaulted: an absent budget must
+  // stay absent so `getGate` can tell "I do not know this provider's budget"
+  // (the legacy env-keyed path) from "this provider has no declared limits".
+  // Coercing it to `{}` here would clobber the routed path's budget — see the
+  // `getGate` docblock. The routed path (lib/ai-tools/providers/config.ts)
+  // always supplies one.
+  const gate = getGate(gateKeyFor(cfg), cfg.rateBudget);
   const inputTokens = estimateInputTokens(systemPrompt, userPrompt, opts.images?.length ?? 0);
   const maxTokens = Math.min(opts.maxTokens, cfg.maxOutputTokens);
   let lastError: unknown;

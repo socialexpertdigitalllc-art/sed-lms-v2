@@ -624,14 +624,29 @@ const gates = new Map<string, ProviderGate>();
  * budget UPDATED rather than being replaced — replacing it would discard the
  * in-flight count and the learned adaptive scale every time an operator saved
  * a settings change, which is exactly when accurate state matters most.
+ *
+ * OMITTING `budget` means "put me in this provider's bucket" WITHOUT also
+ * asserting what that bucket's budget is. The legacy env-keyed path
+ * (`callProvider` in lib/ai-tools/run.ts) knows the provider but has no access
+ * to the operator's stored override, so the best it could otherwise state is
+ * the shipped default. That would differ from the routed path's
+ * default-plus-override on any tuned provider, and since `setBudget` resets the
+ * learned adaptive state whenever the budget CHANGES, the two callers
+ * alternating would reset it on every call — switching AIMD backoff off
+ * entirely, on precisely the providers an operator cared enough to tune.
+ *
+ * ACCEPTED CONSEQUENCE: if a budget-less caller is the FIRST to touch a
+ * provider in a fresh process, the gate is created unpaced (`{}`) and stays so
+ * until the first routed call installs the real budget. That window is brief
+ * and self-correcting, and it is strictly better than two budgets fighting.
  */
-export function getGate(providerKey: string, budget: RateBudget): ProviderGate {
+export function getGate(providerKey: string, budget?: RateBudget): ProviderGate {
   const existing = gates.get(providerKey);
   if (existing) {
-    existing.setBudget(budget);
+    if (budget !== undefined) existing.setBudget(budget);
     return existing;
   }
-  const created = new ProviderGate(providerKey, budget);
+  const created = new ProviderGate(providerKey, budget ?? {});
   gates.set(providerKey, created);
   return created;
 }

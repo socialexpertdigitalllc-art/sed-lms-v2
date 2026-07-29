@@ -486,6 +486,53 @@ describe("gate registry", () => {
     slot.settle(null);
   });
 
+  // A caller that supplies NO budget is joining the bucket, not describing it.
+  // The legacy env-keyed path (callProvider) knows the provider but not the
+  // operator's stored override, so if it installed the shipped default instead,
+  // the two callers would alternate between two different budgets — and because
+  // setBudget resets the learned adaptive state on any change, that would switch
+  // AIMD backoff OFF on exactly the providers an operator has tuned.
+  /** Does the gate admit a call RIGHT NOW? `maxWaitMs: 0` makes this a probe
+   *  rather than a wait. An admitted probe spends a request, so order matters. */
+  const probe = async (g: ProviderGate): Promise<"admitted" | "blocked"> => {
+    try {
+      (await g.acquire({ inputTokens: 1, model: "m", maxTokens: 1 }, undefined, 0)).settle(null);
+      return "admitted";
+    } catch {
+      return "blocked";
+    }
+  };
+
+  it("leaves an existing gate's budget and learned pacing alone when the caller supplies none", async () => {
+    const gate = getGate("p", { rpm: 4 });
+    const slot = await gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 });
+    slot.settleError(new ProviderHttpError("rate limited", 429, null, null));
+    expect(gate.snapshot().scale).toBe(0.5);
+
+    const joined = getGate("p");
+    expect(joined).toBe(gate);
+    // THE ASSERTION THAT PINS THE BUG: a budget-less caller that installed the
+    // shipped default instead would look like a CHANGED budget to setBudget and
+    // reset this to 1 — i.e. "no congestion ever seen" — which is how the
+    // adaptive backoff gets switched off rather than merely degraded.
+    expect(joined.snapshot().scale).toBe(0.5);
+    // And the budget itself survives: rpm 4 at scale 0.5 admits 2 a minute, one
+    // of which the 429'd call already spent.
+    expect(await probe(joined)).toBe("admitted");
+    expect(await probe(joined)).toBe("blocked");
+  });
+
+  it("creates an unpaced gate when a budget-less caller gets there first", async () => {
+    // Accepted and documented: brief, self-correcting, and strictly better than
+    // two budgets fighting. The next routed call installs the real one.
+    const gate = getGate("p");
+    expect(await probe(gate)).toBe("admitted");
+    const routed = getGate("p", { rpm: 1 });
+    expect(routed).toBe(gate);
+    // rpm 1, already spent by the probe above — so the real budget did land.
+    expect(await probe(routed)).toBe("blocked");
+  });
+
   it("reports every live gate for the settings screen", () => {
     getGate("minimax", {});
     getGate("gemini", {});

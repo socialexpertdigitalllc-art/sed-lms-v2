@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { backoffDelayMs, callWithProvider, MAX_ATTEMPTS, type ProviderSpec } from "@/lib/ai-tools/run";
 import { ProviderHttpError } from "@/lib/ai-tools/providers/errors";
-import { getGate, resetGates } from "@/lib/ai-tools/providers/gate";
+import { gateSnapshots, getGate, resetGates } from "@/lib/ai-tools/providers/gate";
 import { AiCallAborted } from "@/lib/ai-tools/abort";
 
 const spec: ProviderSpec = {
@@ -248,6 +248,42 @@ describe("callWithProvider gating", () => {
     await callWithProvider(gated, "m1", "s", "u", { maxTokens: 100, temperature: 0 }).catch(() => {});
 
     expect(getGate("testprov", { concurrency: 1 }).snapshot().inFlight).toBe(0);
+  });
+
+  it("lets a budget-less caller share the bucket without overwriting its budget", async () => {
+    // The two production shapes side by side: the routed path knows the
+    // operator's budget, the legacy env-keyed path (callProvider) knows only
+    // which provider it is. They must land in ONE bucket, and the one that does
+    // not know the budget must not overwrite the one that does — otherwise the
+    // budgets alternate and `setBudget` resets the learned adaptive state on
+    // every call, switching AIMD backoff off on exactly the tuned providers.
+    // A fresh Response per call: a body may only be read once.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse(okBody));
+    const routed: ProviderSpec = { ...spec, rateBudget: { rpm: 2 } };
+    const legacy: ProviderSpec = { ...spec };
+    expect(legacy.rateBudget).toBeUndefined();
+
+    await callWithProvider(routed, "m1", "s", "u", { maxTokens: 10, temperature: 0 });
+    await callWithProvider(legacy, "m1", "s", "u", { maxTokens: 10, temperature: 0 });
+
+    // ONE bucket: the legacy spec's endpoint host never got a gate of its own.
+    expect(gateSnapshots().map((s) => s.key)).toEqual(["testprov"]);
+    expect(getGate("testprov").snapshot().requestsThisMinute).toBe(2);
+
+    // rpm 2 is now spent — and it is still rpm 2, not the `{}` a clobbering
+    // caller would have installed, so the next call has to WAIT for the window.
+    let third = false;
+    const pending = callWithProvider(legacy, "m1", "s", "u", { maxTokens: 10, temperature: 0 }).then((r) => {
+      third = true;
+      return r;
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(third).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(60_000); // the window rolls
+    await pending;
+    expect(third).toBe(true);
   });
 
   it("buckets by endpoint host when no provider key is given", async () => {
