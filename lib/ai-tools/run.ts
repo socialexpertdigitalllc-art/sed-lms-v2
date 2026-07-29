@@ -331,13 +331,26 @@ export async function callWithProvider(
     // Acquired per ATTEMPT, not per call: a retry is a fresh request against
     // the vendor's budget and must queue behind everything else rather than
     // riding in on a slot it reserved a minute ago.
+    //
+    // No `maxWaitMs`, DELIBERATELY. Time parked here is not covered by this
+    // call's timeout, which only starts once the request is on the wire, so an
+    // unbounded wait is breakable only by `opts.signal`. That is accepted for
+    // now: `tpd` is the sole dimension that can compute a multi-hour wait and
+    // no shipped budget declares one, leaving a worst case of about a minute.
+    // A deadline should be set once a real paced run shows what it costs.
     const slot = await gate.acquire({ inputTokens, model, maxTokens }, opts.signal);
     try {
       const out = await attemptCall(cfg, model, systemPrompt, userPrompt, opts);
       slot.settle(out.usage);
       return { text: out.text, tokens: out.tokens };
     } catch (e) {
-      slot.settleError(e);
+      // Every attempt after the first is, with certainty, this same call
+      // hitting the same wall — so it is counted as a health signal but must
+      // not back the provider off again. The gate cannot work this out for
+      // itself: its wall-clock cooldown infers "same event" from proximity,
+      // and a vendor-supplied `Retry-After` can space these attempts far
+      // wider than that (see recordThrottle).
+      slot.settleError(e, { sameCongestionEvent: attempt > 1 });
       lastError = e;
       if (isAbortedError(e)) throw e;
       if (!isRetryableError(e) || attempt === attempts) throw e;

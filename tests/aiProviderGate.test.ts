@@ -216,6 +216,23 @@ describe("ProviderGate adaptive pacing", () => {
     expect(gate.snapshot().throttlesLastHour).toBe(4);
   });
 
+  it("does not re-halve for a 429 the caller declares part of one event", async () => {
+    const gate = new ProviderGate("minimax", { rpm: 60 });
+    await throttleOnce(gate);
+    expect(gate.snapshot().scale).toBe(0.5);
+
+    // FAR outside the cooldown — a retry whose vendor asked for a long wait —
+    // so proximity alone would read this as a separate wall and halve again.
+    // The caller knows better and says so.
+    vi.advanceTimersByTime(THROTTLE_COOLDOWN_MS * 4);
+    const slot = await gate.acquire({ inputTokens: 10, model: "m", maxTokens: 10 });
+    slot.settleError(throttled(), { sameCongestionEvent: true });
+
+    expect(gate.snapshot().scale).toBe(0.5);
+    // Recorded regardless: it is a real 429 and the operator must see it.
+    expect(gate.snapshot().throttlesLastHour).toBe(2);
+  });
+
   it("backs off again for a genuinely separate congestion event", async () => {
     const gate = new ProviderGate("minimax", { rpm: 60 });
     await throttleOnce(gate);

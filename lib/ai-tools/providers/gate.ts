@@ -151,8 +151,14 @@ export interface GateSlot {
    *  really spent, feed the ratio estimator, and count toward ramp-up. */
   settle(usage: TokenUsage | null): void;
   /** The call failed: release the slot, and if it was throttled, halve the
-   *  provider's effective budget. */
-  settleError(error: unknown): void;
+   *  provider's effective budget.
+   *
+   *  `sameCongestionEvent` is the caller ASSERTING that this 429 is a repeat of
+   *  a wall already counted — a retry of a call that just throttled. It is
+   *  still recorded as a health signal, but it does not back the budget off a
+   *  second time. Only a caller that retries can know this; see
+   *  `recordThrottle` for why the wall-clock cooldown cannot infer it. */
+  settleError(error: unknown, opts?: { sameCongestionEvent?: boolean }): void;
 }
 
 export interface GateSnapshot {
@@ -520,7 +526,7 @@ export class ProviderGate {
         if (ratio !== null) this.estimator.record(`${this.key}:${model}`, ratio);
         this.recordSuccess(Date.now());
       },
-      settleError: (error) => {
+      settleError: (error, opts) => {
         if (!release()) return;
         // `isRateLimitError` is a boolean check, not a type predicate, so the
         // cast is what carries the narrowing it already proved: it matched a
@@ -528,7 +534,9 @@ export class ProviderGate {
         // that crossed a module boundary — carries. `recordThrottle` reads
         // only diagnostic fields off it, and reads them for a log line, so a
         // copy missing one degrades that line rather than the pacing decision.
-        if (isRateLimitError(error)) this.recordThrottle(Date.now(), error as ProviderHttpError);
+        if (isRateLimitError(error)) {
+          this.recordThrottle(Date.now(), error as ProviderHttpError, opts?.sameCongestionEvent === true);
+        }
       },
     };
   }
@@ -545,14 +553,25 @@ export class ProviderGate {
     }
   }
 
-  private recordThrottle(now: number, error: ProviderHttpError): void {
+  private recordThrottle(now: number, error: ProviderHttpError, sameCongestionEvent = false): void {
     this.successStreak = 0;
     this.throttles.push(now);
-    // Every 429 within the cooldown is the same wall being reported again by
-    // another in-flight call (or by a retry of one), so only the first backs
-    // the budget off. See THROTTLE_COOLDOWN_MS for what unconditional halving
-    // measured out to.
-    const sameEvent = this.lastThrottleAt > 0 && now - this.lastThrottleAt < THROTTLE_COOLDOWN_MS;
+    // TWO ways a 429 is recognised as a repeat of a wall already counted, and
+    // both are needed because they cover cases the other cannot reach:
+    //
+    //  - ASSERTED by the caller. The retry loop in run.ts knows for a fact that
+    //    attempts 2..n are one call hitting one wall, however far apart they
+    //    land. It has to say so, because the spacing is VENDOR-CONTROLLED: a
+    //    polite `Retry-After: 10` puts four attempts 10s apart, so inferring
+    //    identity from proximity gets it exactly backwards and punishes the
+    //    vendor that warned us — measured at 1.00 -> 0.06 from a single call,
+    //    the very compounding this cooldown was introduced to stop.
+    //  - INFERRED from proximity. This is what the flag cannot see: DIFFERENT
+    //    concurrent calls hitting the wall together. Six pages of a site each
+    //    report their own attempt 1, so every one of them arrives with the flag
+    //    false and only their closeness in time marks them as one fact.
+    const sameEvent =
+      sameCongestionEvent || (this.lastThrottleAt > 0 && now - this.lastThrottleAt < THROTTLE_COOLDOWN_MS);
     // Advanced even for a duplicate: it dates the congestion, and the quiet
     // ramp must count from the LAST 429 seen, not the first of a burst.
     this.lastThrottleAt = now;

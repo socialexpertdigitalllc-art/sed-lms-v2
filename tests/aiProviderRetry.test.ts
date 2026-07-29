@@ -233,4 +233,29 @@ describe("callWithProvider gating", () => {
     expect(snap.throttlesLastHour).toBe(MAX_ATTEMPTS);
     expect(snap.scale).toBe(0.5);
   });
+
+  it("does not compound the backoff when the vendor's Retry-After outruns the cooldown", async () => {
+    // The regression guard for the whole class. `Retry-After: 10` spaces the
+    // four attempts 10s apart — every one of them OUTSIDE the gate's 5s
+    // wall-clock cooldown, so proximity alone marks each as a fresh congestion
+    // event and the scale compounds: measured at 1.00 -> 0.50 -> 0.25 -> 0.13
+    // -> 0.0625, a hair above MIN_SCALE, from ONE call hitting ONE wall. It
+    // also made the polite vendor the one punished hardest, which is backwards.
+    // The retry loop now ASSERTS that attempts 2..n are the same event.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ error: { message: "limited" } }, { status: 429, headers: { "retry-after": "10" } }),
+    );
+    const gated: ProviderSpec = { ...spec, rateBudget: { concurrency: 4 } };
+
+    const settled = callWithProvider(gated, "m1", "s", "u", { maxTokens: 100, temperature: 0 }).catch((e) => e);
+    // Covers all three 10s waits (30s), and leaves the last throttle well
+    // inside RAMP_QUIET_MS (60s) so no quiet ramp can mask the result.
+    await vi.advanceTimersByTimeAsync(40_000);
+    await settled;
+
+    const snap = getGate("testprov", { concurrency: 4 }).snapshot();
+    expect(snap.scale).toBe(0.5);
+    // Still every one of them on the operator's health counter.
+    expect(snap.throttlesLastHour).toBe(MAX_ATTEMPTS);
+  });
 });
