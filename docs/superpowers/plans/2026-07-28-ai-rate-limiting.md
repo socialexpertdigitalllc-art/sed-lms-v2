@@ -2166,6 +2166,31 @@ object:
         rateBudget: resolveBudget(descriptor.key, null),
 ```
 
+**(i) MUST land in this same commit — `lib/ai-tools/run.ts`'s `callProvider`.**
+
+The legacy env-keyed wrapper `callProvider` builds a `ProviderSpec` inline and
+sets no `providerKey`, so it buckets by endpoint host. That is *accidentally*
+correct right now only because the routed path sets no `providerKey` either and
+the registry endpoints are byte-identical to the `TOOLS` endpoints — both land
+in the same host bucket.
+
+The moment (g) above gives the routed spec a `providerKey`, the two paths split
+into SEPARATE gates for a single vendor quota, and the vendor sees up to double
+the intended rate. That is the exact failure this subsystem exists to prevent,
+introduced by the commit meant to complete it.
+
+`ToolId`'s values are the same strings as the registry keys, so the fix is one
+line in `callProvider`'s spec literal:
+
+```ts
+    { label: cfg.label, endpoint: cfg.endpoint, apiKey, maxOutputTokens: cfg.maxOutputTokens, providerKey: tool },
+```
+
+Verify before relying on it: confirm every `ToolId` value has a matching
+descriptor `key` in `AI_PROVIDER_REGISTRY`. If one does not, that tool must
+keep falling back to the host bucket rather than inventing a key nothing else
+uses — and the reason must be written down at the call site.
+
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run tests/aiTaskRouting.test.ts`
@@ -2447,6 +2472,23 @@ git commit -m "feat(ai-models): let an operator set each provider's tier limits 
 
 **Files:**
 - Modify: `app/api/site-builder/runs/[id]/generate/route.ts:10`
+
+Two routes need this, not one. The per-page regenerate route makes the same
+paced AI call and was overlooked in the original plan — a single regeneration
+now costs up to 4 attempts plus backoff, which does not fit in 120s.
+
+- [ ] **Step 0: Raise the per-page regenerate route too**
+
+In `app/api/site-builder/runs/[id]/pages/[file]/regenerate/route.ts`, replace
+`export const maxDuration = 120;` with:
+
+```ts
+/** One page, but the same paced-and-retried AI call the full generation makes
+ *  (see the sibling generate route). Four attempts at up to 300s each, plus
+ *  backoff, does not fit in 120s — and a regeneration killed mid-flight leaves
+ *  the operator with the failed page they were trying to replace. */
+export const maxDuration = 900;
+```
 
 - [ ] **Step 1: Raise the ceiling**
 
