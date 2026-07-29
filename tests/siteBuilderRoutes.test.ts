@@ -36,14 +36,20 @@ vi.mock("@/lib/site-studio/service/guard", () => ({
  * TDZ, since the hoisted route import below runs before this file's consts.
  */
 const runSiteMock = vi.fn();
+const regeneratePageMock = vi.fn();
 vi.mock("@/lib/site-builder/run", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/site-builder/run")>()),
   runSite: (args: unknown) => runSiteMock(args),
+  // The per-page sibling of the seam above, stubbed for the same reason and
+  // in the same lazy way: `regeneratePage` is the AI call, and the regenerate
+  // tests are about the ROUTE's status gate and promotion.
+  regeneratePage: (args: unknown) => regeneratePageMock(args),
 }));
 
 import { GET as previewGet } from "@/app/api/site-builder/runs/[id]/preview/[[...path]]/route";
 import { GET as downloadGet } from "@/app/api/site-builder/runs/[id]/download/route";
 import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/route";
+import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
 
 const enc = new TextEncoder();
 
@@ -214,6 +220,8 @@ beforeEach(() => {
     pages: { "index.html": { status: "ok", kind: "existing", html: "<html>gen</html>" } },
     zipBytes: new Uint8Array([1, 2, 3]),
   });
+  regeneratePageMock.mockReset();
+  regeneratePageMock.mockResolvedValue({ ok: true, html: "<html>regenerated</html>" });
 });
 
 const ctx = (path?: string[]) => ({ params: Promise.resolve({ id: "run-1", path }) });
@@ -538,5 +546,110 @@ describe("POST /api/site-builder/runs/[id]/generate — which runs may be claime
 
     const args = runSiteMock.mock.calls[0][0] as { resume?: unknown };
     expect(args.resume).toEqual({});
+  });
+});
+
+describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed run is fixable", () => {
+  const pageCtx = (file: string) => ({ params: Promise.resolve({ id: "run-1", file }) });
+  const post = (file: string) =>
+    regeneratePost(new Request("http://test.local/x", { method: "POST" }), pageCtx(file));
+
+  /** A run that died with its components rewritten and no page standing. */
+  const AFTER_FAILURE = {
+    "components.js": { status: "ok", kind: "component", name: "Shared components", html: "// REWRITTEN" },
+    "index.html": { status: "failed", kind: "existing", error: "boom" },
+  };
+
+  it("accepts a page regeneration on a failed run", async () => {
+    const { admin } = makeWritableAdmin([RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).not.toBe(409);
+    expect(regeneratePageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("promotes the run to review once a REAL page is ok again, clearing the error", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].error).toBeNull();
+    const pages = state.runs[0].pages as Record<string, { status: string }>;
+    expect(pages["index.html"].status).toBe("ok");
+  });
+
+  it("leaves the run failed when the only thing ok is the components file", async () => {
+    // The mirror image of the case above: the components file regenerates
+    // fine, every actual PAGE is still failed. A components file is not a
+    // site, and a run promoted to review here would offer the operator a zip
+    // with nothing in it to look at.
+    const componentsDown = {
+      "components.js": { status: "failed", kind: "component", name: "Shared components", error: "boom" },
+      "index.html": { status: "failed", kind: "existing", error: "boom" },
+    };
+    const { admin, state } = makeWritableAdmin([RUN({ status: "failed", pages: componentsDown, error: "boom" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("components.js");
+
+    expect(res.status).toBe(200);
+    const pages = state.runs[0].pages as Record<string, { status: string }>;
+    // The regeneration itself landed — so "still failed" below is about the
+    // promotion rule, not about a regeneration that quietly did nothing.
+    expect(pages["components.js"].status).toBe("ok");
+    expect(pages["index.html"].status).toBe("failed");
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].error).toBe("boom");
+  });
+
+  it("leaves the run failed, and still answers 502, when the regeneration fails", async () => {
+    regeneratePageMock.mockResolvedValue({ ok: false, error: "the model refused" });
+    const { admin, state } = makeWritableAdmin([RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(502);
+    expect(String((await res.json()).error)).toContain("the model refused");
+    expect(state.runs[0].status).toBe("failed");
+    expect(state.runs[0].error).toBe("boom");
+  });
+
+  it("does not touch the status of a review run", async () => {
+    // The sentinel `error` is the assertion that matters: promotion writes
+    // `error: null` alongside `status`, so a promotion rule that ignored the
+    // run's CURRENT status would wipe this even though "review" → "review"
+    // would look like a no-op.
+    const reviewPages = {
+      "components.js": { status: "ok", kind: "component", name: "Shared components", html: "// REWRITTEN" },
+      "index.html": { status: "ok", kind: "existing", html: "<html>a</html>" },
+    };
+    const { admin, state } = makeWritableAdmin([
+      RUN({ status: "review", pages: reviewPages, error: "a stale note from an earlier attempt" }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("review");
+    expect(state.runs[0].error).toBe("a stale note from an earlier attempt");
+  });
+
+  it("still refuses a queued run", async () => {
+    const { admin, state } = makeWritableAdmin([RUN({ status: "queued", pages: AFTER_FAILURE })]);
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toContain(`"queued"`);
+    expect(regeneratePageMock).not.toHaveBeenCalled();
+    expect(state.runs[0].status).toBe("queued");
   });
 });

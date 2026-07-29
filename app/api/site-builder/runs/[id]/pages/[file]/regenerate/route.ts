@@ -17,11 +17,13 @@ type Ctx = { params: Promise<{ id: string; file: string }> };
 
 /**
  * Regenerate exactly one page of an already-generated run, optionally
- * steered by an operator instruction. Runs only at "review" or "approved" —
- * the same "operator can still fix a page they dislike" window the plan
+ * steered by an operator instruction. Runs at "review" or "approved" — the
+ * same "operator can still fix a page they dislike" window the plan
  * describes, kept open a little past approval since nothing has deployed
- * yet. Re-assembles and re-uploads the output zip afterward so the run's
- * `output_path` always reflects the latest per-page state.
+ * yet — and ALSO at "failed", where fixing one page is the whole point; such
+ * a run is promoted back to "review" as soon as it has a real page again (see
+ * `promoted` below). Re-assembles and re-uploads the output zip afterward so
+ * the run's `output_path` always reflects the latest per-page state.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const auth = await guard();
@@ -36,9 +38,13 @@ export async function POST(req: Request, ctx: Ctx) {
   const { data: run, error: fetchErr } = await admin.from("builder_runs").select("*").eq("id", id).single();
   if (fetchErr || !run) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  if (run.status !== "review" && run.status !== "approved") {
+  // `failed` is here so an operator can fix the run that most needs fixing.
+  // Without it the button renders on a failed page, shows its error, and does
+  // nothing when clicked.
+  const REGENERATABLE = new Set(["review", "approved", "failed"]);
+  if (!REGENERATABLE.has(run.status as string)) {
     return NextResponse.json(
-      { error: `Cannot regenerate: this run is "${run.status}", not "review" or "approved".` },
+      { error: `Cannot regenerate: this run is "${run.status}", not "review", "approved" or "failed".` },
       { status: 409 },
     );
   }
@@ -92,6 +98,13 @@ export async function POST(req: Request, ctx: Ctx) {
       : { status: "failed", kind: current.kind, name: current.name, error: outcome.error },
   };
 
+  // A failed run with a working page is reviewable. Leaving it `failed` would
+  // mean the operator fixes a page and still cannot approve the run — the same
+  // dead end this route was widened to escape. Only a REAL page counts: a
+  // rewritten components file is not a site.
+  const hasRealPage = Object.values(newPages).some((p) => p.status === "ok" && p.kind !== "component");
+  const promoted = run.status === "failed" && hasRealPage;
+
   // Same fallback runSite applies on assembly: an HTML components file that
   // is not currently "ok" ships as the template's original (it is a page
   // file, so it isn't in `assets`, and every generated page fetches it).
@@ -110,7 +123,12 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const { data: updated, error: updErr } = await admin
     .from("builder_runs")
-    .update({ pages: newPages, output_path: outputPath, updated_at: new Date().toISOString() })
+    .update({
+      pages: newPages,
+      output_path: outputPath,
+      updated_at: new Date().toISOString(),
+      ...(promoted ? { status: "review", error: null } : {}),
+    })
     .eq("id", id)
     .select("*")
     .single();
