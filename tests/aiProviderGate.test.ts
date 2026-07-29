@@ -284,6 +284,53 @@ describe("ProviderGate adaptive pacing", () => {
     expect(gate.snapshot().scale).toBeCloseTo(0.5 + RAMP_STEP, 5);
   });
 
+  // The operator-facing distinction the settings screen exists to make: "I
+  // configured 500 rpm" versus "adaptive backoff has me at 250 right now".
+  // Reporting only `scale` leaves them to do that arithmetic themselves, and
+  // reporting only `effectiveBudget` makes a backed-off gate look like a
+  // misapplied override.
+  it("reports the configured budget unchanged while the effective one halves after a 429", async () => {
+    const declared = { concurrency: 10, rpm: 60, tpm: 500_000, tpd: 1_000_000 };
+    const gate = new ProviderGate("minimax", { ...declared });
+
+    expect(gate.snapshot().budget).toEqual(declared);
+    expect(gate.snapshot().effectiveBudget).toEqual(declared);
+
+    await throttleOnce(gate);
+
+    const snap = gate.snapshot();
+    expect(snap.scale).toBe(0.5);
+    // The ceiling the operator stated is untouched by pacing...
+    expect(snap.budget).toEqual(declared);
+    // ...but what the gate will admit right now is halved on the RATE
+    // dimensions, and tpd — a daily quota, not a rate — is deliberately not.
+    expect(snap.effectiveBudget).toEqual({ concurrency: 5, rpm: 30, tpm: 250_000, tpd: 1_000_000 });
+    // And it is the same arithmetic `msUntilCapacity` admits against, so the
+    // screen cannot show a ceiling the gate is not actually enforcing.
+    expect(snap.effectiveBudget).toEqual(scaleBudget(snap.budget, snap.scale));
+  });
+
+  it("reports the new budget, unscaled, once the operator raises it", async () => {
+    const gate = new ProviderGate("webcraft", { concurrency: 50, rpm: 200 });
+    await throttleOnce(gate);
+    expect(gate.snapshot().effectiveBudget).toEqual({ concurrency: 25, rpm: 100 });
+
+    // Tier1 -> Tier2. setBudget discards pacing learned against the old
+    // ceiling, so both figures must move together.
+    gate.setBudget({ concurrency: 100, rpm: 500 });
+    const snap = gate.snapshot();
+    expect(snap.budget).toEqual({ concurrency: 100, rpm: 500 });
+    expect(snap.effectiveBudget).toEqual({ concurrency: 100, rpm: 500 });
+  });
+
+  it("hands out a copy, so a reader cannot edit the budget the gate enforces", async () => {
+    const gate = new ProviderGate("p", { rpm: 60 });
+    const snap = gate.snapshot();
+    snap.budget.rpm = 999_999;
+    expect(gate.snapshot().budget).toEqual({ rpm: 60 });
+    expect(gate.snapshot().effectiveBudget).toEqual({ rpm: 60 });
+  });
+
   it("clears pacing learned against an old budget when the operator changes it", async () => {
     const gate = new ProviderGate("minimax", { rpm: 60, tpm: 500_000 });
     for (let i = 0; i < 4; i++) await throttleOnce(gate, 100);

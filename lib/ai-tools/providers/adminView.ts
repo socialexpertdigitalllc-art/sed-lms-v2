@@ -11,6 +11,8 @@ import {
   type AiModelDescriptor,
 } from "./registry";
 import { getAiProviderStatuses, getAiTaskAssignments } from "./config";
+import { gateSnapshots, type GateSnapshot } from "./gate";
+import { DEFAULT_RATE_BUDGETS, resolveBudget, type RateBudget, type RateBudgetOverride } from "./limits";
 
 /**
  * The one client-safe projection of the AI routing settings.
@@ -33,6 +35,17 @@ export interface AiProviderSetting {
   configured: boolean;
   /** The last 4 of an API key. Never the secret. */
   hint: string | null;
+  /** The shipped default budget for this provider — shown as placeholder text
+   *  so the operator can see what they are overriding. */
+  defaultRateBudget: RateBudget;
+  /** The operator's stored override, or null when they have set none. */
+  rateLimits: RateBudgetOverride | null;
+  /** The budget actually in force. */
+  effectiveRateBudget: RateBudget;
+  /** Live gate state, or null when this provider has not been called yet this
+   *  process. An adaptive limiter the operator cannot observe is a black box
+   *  the moment it misbehaves. */
+  gate: GateSnapshot | null;
   updatedAt: string | null;
 }
 
@@ -82,9 +95,15 @@ export async function listAiRoutingSettings(): Promise<AiRoutingSettings> {
     getAiTaskAssignments().catch(() => []),
   ]);
   const statusByKey = new Map(statuses.map((s) => [s.key, s]));
+  // Read once for the whole projection rather than per provider: each snapshot
+  // banks elapsed quiet-period recovery as it is taken, so one pass keeps every
+  // row on the same instant. A provider with no entry has simply not been
+  // called in this process yet — the gate is created lazily on first use.
+  const gatesByKey = new Map(gateSnapshots().map((g) => [g.key, g]));
 
   const providers: AiProviderSetting[] = AI_PROVIDER_REGISTRY.map((d) => {
     const s = statusByKey.get(d.key);
+    const rateLimits = s?.rateLimits ?? null;
     return {
       key: d.key,
       label: d.label,
@@ -96,6 +115,15 @@ export async function listAiRoutingSettings(): Promise<AiRoutingSettings> {
       enabled: s?.enabled ?? false,
       configured: s?.configured ?? false,
       hint: s?.hint ?? null,
+      // Copied, not aliased: DEFAULT_RATE_BUDGETS is process-wide module state
+      // and handing a caller the live object would let a stray edit change what
+      // every future call is paced against.
+      defaultRateBudget: { ...(DEFAULT_RATE_BUDGETS[d.key] ?? {}) },
+      rateLimits,
+      // The SAME function the call path resolves with, so the number rendered
+      // in settings is the number the gate will be given.
+      effectiveRateBudget: resolveBudget(d.key, rateLimits),
+      gate: gatesByKey.get(d.key) ?? null,
       updatedAt: s?.updatedAt ?? null,
     };
   });

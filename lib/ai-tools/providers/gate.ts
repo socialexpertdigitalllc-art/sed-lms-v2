@@ -168,6 +168,16 @@ export interface GateSnapshot {
   tokensThisMinute: number;
   /** Tokens charged against the current 24h window. */
   dayTokens: number;
+  /** The resolved budget this gate is enforcing — the shipped default with the
+   *  operator's override applied. Reported so an operator can confirm that a
+   *  settings change actually reached the gate, rather than inferring it. */
+  budget: RateBudget;
+  /** The same budget with the adaptive scale applied: what the gate will admit
+   *  RIGHT NOW. Computed with the same `scaleBudget` and the same effective
+   *  scale that `msUntilCapacity` admits against, so the number an operator
+   *  reads and the number the gate enforces cannot drift apart. Without this,
+   *  "I configured 500 rpm" and "backoff has me at 250" look identical. */
+  effectiveBudget: RateBudget;
   /** Current adaptive multiplier applied to the resolved budget. */
   scale: number;
   /** 429s seen in the last hour — the operator-facing health signal. */
@@ -329,17 +339,27 @@ export class ProviderGate {
   snapshot(): GateSnapshot {
     const now = Date.now();
     this.prune(now);
+    // The EFFECTIVE scale, not the stored one, so an operator reading this
+    // sees the pacing actually in force rather than the last value some call
+    // happened to write. Recovery is lazy (see `effectiveScale`), so on an
+    // idle gate the stored field is stale by construction. Taken ONCE and
+    // shared with `effectiveBudget` below: `effectiveScale` banks elapsed
+    // quiet time as a side effect, so two calls could straddle a ramp step and
+    // report a scale that does not match the budget printed beside it.
+    const scale = this.effectiveScale(now);
     return {
       key: this.key,
       inFlight: this.inFlight,
       requestsThisMinute: this.requests.length,
       tokensThisMinute: this.tokens.reduce((sum, t) => sum + t.amount, 0),
       dayTokens: this.dayTokens,
-      // The EFFECTIVE scale, not the stored one, so an operator reading this
-      // sees the pacing actually in force rather than the last value some call
-      // happened to write. Recovery is lazy (see `effectiveScale`), so on an
-      // idle gate the stored field is stale by construction.
-      scale: this.effectiveScale(now),
+      // Copied, not aliased: a snapshot is a value handed to callers we do not
+      // control, and the gate's own budget must not be reachable through it.
+      budget: { ...this.budget },
+      // Same expression `msUntilCapacity` admits against, so the two can never
+      // disagree about what is in force.
+      effectiveBudget: scaleBudget(this.budget, scale),
+      scale,
       throttlesLastHour: this.throttles.length,
       lastThrottleAt: this.lastThrottleAt || null,
     };
