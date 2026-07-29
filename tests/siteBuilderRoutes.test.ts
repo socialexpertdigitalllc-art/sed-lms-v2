@@ -50,6 +50,7 @@ import { GET as previewGet } from "@/app/api/site-builder/runs/[id]/preview/[[..
 import { GET as downloadGet } from "@/app/api/site-builder/runs/[id]/download/route";
 import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/route";
 import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
+import { POST as recoverPost } from "@/app/api/site-builder/runs/[id]/recover/route";
 
 const enc = new TextEncoder();
 
@@ -724,5 +725,146 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     expect(String((await res.json()).error)).toContain(`"queued"`);
     expect(regeneratePageMock).not.toHaveBeenCalled();
     expect(state.runs[0].status).toBe("queued");
+  });
+});
+
+describe("POST /api/site-builder/runs/[id]/recover — releasing a wedged run", () => {
+  const post = () => recoverPost(new Request("http://test.local/x", { method: "POST" }), runCtx());
+
+  /**
+   * The run this route exists for: claimed by an attempt that is gone (or that
+   * the operator no longer wants), so the token is set and the status is stuck.
+   */
+  const WEDGED = { status: "generating", generation_id: "gen-in-flight", error: null };
+
+  it("releases a generating run to failed, clearing the claim token", async () => {
+    const { admin, state } = makeWritableAdmin([
+      RUN({ ...WEDGED, pages: { "index.html": { status: "ok", kind: "existing", html: "<html>a</html>" } } }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post();
+
+    expect(res.status).toBe(200);
+    expect(state.runs[0].status).toBe("failed");
+    /**
+     * The token is the whole safety story: nulling it is what makes an attempt
+     * that is STILL RUNNING discard its own writes instead of racing whatever
+     * the operator does next. A recover that flipped the status but left the
+     * token would hand the run back to the very attempt it just disowned.
+     */
+    expect(state.runs[0].generation_id).toBeNull();
+
+    const message = String(state.runs[0].error);
+    expect(message).toMatch(/generating/i);
+    expect(message).toMatch(/retry/i);
+    // The response carries the released row, so the screen can render it
+    // without a second round trip.
+    const body = (await res.json()) as { run: Row };
+    expect(body.run.status).toBe("failed");
+    expect(body.run.generation_id).toBeNull();
+
+    // Pages are DELIBERATELY untouched — they are what makes the retry cheap.
+    expect(Object.keys(state.runs[0].pages as Row)).toEqual(["index.html"]);
+  });
+
+  it("writes an activity_log row naming the transition", async () => {
+    const { admin, state } = makeWritableAdmin([RUN(WEDGED)]);
+    adminHolder.admin = admin;
+
+    const res = await post();
+
+    expect(res.status).toBe(200);
+    expect(state.activity).toHaveLength(1);
+    expect(state.activity[0]).toMatchObject({
+      user_id: "user-1",
+      action: "site_builder.run.recovered",
+      entity_type: "builder_run",
+      entity_id: "run-1",
+    });
+  });
+
+  for (const status of ["queued", "review", "approved", "deployed", "failed"]) {
+    it(`refuses a ${status} run, naming what it found`, async () => {
+      const { admin, state } = makeWritableAdmin([RUN({ status, generation_id: null })]);
+      adminHolder.admin = admin;
+
+      const res = await post();
+
+      expect(res.status).toBe(409);
+      const message = String((await res.json()).error);
+      expect(message).toContain(`"${status}"`);
+      expect(message).toContain(`"generating"`);
+      expect(state.runs[0].status).toBe(status);
+      expect(state.activity).toHaveLength(0);
+    });
+  }
+
+  it("404s for a run that is not there", async () => {
+    const { admin } = makeWritableAdmin([]);
+    adminHolder.admin = admin;
+
+    const res = await post();
+
+    expect(res.status).toBe(404);
+  });
+
+  it("409s rather than forcing it when the row moves between the read and the write", async () => {
+    const { admin, state } = makeWritableAdmin([RUN(WEDGED)]);
+    adminHolder.admin = admin;
+
+    /**
+     * The race this route is most likely to lose, and the one that matters: the
+     * very generation it is about to disown finishes on its own in the gap
+     * between the handler's status read and its CAS write. Without the
+     * `.eq("status", "generating")` on the update, this recover would stamp
+     * "failed" over a run that had just reached "review" — with a zip in the
+     * bucket and no way back.
+     *
+     * Driven by hooking the handler's READ (the only `.single()` on this path)
+     * and mutating the row the instant it returns, which is exactly that gap.
+     * The chain object is rebuilt rather than spread because the underlying
+     * fake's methods return ITS api, not ours — a spread would lose the hook
+     * the moment the handler called `.select()`.
+     */
+    let hooked = false;
+    adminHolder.admin = {
+      ...admin,
+      from(table: string) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const inner: any = admin.from(table);
+        if (table !== "builder_runs") return inner;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const wrap: any = {
+          select: (...a: unknown[]) => { inner.select(...a); return wrap; },
+          update: (...a: unknown[]) => { inner.update(...a); return wrap; },
+          eq: (...a: unknown[]) => { inner.eq(...a); return wrap; },
+          is: (...a: unknown[]) => { inner.is(...a); return wrap; },
+          maybeSingle: () => inner.maybeSingle(),
+          then: (res: unknown) => inner.then(res),
+          single: async () => {
+            const out = await inner.single();
+            if (!hooked) {
+              hooked = true;
+              // …the generation finished and published while we were deciding.
+              state.runs[0].status = "review";
+              state.runs[0].generation_id = null;
+            }
+            return out;
+          },
+        };
+        return wrap;
+      },
+    };
+
+    const res = await post();
+
+    // The hook fired — otherwise this test proves nothing about the CAS.
+    expect(hooked).toBe(true);
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toMatch(/changed/i);
+    // Untouched: the run kept the state the winner set.
+    expect(state.runs[0].status).toBe("review");
+    expect(state.activity).toHaveLength(0);
   });
 });
