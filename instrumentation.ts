@@ -34,4 +34,10 @@ export async function register() {
   setInterval(() => {
     fetch(`${origin}/api/tickets/maintenance`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 300_000);
+
+  // Site Builder processor: starts queued runs and resumes parked ones
+  // (failed + due resume_at + auto_resume on). Single-flight per tick.
+  setInterval(() => {
+    fetch(`${origin}/api/site-builder/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 60_000);
 }

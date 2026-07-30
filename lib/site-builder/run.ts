@@ -264,6 +264,40 @@ export interface PageState {
    *  file is. */
   html?: string;
   error?: string;
+  /** Whether retrying this failed page can possibly succeed — copied verbatim
+   *  from the generation outcome (see GenerateOutcome in generate.ts). Absent
+   *  on an extraction failure, which is retryable by nature; `false` only for
+   *  a terminal provider failure (bad key, model not found). Never present on
+   *  a non-failed entry. */
+  retryable?: boolean;
+  /** The vendor's Retry-After from a throttled call, when it sent one. */
+  retryAfterMs?: number;
+}
+
+/** The failure fields of a not-ok generation outcome, projected onto PageState:
+ *  the error always, the classification fields only when the outcome carries
+ *  them — an extraction failure's ABSENT `retryable` must stay absent (absent
+ *  means "retryable by nature", see GenerateOutcome). */
+function failureFields(outcome: { error: string; retryable?: boolean; retryAfterMs?: number }) {
+  return {
+    error: outcome.error,
+    ...(outcome.retryable !== undefined && { retryable: outcome.retryable }),
+    ...(outcome.retryAfterMs !== undefined && { retryAfterMs: outcome.retryAfterMs }),
+  };
+}
+
+/** Failed pages worth another round: failed and not marked terminal. */
+export function retryablePages(pages: Record<string, PageState>): string[] {
+  return Object.entries(pages)
+    .filter(([, p]) => p.status === "failed" && p.retryable !== false)
+    .map(([file]) => file);
+}
+
+/** True when every failed page is terminal — looping cannot help. False when
+ *  there are no failures at all: an all-ok map is "done", not "terminal". */
+export function allFailuresTerminal(pages: Record<string, PageState>): boolean {
+  const failed = Object.values(pages).filter((p) => p.status === "failed");
+  return failed.length > 0 && failed.every((p) => p.retryable === false);
 }
 
 /** Assemble the output zip from whichever pages currently succeeded, plus
@@ -375,6 +409,10 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
    * every page was empty would report success. No current extractor can produce
    * that; this is defence against a corrupted row, which is exactly the kind of
    * row `resume` exists to read.
+   *
+   * Failure metadata (`error`, `retryable`, `retryAfterMs`) is NEVER carried:
+   * a carried page is only ever `ok`, and a failed previous attempt's
+   * classification describes a call this run is about to redo, not this run.
    */
   const withCarried = (file: string, planned: PageState): PageState => {
     const prev = resume?.[file];
@@ -415,7 +453,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
       );
       pages[components.file] = outcome.ok
         ? { status: "ok", kind: "component", name: "Shared components", html: outcome.html }
-        : { status: "failed", kind: "component", name: "Shared components", error: outcome.error };
+        : { status: "failed", kind: "component", name: "Shared components", ...failureFields(outcome) };
       if (outcome.ok) shared = { file: components.file, source: outcome.html };
       await emit();
     }
@@ -445,7 +483,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
     });
     pages[file] = outcome.ok
       ? { status: "ok", kind: "existing", html: outcome.html }
-      : { status: "failed", kind: "existing", error: outcome.error };
+      : { status: "failed", kind: "existing", ...failureFields(outcome) };
     await emit();
   };
 
@@ -465,7 +503,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
     });
     pages[file] = outcome.ok
       ? { status: "ok", kind: "new", name, html: outcome.html }
-      : { status: "failed", kind: "new", name, error: outcome.error };
+      : { status: "failed", kind: "new", name, ...failureFields(outcome) };
     await emit();
   };
 

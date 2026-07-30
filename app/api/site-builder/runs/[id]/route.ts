@@ -19,6 +19,47 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json({ run: data });
 }
 
+/**
+ * PATCH — per-run operator preferences: `{ auto_resume: boolean }`, merged
+ * into `options`. `auto_resume` gates the background processor's automatic
+ * resumption of a PARKED run (failed + `resume_at`); absent means true, so
+ * the toggle only ever needs to write the explicit value.
+ *
+ * Read-modify-write on `options` rather than a JSON-merge expression. The
+ * race is benign: `options` carries only operator preferences, the engine
+ * never writes the column, and two concurrent toggles losing one another
+ * just means the older click loses — which is what it deserves.
+ *
+ * `updated_at` is deliberately NOT stamped: it is the liveness clock for the
+ * stale-reclaim rule and the delete grace, and a preference toggle must not
+ * make a dead "generating" run look alive (nor 409 a claim CAS in flight).
+ */
+export async function PATCH(req: Request, ctx: Ctx) {
+  const auth = await guard();
+  if ("error" in auth) return guardError(auth.error);
+  const { id } = await ctx.params;
+
+  const body = (await req.json().catch(() => null)) as { auto_resume?: unknown } | null;
+  if (!body || typeof body.auto_resume !== "boolean") {
+    return NextResponse.json({ error: "Expected { auto_resume: boolean }" }, { status: 400 });
+  }
+
+  const admin = createAdminClient();
+  const { data: run, error: fetchErr } = await admin.from("builder_runs").select("id, options").eq("id", id).single();
+  if (fetchErr || !run) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const options = { ...((run.options as Record<string, unknown> | null) ?? {}), auto_resume: body.auto_resume };
+  const { data: updated, error: updErr } = await admin
+    .from("builder_runs")
+    .update({ options })
+    .eq("id", id)
+    .select("*")
+    .single();
+  if (updErr || !updated) return NextResponse.json({ error: updErr?.message ?? "Update failed" }, { status: 400 });
+
+  return NextResponse.json({ run: updated });
+}
+
 /** An actively-generating run may not be deleted out from under itself —
  *  unless its row hasn't moved for this long, in which case the generation
  *  is presumed dead (server restart) and the run is just debris.

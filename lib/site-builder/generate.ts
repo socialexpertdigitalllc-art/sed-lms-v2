@@ -1,4 +1,5 @@
 import { callForTask } from "@/lib/ai-tools/providers/run";
+import { isRetryableError, ProviderHttpError } from "@/lib/ai-tools/providers/errors";
 import {
   SITE_BUILD_SYSTEM,
   SITE_COMPONENTS_SYSTEM,
@@ -22,7 +23,19 @@ export const productionSiteBuildCall: AiCall = async (system, user) => {
   return { text };
 };
 
-export type GenerateOutcome = { ok: true; html: string } | { ok: false; error: string };
+export type GenerateOutcome =
+  | { ok: true; html: string }
+  | {
+      ok: false;
+      error: string;
+      /** Whether retrying can possibly succeed. Absent on EXTRACTION failures
+       *  (bad model output) — those are retryable by nature: the next call may
+       *  extract cleanly. False only for a terminal PROVIDER failure (bad key,
+       *  model not found), where retrying burns quota for nothing. */
+      retryable?: boolean;
+      /** The vendor's Retry-After from a throttled call, when it sent one. */
+      retryAfterMs?: number;
+    };
 
 const DOCTYPE_NEEDLE = "<!doctype";
 const HTML_TAG_NEEDLE = "<html";
@@ -295,19 +308,32 @@ function withInstruction(user: string, instruction?: string): string {
  * The underlying message is preserved verbatim: it is the only thing that tells
  * the operator whether to regenerate now (429, timeout) or fix a setting (bad
  * key, retired model).
+ *
+ * The caught error is also CLASSIFIED, not just flattened: `retryable` records
+ * whether another attempt can possibly succeed (`isRetryableError` — a 429 can,
+ * a bad key cannot), and a throttled call's vendor `Retry-After` is carried
+ * through as `retryAfterMs`. The coming retry loop reads both off the failed
+ * page's state; before this, the string above was all that survived, and the
+ * loop would have had to re-parse prose to know whether waiting could help.
  */
 async function callOrFail(
   aiCall: AiCall,
   system: string,
   user: string,
   label: string,
-): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; text: string } | { ok: false; error: string; retryable: boolean; retryAfterMs?: number }> {
   try {
     const { text } = await aiCall(system, user);
     return { ok: true, text };
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: `${label}: the model call failed — ${detail}` };
+    const retryAfterMs = e instanceof ProviderHttpError && e.retryAfterMs !== null ? e.retryAfterMs : undefined;
+    return {
+      ok: false,
+      error: `${label}: the model call failed — ${detail}`,
+      retryable: isRetryableError(e),
+      ...(retryAfterMs !== undefined && { retryAfterMs }),
+    };
   }
 }
 
