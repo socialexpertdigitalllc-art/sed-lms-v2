@@ -331,6 +331,15 @@ export interface RunSiteArgs {
    *  likes); runSite awaits each call so persistence can't fall behind. */
   onProgress?: (pages: Record<string, PageState>) => void | Promise<void>;
   /**
+   * Live OUTPUT seam, one level below `onProgress`: every streamed delta of
+   * every generation lands here tagged with the FILE it belongs to, as it
+   * arrives. Presence of this callback is what switches the underlying model
+   * calls to streaming; absent → every call is the non-streaming call it
+   * always was. Fire-and-forget by design (never awaited): a slow consumer
+   * must not be able to slow a generation down.
+   */
+  onOutput?: (file: string, delta: string) => void;
+  /**
    * Pages carried over from a PREVIOUS attempt at this run. Any entry already
    * `ok` is kept verbatim and never regenerated; everything else is
    * (re)generated from scratch.
@@ -386,7 +395,10 @@ export interface RunSiteResult {
  * interrupted upload is recovered without paying for the site twice.
  */
 export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
-  const { aiCall, brief, images, template, requestedPages, onProgress, resume } = args;
+  const { aiCall, brief, images, template, requestedPages, onProgress, onOutput, resume } = args;
+  /** The per-file streaming callback for one generation — undefined when the
+   *  caller wants no live output, so the calls stay non-streaming. */
+  const chunkSink = (file: string) => (onOutput ? (delta: string) => onOutput(file, delta) : undefined);
 
   const components = findComponentsFile(template);
   // A components.html is a page FILE but never a page of the site — it must
@@ -449,7 +461,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
       await emit();
       const outcome = await generateComponents(
         { aiCall },
-        { brief, images, file: components.file, source: components.source, siteFiles },
+        { brief, images, file: components.file, source: components.source, siteFiles, onChunk: chunkSink(components.file) },
       );
       pages[components.file] = outcome.ok
         ? { status: "ok", kind: "component", name: "Shared components", html: outcome.html }
@@ -480,6 +492,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
       pageHtml: template.pages[file],
       siteFiles,
       components: shared,
+      onChunk: chunkSink(file),
     });
     pages[file] = outcome.ok
       ? { status: "ok", kind: "existing", html: outcome.html }
@@ -500,6 +513,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
       references,
       siteFiles,
       components: shared,
+      onChunk: chunkSink(file),
     });
     pages[file] = outcome.ok
       ? { status: "ok", kind: "new", name, html: outcome.html }

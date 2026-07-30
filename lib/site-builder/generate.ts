@@ -14,12 +14,18 @@ import {
 /**
  * The model-call seam. Production passes `productionSiteBuildCall`; tests
  * pass a stub so nothing here ever touches the network. Same shape as every
- * other AiCall seam in this codebase (see lib/site-studio/run/writer.ts).
+ * other AiCall seam in this codebase (see lib/site-studio/run/writer.ts) —
+ * plus an optional `onChunk`: when a caller passes one, the call STREAMS and
+ * each content delta lands there as it arrives (the live-progress feed).
+ * Callers that pass none get the exact non-streaming call they always made,
+ * which is what keeps the Site Studio seams unaffected by this addition.
  */
-export type AiCall = (system: string, user: string) => Promise<{ text: string }>;
+export type AiCall = (system: string, user: string, onChunk?: (delta: string) => void) => Promise<{ text: string }>;
 
-export const productionSiteBuildCall: AiCall = async (system, user) => {
-  const { text } = await callForTask("site_build", system, user, { maxTokens: "model-max", temperature: 0.4 });
+export const productionSiteBuildCall: AiCall = async (system, user, onChunk) => {
+  // `idleTimeoutMs` is deliberately not set — the provider layer's streaming
+  // default (90s of silence) is the policy, and it lives in one place.
+  const { text } = await callForTask("site_build", system, user, { maxTokens: "model-max", temperature: 0.4, onChunk });
   return { text };
 };
 
@@ -321,9 +327,10 @@ async function callOrFail(
   system: string,
   user: string,
   label: string,
+  onChunk?: (delta: string) => void,
 ): Promise<{ ok: true; text: string } | { ok: false; error: string; retryable: boolean; retryAfterMs?: number }> {
   try {
-    const { text } = await aiCall(system, user);
+    const { text } = await aiCall(system, user, onChunk);
     return { ok: true, text };
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
@@ -348,6 +355,9 @@ export async function generateComponents(
     source: string;
     siteFiles: string[];
     instruction?: string;
+    /** Live-output feed: each streamed delta of THIS generation, as it
+     *  arrives. Absent → the call is non-streaming, exactly as before. */
+    onChunk?: (delta: string) => void;
   },
 ): Promise<GenerateOutcome> {
   const user = withInstruction(
@@ -360,7 +370,7 @@ export async function generateComponents(
     }),
     args.instruction,
   );
-  const reply = await callOrFail(deps.aiCall, SITE_COMPONENTS_SYSTEM, user, args.file);
+  const reply = await callOrFail(deps.aiCall, SITE_COMPONENTS_SYSTEM, user, args.file, args.onChunk);
   if (!reply.ok) return reply;
   // An HTML components include still ends in </html>-less fragment markup, so
   // the source extractor (marker/fence stripping only) is right for both kinds.
@@ -404,6 +414,9 @@ export async function generatePage(
     /** Operator's free-text steer for a regeneration. Appended to the prompt
      *  functions' own output — prompt.ts itself is never rewritten. */
     instruction?: string;
+    /** Live-output feed: each streamed delta of THIS generation, as it
+     *  arrives. Absent → the call is non-streaming, exactly as before. */
+    onChunk?: (delta: string) => void;
   },
 ): Promise<GenerateOutcome> {
   const user = withInstruction(
@@ -417,7 +430,7 @@ export async function generatePage(
     }),
     args.instruction,
   );
-  const reply = await callOrFail(deps.aiCall, SITE_BUILD_SYSTEM, user, args.pageFile);
+  const reply = await callOrFail(deps.aiCall, SITE_BUILD_SYSTEM, user, args.pageFile, args.onChunk);
   if (!reply.ok) return reply;
   return extractHtml(reply.text, args.pageFile);
 }
@@ -434,6 +447,9 @@ export async function generateNewPage(
     siteFiles: string[];
     components?: SharedComponents;
     instruction?: string;
+    /** Live-output feed: each streamed delta of THIS generation, as it
+     *  arrives. Absent → the call is non-streaming, exactly as before. */
+    onChunk?: (delta: string) => void;
   },
 ): Promise<GenerateOutcome> {
   const user = withInstruction(
@@ -448,7 +464,7 @@ export async function generateNewPage(
     }),
     args.instruction,
   );
-  const reply = await callOrFail(deps.aiCall, SITE_BUILD_SYSTEM, user, args.newFile);
+  const reply = await callOrFail(deps.aiCall, SITE_BUILD_SYSTEM, user, args.newFile, args.onChunk);
   if (!reply.ok) return reply;
   return extractHtml(reply.text, args.newFile);
 }

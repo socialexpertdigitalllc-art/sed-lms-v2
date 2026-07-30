@@ -472,3 +472,76 @@ describe("generateNewPage", () => {
     expect(seenUser).toContain("DESIGN REFERENCE");
   });
 });
+
+describe("streaming pass-through", () => {
+  it("generatePage hands its onChunk through to the model call, delta for delta", async () => {
+    const seen: string[] = [];
+    const call = async (_system: string, _user: string, onChunk?: (d: string) => void) => {
+      onChunk?.(RAW_PAGE.slice(0, 12));
+      onChunk?.(RAW_PAGE.slice(12));
+      return { text: RAW_PAGE };
+    };
+    const r = await generatePage({ aiCall: call }, {
+      brief,
+      images: [],
+      pageFile: "index.html",
+      pageHtml: "<html>t</html>",
+      siteFiles: ["index.html"],
+      onChunk: (d) => seen.push(d),
+    });
+    expect(r.ok).toBe(true);
+    expect(seen).toHaveLength(2);
+    expect(seen.join("")).toBe(RAW_PAGE);
+  });
+
+  it("a generator given no onChunk passes undefined — the call stays non-streaming", async () => {
+    let seenOnChunk: unknown = "sentinel";
+    const call = async (_s: string, _u: string, onChunk?: (d: string) => void) => {
+      seenOnChunk = onChunk;
+      return { text: RAW_PAGE };
+    };
+    const r = await generatePage({ aiCall: call }, {
+      brief,
+      images: [],
+      pageFile: "index.html",
+      pageHtml: "<html>t</html>",
+      siteFiles: ["index.html"],
+    });
+    expect(r.ok).toBe(true);
+    expect(seenOnChunk).toBeUndefined();
+  });
+
+  it("generateComponents and generateNewPage forward it too", async () => {
+    const COMPONENTS = "customElements.define('x-header', class extends HTMLElement {});";
+    const seen: string[] = [];
+    const componentsCall = async (_s: string, _u: string, onChunk?: (d: string) => void) => {
+      onChunk?.("components-delta");
+      return { text: COMPONENTS };
+    };
+    const rc = await generateComponents({ aiCall: componentsCall }, {
+      brief,
+      images: [],
+      file: "components.js",
+      source: COMPONENTS,
+      siteFiles: ["index.html"],
+      onChunk: (d) => seen.push(d),
+    });
+    expect(rc.ok).toBe(true);
+
+    const pageCall = async (_s: string, _u: string, onChunk?: (d: string) => void) => {
+      onChunk?.("new-page-delta");
+      return { text: RAW_PAGE };
+    };
+    const rn = await generateNewPage({ aiCall: pageCall }, {
+      brief,
+      images: [],
+      pageName: "Team",
+      newFile: "team.html",
+      references: [],
+      siteFiles: ["team.html"],
+      onChunk: (d) => seen.push(d),
+    });
+    expect(rn.ok).toBe(true);
+    expect(seen).toEqual(["components-delta", "new-page-delta"]);
+  });
+});

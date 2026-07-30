@@ -18,8 +18,11 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => adminHolder.admin,
 }));
 
+/** Configurable per test (the live-route auth test flips it to a 401); the
+ *  global beforeEach resets it to the operator every other test assumes. */
+const guardHolder: { result: { userId: string } | { error: 401 | 403 } } = { result: { userId: "user-1" } };
 vi.mock("@/lib/site-studio/service/guard", () => ({
-  guard: async () => ({ userId: "user-1" }),
+  guard: async () => guardHolder.result,
   guardError: (status: 401 | 403) =>
     NextResponse.json({ error: status === 401 ? "Unauthorized" : "Forbidden" }, { status }),
 }));
@@ -71,8 +74,11 @@ import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/
 import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
 import { POST as recoverPost } from "@/app/api/site-builder/runs/[id]/recover/route";
 import { DELETE as runDelete } from "@/app/api/site-builder/runs/[id]/route";
+import { GET as liveGet } from "@/app/api/site-builder/runs/[id]/live/route";
+import { POST as bulkPost } from "@/app/api/site-builder/runs/bulk/route";
 import { POST as processPost } from "@/app/api/site-builder/process/route";
 import { generateRunNow, type GenerateRunDeps } from "@/lib/site-builder/generateRun";
+import { recordOutput, liveSnapshot, clearLive } from "@/lib/site-builder/liveProgress";
 
 const enc = new TextEncoder();
 
@@ -147,8 +153,10 @@ type Row = Record<string, unknown>;
 function makeWritableAdmin(
   rows: Row[],
   leads: Row[] = [{ id: "lead-1", business_name: "Acme", specify_pages: ["Home"] }],
+  templates: Row[] = [{ id: "tpl-1", name: "Starter" }],
 ) {
-  const state = { runs: rows.map((r) => ({ ...r })), leads, activity: [] as Row[] };
+  const state = { runs: rows.map((r) => ({ ...r })), leads, templates, activity: [] as Row[] };
+  let insertSeq = 0;
 
   const from = (table: string) => {
     if (table === "activity_log") {
@@ -160,7 +168,8 @@ function makeWritableAdmin(
       };
     }
 
-    const source = table === "builder_runs" ? state.runs : table === "leads" ? state.leads : null;
+    const source =
+      table === "builder_runs" ? state.runs : table === "leads" ? state.leads : table === "builder_templates" ? state.templates : null;
     if (!source) throw new Error(`unexpected table "${table}"`);
 
     const filters: ((r: Row) => boolean)[] = [];
@@ -203,6 +212,26 @@ function makeWritableAdmin(
       is: (col: string, val: unknown) => {
         filters.push((r) => (val === null ? r[col] === undefined || r[col] === null : r[col] === val));
         return api;
+      },
+      // Honoured like `.eq()` — the bulk route narrows its two up-front reads
+      // with `.in(...)`, and a fake that returned everything regardless would
+      // hide a route that forgot to filter at all.
+      in: (col: string, vals: unknown[]) => {
+        filters.push((r) => vals.includes(r[col]));
+        return api;
+      },
+      /**
+       * Row creation, for the bulk route's per-lead inserts. Chains only what
+       * the routes actually use (`.select().single()` returning the new row).
+       * The generated id is deterministic per admin instance so tests can
+       * assert "the response's `created` names the row that landed".
+       */
+      insert: (p: Row) => {
+        const row: Row = { id: `inserted-${++insertSeq}`, ...p };
+        source.push(row);
+        return {
+          select: () => ({ single: async () => ({ data: { ...row }, error: null }) }),
+        };
       },
       single: async () => {
         const hits = apply();
@@ -268,6 +297,7 @@ const RUN = (over: Row = {}): Row => ({
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 beforeEach(() => {
+  guardHolder.result = { userId: "user-1" };
   adminHolder.admin = makeAdmin();
   runSiteMock.mockReset();
   runSiteMock.mockResolvedValue({
@@ -1597,5 +1627,244 @@ describe("generateRunNow — retry rounds, quota-aware waits, parking", () => {
     // …and the terminal write cleared it: a finished run with a leftover
     // "next attempt" time would show a countdown to nothing.
     expect(h.state.runs[0].resume_at).toBeNull();
+  });
+
+  it("wires onOutput into the live registry, starts it clean on claim, and clears it on terminal", async () => {
+    // A PREVIOUS attempt's leftovers. If the claim did not clear them, the
+    // fresh attempt would show a stale tail beside a live generation.
+    recordOutput("run-1", "stale.html", "left over from the last attempt");
+
+    const h = harness([]);
+    let atClaim: unknown;
+    let midRun: unknown;
+    h.deps.runSiteImpl = (async (args: { onOutput?: (file: string, delta: string) => void }) => {
+      atClaim = liveSnapshot("run-1");
+      args.onOutput?.("index.html", "<html>st");
+      args.onOutput?.("index.html", "reamed</html>");
+      midRun = liveSnapshot("run-1");
+      return finished();
+    }) as unknown as GenerateRunDeps["runSiteImpl"];
+
+    const outcome = await h.call();
+
+    expect(outcome.kind).toBe("done");
+    // Clean at claim — the stale entry is gone before the first page starts.
+    expect(atClaim).toEqual([]);
+    // Wired: the engine's deltas landed in the registry, accumulated per file.
+    expect(midRun).toEqual([
+      { file: "index.html", chars: 21, lastChunkAt: expect.any(Number), tail: "<html>streamed</html>" },
+    ]);
+    // And a finished attempt leaves nothing behind for the poller to misread.
+    expect(liveSnapshot("run-1")).toEqual([]);
+  });
+
+  it("a parked attempt drops its live feed too", async () => {
+    const h = harness([], { budgetMs: 5, waitsMs: [10] });
+    h.impl.mockImplementationOnce(async (args: { onOutput?: (file: string, delta: string) => void }) => {
+      args.onOutput?.("about.html", "partial output");
+      return oneThrottled();
+    });
+
+    const outcome = await h.call();
+
+    expect(outcome.kind).toBe("parked");
+    // The park released the run; its live tail describes a generation that is
+    // no longer writing and must not linger until the resume.
+    expect(liveSnapshot("run-1")).toEqual([]);
+  });
+});
+
+/**
+ * The live-output route: a Map lookup behind the operator guard, polled every
+ * ~2s by the run screen. No DB in sight — the registry tests own the data
+ * semantics; these pin the route's shape and its guard.
+ */
+describe("GET /api/site-builder/runs/[id]/live", () => {
+  const get = () => liveGet(new Request("http://test.local/api/site-builder/runs/run-1/live"), ctx());
+
+  afterEach(() => {
+    clearLive("run-1");
+  });
+
+  it("returns the run's live snapshot with the server's own clock", async () => {
+    recordOutput("run-1", "index.html", "<html>partial");
+
+    const res = await get();
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { now: number; files: unknown };
+    // `now` is the reference the client subtracts lastChunkAt from — one
+    // clock, no skew.
+    expect(typeof body.now).toBe("number");
+    expect(body.files).toEqual([
+      { file: "index.html", chars: 13, lastChunkAt: expect.any(Number), tail: "<html>partial" },
+    ]);
+  });
+
+  it("answers an idle or unknown run with an empty list, not a 404", async () => {
+    const res = await get();
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ files: [] });
+  });
+
+  it("guards auth: an unauthenticated caller gets a 401 and no tail", async () => {
+    guardHolder.result = { error: 401 };
+    recordOutput("run-1", "index.html", "output the outsider must not see");
+
+    const res = await get();
+
+    expect(res.status).toBe(401);
+    const text = await res.text();
+    expect(text).not.toContain("outsider");
+  });
+});
+
+/**
+ * Bulk generation: one queued run per lead, the processor does the rest.
+ * These tests are about the QUEUEING bookkeeping — nothing here generates:
+ * the route must never call the engine, only insert rows the processor's own
+ * (already-tested) eligibility filter will drain.
+ */
+describe("POST /api/site-builder/runs/bulk", () => {
+  const post = (body: unknown) =>
+    bulkPost(
+      new Request("http://test.local/api/site-builder/runs/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  const LEADS = [
+    { id: "lead-1", business_name: "Acme" },
+    { id: "lead-2", business_name: "Bravo" },
+    { id: "lead-3", business_name: "Cara" },
+  ];
+
+  it("creates one queued run per lead, images empty, and reports each creation", async () => {
+    const { admin, state } = makeWritableAdmin([], LEADS);
+    adminHolder.admin = admin;
+
+    const res = await post({ lead_ids: ["lead-1", "lead-2", "lead-3"], template_id: "tpl-1" });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { results: Row[]; created: number; skipped: number };
+    expect(body.created).toBe(3);
+    expect(body.skipped).toBe(0);
+
+    expect(state.runs).toHaveLength(3);
+    for (const run of state.runs) {
+      expect(run.status).toBe("queued");
+      // Bulk runs carry NO picked images — the prompts derive everything from
+      // the lead; per-page regeneration with picked images comes later.
+      expect(run.images).toEqual([]);
+      expect(run.template_id).toBe("tpl-1");
+      expect(run.created_by).toBe("user-1");
+    }
+    // Per-lead report, in request order, each naming the row that landed.
+    expect(body.results.map((r) => r.lead_id)).toEqual(["lead-1", "lead-2", "lead-3"]);
+    for (const r of body.results) {
+      expect(state.runs.some((run) => run.id === r.created && run.lead_id === r.lead_id)).toBe(true);
+    }
+    // ONE summary log entry for the whole batch, carrying the counts.
+    expect(state.activity).toHaveLength(1);
+    expect(state.activity[0]).toMatchObject({
+      user_id: "user-1",
+      action: "site_builder.runs.bulk_created",
+      new_value: { template_id: "tpl-1", requested: 3, created: 3, skipped: 0 },
+    });
+  });
+
+  it("skips a lead with an active run instead of double-queuing it — but a finished run does not block", async () => {
+    // lead-2 is mid-generation; lead-3 has a REVIEW run, which is history,
+    // not activity — only queued/generating block a new run.
+    const { admin, state } = makeWritableAdmin(
+      [
+        RUN({ id: "run-live", lead_id: "lead-2", status: "generating" }),
+        RUN({ id: "run-done", lead_id: "lead-3", status: "review" }),
+      ],
+      LEADS,
+    );
+    adminHolder.admin = admin;
+
+    const res = await post({ lead_ids: ["lead-1", "lead-2", "lead-3"], template_id: "tpl-1" });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { results: Row[]; created: number; skipped: number };
+    expect(body.created).toBe(2);
+    expect(body.skipped).toBe(1);
+    const forLead2 = body.results.find((r) => r.lead_id === "lead-2");
+    expect(String(forLead2?.skipped)).toMatch(/already has a run/i);
+
+    // The double-queue that must not happen: lead-2 still has exactly ONE run.
+    expect(state.runs.filter((r) => r.lead_id === "lead-2")).toHaveLength(1);
+    // …and lead-3 now has two — the old reviewed one and the fresh queued one.
+    const lead3Runs = state.runs.filter((r) => r.lead_id === "lead-3");
+    expect(lead3Runs).toHaveLength(2);
+    expect(lead3Runs.some((r) => r.status === "queued")).toBe(true);
+  });
+
+  it("404s an unknown template and queues nothing", async () => {
+    const { admin, state } = makeWritableAdmin([], LEADS);
+    adminHolder.admin = admin;
+
+    const res = await post({ lead_ids: ["lead-1"], template_id: "tpl-nope" });
+
+    expect(res.status).toBe(404);
+    expect(state.runs).toHaveLength(0);
+    expect(state.activity).toHaveLength(0);
+  });
+
+  it("caps the batch at 50 leads with a 422, queuing nothing", async () => {
+    const { admin, state } = makeWritableAdmin([], LEADS);
+    adminHolder.admin = admin;
+
+    const ids = Array.from({ length: 51 }, (_, i) => `lead-${i}`);
+    const res = await post({ lead_ids: ids, template_id: "tpl-1" });
+
+    expect(res.status).toBe(422);
+    expect(String((await res.json()).error)).toContain("50");
+    expect(state.runs).toHaveLength(0);
+  });
+
+  it("reports a missing lead and an in-request duplicate as skips, keeping the per-lead shape", async () => {
+    const { admin, state } = makeWritableAdmin([], LEADS);
+    adminHolder.admin = admin;
+
+    const res = await post({ lead_ids: ["lead-1", "lead-ghost", "lead-1"], template_id: "tpl-1" });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { results: Row[]; created: number; skipped: number };
+    expect(body.created).toBe(1);
+    expect(body.skipped).toBe(2);
+    // Shape: every entry names its lead and carries EITHER created OR skipped.
+    expect(body.results).toHaveLength(3);
+    expect(body.results[0]).toMatchObject({ lead_id: "lead-1", created: expect.any(String) });
+    expect(body.results[1]).toMatchObject({ lead_id: "lead-ghost", skipped: expect.stringMatching(/not found/i) });
+    expect(body.results[2]).toMatchObject({ lead_id: "lead-1", skipped: expect.stringMatching(/duplicated/i) });
+    // The duplicate did not slip a second row in.
+    expect(state.runs).toHaveLength(1);
+  });
+
+  it("422s an empty or missing lead list", async () => {
+    const { admin, state } = makeWritableAdmin([], LEADS);
+    adminHolder.admin = admin;
+
+    expect((await post({ lead_ids: [], template_id: "tpl-1" })).status).toBe(422);
+    expect((await post({ template_id: "tpl-1" })).status).toBe(422);
+    expect((await post({ lead_ids: ["lead-1"] })).status).toBe(422);
+    expect(state.runs).toHaveLength(0);
+  });
+
+  it("is operator-guarded like the sibling runs route", async () => {
+    guardHolder.result = { error: 401 };
+    const { admin, state } = makeWritableAdmin([], LEADS);
+    adminHolder.admin = admin;
+
+    const res = await post({ lead_ids: ["lead-1"], template_id: "tpl-1" });
+
+    expect(res.status).toBe(401);
+    expect(state.runs).toHaveLength(0);
   });
 });

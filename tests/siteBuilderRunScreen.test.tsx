@@ -316,3 +316,126 @@ describe("BuilderRun — getting a broken run moving again", () => {
     expect(screen.queryByRole("button", { name: /stop and recover/i })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The live stream readout: while a run generates, the screen polls
+ * `GET /runs/[id]/live` (the in-memory registry's snapshot) and shows, per
+ * generating page, how many chars have streamed and how long the stream has
+ * been quiet — plus an expandable raw tail. This is what tells "writing a
+ * long page" apart from "wedged".
+ */
+describe("BuilderRun — watching the live stream", () => {
+  /** A server clock the fixtures hang off — idle seconds are computed from the
+   *  RESPONSE's `now` minus `lastChunkAt`, never from the client's clock, so
+   *  the tests pin both and assert the exact figure. */
+  const SERVER_NOW = 1_753_800_000_000;
+
+  const generatingRun = () => ({
+    ...runFixture("generating"),
+    pages: {
+      "index.html": { status: "generating", kind: "existing" },
+      "about.html": { status: "pending", kind: "existing" },
+    },
+  });
+
+  /** Routes the two endpoints the screen polls: the run row and the live
+   *  snapshot. Returns the mock plus a live-call counter for the stop test. */
+  function routedFetch(opts: {
+    run: () => unknown;
+    live: () => { now: number; files: unknown[] };
+  }) {
+    let liveCalls = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/live")) {
+        liveCalls += 1;
+        return { ok: true, json: async () => opts.live() } as Response;
+      }
+      return { ok: true, json: async () => ({ run: opts.run() }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { fetchMock, getLiveCalls: () => liveCalls };
+  }
+
+  it("shows chars streamed and quiet seconds for the generating page, from the live snapshot", async () => {
+    routedFetch({
+      run: generatingRun,
+      live: () => ({
+        now: SERVER_NOW,
+        files: [{ file: "index.html", chars: 12345, lastChunkAt: SERVER_NOW - 5000, tail: "<h1>stream</h1>" }],
+      }),
+    });
+    render(<BuilderRun runId="run-1" />);
+
+    // 12,345 chars in, last chunk 5s before the snapshot — the exact figure is
+    // the discrimination: an implementation that used lastChunkAt directly as
+    // seconds would show an epoch-sized number here, not 5.
+    expect(await screen.findByText(/~12,345 chars/)).toBeInTheDocument();
+    const quiet = screen.getByText(/quiet for 5s/);
+    expect(quiet).toBeInTheDocument();
+    // A 5s pause is normal thinking time, not an alarm.
+    expect(quiet).not.toHaveAttribute("title");
+    // The pending page has no live entry and gains nothing new.
+    expect(screen.getAllByRole("button", { name: /^watch$/i })).toHaveLength(1);
+  });
+
+  it("styles the quiet figure as alarming once the stream has been silent for over a minute", async () => {
+    routedFetch({
+      run: generatingRun,
+      live: () => ({
+        now: SERVER_NOW,
+        files: [{ file: "index.html", chars: 900, lastChunkAt: SERVER_NOW - 90_000, tail: "…" }],
+      }),
+    });
+    render(<BuilderRun runId="run-1" />);
+
+    const quiet = await screen.findByText(/quiet for 90s/);
+    expect(quiet).toHaveAttribute("title", expect.stringMatching(/stalled/i));
+    expect(quiet.className).toContain("text-dropped-fg");
+  });
+
+  it("expands the raw tail when Watch is clicked, and collapses it again", async () => {
+    const TAIL = "<section>the raw model output, mid-page</section>";
+    routedFetch({
+      run: generatingRun,
+      live: () => ({
+        now: SERVER_NOW,
+        files: [{ file: "index.html", chars: 48, lastChunkAt: SERVER_NOW - 1000, tail: TAIL }],
+      }),
+    });
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    render(<BuilderRun runId="run-1" />);
+
+    const watch = await screen.findByRole("button", { name: /^watch$/i });
+    // Collapsed by default — the tail is opt-in, not another wall of text.
+    expect(screen.queryByTestId("sb-live-tail")).not.toBeInTheDocument();
+
+    await user.click(watch);
+    const tail = await screen.findByTestId("sb-live-tail");
+    expect(tail.textContent).toBe(TAIL);
+
+    await user.click(screen.getByRole("button", { name: /^hide$/i }));
+    expect(screen.queryByTestId("sb-live-tail")).not.toBeInTheDocument();
+  });
+
+  it("stops polling the live endpoint once the run reaches review", async () => {
+    let status: "generating" | "review" = "generating";
+    const { getLiveCalls } = routedFetch({
+      run: () => ({ ...runFixture(status) }),
+      live: () => ({ now: SERVER_NOW, files: [] }),
+    });
+    render(<BuilderRun runId="run-1" />);
+
+    // The live poll is running (it fires immediately on entering "generating").
+    await waitFor(() => expect(getLiveCalls()).toBeGreaterThan(0));
+
+    // The run finishes server-side; the 2s run poll picks the new status up.
+    status = "review";
+    await waitFor(() => expect(screen.getByText("Awaiting review")).toBeInTheDocument(), { timeout: 6000 });
+
+    // No further live fetches after the status change settles.
+    const after = getLiveCalls();
+    await new Promise((r) => setTimeout(r, 2600));
+    expect(getLiveCalls()).toBe(after);
+  }, 15000);
+});
