@@ -574,6 +574,51 @@ describe("regeneratePage", () => {
     expect(seenUser).toContain("shorten the hero");
   });
 
+  // Regression guard for a production incident: regeneratePage dropped its
+  // caller's onChunk, silently putting the Regenerate button on the
+  // NON-streaming path — whose 300s total timeout a real index.html on
+  // MiniMax M3 cannot fit. Full runs streamed and succeeded; the one button
+  // for fixing a big failed page timed out every time. The seam contract is
+  // that the callback reaches the AI call for EVERY kind.
+  it("forwards onChunk to the AI call for every kind, so a regeneration streams", async () => {
+    const tpl = bundle(
+      { "index.html": "<html>original</html>", "components.js": "" },
+      { "components.js": "customElements.define('x-a', class extends HTMLElement {});" },
+    );
+    for (const [kind, file] of [
+      ["existing", "index.html"],
+      ["component", "components.js"],
+      ["new", "pricing.html"],
+    ] as const) {
+      let sawChunkFn = false;
+      const call: AiCall = async (_s, _u, onChunk) => {
+        sawChunkFn = typeof onChunk === "function";
+        onChunk?.("<!doctype html>");
+        return {
+          text:
+            kind === "component"
+              ? "customElements.define('x-a', class extends HTMLElement {});"
+              : okHtml("STREAMED"),
+        };
+      };
+      const deltas: string[] = [];
+      const outcome = await regeneratePage({
+        aiCall: call,
+        brief,
+        images: [],
+        template: tpl,
+        siteFiles: ["index.html"],
+        file,
+        kind,
+        name: kind === "new" ? "Pricing" : undefined,
+        onChunk: (d) => deltas.push(d),
+      });
+      expect(outcome.ok, `${kind} should regenerate`).toBe(true);
+      expect(sawChunkFn, `${kind} must pass onChunk to the AI call`).toBe(true);
+      expect(deltas.length, `${kind} must deliver deltas to the caller`).toBeGreaterThan(0);
+    }
+  });
+
   it("regenerates a new page using reference pages and its saved name", async () => {
     const tpl = bundle({ "index.html": "<html>home</html>" });
     let seenUser = "";
