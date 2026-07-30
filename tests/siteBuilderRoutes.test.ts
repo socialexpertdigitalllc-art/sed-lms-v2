@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextResponse } from "next/server";
 import { zipFromMap } from "@/lib/site-studio/zip";
 
@@ -46,12 +46,32 @@ vi.mock("@/lib/site-builder/run", async (importOriginal) => ({
   regeneratePage: (args: unknown) => regeneratePageMock(args),
 }));
 
+/**
+ * The processor's seam, wired the same lazy way as `runSiteMock` — with one
+ * extra wrinkle: this file ALSO exercises the REAL `generateRunNow`, both
+ * directly (the rounds-loop describe at the bottom) and through the /generate
+ * route, so the wrapper falls back to the real implementation whenever no
+ * stub is installed. The processor tests install `generateRunNowMock` via the
+ * holder; the global beforeEach uninstalls it.
+ */
+const generateRunNowMock = vi.fn();
+const generateRunNowHolder: { impl: typeof generateRunNowMock | null } = { impl: null };
+vi.mock("@/lib/site-builder/generateRun", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/site-builder/generateRun")>();
+  return {
+    ...real,
+    generateRunNow: (...args: Parameters<typeof real.generateRunNow>) =>
+      generateRunNowHolder.impl ? generateRunNowHolder.impl(...args) : real.generateRunNow(...args),
+  };
+});
+
 import { GET as previewGet } from "@/app/api/site-builder/runs/[id]/preview/[[...path]]/route";
 import { GET as downloadGet } from "@/app/api/site-builder/runs/[id]/download/route";
 import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/route";
 import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
 import { POST as recoverPost } from "@/app/api/site-builder/runs/[id]/recover/route";
 import { DELETE as runDelete } from "@/app/api/site-builder/runs/[id]/route";
+import { POST as processPost } from "@/app/api/site-builder/process/route";
 import { generateRunNow, type GenerateRunDeps } from "@/lib/site-builder/generateRun";
 
 const enc = new TextEncoder();
@@ -192,11 +212,14 @@ function makeWritableAdmin(
         const hits = apply();
         return { data: hits.length ? { ...hits[0] } : null, error: null };
       },
-      // An update with no .select() is awaited directly (the progress chain and
-      // the catch-block failure write both do this).
-      then: (res: (v: { data: null; error: null }) => unknown) => {
-        apply();
-        return Promise.resolve({ data: null, error: null }).then(res);
+      // Awaited directly, with no terminal call. A bare select resolves with
+      // every matching row — filter-honoured like everything else — which is
+      // how the process route lists builder_runs. An update with no .select()
+      // is awaited the same way (the progress chain and the catch-block
+      // failure write both do this); its data goes unread.
+      then: (res: (v: { data: Row[]; error: null }) => unknown) => {
+        const hits = apply();
+        return Promise.resolve({ data: hits.map((r) => ({ ...r })), error: null }).then(res);
       },
     };
     return api;
@@ -254,6 +277,8 @@ beforeEach(() => {
   });
   regeneratePageMock.mockReset();
   regeneratePageMock.mockResolvedValue({ ok: true, html: "<html>regenerated</html>" });
+  generateRunNowMock.mockReset();
+  generateRunNowHolder.impl = null;
 });
 
 const ctx = (path?: string[]) => ({ params: Promise.resolve({ id: "run-1", path }) });
@@ -1191,6 +1216,173 @@ describe("POST /api/site-builder/runs/[id]/recover — releasing a wedged run", 
     // Untouched: the run kept the state the winner set.
     expect(state.runs[0].status).toBe("review");
     expect(state.activity).toHaveLength(0);
+  });
+});
+
+/**
+ * The background processor: the route that lets a run start (and a parked run
+ * resume) with NO screen open. `generateRunNow` is stubbed via the holder —
+ * these tests are about the route's secret gate, its eligibility filter, and
+ * its single-flight cap, not about generation itself.
+ */
+describe("POST /api/site-builder/process — the background processor", () => {
+  const SECRET = "processor-secret";
+  const post = (secret?: string) =>
+    processPost(
+      new Request("http://test.local/api/site-builder/process", {
+        method: "POST",
+        headers: secret === undefined ? {} : { "x-wge-secret": secret },
+      }),
+    );
+
+  const minutesFromNow = (n: number) => new Date(Date.now() + n * 60_000).toISOString();
+
+  beforeEach(() => {
+    vi.stubEnv("WGE_PROCESSOR_SECRET", SECRET);
+    generateRunNowHolder.impl = generateRunNowMock;
+    generateRunNowMock.mockResolvedValue({ kind: "done", run: RUN({ status: "review" }) });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("401s a wrong secret — and generation is never touched", async () => {
+    const { admin } = makeWritableAdmin([RUN({ status: "queued" })]);
+    adminHolder.admin = admin;
+
+    const res = await post("not-the-secret");
+
+    expect(res.status).toBe(401);
+    expect(generateRunNowMock).not.toHaveBeenCalled();
+  });
+
+  it("401s a missing secret header", async () => {
+    const { admin } = makeWritableAdmin([RUN({ status: "queued" })]);
+    adminHolder.admin = admin;
+
+    const res = await post(undefined);
+
+    expect(res.status).toBe(401);
+    expect(generateRunNowMock).not.toHaveBeenCalled();
+  });
+
+  it("503s when the secret is not configured, even with a matching header", async () => {
+    vi.stubEnv("WGE_PROCESSOR_SECRET", "");
+    const { admin } = makeWritableAdmin([RUN({ status: "queued" })]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(res.status).toBe(503);
+    expect(generateRunNowMock).not.toHaveBeenCalled();
+  });
+
+  it("kicks a queued run", async () => {
+    const { admin } = makeWritableAdmin([RUN({ status: "queued" })]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ processed: 1, runId: "run-1", kind: "done" });
+    expect(generateRunNowMock).toHaveBeenCalledTimes(1);
+    expect(generateRunNowMock.mock.calls[0][1]).toBe("run-1");
+  });
+
+  it("resumes a parked run whose resume_at is due — an ABSENT auto_resume key means true", async () => {
+    // Parking never writes auto_resume; the default has to live in the
+    // processor's read, and it has to default ON or parking is just failing
+    // with extra steps.
+    const { admin } = makeWritableAdmin([
+      RUN({ status: "failed", resume_at: minutesFromNow(-5), options: {}, error: "Paused — quota exhausted." }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ processed: 1, runId: "run-1" });
+    expect(generateRunNowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT resume a parked run the operator switched to manual", async () => {
+    const { admin } = makeWritableAdmin([
+      RUN({ status: "failed", resume_at: minutesFromNow(-5), options: { auto_resume: false } }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ processed: 0 });
+    expect(generateRunNowMock).not.toHaveBeenCalled();
+  });
+
+  it("does NOT resume a parked run whose resume_at is still in the future", async () => {
+    const { admin } = makeWritableAdmin([
+      RUN({ status: "failed", resume_at: minutesFromNow(30), options: {} }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(await res.json()).toEqual({ processed: 0 });
+    expect(generateRunNowMock).not.toHaveBeenCalled();
+  });
+
+  it("does NOT touch an ordinary failed run — no resume_at means the retry is the operator's", async () => {
+    const { admin } = makeWritableAdmin([
+      RUN({ status: "failed", resume_at: null, error: "Every page failed to generate." }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(await res.json()).toEqual({ processed: 0 });
+    expect(generateRunNowMock).not.toHaveBeenCalled();
+  });
+
+  it("processes AT MOST ONE run per invocation — the oldest — even with several eligible", async () => {
+    // Single-flight is the burst protection: generation takes minutes and the
+    // poller re-fires every ~60s, so the second run's turn comes next tick.
+    const { admin } = makeWritableAdmin([
+      RUN({ id: "run-newer", status: "queued", created_at: "2026-07-29T11:00:00.000Z" }),
+      RUN({ id: "run-older", status: "queued", created_at: "2026-07-29T10:00:00.000Z" }),
+    ]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ processed: 1, runId: "run-older" });
+    expect(generateRunNowMock).toHaveBeenCalledTimes(1);
+    expect(generateRunNowMock.mock.calls[0][1]).toBe("run-older");
+  });
+
+  it("reports a refused outcome as processed work, not as an idle tick", async () => {
+    // A refusal means the claim CAS lost a race (an open run screen kicked the
+    // same run first) — work WAS attempted, and reporting processed: 0 would
+    // make a busy system indistinguishable from an empty queue.
+    generateRunNowMock.mockResolvedValue({ kind: "refused", status: 409, error: "Generation already started for this run." });
+    const { admin } = makeWritableAdmin([RUN({ status: "queued" })]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ processed: 1, runId: "run-1", kind: "refused" });
+  });
+
+  it("answers 200 when the RUN itself fails — a failed run is not a failed processor call", async () => {
+    generateRunNowMock.mockResolvedValue({ kind: "done", run: RUN({ status: "failed", error: "boom" }) });
+    const { admin } = makeWritableAdmin([RUN({ status: "queued" })]);
+    adminHolder.admin = admin;
+
+    const res = await post(SECRET);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ processed: 1, kind: "done" });
   });
 });
 
