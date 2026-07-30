@@ -47,7 +47,13 @@ export async function updateSession(request: NextRequest) {
     path === "/api/ai-tools/wge/process" ||
     path === "/api/template-engine/process" ||
     path === "/api/notifications/generate" ||
-    path === "/api/tickets/maintenance";
+    path === "/api/tickets/maintenance" ||
+    // Same contract as the WGE processor above: secret-header auth, called by
+    // the instrumentation poller with no user session. Discovered missing in
+    // LIVE deploy verification — a 307-to-login here silently kills the
+    // background processor, and no route test can catch it (they import the
+    // handler directly, bypassing middleware entirely).
+    path === "/api/site-builder/process";
 
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));
