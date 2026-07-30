@@ -102,6 +102,24 @@ export async function persistGeneration(input: PersistInput): Promise<{ id: stri
 const DEFAULT_CALL_TIMEOUT_MS = 300000; // 5 min
 
 /**
+ * Streaming only: how long the stream may be SILENT before the call is
+ * abandoned. On a streaming call this replaces the blunt whole-call ceiling as
+ * the stall detector — "no data for 90s" is the real signal that a connection
+ * is wedged, whereas total elapsed time says nothing when a model is busy
+ * writing a large page. Re-armed on every received chunk.
+ */
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 90_000;
+/**
+ * Streaming's overall ceiling, kept purely as a BACKSTOP behind the idle
+ * timer (a stream drip-feeding bytes forever would never trip the idle
+ * timer). Far above the non-streaming default on purpose: a big page that is
+ * still visibly streaming at minute six must not be killed for taking long —
+ * that is exactly the case streaming exists to make survivable. A
+ * caller-passed `timeoutMs` still wins.
+ */
+const DEFAULT_STREAM_CALL_TIMEOUT_MS = 900_000; // 15 min
+
+/**
  * Everything a single completion needs beyond the prompts.
  *
  * `signal` is the EXTERNAL cancellation channel (the runner's per-generation
@@ -122,6 +140,14 @@ export interface ProviderCallOptions {
    * to 1 to assert single-shot behaviour without waiting out backoff.
    */
   maxAttempts?: number;
+  /** When present, the call streams: each content delta is emitted here as it
+   *  arrives, and the reply is accumulated from the stream. Absent → the
+   *  request is the exact non-streaming call it always was. */
+  onChunk?: (delta: string) => void;
+  /** Streaming only: abort when NO data has arrived for this long. "Silent
+   *  for 90s" is the real stall signal; a big page still streaming must not
+   *  be killed by a total-duration ceiling. */
+  idleTimeoutMs?: number;
 }
 
 export async function callProvider(
@@ -262,69 +288,218 @@ async function attemptCall(
       ? [{ type: "text", text: userPrompt }, ...opts.images.map((url) => ({ type: "image_url", image_url: { url } }))]
       : userPrompt;
 
+  const onChunk = opts.onChunk;
+  const streaming = onChunk !== undefined;
   const controller = new AbortController();
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+  // Streaming raises the overall ceiling to a backstop — the idle timer below
+  // is the real stall detector there. A caller-passed `timeoutMs` still wins
+  // on both paths.
+  const timeoutMs = opts.timeoutMs ?? (streaming ? DEFAULT_STREAM_CALL_TIMEOUT_MS : DEFAULT_CALL_TIMEOUT_MS);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   // Timeout OR external stop, whichever comes first.
   const combined = combineAbortSignals([controller.signal, opts.signal]);
-  let res: Response;
+  /** Streaming's silence detector; armed only on the streaming path, re-armed
+   *  on every received chunk, torn down in the outer finally with the rest. */
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    res = await fetch(cfg.endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-      signal: combined.signal,
-      body: JSON.stringify({
-        model,
-        [cfg.outputTokenParam ?? "max_tokens"]: Math.min(opts.maxTokens, cfg.maxOutputTokens),
-        temperature: opts.temperature,
-        stream: false,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-      }),
-    });
-  } catch (e) {
-    // Order matters: an external stop is checked FIRST, so a Stop that lands
-    // inside the timeout window is reported as an abort (never retried) rather
-    // than as a timeout (which callers do retry).
-    if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
-    if (e instanceof Error && e.name === "AbortError") {
-      throw new Error(callTimedOutMessage(cfg.label, timeoutMs));
-    }
-    throw e;
-  } finally {
-    clearTimeout(timer);
-    combined.cleanup();
-  }
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
+    let res: Response;
     try {
-      const j = await res.json();
-      msg = j?.error?.message || j?.message || msg;
-    } catch {
-      /* ignore */
+      res = await fetch(cfg.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+        signal: combined.signal,
+        body: JSON.stringify({
+          model,
+          [cfg.outputTokenParam ?? "max_tokens"]: Math.min(opts.maxTokens, cfg.maxOutputTokens),
+          temperature: opts.temperature,
+          // A non-streaming call sends NO `stream` key at all — every
+          // OpenAI-compatible provider defaults it to false, and its absence is
+          // what the non-streaming tests pin. `include_usage` asks the vendor
+          // to attach the usage block to the stream's final chunk (MiniMax and
+          // Kimi honour it); a vendor that doesn't degrades to `usage: null`,
+          // which the gate's estimate already covers.
+          ...(streaming && { stream: true, stream_options: { include_usage: true } }),
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userContent },
+          ],
+        }),
+      });
+    } catch (e) {
+      // Order matters: an external stop is checked FIRST, so a Stop that lands
+      // inside the timeout window is reported as an abort (never retried) rather
+      // than as a timeout (which callers do retry).
+      if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
+      if (e instanceof Error && e.name === "AbortError") {
+        throw new Error(callTimedOutMessage(cfg.label, timeoutMs));
+      }
+      throw e;
+    } finally {
+      // Non-streaming tears the timeout down HERE, before the body is read —
+      // exactly the historical behaviour, byte for byte. Streaming must NOT:
+      // its body read is the long part of the call, and both the backstop
+      // ceiling and an external Stop still have to be able to cut it short.
+      // The outer finally below is streaming's teardown.
+      if (!streaming) {
+        clearTimeout(timer);
+        combined.cleanup();
+      }
     }
-    // The status is the whole point: a 429 is "wait, then this call would have
-    // worked", a 400 is "this call can never work". Flattening both into
-    // Error(msg) is what made rate limiting look like permanent failure.
-    // The human-readable message is preserved verbatim so no existing error
-    // surface regresses.
-    throw new ProviderHttpError(
-      msg,
-      res.status,
-      parseRetryAfter(res.headers.get("retry-after")),
-      rateLimitHeadersFrom(res.headers),
-    );
+    if (!res.ok) {
+      // Non-2xx bodies are plain JSON even on a streaming request — vendors
+      // only switch to SSE framing on success — so this path is one and the
+      // same for both kinds of call.
+      let msg = `HTTP ${res.status}`;
+      try {
+        const j = await res.json();
+        msg = j?.error?.message || j?.message || msg;
+      } catch {
+        /* ignore */
+      }
+      // The status is the whole point: a 429 is "wait, then this call would have
+      // worked", a 400 is "this call can never work". Flattening both into
+      // Error(msg) is what made rate limiting look like permanent failure.
+      // The human-readable message is preserved verbatim so no existing error
+      // surface regresses.
+      throw new ProviderHttpError(
+        msg,
+        res.status,
+        parseRetryAfter(res.headers.get("retry-after")),
+        rateLimitHeadersFrom(res.headers),
+      );
+    }
+    if (onChunk === undefined) {
+      const j = await res.json();
+      const text: string = j?.choices?.[0]?.message?.content ?? "";
+      // The raw usage block, not just the total: the gate's TPM accounting learns
+      // an output-to-input ratio from prompt/completion, which the total alone
+      // cannot supply.
+      const usage = (j?.usage ?? null) as TokenUsage | null;
+      const tokens: number = usage?.total_tokens ?? Math.ceil(text.length / 4);
+      return { text, tokens, usage };
+    }
+
+    // ---- the streaming read: OpenAI-style SSE over the response body ----
+    const idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+    let idleFired = false;
+    const armIdle = () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleFired = true;
+        controller.abort();
+      }, idleTimeoutMs);
+    };
+
+    if (!res.body) throw new Error(`${cfg.label} returned no body for a streaming request.`);
+    const reader = res.body.getReader();
+    // The real fetch tears its body down when the request signal aborts, but
+    // the read below must not DEPEND on that coupling: racing each read
+    // against the combined signal guarantees an abort (idle, backstop, or
+    // Stop) always breaks the loop, whatever produced the Response.
+    let onAbort: (() => void) | undefined;
+    const abortedRead = new Promise<never>((_, reject) => {
+      const fire = () => reject(Object.assign(new Error("stream read aborted"), { name: "AbortError" }));
+      if (combined.signal.aborted) return fire();
+      onAbort = fire;
+      combined.signal.addEventListener("abort", fire, { once: true });
+    });
+    // The race loses interest in this promise the moment a read settles first;
+    // a standing handler keeps its eventual rejection from surfacing as
+    // unhandled.
+    abortedRead.catch(() => {});
+
+    let text = "";
+    let usage: TokenUsage | null = null;
+    let sawDone = false;
+    /**
+     * One SSE line. Only `data:` lines matter (comments and other fields are
+     * skipped); `data: [DONE]` ends the stream; a line whose JSON does not
+     * parse is SKIPPED, never fatal — one mangled frame must not throw away
+     * the thousands of good ones around it. Each non-empty content delta is
+     * emitted to `onChunk` as it lands; a `usage` block on any chunk wins
+     * (MiniMax/Kimi send it on the final chunk under include_usage).
+     */
+    const takeLine = (line: string): void => {
+      // Terminated — anything after [DONE], even inside the same network
+      // chunk, is not part of the reply.
+      if (sawDone) return;
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) return;
+      const payload = trimmed.slice(5).trim();
+      if (payload === "[DONE]") {
+        sawDone = true;
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      const j = parsed as { choices?: { delta?: { content?: string } }[]; usage?: TokenUsage | null };
+      const delta = j?.choices?.[0]?.delta?.content ?? "";
+      if (delta) {
+        text += delta;
+        onChunk(delta);
+      }
+      if (j?.usage) usage = j.usage;
+    };
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      armIdle();
+      for (;;) {
+        const step = await Promise.race([reader.read(), abortedRead]);
+        armIdle();
+        if (step.done) break;
+        buffer += decoder.decode(step.value, { stream: true });
+        let nl = buffer.indexOf("\n");
+        while (nl !== -1) {
+          takeLine(buffer.slice(0, nl));
+          buffer = buffer.slice(nl + 1);
+          nl = buffer.indexOf("\n");
+        }
+        if (sawDone) break;
+      }
+      // A final frame without a trailing newline still counts.
+      if (!sawDone) {
+        buffer += decoder.decode();
+        if (buffer.trim()) takeLine(buffer);
+      }
+    } catch (e) {
+      // Same precedence as the fetch's own catch, with the idle case between:
+      // an external Stop is an abort (never retried); an idle-fire is worded
+      // through callTimedOutMessage so isRetryableError classifies it
+      // retryable; anything else aborted is the backstop ceiling.
+      if (opts.signal?.aborted) throw new AiCallAborted(cfg.label, opts.signal.reason);
+      if (idleFired) throw new Error(callTimedOutMessage(cfg.label, idleTimeoutMs));
+      if (e instanceof Error && e.name === "AbortError") {
+        throw new Error(callTimedOutMessage(cfg.label, timeoutMs));
+      }
+      throw e;
+    } finally {
+      if (onAbort) combined.signal.removeEventListener("abort", onAbort);
+      // Release the connection whatever happened; the reply is already whole
+      // or already failed.
+      void reader.cancel().catch(() => {});
+    }
+
+    // The assertion only WIDENS: `usage` is assigned inside `takeLine`, which
+    // TS's narrowing cannot see, so it still believes the initial null here.
+    const finalUsage = usage as TokenUsage | null;
+    const tokens = finalUsage?.total_tokens ?? Math.ceil(text.length / 4);
+    return { text, tokens, usage: finalUsage };
+  } finally {
+    // Streaming's teardown — the non-streaming path already ran its own
+    // (identical, earlier) teardown in the fetch's finally above, and both
+    // timer clears are harmless to repeat.
+    if (streaming) {
+      clearTimeout(timer);
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      combined.cleanup();
+    }
   }
-  const j = await res.json();
-  const text: string = j?.choices?.[0]?.message?.content ?? "";
-  // The raw usage block, not just the total: the gate's TPM accounting learns
-  // an output-to-input ratio from prompt/completion, which the total alone
-  // cannot supply.
-  const usage = (j?.usage ?? null) as TokenUsage | null;
-  const tokens: number = usage?.total_tokens ?? Math.ceil(text.length / 4);
-  return { text, tokens, usage };
 }
 
 /**

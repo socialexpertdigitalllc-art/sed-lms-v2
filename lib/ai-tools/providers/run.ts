@@ -66,6 +66,14 @@ export interface TaskCallOptions {
    * Passed straight through to `callWithProvider`.
    */
   maxAttempts?: number;
+  /** When present, the call streams: each content delta is emitted here as it
+   *  arrives, and the reply is accumulated from the stream. Absent → the
+   *  request is the exact non-streaming call it always was. Passed straight
+   *  through to `callWithProvider` (see ProviderCallOptions.onChunk). */
+  onChunk?: (delta: string) => void;
+  /** Streaming only: abort when NO data has arrived for this long (the
+   *  provider layer defaults it to 90s). Passed straight through. */
+  idleTimeoutMs?: number;
 }
 
 function budget(opts: TaskCallOptions, resolved: ResolvedTaskModel): ProviderCallOptions {
