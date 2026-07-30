@@ -555,6 +555,14 @@ export interface RegeneratePageArgs {
    *  template's own original source. */
   components?: SharedComponents;
   instruction?: string;
+  /** Streams the model's output as it arrives, exactly like a full run's
+   *  `onOutput`. NOT optional in spirit: omitting it silently puts the call on
+   *  the NON-streaming path, whose 300s total timeout a big page (a real
+   *  index.html on MiniMax M3) cannot fit — which made the per-page Regenerate
+   *  button fail on exactly the pages an operator most wants to fix, while
+   *  full runs streamed happily past 300s. Streaming's idle timeout (90s of
+   *  SILENCE, not 300s of work) is the correct budget for a single big page. */
+  onChunk?: (delta: string) => void;
 }
 
 /** Regenerate exactly one entry — an existing page, a newly-designed page,
@@ -562,7 +570,7 @@ export interface RegeneratePageArgs {
  *  instruction. Used by the regenerate route so a disliked page can be
  *  redone without touching the rest of the run. */
 export async function regeneratePage(args: RegeneratePageArgs) {
-  const { aiCall, brief, images, template, siteFiles, file, kind, name, components, instruction } = args;
+  const { aiCall, brief, images, template, siteFiles, file, kind, name, components, instruction, onChunk } = args;
 
   if (kind === "component") {
     const original = findComponentsFile(template);
@@ -576,6 +584,7 @@ export async function regeneratePage(args: RegeneratePageArgs) {
       source: original.source,
       siteFiles,
       instruction,
+      onChunk,
     });
   }
 
@@ -584,7 +593,7 @@ export async function regeneratePage(args: RegeneratePageArgs) {
     if (pageHtml === undefined) {
       return { ok: false as const, error: `${file}: not found in this template.` };
     }
-    return generatePage({ aiCall }, { brief, images, pageFile: file, pageHtml, siteFiles, components, instruction });
+    return generatePage({ aiCall }, { brief, images, pageFile: file, pageHtml, siteFiles, components, instruction, onChunk });
   }
 
   const componentsFile = findComponentsFile(template)?.file;
@@ -604,5 +613,6 @@ export async function regeneratePage(args: RegeneratePageArgs) {
     siteFiles,
     components,
     instruction,
+    onChunk,
   });
 }

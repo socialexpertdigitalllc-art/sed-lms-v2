@@ -4,6 +4,7 @@ import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { loadTemplateBundle } from "@/lib/site-builder/templates";
 import { productionSiteBuildCall } from "@/lib/site-builder/generate";
 import { regeneratePage, buildBrief, assembleZip, findComponentsFile, outputPathFor, BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
+import { clearLive, recordOutput } from "@/lib/site-builder/liveProgress";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
 export const runtime = "nodejs";
@@ -104,7 +105,17 @@ export async function POST(req: Request, ctx: Ctx) {
     name: current.name,
     components,
     instruction,
+    // STREAM, exactly like a full run does. Without this the call rides the
+    // non-streaming path's 300s TOTAL timeout, which a big page (a real
+    // index.html on MiniMax M3) cannot fit — so the Regenerate button failed
+    // on precisely the pages an operator most wants to fix, while full runs
+    // streamed happily past 300s. Feeding the live registry also lets the run
+    // screen's Watch view work during a regeneration.
+    onChunk: (delta) => recordOutput(id, file, delta),
   });
+  // The regeneration is finished either way — drop its live tail rather than
+  // leaving a completed page's output looking like an in-flight stream.
+  clearLive(id);
 
   const newPages: Record<string, PageState> = {
     ...pages,
