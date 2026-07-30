@@ -43,6 +43,13 @@ interface BuilderRunRow {
   output_path: string | null;
   deployed_url: string | null;
   error: string | null;
+  /** Set on a PARKED run (status "failed": when generation resumes) and on a
+   *  waiting "generating" run (the engine's next-attempt marker between
+   *  retry rounds). Null/absent otherwise. */
+  resume_at?: string | null;
+  /** Per-run operator preferences. `auto_resume` gates the background
+   *  processor's automatic resumption of a parked run; ABSENT MEANS TRUE. */
+  options?: { auto_resume?: boolean } | null;
   created_at: string;
   updated_at: string;
 }
@@ -99,6 +106,7 @@ export function BuilderRun({ runId }: { runId: string }) {
   const [regeneratingFile, setRegeneratingFile] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [recovering, setRecovering] = useState(false);
+  const [togglingResume, setTogglingResume] = useState(false);
   const [approving, setApproving] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -276,6 +284,29 @@ export function BuilderRun({ runId }: { runId: string }) {
   }
 
   /**
+   * The parked run's auto/manual switch: PATCHes `{ auto_resume }` into the
+   * run's options. Absent means true, so the toggle always writes the
+   * explicit value; the response carries the updated row.
+   */
+  async function setAutoResume(next: boolean) {
+    setTogglingResume(true);
+    try {
+      const res = await fetch(`/api/site-builder/runs/${runId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_resume: next }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { toast({ kind: "error", title: body.error ?? "Could not change the resume mode" }); return; }
+      if (body.run && mountedRef.current) setRun(body.run as BuilderRunRow);
+    } catch (e) {
+      toast({ kind: "error", title: e instanceof Error ? e.message : "Could not change the resume mode" });
+    } finally {
+      setTogglingResume(false);
+    }
+  }
+
+  /**
    * Force-release a run stuck in "generating". Safe to take on a live
    * generation — the server clears the claim token, so that attempt's writes
    * are discarded rather than racing us — but it does throw away whatever it
@@ -373,6 +404,23 @@ export function BuilderRun({ runId }: { runId: string }) {
   // most, and the route accepts it.
   const gate = run.status === "review" || run.status === "approved" || run.status === "failed";
   const recoverable = run.status === "generating" && now - new Date(run.updated_at).getTime() > RECOVER_OFFER_MS;
+  /**
+   * PARKED: a failed run WITH a `resume_at` is not a dead end but a scheduled
+   * pause — the engine parked it against a quota wall (its `error` says which
+   * and until when) and the background processor resumes it, unless the
+   * operator switched this run to manual. A "generating" run's `resume_at` is
+   * something else entirely: the engine's own next-attempt marker between
+   * retry rounds. Both countdowns derive from the coarse `now` clock above —
+   * the lint (correctly) forbids Date.now() in render.
+   */
+  const resumeAtMs = run.resume_at ? new Date(run.resume_at).getTime() : null;
+  const parked = run.status === "failed" && resumeAtMs !== null;
+  const autoResume = run.options?.auto_resume !== false; // absent means true
+  const resumeInMin = resumeAtMs !== null ? Math.max(1, Math.ceil((resumeAtMs - now) / 60_000)) : null;
+  const nextAttemptInSec =
+    run.status === "generating" && resumeAtMs !== null && resumeAtMs > now
+      ? Math.max(1, Math.ceil((resumeAtMs - now) / 1000))
+      : null;
   const previewRoot = `/api/site-builder/runs/${runId}/preview/`;
   const previewSrc = selectedFile
     ? `${previewRoot}${encodePathSegments(selectedFile)}?v=${encodeURIComponent(run.updated_at)}`
@@ -424,7 +472,32 @@ export function BuilderRun({ runId }: { runId: string }) {
         </div>
       </div>
 
-      {run.status === "failed" ? (
+      {parked ? (
+        /* A parked run is paused, not broken: the engine's own message says
+           why and until when, so the generic failure copy would be a lie. */
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <p className="flex items-center gap-2 font-medium text-text">
+            <Clock className="h-4 w-4" /> {run.error ?? "Paused — generation resumes later."}
+          </p>
+          <p className="mt-1 text-sm text-text-muted">
+            {autoResume
+              ? resumeAtMs !== null && resumeAtMs > now
+                ? `Resumes in ~${resumeInMin}m — nothing to do; it restarts on its own.`
+                : "Resuming any moment now — it restarts on its own."
+              : "Automatic resume is off: this run will NOT resume on its own. Retry it when you are ready, or switch back to automatic."}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button className={btnSecondarySm} onClick={() => void retry()} disabled={retrying}>
+              {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Retry failed pages
+            </button>
+            <button className={btnGhostSm} onClick={() => void setAutoResume(!autoResume)} disabled={togglingResume}>
+              {togglingResume ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {autoResume ? "Switch to manual resume" : "Switch to automatic resume"}
+            </button>
+          </div>
+        </div>
+      ) : run.status === "failed" ? (
         <div className="rounded-lg border border-dropped-bg bg-dropped-bg/40 p-4">
           <p className="flex items-center gap-2 font-medium text-dropped-fg"><AlertTriangle className="h-4 w-4" /> This run failed.</p>
           <p className="mt-1 text-sm text-dropped-fg">{run.error ?? "Every page failed to generate."}</p>
@@ -450,6 +523,15 @@ export function BuilderRun({ runId }: { runId: string }) {
           {progress && progress.generating.length > 0 ? (
             <p className="mt-1 text-xs text-text-faint">
               Writing now: {progress.generating.map((f) => run.pages[f]?.name ?? f).join(", ")}
+            </p>
+          ) : null}
+          {nextAttemptInSec !== null ? (
+            /* Between retry rounds the engine stamps `resume_at` on the still-
+               generating row as its next-attempt marker — without this line the
+               screen looks hung for exactly the minutes it is deliberately
+               waiting out a throttle. */
+            <p className="mt-1 text-xs text-text-faint">
+              Waiting out the provider — next attempt in ~{nextAttemptInSec}s.
             </p>
           ) : null}
           {recoverable ? (
