@@ -18,8 +18,11 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => adminHolder.admin,
 }));
 
+/** Configurable per test (the live-route auth test flips it to a 401); the
+ *  global beforeEach resets it to the operator every other test assumes. */
+const guardHolder: { result: { userId: string } | { error: 401 | 403 } } = { result: { userId: "user-1" } };
 vi.mock("@/lib/site-studio/service/guard", () => ({
-  guard: async () => ({ userId: "user-1" }),
+  guard: async () => guardHolder.result,
   guardError: (status: 401 | 403) =>
     NextResponse.json({ error: status === 401 ? "Unauthorized" : "Forbidden" }, { status }),
 }));
@@ -71,8 +74,10 @@ import { POST as generatePost } from "@/app/api/site-builder/runs/[id]/generate/
 import { POST as regeneratePost } from "@/app/api/site-builder/runs/[id]/pages/[file]/regenerate/route";
 import { POST as recoverPost } from "@/app/api/site-builder/runs/[id]/recover/route";
 import { DELETE as runDelete } from "@/app/api/site-builder/runs/[id]/route";
+import { GET as liveGet } from "@/app/api/site-builder/runs/[id]/live/route";
 import { POST as processPost } from "@/app/api/site-builder/process/route";
 import { generateRunNow, type GenerateRunDeps } from "@/lib/site-builder/generateRun";
+import { recordOutput, liveSnapshot, clearLive } from "@/lib/site-builder/liveProgress";
 
 const enc = new TextEncoder();
 
@@ -268,6 +273,7 @@ const RUN = (over: Row = {}): Row => ({
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 beforeEach(() => {
+  guardHolder.result = { userId: "user-1" };
   adminHolder.admin = makeAdmin();
   runSiteMock.mockReset();
   runSiteMock.mockResolvedValue({
@@ -1597,5 +1603,95 @@ describe("generateRunNow — retry rounds, quota-aware waits, parking", () => {
     // …and the terminal write cleared it: a finished run with a leftover
     // "next attempt" time would show a countdown to nothing.
     expect(h.state.runs[0].resume_at).toBeNull();
+  });
+
+  it("wires onOutput into the live registry, starts it clean on claim, and clears it on terminal", async () => {
+    // A PREVIOUS attempt's leftovers. If the claim did not clear them, the
+    // fresh attempt would show a stale tail beside a live generation.
+    recordOutput("run-1", "stale.html", "left over from the last attempt");
+
+    const h = harness([]);
+    let atClaim: unknown;
+    let midRun: unknown;
+    h.deps.runSiteImpl = (async (args: { onOutput?: (file: string, delta: string) => void }) => {
+      atClaim = liveSnapshot("run-1");
+      args.onOutput?.("index.html", "<html>st");
+      args.onOutput?.("index.html", "reamed</html>");
+      midRun = liveSnapshot("run-1");
+      return finished();
+    }) as unknown as GenerateRunDeps["runSiteImpl"];
+
+    const outcome = await h.call();
+
+    expect(outcome.kind).toBe("done");
+    // Clean at claim — the stale entry is gone before the first page starts.
+    expect(atClaim).toEqual([]);
+    // Wired: the engine's deltas landed in the registry, accumulated per file.
+    expect(midRun).toEqual([
+      { file: "index.html", chars: 21, lastChunkAt: expect.any(Number), tail: "<html>streamed</html>" },
+    ]);
+    // And a finished attempt leaves nothing behind for the poller to misread.
+    expect(liveSnapshot("run-1")).toEqual([]);
+  });
+
+  it("a parked attempt drops its live feed too", async () => {
+    const h = harness([], { budgetMs: 5, waitsMs: [10] });
+    h.impl.mockImplementationOnce(async (args: { onOutput?: (file: string, delta: string) => void }) => {
+      args.onOutput?.("about.html", "partial output");
+      return oneThrottled();
+    });
+
+    const outcome = await h.call();
+
+    expect(outcome.kind).toBe("parked");
+    // The park released the run; its live tail describes a generation that is
+    // no longer writing and must not linger until the resume.
+    expect(liveSnapshot("run-1")).toEqual([]);
+  });
+});
+
+/**
+ * The live-output route: a Map lookup behind the operator guard, polled every
+ * ~2s by the run screen. No DB in sight — the registry tests own the data
+ * semantics; these pin the route's shape and its guard.
+ */
+describe("GET /api/site-builder/runs/[id]/live", () => {
+  const get = () => liveGet(new Request("http://test.local/api/site-builder/runs/run-1/live"), ctx());
+
+  afterEach(() => {
+    clearLive("run-1");
+  });
+
+  it("returns the run's live snapshot with the server's own clock", async () => {
+    recordOutput("run-1", "index.html", "<html>partial");
+
+    const res = await get();
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { now: number; files: unknown };
+    // `now` is the reference the client subtracts lastChunkAt from — one
+    // clock, no skew.
+    expect(typeof body.now).toBe("number");
+    expect(body.files).toEqual([
+      { file: "index.html", chars: 13, lastChunkAt: expect.any(Number), tail: "<html>partial" },
+    ]);
+  });
+
+  it("answers an idle or unknown run with an empty list, not a 404", async () => {
+    const res = await get();
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ files: [] });
+  });
+
+  it("guards auth: an unauthenticated caller gets a 401 and no tail", async () => {
+    guardHolder.result = { error: 401 };
+    recordOutput("run-1", "index.html", "output the outsider must not see");
+
+    const res = await get();
+
+    expect(res.status).toBe(401);
+    const text = await res.text();
+    expect(text).not.toContain("outsider");
   });
 });

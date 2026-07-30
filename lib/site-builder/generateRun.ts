@@ -16,6 +16,7 @@ import {
   type RunSiteResult,
 } from "@/lib/site-builder/run";
 import { probeQuota } from "@/lib/ai-tools/providers/quota";
+import { clearLive, recordOutput } from "@/lib/site-builder/liveProgress";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
 /**
@@ -220,6 +221,12 @@ export async function generateRunNow(
     return { kind: "refused", status: 409, error: "Generation already started for this run." };
   }
 
+  // The claim starts the live-output feed CLEAN: whatever a previous attempt
+  // streamed describes output this attempt is about to redo, and a stale tail
+  // beside a fresh generation would be worse than no tail. Only after a WON
+  // claim — a refused caller must not wipe the live attempt's feed.
+  clearLive(runId);
+
   try {
     if (!run.lead_id) throw new Error("This run has no lead");
     const { data: lead } = await admin.from("leads").select("*").eq("id", run.lead_id).is("deleted_at", null).single();
@@ -319,6 +326,10 @@ export async function generateRunNow(
         template: bundle,
         requestedPages,
         onProgress: persist,
+        // The live-output feed: every streamed delta of every page lands in
+        // the in-memory registry the /live route reads. Passing the callback
+        // is also what switches the model calls to streaming.
+        onOutput: (file, delta) => recordOutput(runId, file, delta),
         // Retry, stale-reclaim, and every round after the first all land
         // here. Whatever a previous pass finished is carried through
         // untouched; only the rest is regenerated. On a first pass this is
@@ -503,5 +514,12 @@ export async function generateRunNow(
       .eq("id", runId)
       .eq("generation_id", generationId);
     return { kind: "refused", status: 500, error: message };
+  } finally {
+    // Every exit of a claimed attempt — done, parked, superseded, refused
+    // after claim, thrown — drops the live feed: the generation it described
+    // is over, and the run screen must not keep showing a "live" tail for a
+    // run that is no longer writing. ONE finally instead of a call per return
+    // path, so no future exit path can forget it.
+    clearLive(runId);
   }
 }

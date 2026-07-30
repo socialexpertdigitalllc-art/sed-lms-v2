@@ -16,7 +16,7 @@ import {
 } from "@/lib/site-builder/run";
 import { ProviderHttpError } from "@/lib/ai-tools/providers/errors";
 import type { AiCall } from "@/lib/site-builder/generate";
-import { SITE_COMPONENTS_SYSTEM } from "@/lib/site-builder/prompt";
+import { SITE_COMPONENTS_SYSTEM, type BusinessBrief } from "@/lib/site-builder/prompt";
 import type { TemplateBundle } from "@/lib/site-builder/templates";
 
 const enc = new TextEncoder();
@@ -998,5 +998,69 @@ describe("assembleZip", () => {
     const files = unzipToMap(assembleZip(assets, pages));
     expect(Object.keys(files).sort()).toEqual(["css/style.css", "index.html"]);
     expect(dec.decode(files["index.html"])).toBe("<html>ok</html>");
+  });
+});
+
+describe("runSite live output", () => {
+  const liveBrief: BusinessBrief = { business_name: "Acme", services: [], service_areas: [] };
+  const COMPONENTS_SRC = "customElements.define('x-header', class extends HTMLElement {});";
+
+  it("routes each generation's streamed deltas to onOutput under that file's own name", async () => {
+    const tpl = bundle(
+      { "index.html": okHtml("home"), "about.html": okHtml("about") },
+      { "components.js": COMPONENTS_SRC },
+    );
+    // The stub streams every reply in two deltas via the AiCall seam's third
+    // argument — page identity is runSite's job, so the stub never sees it.
+    const aiCall: AiCall = async (system, _user, onChunk) => {
+      const reply = system === SITE_COMPONENTS_SYSTEM ? COMPONENTS_SRC : okHtml("gen");
+      onChunk?.(reply.slice(0, 8));
+      onChunk?.(reply.slice(8));
+      return { text: reply };
+    };
+
+    const events: Record<string, string> = {};
+    const result = await runSite({
+      aiCall,
+      brief: liveBrief,
+      images: [],
+      template: tpl,
+      // Two template pages plus one the template lacks — all three kinds of
+      // generation (component, existing, new) must report their own file.
+      requestedPages: ["Home", "About", "Team"],
+      onOutput: (file, delta) => {
+        events[file] = (events[file] ?? "") + delta;
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(Object.keys(events).sort()).toEqual(["about.html", "components.js", "index.html", "team.html"]);
+    // Joined deltas reproduce each file's whole reply — nothing dropped,
+    // nothing cross-wired into another file's feed.
+    expect(events["components.js"]).toBe(COMPONENTS_SRC);
+    expect(events["index.html"]).toBe(okHtml("gen"));
+    expect(events["about.html"]).toBe(okHtml("gen"));
+    expect(events["team.html"]).toBe(okHtml("gen"));
+  });
+
+  it("passes NO onChunk to the model calls when the caller wants no live output", async () => {
+    const seen: unknown[] = [];
+    const aiCall: AiCall = async (_s, _u, onChunk) => {
+      seen.push(onChunk);
+      return { text: okHtml("gen") };
+    };
+
+    const result = await runSite({
+      aiCall,
+      brief: liveBrief,
+      images: [],
+      template: bundle({ "index.html": okHtml("home") }),
+      requestedPages: [],
+    });
+
+    expect(result.ok).toBe(true);
+    // One page generated, and its call carried no streaming callback — the
+    // non-streaming request stays exactly what it always was.
+    expect(seen).toEqual([undefined]);
   });
 });
