@@ -10,6 +10,8 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Eye,
+  EyeOff,
   Loader2,
   RefreshCw,
   ShieldCheck,
@@ -83,6 +85,54 @@ const KIND_LABEL: Record<PageState["kind"], string> = {
   component: "shared components",
 };
 
+/** One generating file's live stream state, as the live route reports it —
+ *  `chars`/`lastChunkAt`/`tail` come straight from the in-memory registry
+ *  (lib/site-builder/liveProgress.ts). */
+interface LiveFileEntry {
+  file: string;
+  chars: number;
+  lastChunkAt: number;
+  tail: string;
+}
+
+interface LiveState {
+  /** The SERVER's clock at snapshot time — idle seconds are `now -
+   *  lastChunkAt`, both server-stamped, so client clock skew cancels out. */
+  now: number;
+  /** Our clock when the snapshot landed, so the coarse render clock can keep
+   *  the idle counter moving even if later polls fail — a stalled poll is
+   *  precisely when "quiet for Ns" must not freeze at a reassuring number. */
+  receivedAt: number;
+  files: LiveFileEntry[];
+}
+
+/** After this many idle seconds the quiet figure turns alarming — matches the
+ *  streaming idle-timeout's order of magnitude: past a minute of silence the
+ *  stream is more likely stalled than thinking. */
+const QUIET_ALARM_SEC = 60;
+
+/**
+ * The expandable raw tail of one page's live output. Its own component so the
+ * auto-scroll ref/effect live beside the one element they serve: every new
+ * tail pins the scroll to the bottom, where the newest output is.
+ */
+function LiveTail({ tail }: { tail: string }) {
+  const ref = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [tail]);
+  return (
+    <pre
+      ref={ref}
+      data-testid="sb-live-tail"
+      className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface-2 p-2 font-mono text-[11px] leading-relaxed text-text-muted"
+    >
+      {tail}
+    </pre>
+  );
+}
+
 /**
  * The run screen: LIVE per-page progress (the generate route persists every
  * page-state change, this screen polls it), a page-by-page preview iframe,
@@ -112,6 +162,8 @@ export function BuilderRun({ runId }: { runId: string }) {
   const [deleting, setDeleting] = useState(false);
   const [viewingCode, setViewingCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [live, setLive] = useState<LiveState | null>(null);
+  const [watching, setWatching] = useState<Set<string>>(new Set());
 
   const mountedRef = useRef(false);
   useEffect(() => {
@@ -176,6 +228,51 @@ export function BuilderRun({ runId }: { runId: string }) {
     }, 2000);
     return () => clearInterval(id);
   }, [run, loadRun, retrying]);
+
+  /**
+   * The LIVE stream poll — separate from the run poll above because it serves
+   * a different phase: only while the run is "generating" is there a stream to
+   * watch, and the moment it leaves that status the interval is torn down and
+   * the snapshot dropped (a review run must not show a stale "quiet for 40s").
+   * Keyed on the boolean, not the `run` object, so the 2s run poll's fresh row
+   * objects do not restart this effect every tick.
+   */
+  const isGenerating = run?.status === "generating";
+  useEffect(() => {
+    if (!isGenerating) return;
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const res = await fetch(`/api/site-builder/runs/${runId}/live`);
+        const body = (await res.json().catch(() => ({}))) as { now?: number; files?: LiveFileEntry[] };
+        if (!res.ok || cancelled || !mountedRef.current || typeof body.now !== "number") return;
+        setLive({ now: body.now, receivedAt: Date.now(), files: body.files ?? [] });
+      } catch {
+        // A failed poll is left alone — the next tick retries, and the coarse
+        // clock keeps the idle figure honest in the meantime.
+      }
+    };
+    void pull();
+    const id = setInterval(() => void pull(), 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isGenerating, runId]);
+
+  /**
+   * The snapshot is IGNORED, not cleared, outside "generating" — same rule as
+   * `selectedFile` below: derived, never stored-then-corrected by an effect.
+   * A run that re-enters generating (a retry) may render one frame of the
+   * previous phase's figures for the same page; the effect's immediate pull
+   * replaces them within the first tick.
+   */
+  const liveByFile = useMemo(() => {
+    const m = new Map<string, LiveFileEntry>();
+    if (!isGenerating) return m;
+    for (const f of live?.files ?? []) m.set(f.file, f);
+    return m;
+  }, [live, isGenerating]);
 
   /**
    * A coarse clock, so `recoverable` below (has this run been quiet long enough
@@ -558,6 +655,17 @@ export function BuilderRun({ runId }: { runId: string }) {
           {pageFiles.map((file) => {
             const p = run.pages[file];
             const busy = regeneratingFile === file;
+            const lf = p.status === "generating" ? liveByFile.get(file) : undefined;
+            /**
+             * Idle seconds = the SERVER's own gap at snapshot time
+             * (`live.now - lastChunkAt`, one clock, no skew) plus however long
+             * the snapshot has been sitting here — measured on the coarse
+             * clock, never Date.now() in render. The drift term is what keeps
+             * the figure climbing when the live polls themselves stop landing.
+             */
+            const quietSec =
+              lf && live ? Math.max(0, Math.round((live.now - lf.lastChunkAt + Math.max(0, now - live.receivedAt)) / 1000)) : 0;
+            const alarming = quietSec > QUIET_ALARM_SEC;
             return (
               <div key={file} className="rounded-lg border border-border bg-surface p-3">
                 <div className="mb-1 flex items-center gap-2">
@@ -573,6 +681,41 @@ export function BuilderRun({ runId }: { runId: string }) {
                   )}
                 </div>
                 <p className="truncate text-xs text-text-faint">{file} · {KIND_LABEL[p.kind]}</p>
+                {lf ? (
+                  /* The live stream readout: only for a page the registry has
+                     heard from — a generating page with no entry yet shows
+                     nothing new (its call may still be in the pre-stream
+                     setup, and "0 chars, quiet forever" would read as stuck). */
+                  <div className="mt-2">
+                    <p className="text-xs text-text-faint">
+                      ~{lf.chars.toLocaleString("en-US")} chars ·{" "}
+                      <span
+                        data-testid="sb-live-quiet"
+                        className={alarming ? "font-medium text-dropped-fg" : undefined}
+                        title={alarming ? "No output for over a minute — the stream may have stalled." : undefined}
+                      >
+                        quiet for {quietSec}s
+                      </span>
+                    </p>
+                    <button
+                      type="button"
+                      className={cn(btnGhostSm, "mt-1")}
+                      aria-expanded={watching.has(file)}
+                      onClick={() =>
+                        setWatching((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(file)) next.delete(file);
+                          else next.add(file);
+                          return next;
+                        })
+                      }
+                    >
+                      {watching.has(file) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      {watching.has(file) ? "Hide" : "Watch"}
+                    </button>
+                    {watching.has(file) ? <LiveTail tail={lf.tail} /> : null}
+                  </div>
+                ) : null}
                 {p.status === "ok" && p.html !== undefined ? (
                   <button className={cn(btnGhostSm, "mt-2")} onClick={() => { setViewingCode(file); setCopied(false); }}>
                     <Code2 className="h-3.5 w-3.5" /> View code
