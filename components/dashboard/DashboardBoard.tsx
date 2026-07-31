@@ -103,12 +103,16 @@ export function DashboardBoard({
   const monthOpts = useMemo(() => monthOptions(leads), [leads]);
   const scoping = selSet.size > 0 || month !== "" || agentId !== "";
 
+  // Velocity KPIs scope by closed_at/dropped_at, so they get region+agent
+  // filtering but NOT the created_at month filter — the month is applied
+  // internally to the right timestamp.
+  const fLeadsAllTime = useMemo(
+    () => filterLeadsByRegions(leads, selSet).filter((l) => !agentId || l.agent_id === agentId),
+    [leads, selSet, agentId]
+  );
   const fLeads = useMemo(
-    () =>
-      filterLeadsByRegions(leads, selSet)
-        .filter((l) => inMonth(l.created_at, month))
-        .filter((l) => !agentId || l.agent_id === agentId),
-    [leads, selSet, month, agentId]
+    () => fLeadsAllTime.filter((l) => inMonth(l.created_at, month)),
+    [fLeadsAllTime, month]
   );
   const scopedIds = useMemo(() => new Set(fLeads.map((l) => l.id)), [fLeads]);
   const fFollowUps = useMemo(
@@ -122,14 +126,6 @@ export function DashboardBoard({
 
   const kpis = computeKpis(fLeads);
   const ext = computeExtendedKpis(fLeads, fFollowUps, fTickets, new Date(now));
-
-  // Velocity KPIs scope by closed_at/dropped_at, so they get region+agent
-  // filtering but NOT the created_at month filter — the month is applied
-  // internally to the right timestamp.
-  const fLeadsAllTime = useMemo(
-    () => filterLeadsByRegions(leads, selSet).filter((l) => !agentId || l.agent_id === agentId),
-    [leads, selSet, agentId]
-  );
   const velocity = computeVelocityKpis(fLeadsAllTime, month);
 
   const fvf = freshVsFollowup(fLeads);

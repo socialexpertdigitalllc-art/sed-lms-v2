@@ -125,7 +125,7 @@ export function StatGrid({
       show: show.dropRatio,
       label: "Drop Ratio",
       value: velocity.dropRatio === null ? "—" : `${velocity.dropRatio.toFixed(0)}%`,
-      sub: "of decided leads",
+      sub: "closed+dropped this period",
     },
     {
       key: "avgFirstTouch",
