@@ -2,6 +2,7 @@ import { Document, Page, Text, View, StyleSheet, renderToBuffer } from "@react-p
 import type { AgentPeriodicReport } from "@/lib/reports/agentPeriodic";
 import type { WindowMetrics } from "@/lib/reports/agentPeriodicMath";
 import { formatUsd } from "@/lib/contracts/merge";
+import { fmtInt, fmtPct, fmtDays, fmtHours, fmtRatio, type Fmt } from "@/lib/reports/format";
 
 const HEADING = "#1c2a4a";
 const MUTED = "#666";
@@ -21,13 +22,6 @@ const styles = StyleSheet.create({
   headLabel: { flex: 3, fontSize: 7.5, color: MUTED, textTransform: "uppercase" },
   note: { color: "#8a6d1a", marginBottom: 10 },
 });
-
-type Fmt = (v: number | null) => string;
-const fmtInt: Fmt = (v) => (v === null ? "—" : String(Math.round(v)));
-const fmtPct: Fmt = (v) => (v === null ? "—" : `${v.toFixed(0)}%`);
-const fmtDays: Fmt = (v) => (v === null ? "—" : v < 2 ? `${Math.round(v * 24)}h` : `${v.toFixed(1)}d`);
-const fmtHours: Fmt = (v) => (v === null ? "—" : v < 48 ? `${Math.round(v)}h` : `${(v / 24).toFixed(1)}d`);
-const fmtRatio: Fmt = (v) => (v === null ? "—" : v.toFixed(2));
 
 interface RowDef { label: string; get: (m: WindowMetrics) => number | null; fmt: Fmt }
 
@@ -49,7 +43,7 @@ const SECTIONS: { title: string; rows: RowDef[] }[] = [
       { label: "Median time to close", get: (m) => m.medianCloseDays, fmt: fmtDays },
       { label: "Avg time to close", get: (m) => m.avgCloseDays, fmt: fmtDays },
       { label: "Median time to drop", get: (m) => m.medianDropDays, fmt: fmtDays },
-      { label: "Fast drops (≤7d)", get: (m) => m.fastDrops, fmt: fmtInt },
+      { label: "Fast drops (7d or less)", get: (m) => m.fastDrops, fmt: fmtInt },
       { label: "Slow drops (>7d)", get: (m) => m.slowDrops, fmt: fmtInt },
       { label: "Median first touch", get: (m) => m.medianFirstTouchHours, fmt: fmtHours },
     ],
@@ -82,7 +76,7 @@ export function ReportDocument({ report }: { report: AgentPeriodicReport }) {
       <Page size="A4" style={styles.page}>
         <Text style={styles.title}>Agent Periodic Report</Text>
         <Text style={styles.subtitle}>
-          {report.agent.name}{report.agent.active ? "" : " (deactivated)"} · {report.period.from} → {report.period.to}
+          {report.agent.name}{report.agent.active ? "" : " (deactivated)"} · {report.period.from} – {report.period.to}
         </Text>
         {m.agent.approxCount > 0 && (
           <Text style={styles.note}>
@@ -108,13 +102,13 @@ export function ReportDocument({ report }: { report: AgentPeriodicReport }) {
             ))}
           </View>
         ))}
-        <View style={styles.section} wrap={false}>
+        <View style={styles.section}>
           <Text style={styles.h2}>Regions (agent)</Text>
           {report.regions.agent.length === 0 ? (
             <Text style={{ color: MUTED }}>No closes or drops in this period.</Text>
           ) : (
             report.regions.agent.map((r) => (
-              <View key={r.region} style={styles.row}>
+              <View key={r.region} style={styles.row} wrap={false}>
                 <Text style={styles.cLabel}>{r.region}</Text>
                 <Text style={styles.cVal}>{r.closed} closed</Text>
                 <Text style={styles.cMuted}>{r.dropped} dropped</Text>

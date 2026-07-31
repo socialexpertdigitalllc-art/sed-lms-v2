@@ -7,12 +7,7 @@ import type { DashboardVisibility } from "@/lib/dashboard/visibility";
 import { applyOrder } from "@/lib/dashboard/orderCards";
 import { useCardDnd } from "@/hooks/useCardDnd";
 import { useUiPrefs } from "@/providers/UiPrefsProvider";
-
-const fmtHours = (h: number | null) =>
-  h === null ? "—" : h < 48 ? `${Math.round(h)}h` : `${(h / 24).toFixed(1)}d`;
-
-const fmtDays = (d: number | null) =>
-  d === null ? "—" : d < 2 ? `${Math.round(d * 24)}h` : `${d.toFixed(1)}d`;
+import { fmtHours, fmtDays } from "@/lib/reports/format";
 
 interface Tile {
   key: string;

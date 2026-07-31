@@ -4,14 +4,9 @@ import { useMemo, useState } from "react";
 import type { AgentPeriodicReport } from "@/lib/reports/agentPeriodic";
 import type { WindowMetrics } from "@/lib/reports/agentPeriodicMath";
 import { formatCompactCurrency } from "@/lib/leads/format";
+import { fmtInt, fmtPct, fmtDays, fmtHours, fmtRatio, type Fmt } from "@/lib/reports/format";
 
-type Fmt = (v: number | null) => string;
-const fmtInt: Fmt = (v) => (v === null ? "—" : String(Math.round(v)));
-const fmtPct: Fmt = (v) => (v === null ? "—" : `${v.toFixed(0)}%`);
-const fmtDays: Fmt = (v) => (v === null ? "—" : v < 2 ? `${Math.round(v * 24)}h` : `${v.toFixed(1)}d`);
-const fmtHours: Fmt = (v) => (v === null ? "—" : v < 48 ? `${Math.round(v)}h` : `${(v / 24).toFixed(1)}d`);
 const fmtMoney: Fmt = (v) => (v === null ? "—" : formatCompactCurrency(v));
-const fmtRatio: Fmt = (v) => (v === null ? "—" : v.toFixed(2));
 
 interface RowDef { label: string; get: (m: WindowMetrics) => number | null; fmt: Fmt }
 
