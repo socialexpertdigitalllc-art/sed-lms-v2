@@ -35,7 +35,7 @@ export interface WindowMetrics {
   followUpsLogged: number;
   pickupRate: number | null;
   contractsSent: number;
-  contractToCloseRatio: number | null; // closes per contract sent
+  closesPerContract: number | null; // closes per contract sent
   closedRevenue: number;
   recurringRevenue: number;
   avgDealSize: number | null; // over closed-in-window priced leads
@@ -149,7 +149,7 @@ export function computeWindowMetrics(
     followUpsLogged: fu.length,
     pickupRate: fu.length ? (pickups / fu.length) * 100 : null,
     contractsSent,
-    contractToCloseRatio: contractsSent ? closedL.length / contractsSent : null,
+    closesPerContract: contractsSent ? closedL.length / contractsSent : null,
     closedRevenue: prices.reduce((s, n) => s + n, 0),
     recurringRevenue: closedL.reduce((s, l) => s + (num(l.yearly_price) ?? 0), 0),
     avgDealSize: avg(prices),

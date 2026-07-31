@@ -94,6 +94,8 @@ describe("computeWindowMetrics", () => {
     expect(m.slowDrops).toBe(1);
     expect(m.closeRatio).toBeCloseTo(50, 5);
     expect(m.dropRatio).toBeCloseTo(50, 5);
+    expect(m.avgDropDays).toBeCloseTo((1 + 44) / 2, 5);
+    expect(m.medianDropDays).toBeCloseTo(22.5, 5);
   });
 
   it("computes avg AND median close days plus distribution buckets", () => {
@@ -136,11 +138,14 @@ describe("computeWindowMetrics", () => {
     expect(m.recurringRevenue).toBe(120);
     expect(m.pickupRate).toBeCloseTo(100, 5);
     expect(m.contractsSent).toBe(1);
+    expect(m.closesPerContract).toBeCloseTo(1, 5);
+    expect(m.followUpsLogged).toBe(1);
+    expect(m.avgDealSize).toBe(900);
     const empty = computeWindowMetrics([], [], [], W, NO_APPROX);
     expect(empty.closeRatio).toBeNull();
     expect(empty.avgCloseDays).toBeNull();
     expect(empty.pickupRate).toBeNull();
-    expect(empty.contractToCloseRatio).toBeNull();
+    expect(empty.closesPerContract).toBeNull();
   });
 
   it("flags approximate exits", () => {
@@ -149,6 +154,20 @@ describe("computeWindowMetrics", () => {
       [], [], W, new Set(["x"])
     );
     expect(m.approxCount).toBe(1);
+  });
+
+  it("computes first-touch hours over the arrival cohort", () => {
+    const m = computeWindowMetrics(
+      [
+        lead({ created_at: "2026-07-01T00:00:00Z", first_touch_at: "2026-07-01T06:00:00Z" }), // 6h
+        lead({ created_at: "2026-07-02T00:00:00Z", first_touch_at: "2026-07-03T00:00:00Z" }), // 24h
+        lead({ created_at: "2026-07-03T00:00:00Z" }), // untouched — excluded
+        lead({ created_at: "2026-07-04T00:00:00Z", first_touch_at: "2026-07-03T00:00:00Z" }), // negative — filtered
+      ],
+      [], [], W, NO_APPROX
+    );
+    expect(m.avgFirstTouchHours).toBeCloseTo(15, 5);
+    expect(m.medianFirstTouchHours).toBeCloseTo(15, 5);
   });
 });
 
