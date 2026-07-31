@@ -1,9 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Denormalized mirror of the ledger: entering Closed/Dropped stamps that
- * column and clears the other; entering any open status clears both. History
- * survives in lead_status_events regardless.
+ * Column patch for a status transition: entering Closed/Dropped stamps that
+ * column and clears the other; entering any open status clears both.
+ * NOTE: reports query these columns directly — the ledger is the audit trail,
+ * not a fallback. A failed patch here degrades report accuracy until the
+ * backfill script is re-run.
  */
 export function statusTimestampPatch(
   to: string,
