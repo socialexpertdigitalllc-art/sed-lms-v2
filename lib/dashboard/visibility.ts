@@ -13,6 +13,10 @@ export interface DashboardVisibility {
   openTickets: boolean;
   overdueTickets: boolean;
   avgResolutionTime: boolean;
+  closedInPeriod: boolean;
+  avgTimeToClose: boolean;
+  dropRatio: boolean;
+  avgFirstTouch: boolean;
   statusStrip: boolean;
   leadsOverTime: boolean;
   pipelineByStatus: boolean;
@@ -39,6 +43,10 @@ const KEYMAP: [keyof DashboardVisibility, string][] = [
   ["openTickets", "dashboard.kpi.open_tickets"],
   ["overdueTickets", "dashboard.kpi.overdue_tickets"],
   ["avgResolutionTime", "dashboard.kpi.avg_resolution_time"],
+  ["closedInPeriod", "dashboard.kpi.closed_in_period"],
+  ["avgTimeToClose", "dashboard.kpi.avg_time_to_close"],
+  ["dropRatio", "dashboard.kpi.drop_ratio"],
+  ["avgFirstTouch", "dashboard.kpi.avg_first_touch"],
   ["statusStrip", "dashboard.strip.status"],
   ["leadsOverTime", "dashboard.chart.leads_over_time"],
   ["pipelineByStatus", "dashboard.chart.pipeline_by_status"],

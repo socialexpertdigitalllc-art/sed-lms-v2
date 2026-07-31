@@ -2,7 +2,7 @@
 
 import { GripVertical } from "lucide-react";
 import { formatCompactCurrency } from "@/lib/leads/format";
-import type { ExtendedKpis } from "@/lib/dashboard/metrics";
+import type { ExtendedKpis, VelocityKpis } from "@/lib/dashboard/metrics";
 import type { DashboardVisibility } from "@/lib/dashboard/visibility";
 import { applyOrder } from "@/lib/dashboard/orderCards";
 import { useCardDnd } from "@/hooks/useCardDnd";
@@ -10,6 +10,9 @@ import { useUiPrefs } from "@/providers/UiPrefsProvider";
 
 const fmtHours = (h: number | null) =>
   h === null ? "—" : h < 48 ? `${Math.round(h)}h` : `${(h / 24).toFixed(1)}d`;
+
+const fmtDays = (d: number | null) =>
+  d === null ? "—" : d < 2 ? `${Math.round(d * 24)}h` : `${d.toFixed(1)}d`;
 
 interface Tile {
   key: string;
@@ -20,7 +23,15 @@ interface Tile {
   valueClass?: string;
 }
 
-export function StatGrid({ kpis, show }: { kpis: ExtendedKpis; show: DashboardVisibility }) {
+export function StatGrid({
+  kpis,
+  velocity,
+  show,
+}: {
+  kpis: ExtendedKpis;
+  velocity: VelocityKpis;
+  show: DashboardVisibility;
+}) {
   const { dashboardOrder, setDashboardOrder } = useUiPrefs();
   const tiles: Tile[] = [
     {
@@ -94,6 +105,34 @@ export function StatGrid({ kpis, show }: { kpis: ExtendedKpis; show: DashboardVi
       label: "Avg Resolution",
       value: fmtHours(kpis.avgResolutionHours),
       sub: "time to resolve",
+    },
+    {
+      key: "closedInPeriod",
+      show: show.closedInPeriod,
+      label: "Closed (Period)",
+      value: String(velocity.closedInPeriod),
+      sub: "by close date",
+    },
+    {
+      key: "avgTimeToClose",
+      show: show.avgTimeToClose,
+      label: "Avg Time To Close",
+      value: fmtDays(velocity.avgTimeToCloseDays),
+      sub: "arrival → close",
+    },
+    {
+      key: "dropRatio",
+      show: show.dropRatio,
+      label: "Drop Ratio",
+      value: velocity.dropRatio === null ? "—" : `${velocity.dropRatio.toFixed(0)}%`,
+      sub: "of decided leads",
+    },
+    {
+      key: "avgFirstTouch",
+      show: show.avgFirstTouch,
+      label: "Avg First Touch",
+      value: fmtHours(velocity.avgFirstTouchHours),
+      sub: "arrival → first call",
     },
   ];
 

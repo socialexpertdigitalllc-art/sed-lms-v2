@@ -25,7 +25,12 @@ import {
   leadsOverTime,
   freshVsFollowup,
 } from "@/lib/leads/analytics";
-import { computeExtendedKpis, revenueByStatus, ticketStatusSplit } from "@/lib/dashboard/metrics";
+import {
+  computeExtendedKpis,
+  computeVelocityKpis,
+  revenueByStatus,
+  ticketStatusSplit,
+} from "@/lib/dashboard/metrics";
 import type { dashboardVisibility } from "@/lib/dashboard/visibility";
 import type { Lead } from "@/lib/leads/types";
 import { filterLeadsByRegions, type RegionFacet } from "@/lib/geo/regions";
@@ -117,6 +122,16 @@ export function DashboardBoard({
 
   const kpis = computeKpis(fLeads);
   const ext = computeExtendedKpis(fLeads, fFollowUps, fTickets, new Date(now));
+
+  // Velocity KPIs scope by closed_at/dropped_at, so they get region+agent
+  // filtering but NOT the created_at month filter — the month is applied
+  // internally to the right timestamp.
+  const fLeadsAllTime = useMemo(
+    () => filterLeadsByRegions(leads, selSet).filter((l) => !agentId || l.agent_id === agentId),
+    [leads, selSet, agentId]
+  );
+  const velocity = computeVelocityKpis(fLeadsAllTime, month);
+
   const fvf = freshVsFollowup(fLeads);
   const siteData = bySiteType(fLeads);
   const freshTotal = fvf.fresh + fvf.followUp || 1;
@@ -278,7 +293,7 @@ export function DashboardBoard({
         />
       )}
 
-      <StatGrid kpis={ext} show={flags} />
+      <StatGrid kpis={ext} velocity={velocity} show={flags} />
 
       {flags.statusStrip && <StatusStrip kpis={kpis} statuses={visible} />}
 
