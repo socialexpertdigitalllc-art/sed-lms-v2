@@ -7,6 +7,7 @@ import { catSetKey } from "@/lib/leads/categories";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { nextStreak, isFollowUpEligible } from "@/lib/leads/followups";
 import { logFollowUpSchema } from "@/lib/leads/followupSchema";
+import { recordStatusChange } from "@/lib/leads/statusEvents";
 
 export async function GET(
   _req: Request,
@@ -119,6 +120,16 @@ export async function POST(
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
+  // First follow-up ever = the lead's first touch. Guarded server-side so a
+  // concurrent second call cannot overwrite it.
+  if (!lead.first_touch_at) {
+    await admin
+      .from("leads")
+      .update({ first_touch_at: fu.created_at })
+      .eq("id", id)
+      .is("first_touch_at", null);
+  }
+
   const { error: leadUpdateError } = await admin
     .from("leads")
     .update({
@@ -134,6 +145,7 @@ export async function POST(
   }
 
   if (!leadUpdateError && statusChange && statusChange !== lead.status) {
+    await recordStatusChange(admin, { leadId: id, from: lead.status, to: statusChange, userId: user.id });
     const nonce = new Date().toISOString();
     try {
       await notify(

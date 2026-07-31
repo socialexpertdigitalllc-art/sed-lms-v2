@@ -8,6 +8,7 @@ import { catSetKey } from "@/lib/leads/categories";
 import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
+import { recordStatusChange } from "@/lib/leads/statusEvents";
 
 /** True when the user belongs to the Sales department (slug "sales"). */
 async function isSalesMember(
@@ -137,6 +138,7 @@ export async function PATCH(
   });
 
   if (parsed.data.status !== undefined && parsed.data.status !== before.status) {
+    await recordStatusChange(admin, { leadId: id, from: before.status, to: parsed.data.status, userId: user.id });
     const newStatus = parsed.data.status;
     const nonce = new Date().toISOString();
     try {

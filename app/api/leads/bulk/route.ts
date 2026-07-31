@@ -7,6 +7,7 @@ import { statusSetError } from "@/lib/leads/categories";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { buildTagLinkRows } from "@/lib/leads/tagFilter";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
+import { bulkRecordStatusChanges } from "@/lib/leads/statusEvents";
 
 const schema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(500),
@@ -105,6 +106,17 @@ export async function POST(req: Request) {
     update = { deleted_at: new Date().toISOString() };
   }
 
+  // Prior statuses for the ledger (the update itself never reads them).
+  let priorStatuses: { id: string; status: string }[] = [];
+  if (action === "status") {
+    const { data: prior } = await admin
+      .from("leads")
+      .select("id, status")
+      .in("id", ids)
+      .is("deleted_at", null);
+    priorStatuses = prior ?? [];
+  }
+
   const { error, count } = await admin
     .from("leads")
     .update(update, { count: "exact" })
@@ -118,6 +130,15 @@ export async function POST(req: Request) {
       );
     }
     return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  if (action === "status" && value) {
+    await bulkRecordStatusChanges(
+      admin,
+      priorStatuses.filter((l) => l.status !== value),
+      value,
+      user.id
+    );
   }
 
   // Same ghost-build cleanup as the single-lead DELETE: a soft-deleted lead
