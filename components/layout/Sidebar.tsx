@@ -8,6 +8,7 @@ import {
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
   Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer, Images,
+  ClipboardList,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -31,6 +32,7 @@ const MAIN: NavItem[] = [
   { href: "/leads/follow-ups", label: "Follow-ups", icon: PhoneCall, perm: "leads.view" },
   { href: "/tickets", label: "Tickets", icon: Ticket, perm: "tickets.view" },
   { href: "/by-agent", label: "By Agent", icon: BarChart3, perm: "analytics.by_agent" },
+  { href: "/reports/agent", label: "Agent Report", icon: ClipboardList, perm: "reports.agent_periodic" },
   { href: "/feedback", label: "Feedback", icon: MessageSquare, perm: "feedback.submit" },
   { href: "/payments", label: "Payments", icon: CreditCard, perm: "payments.view" },
   { href: "/contracts", label: "Contracts", icon: FileText, perm: "contracts.view" },
