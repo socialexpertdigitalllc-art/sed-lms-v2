@@ -95,8 +95,13 @@ export function AgentReportBoard({
 
   async function generate() {
     if (!agentId) { setApiError("Pick an agent first."); return; }
+    if (!from || !to || from > to) {
+      setApiError("Pick a valid date range — 'From' must be on or before 'To'.");
+      return;
+    }
     setBusy(true);
     setApiError(null);
+    setReport(null);
     const res = await fetch("/api/reports/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -169,7 +174,7 @@ export function AgentReportBoard({
       </div>
 
       {apiError && (
-        <div className="bg-surface border border-border rounded-lg p-4 text-sm text-red-500">{apiError}</div>
+        <div className="border border-border rounded-lg p-4 text-sm bg-dropped-bg text-dropped-fg">{apiError}</div>
       )}
 
       {report && m && (
@@ -177,7 +182,7 @@ export function AgentReportBoard({
           <div className="text-sm text-text-muted">
             {report.agent.name}{report.agent.active ? "" : " (deactivated)"} · {report.period.from} → {report.period.to}
             {m.agent.approxCount > 0 && (
-              <span className="ml-2 text-amber-500">
+              <span className="ml-2 text-notready-fg">
                 {m.agent.approxCount} exit timing(s) approximated from legacy data
               </span>
             )}
@@ -186,26 +191,28 @@ export function AgentReportBoard({
           {SECTIONS.map((s) => (
             <div key={s.title} className="bg-surface border border-border rounded-lg p-5">
               <h2 className="text-sm font-semibold text-text mb-3">{s.title}</h2>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-wide text-text-faint text-left">
-                    <th className="pb-2 font-normal">Metric</th>
-                    <th className="pb-2 font-normal text-right">Agent</th>
-                    <th className="pb-2 font-normal text-right">Team</th>
-                    <th className="pb-2 font-normal text-right">Prev period</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {s.rows.map((r) => (
-                    <tr key={r.label} className="border-t border-border">
-                      <td className="py-1.5 text-text-muted">{r.label}</td>
-                      <td className="py-1.5 text-right font-mono text-text">{r.fmt(r.get(m.agent))}</td>
-                      <td className="py-1.5 text-right font-mono text-text-muted">{r.fmt(r.get(m.team))}</td>
-                      <td className="py-1.5 text-right font-mono text-text-muted">{r.fmt(r.get(m.prev))}</td>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wide text-text-faint text-left">
+                      <th className="pb-2 font-normal">Metric</th>
+                      <th className="pb-2 font-normal text-right">Agent</th>
+                      <th className="pb-2 font-normal text-right">Team</th>
+                      <th className="pb-2 font-normal text-right">Prev period</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {s.rows.map((r) => (
+                      <tr key={r.label} className="border-t border-border">
+                        <td className="py-1.5 text-text-muted">{r.label}</td>
+                        <td className="py-1.5 text-right font-mono text-text">{r.fmt(r.get(m.agent))}</td>
+                        <td className="py-1.5 text-right font-mono text-text-muted">{r.fmt(r.get(m.team))}</td>
+                        <td className="py-1.5 text-right font-mono text-text-muted">{r.fmt(r.get(m.prev))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ))}
 
@@ -226,31 +233,33 @@ export function AgentReportBoard({
             {report.regions.agent.length === 0 ? (
               <p className="text-sm text-text-faint">No closes or drops in this period.</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-wide text-text-faint text-left">
-                    <th className="pb-2 font-normal">Region</th>
-                    <th className="pb-2 font-normal text-right">Closed</th>
-                    <th className="pb-2 font-normal text-right">Dropped</th>
-                    <th className="pb-2 font-normal text-right">Median close</th>
-                    <th className="pb-2 font-normal text-right">Team median close</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.regions.agent.map((r) => {
-                    const t = report.regions.team.find((x) => x.region === r.region);
-                    return (
-                      <tr key={r.region} className="border-t border-border">
-                        <td className="py-1.5 text-text-muted">{r.region}</td>
-                        <td className="py-1.5 text-right font-mono">{r.closed}</td>
-                        <td className="py-1.5 text-right font-mono">{r.dropped}</td>
-                        <td className="py-1.5 text-right font-mono">{fmtDays(r.medianCloseDays)}</td>
-                        <td className="py-1.5 text-right font-mono text-text-muted">{fmtDays(t?.medianCloseDays ?? null)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wide text-text-faint text-left">
+                      <th className="pb-2 font-normal">Region</th>
+                      <th className="pb-2 font-normal text-right">Closed</th>
+                      <th className="pb-2 font-normal text-right">Dropped</th>
+                      <th className="pb-2 font-normal text-right">Median close</th>
+                      <th className="pb-2 font-normal text-right">Team median close</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.regions.agent.map((r) => {
+                      const t = report.regions.team.find((x) => x.region === r.region);
+                      return (
+                        <tr key={r.region} className="border-t border-border">
+                          <td className="py-1.5 text-text-muted">{r.region}</td>
+                          <td className="py-1.5 text-right font-mono">{r.closed}</td>
+                          <td className="py-1.5 text-right font-mono">{r.dropped}</td>
+                          <td className="py-1.5 text-right font-mono">{fmtDays(r.medianCloseDays)}</td>
+                          <td className="py-1.5 text-right font-mono text-text-muted">{fmtDays(t?.medianCloseDays ?? null)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 
