@@ -891,7 +891,7 @@ describe("computeWindowMetrics", () => {
       lead({ id: "f", created_at: "2026-08-02T00:00:00Z" }), // next month — not arrived
     ];
     const m = computeWindowMetrics(leads, [], [], W, NO_APPROX);
-    expect(m.arrived).toBe(4);
+    expect(m.arrived).toBe(3); // a, c, e — b and d are carry-over, f is next month
     expect(m.closedCount).toBe(2);
     expect(m.closedFresh).toBe(1);
     expect(m.closedCarryOver).toBe(1);
