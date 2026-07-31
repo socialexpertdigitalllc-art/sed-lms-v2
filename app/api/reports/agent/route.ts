@@ -30,7 +30,13 @@ export async function POST(req: Request) {
   }
 
   const admin = createAdminClient();
-  const report = await buildAgentPeriodicReport(admin, parsed.data);
+  let report;
+  try {
+    report = await buildAgentPeriodicReport(admin, parsed.data);
+  } catch (e) {
+    console.error("[reports/agent] build failed:", e);
+    return NextResponse.json({ error: "Failed to build report" }, { status: 500 });
+  }
   if (!report) return NextResponse.json({ error: "Agent not found" }, { status: 404 });
   return NextResponse.json({ report });
 }

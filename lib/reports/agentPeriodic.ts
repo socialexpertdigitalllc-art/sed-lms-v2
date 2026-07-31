@@ -30,12 +30,13 @@ async function generationCount(
   agentId: string,
   w: ReportWindow
 ): Promise<number> {
-  const { count } = await admin
+  const { count, error } = await admin
     .from(table)
     .select("id", { count: "exact", head: true })
     .eq(col, agentId)
     .gte("created_at", iso(w.fromMs))
     .lt("created_at", iso(w.toExMs));
+  if (error) console.error(`[agentPeriodic] ${table} count failed:`, error.message);
   return count ?? 0;
 }
 
@@ -45,7 +46,13 @@ export async function buildAgentPeriodicReport(
 ): Promise<AgentPeriodicReport | null> {
   const w = windowFor(opts.from, opts.to);
 
-  const [{ data: profile }, { data: leadsData }, { data: fuData }, { data: contractsData }, { data: approxData }] =
+  const [
+    { data: profile },
+    { data: leadsData, error: leadsError },
+    { data: fuData },
+    { data: contractsData },
+    { data: approxData },
+  ] =
     await Promise.all([
       admin.from("profiles").select("id, display_name, is_active").eq("id", opts.agentId).maybeSingle(),
       admin
@@ -69,6 +76,7 @@ export async function buildAgentPeriodicReport(
       admin.from("lead_status_events").select("lead_id").eq("source", "backfill_approx"),
     ]);
   if (!profile) return null;
+  if (leadsError) throw new Error(`leads fetch failed: ${leadsError.message}`);
 
   const leads = (leadsData ?? []) as Lead[];
   const followUps = (fuData ?? []) as FollowUpRow[];
