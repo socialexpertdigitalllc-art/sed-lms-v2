@@ -107,6 +107,10 @@ export async function POST(req: Request) {
   }
 
   // Prior statuses for the ledger (the update itself never reads them).
+  // Known race: a concurrent single-lead PATCH between this select and the
+  // update below can leave a stale from_status on that lead's ledger row.
+  // Accepted: audit-trail imprecision only — reports read leads.closed_at/
+  // dropped_at, which the last write always sets correctly.
   let priorStatuses: { id: string; status: string }[] = [];
   if (action === "status") {
     const { data: prior } = await admin
