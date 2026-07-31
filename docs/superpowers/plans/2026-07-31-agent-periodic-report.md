@@ -946,7 +946,7 @@ describe("computeWindowMetrics", () => {
     expect(empty.closeRatio).toBeNull();
     expect(empty.avgCloseDays).toBeNull();
     expect(empty.pickupRate).toBeNull();
-    expect(empty.contractToCloseRatio).toBeNull();
+    expect(empty.closesPerContract).toBeNull();
   });
 
   it("flags approximate exits", () => {
@@ -1017,7 +1017,7 @@ export interface WindowMetrics {
   followUpsLogged: number;
   pickupRate: number | null;
   contractsSent: number;
-  contractToCloseRatio: number | null; // closes per contract sent
+  closesPerContract: number | null; // closes per contract sent
   closedRevenue: number;
   recurringRevenue: number;
   avgDealSize: number | null; // over closed-in-window priced leads
@@ -1131,7 +1131,7 @@ export function computeWindowMetrics(
     followUpsLogged: fu.length,
     pickupRate: fu.length ? (pickups / fu.length) * 100 : null,
     contractsSent,
-    contractToCloseRatio: contractsSent ? closedL.length / contractsSent : null,
+    closesPerContract: contractsSent ? closedL.length / contractsSent : null,
     closedRevenue: prices.reduce((s, n) => s + n, 0),
     recurringRevenue: closedL.reduce((s, l) => s + (num(l.yearly_price) ?? 0), 0),
     avgDealSize: avg(prices),
@@ -1473,7 +1473,7 @@ const SECTIONS: { title: string; rows: RowDef[] }[] = [
       { label: "Pickup rate", get: (m) => m.pickupRate, fmt: fmtPct },
       { label: "Follow-ups logged", get: (m) => m.followUpsLogged, fmt: fmtInt },
       { label: "Contracts sent", get: (m) => m.contractsSent, fmt: fmtInt },
-      { label: "Closes per contract sent", get: (m) => m.contractToCloseRatio, fmt: fmtRatio },
+      { label: "Closes per contract sent", get: (m) => m.closesPerContract, fmt: fmtRatio },
     ],
   },
   {
@@ -1807,7 +1807,7 @@ const SECTIONS: { title: string; rows: RowDef[] }[] = [
       { label: "Pickup rate", get: (m) => m.pickupRate, fmt: fmtPct },
       { label: "Follow-ups logged", get: (m) => m.followUpsLogged, fmt: fmtInt },
       { label: "Contracts sent", get: (m) => m.contractsSent, fmt: fmtInt },
-      { label: "Closes per contract sent", get: (m) => m.contractToCloseRatio, fmt: fmtRatio },
+      { label: "Closes per contract sent", get: (m) => m.closesPerContract, fmt: fmtRatio },
     ],
   },
   {
