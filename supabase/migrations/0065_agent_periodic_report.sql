@@ -24,6 +24,7 @@ create table if not exists public.lead_status_events (
   -- activity_log; 'backfill_approx' = legacy lead with no log trace, timestamp
   -- approximated from leads.updated_at.
   source      text not null default 'app'
+    check (source in ('app','backfill','backfill_approx'))
 );
 
 create index if not exists lead_status_events_lead_idx
