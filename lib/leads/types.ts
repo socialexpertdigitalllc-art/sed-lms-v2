@@ -54,6 +54,12 @@ export interface Lead {
   follow_up_time: string | null;
   last_followup_status: string | null;
   no_pickup_streak: number;
+  /** Set when the lead enters Closed; cleared if it leaves. Ledger: lead_status_events. */
+  closed_at: string | null;
+  /** Set when the lead enters Dropped; cleared if it leaves. */
+  dropped_at: string | null;
+  /** First follow-up ever logged on this lead. Set once. */
+  first_touch_at: string | null;
   direct_line_saved: boolean | null;
   fresh_or_followup: string | null;
   reference_link: string | null;
