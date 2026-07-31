@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { readSheet } from "@/lib/import/sheets";
 import { mapRow } from "@/lib/import/map";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
+import { stampInitialTerminalStatuses } from "@/lib/leads/statusEvents";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -63,9 +64,10 @@ export async function POST(req: Request) {
   let imported = 0;
   let failed = 0;
   let firstError: string | null = null;
+  const createdRows: { id: string; status: string }[] = [];
   for (let i = 0; i < inserts.length; i += 200) {
     const chunk = inserts.slice(i, i + 200);
-    const { error } = await admin.from("leads").insert(chunk);
+    const { data: inserted, error } = await admin.from("leads").insert(chunk).select("id, status");
     if (error) {
       // Don't abort the batch on a Ready-guard violation (or any other row
       // error) — count the chunk as failed and keep importing the rest.
@@ -74,8 +76,13 @@ export async function POST(req: Request) {
       if (!firstError) firstError = message;
     } else {
       imported += chunk.length;
+      createdRows.push(...(inserted ?? []));
     }
   }
+
+  // Leads imported directly in a terminal status never go through a status
+  // CHANGE — they need to enter the lifecycle ledger at creation time too.
+  await stampInitialTerminalStatuses(admin, createdRows, user.id);
 
   await admin.from("activity_log").insert({
     user_id: user.id,

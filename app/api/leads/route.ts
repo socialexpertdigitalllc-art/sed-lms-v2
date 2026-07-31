@@ -9,6 +9,7 @@ import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { enqueueLeadIfReady } from "@/lib/ai-tools/queue";
 import { findCollisions, type DupRow } from "@/lib/leads/duplicate";
+import { recordStatusChange } from "@/lib/leads/statusEvents";
 
 /** The schema's optional-string fields type-check as `unknown` (zod preprocess quirk); narrow defensively. */
 const asStr = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -134,6 +135,17 @@ export async function POST(req: Request) {
     entity_id: data.id,
     new_value: { business_name: payload.business_name, status: payload.status },
   });
+
+  // Leads created directly in a terminal status never go through a status
+  // CHANGE — they need to enter the lifecycle ledger at creation time too.
+  if (payload.status === "Closed" || payload.status === "Dropped") {
+    await recordStatusChange(admin, {
+      leadId: data.id,
+      from: null,
+      to: payload.status,
+      userId: user.id,
+    });
+  }
 
   try {
     await notify(

@@ -37,9 +37,16 @@ const leads = await fetchAll(() =>
 const followUps = await fetchAll(() =>
   admin.from("lead_follow_ups").select("lead_id, created_at").order("id", { ascending: true })
 );
-console.log(`inputs: ${activityRows.length} log rows, ${leads.length} leads, ${followUps.length} follow-ups`);
+const appEvents = await fetchAll(() =>
+  admin
+    .from("lead_status_events")
+    .select("lead_id, changed_at")
+    .eq("source", "app")
+    .order("id", { ascending: true })
+);
+console.log(`inputs: ${activityRows.length} log rows, ${leads.length} leads, ${followUps.length} follow-ups, ${appEvents.length} app events`);
 
-const { events, patches } = deriveStatusHistory({ activityRows, leads, followUps });
+const { events, patches } = deriveStatusHistory({ activityRows, leads, followUps, appEvents });
 const approx = events.filter((e) => e.source === "backfill_approx").length;
 console.log(`derived: ${events.length} events (${approx} approx), ${patches.length} lead patches`);
 

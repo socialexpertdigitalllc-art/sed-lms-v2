@@ -13,7 +13,14 @@ const schema = z
     to: z.string().regex(DATE),
     includeAttendance: z.boolean().optional().default(false),
   })
-  .refine((v) => v.from <= v.to, { message: "from must be on or before to" });
+  .refine((v) => v.from <= v.to, { message: "from must be on or before to" })
+  .refine(
+    (v) =>
+      [v.from, v.to].every(
+        (s) => new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s
+      ),
+    { message: "invalid calendar date" }
+  );
 
 export async function POST(req: Request) {
   const supabase = await createClient();

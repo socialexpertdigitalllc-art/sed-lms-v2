@@ -6,15 +6,32 @@
 //     lead.updated / lead.bulk_status.
 //   leads:     { id, status, updated_at }[]  (every lead, incl. soft-deleted)
 //   followUps: { lead_id, created_at }[]
+//   appEvents: { lead_id, changed_at }[]  (existing source='app' ledger events —
+//     the routes dual-write these AND activity_log, so a re-run must not
+//     re-derive transitions the app already ledgered.)
 // Output:
 //   events:  rows for lead_status_events (source backfill | backfill_approx)
 //   patches: { id, closed_at, dropped_at, first_touch_at }[] — only leads
 //            where at least one field is non-null.
 
-export function deriveStatusHistory({ activityRows, leads, followUps }) {
+/**
+ * @param {{
+ *   activityRows: any[],
+ *   leads: any[],
+ *   followUps: any[],
+ *   appEvents?: { lead_id: string, changed_at: string }[],
+ * }} input
+ */
+export function deriveStatusHistory({ activityRows, leads, followUps, appEvents }) {
   const events = [];
   const byLead = new Map(); // lead_id -> events for that lead, chronological
   const lastStatus = new Map(); // lead_id -> last known status
+
+  const minAppByLead = new Map(); // lead_id -> earliest app-written changed_at
+  for (const e of appEvents ?? []) {
+    const cur = minAppByLead.get(e.lead_id);
+    if (!cur || e.changed_at < cur) minAppByLead.set(e.lead_id, e.changed_at);
+  }
 
   const push = (leadId, to, from, userId, at, source) => {
     if (!leadId || to == null) return;
@@ -35,15 +52,25 @@ export function deriveStatusHistory({ activityRows, leads, followUps }) {
     lastStatus.set(leadId, to);
   };
 
+  // A transition is already ledgered by the app if this row's timestamp falls
+  // on or after the earliest app-written event for that lead — the app has
+  // been dual-writing activity_log + lead_status_events since that moment.
+  const coveredByApp = (leadId, createdAt) =>
+    minAppByLead.has(leadId) && createdAt >= minAppByLead.get(leadId);
+
   for (const r of activityRows) {
     if (r.action === "lead.status_changed" || r.action === "lead.updated") {
       const to = r.new_value?.status;
       if (to === undefined) continue; // lead.updated without a status change
+      if (coveredByApp(r.entity_id, r.created_at)) continue;
       const from = r.old_value && "status" in r.old_value ? r.old_value.status : undefined;
       push(r.entity_id, to, from, r.user_id, r.created_at, "backfill");
     } else if (r.action === "lead.bulk_status") {
       const ids = Array.isArray(r.new_value?.ids) ? r.new_value.ids : [];
-      for (const id of ids) push(id, r.new_value?.value, undefined, r.user_id, r.created_at, "backfill");
+      for (const id of ids) {
+        if (coveredByApp(id, r.created_at)) continue;
+        push(id, r.new_value?.value, undefined, r.user_id, r.created_at, "backfill");
+      }
     }
   }
 
@@ -55,6 +82,11 @@ export function deriveStatusHistory({ activityRows, leads, followUps }) {
 
   const patches = [];
   for (const l of leads) {
+    // Leads with any app-written ledger event have app-maintained
+    // closed_at/dropped_at columns already — skip entirely. No approx
+    // synthesis, no patch: patching here with an updated_at approximation
+    // would overwrite correct, precisely-timestamped app data with a guess.
+    if (minAppByLead.has(l.id)) continue;
     let terminalAt = null;
     if (l.status === "Closed" || l.status === "Dropped") {
       const evs = byLead.get(l.id) ?? [];

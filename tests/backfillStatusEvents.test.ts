@@ -100,4 +100,29 @@ describe("deriveStatusHistory", () => {
     });
     expect(patches).toEqual([]);
   });
+
+  it("skips activity rows already covered by app-written ledger events", () => {
+    const { events } = deriveStatusHistory({
+      activityRows: [
+        row({ old_value: { status: "Not Ready" }, new_value: { status: "Ready" }, created_at: "2026-01-02T00:00:00Z" }),
+        row({ old_value: { status: "Ready" }, new_value: { status: "Closed" }, created_at: "2026-03-01T00:00:00Z" }), // app-era — skipped
+      ],
+      leads: [{ id: "L1", status: "Closed", updated_at: "2026-03-01T00:00:00Z" }],
+      followUps: [],
+      appEvents: [{ lead_id: "L1", changed_at: "2026-02-01T00:00:00Z" }],
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ to_status: "Ready", source: "backfill" });
+  });
+
+  it("never patches or approx-synthesizes for leads with app-written events", () => {
+    const { events, patches } = deriveStatusHistory({
+      activityRows: [],
+      leads: [{ id: "L1", status: "Closed", updated_at: "2026-03-01T00:00:00Z" }],
+      followUps: [{ lead_id: "L1", created_at: "2026-01-05T00:00:00Z" }],
+      appEvents: [{ lead_id: "L1", changed_at: "2026-02-01T00:00:00Z" }],
+    });
+    expect(events).toHaveLength(0);
+    expect(patches).toEqual([]);
+  });
 });

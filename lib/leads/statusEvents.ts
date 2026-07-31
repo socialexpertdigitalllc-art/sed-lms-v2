@@ -65,3 +65,26 @@ export async function bulkRecordStatusChanges(
     .in("id", rows.map((r) => r.id));
   if (patchError) console.error("[statusEvents] bulk lead patch failed:", patchError.message);
 }
+
+/** Ledger + column stamps for leads CREATED directly in a terminal status. */
+export async function stampInitialTerminalStatuses(
+  admin: SupabaseClient,
+  rows: { id: string; status: string }[],
+  userId: string | null
+): Promise<void> {
+  for (const to of ["Closed", "Dropped"]) {
+    const ids = rows.filter((r) => r.status === to).map((r) => r.id);
+    if (ids.length === 0) continue;
+    const at = new Date().toISOString();
+    const { error: evError } = await admin.from("lead_status_events").insert(
+      ids.map((id) => ({
+        lead_id: id, from_status: null, to_status: to,
+        changed_by: userId, changed_at: at, source: "app",
+      }))
+    );
+    if (evError) console.error("[statusEvents] initial event insert failed:", evError.message);
+    const { error: patchError } = await admin
+      .from("leads").update(statusTimestampPatch(to, at)).in("id", ids);
+    if (patchError) console.error("[statusEvents] initial lead patch failed:", patchError.message);
+  }
+}

@@ -87,6 +87,7 @@ export function AgentReportBoard({
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [report, setReport] = useState<AgentPeriodicReport | null>(null);
+  const [generated, setGenerated] = useState<{ agentId: string; from: string; to: string; attendance: boolean } | null>(null);
 
   async function generate() {
     if (!agentId) { setApiError("Pick an agent first."); return; }
@@ -97,6 +98,7 @@ export function AgentReportBoard({
     setBusy(true);
     setApiError(null);
     setReport(null);
+    setGenerated(null);
     const res = await fetch("/api/reports/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -108,10 +110,11 @@ export function AgentReportBoard({
       return;
     }
     setReport((await res.json()).report);
+    setGenerated({ agentId, from, to, attendance: includeAttendance });
   }
 
-  const pdfHref = agentId
-    ? `/api/reports/agent/pdf?agentId=${agentId}&from=${from}&to=${to}${includeAttendance ? "&attendance=1" : ""}`
+  const pdfHref = generated
+    ? `/api/reports/agent/pdf?agentId=${generated.agentId}&from=${generated.from}&to=${generated.to}${generated.attendance ? "&attendance=1" : ""}`
     : null;
   const m = report?.metrics;
 
@@ -163,7 +166,7 @@ export function AgentReportBoard({
           onClick={generate}>
           {busy ? "Generating…" : "Generate"}
         </button>
-        {report && pdfHref && (
+        {report && generated && pdfHref && (
           <a className="text-sm text-accent underline pb-1.5" href={pdfHref}>Download PDF</a>
         )}
       </div>
