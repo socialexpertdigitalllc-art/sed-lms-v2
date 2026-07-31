@@ -21,6 +21,8 @@ export function deriveStatusHistory({ activityRows, leads, followUps }) {
     if (lastStatus.get(leadId) === to) return; // no-op transition
     const ev = {
       lead_id: leadId,
+      // undefined = "row logged no explicit prior status" → carry the running
+      // last-known status; an explicit null means the log really said null.
       from_status: from !== undefined ? from : lastStatus.get(leadId) ?? null,
       to_status: to,
       changed_by: userId ?? null,
@@ -56,6 +58,8 @@ export function deriveStatusHistory({ activityRows, leads, followUps }) {
     let terminalAt = null;
     if (l.status === "Closed" || l.status === "Dropped") {
       const evs = byLead.get(l.id) ?? [];
+      // Scan backward: a lead can bounce in and out of Closed/Dropped —
+      // the LATEST entry into the current status is the true exit moment.
       for (let i = evs.length - 1; i >= 0; i--) {
         if (evs[i].to_status === l.status) { terminalAt = evs[i].changed_at; break; }
       }

@@ -40,7 +40,8 @@ const followUps = await fetchAll(() =>
 console.log(`inputs: ${activityRows.length} log rows, ${leads.length} leads, ${followUps.length} follow-ups`);
 
 const { events, patches } = deriveStatusHistory({ activityRows, leads, followUps });
-console.log(`derived: ${events.length} events, ${patches.length} lead patches`);
+const approx = events.filter((e) => e.source === "backfill_approx").length;
+console.log(`derived: ${events.length} events (${approx} approx), ${patches.length} lead patches`);
 
 const { error: delError } = await admin
   .from("lead_status_events")
