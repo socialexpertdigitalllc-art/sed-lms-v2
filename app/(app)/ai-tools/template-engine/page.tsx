@@ -57,7 +57,7 @@ export default async function TemplateEnginePage() {
         </div>
         {perms.has("templates.deploy") ? (
           <Link
-            href="/ai-tools/template-engine/deployments"
+            href="/ai-tools/site-builder/deployments"
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text"
           >
             <Globe className="h-4 w-4" /> Deployed sites

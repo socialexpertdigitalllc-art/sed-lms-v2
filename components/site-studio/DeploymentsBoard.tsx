@@ -1,78 +1,100 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ExternalLink, Globe, Loader2, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ExternalLink,
+  Globe,
+  Link2,
+  Loader2,
+  RefreshCw,
+  Search,
+  Shuffle,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { EmptyPanel, PageHeader, Pill, type PillTone } from "@/components/common/Panel";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { useToast } from "@/components/common/Toast";
 import { iconBtn, iconBtnDanger } from "@/components/common/buttons";
+import { inputCls } from "@/components/forms/Field";
 import { TransferDeploymentModal } from "@/components/site-studio/TransferDeploymentModal";
+import { UploadModal, type UploadResult } from "@/components/site-studio/board/UploadModal";
+import { LinkLeadModal } from "@/components/site-studio/board/LinkLeadModal";
 import { cn } from "@/lib/utils";
 
-export type DeploymentStatus = "live" | "taken_down" | "failed";
-export type DeploymentOrigin = "studio" | "v2_import" | "builder";
-
-export interface DeploymentRow {
-  id: string;
-  lead_id: string | null;
-  run_id: string | null;
-  subdomain: string;
-  docroot: string;
+export interface BoardRow {
+  id: string | null;
+  subdomain: string | null;
   url: string;
-  status: DeploymentStatus;
-  origin: DeploymentOrigin;
-  deployed_at: string;
-  taken_down_at: string | null;
-  deployed_by: string | null;
-  created_at: string;
-  updated_at: string;
-  leads: { business_name: string } | null;
+  status: "live" | "taken_down" | "failed" | "untracked";
+  origin: string | null;
+  category: "ready" | "manual" | "live" | "other";
+  leadId: string | null;
+  leadName: string | null;
+  leadStatus: string | null;
+  deployedAt: string | null;
+  isCustomDomain: boolean;
 }
 
-type FilterId = "live" | "taken_down" | "failed" | "all";
+type View = "all" | "ready" | "manual" | "other" | "live";
 
-const FILTERS: { id: FilterId; label: string }[] = [
-  { id: "live", label: "Live" },
-  { id: "taken_down", label: "Taken down" },
-  { id: "failed", label: "Failed" },
+const VIEWS: { id: View; label: string }[] = [
   { id: "all", label: "All" },
+  { id: "ready", label: "Ready" },
+  { id: "manual", label: "Manual" },
+  { id: "other", label: "Others" },
+  { id: "live", label: "Live Websites" },
 ];
 
-const STATUS_TONE: Record<DeploymentStatus, PillTone> = {
+const STATUS_TONE: Record<BoardRow["status"], PillTone> = {
   live: "ready",
   taken_down: "neutral",
   failed: "dropped",
+  untracked: "neutral",
 };
 
+type Counts = Partial<Record<View, number>>;
+
 /**
- * The deployments board (Phase 4a Task 10) — moved here from
- * `template-engine/deployments` so Phase 4b's cutover can delete that whole
- * namespace without carving out an exception. It must display and support
- * takedown for `origin:'v2_import'` rows too (seeded at cutover), even
- * though nothing writes them yet — nothing below special-cases `origin`
- * beyond the badge, on purpose.
+ * The unified deployments board — every staging subdomain and custom domain on
+ * the hosting, tracked or not, categorized Ready / Manual / Others / Live.
+ * Actions: upload (new / override / new version), shuffle to a fresh
+ * subdomain, link to a lead, transfer to a custom domain, bulk delete.
  */
 export function DeploymentsBoard() {
   const { toast } = useToast();
-  const [rows, setRows] = useState<DeploymentRow[]>([]);
+  const [rows, setRows] = useState<BoardRow[]>([]);
+  const [counts, setCounts] = useState<Counts>({});
+  const [daDomain, setDaDomain] = useState("dmviral.com");
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<FilterId>("live");
-  const [confirming, setConfirming] = useState<DeploymentRow | null>(null);
-  const [confirmingRecord, setConfirmingRecord] = useState<DeploymentRow | null>(null);
-  const [transferRow, setTransferRow] = useState<DeploymentRow | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [view, setView] = useState<View>("all");
+  const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  const [uploadOpen, setUploadOpen] = useState<{ target?: string | null } | null>(null);
+  const [linkFor, setLinkFor] = useState<{ deploymentId: string | null; subdomain: string | null; url: string; optional?: boolean } | null>(null);
+  const [transferRow, setTransferRow] = useState<{ id: string; name: string } | null>(null);
+  const [confirmShuffle, setConfirmShuffle] = useState<BoardRow | null>(null);
+  const [confirmTakedown, setConfirmTakedown] = useState<BoardRow | null>(null);
+  const [confirmRecord, setConfirmRecord] = useState<BoardRow | null>(null);
+  const [confirmBulk, setConfirmBulk] = useState<string[] | null>(null);
+  const overrideInput = useRef<HTMLInputElement>(null);
+  const overrideRowRef = useRef<BoardRow | null>(null);
 
   const load = useCallback(
-    async (opts?: { filter?: FilterId }) => {
+    async (opts?: { view?: View }) => {
       setLoading(true);
       try {
-        const f = opts?.filter ?? filter;
-        const params = new URLSearchParams();
-        if (f !== "all") params.set("status", f);
-        const res = await fetch(`/api/site-studio/deployments?${params.toString()}`);
+        const v = opts?.view ?? view;
+        const res = await fetch(`/api/site-studio/deployments?view=${v}`);
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.error ?? "Could not load deployments");
-        setRows((body.deployments ?? []) as DeploymentRow[]);
+        setRows((body.rows ?? []) as BoardRow[]);
+        setCounts((body.counts ?? {}) as Counts);
+        if (body.daDomain) setDaDomain(body.daDomain);
+        if (body.hostingWarning) toast({ kind: "info", title: body.hostingWarning });
+        setSelected(new Set());
       } catch (e) {
         toast({ kind: "error", title: e instanceof Error ? e.message : "Could not load deployments" });
       } finally {
@@ -80,266 +102,496 @@ export function DeploymentsBoard() {
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [toast],
+    [toast, view],
   );
 
   useEffect(() => {
     void load();
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  function changeFilter(next: FilterId) {
-    setFilter(next);
-    void load({ filter: next });
+  function changeView(next: View) {
+    setView(next);
+    void load({ view: next });
   }
 
-  async function takedown(row: DeploymentRow) {
-    setConfirming(null);
-    setBusyId(row.id);
+  const visible = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter(
+      (r) =>
+        (r.subdomain ?? "").includes(needle) ||
+        r.url.toLowerCase().includes(needle) ||
+        (r.leadName ?? "").toLowerCase().includes(needle),
+    );
+  }, [rows, q]);
+
+  const selectable = useMemo(() => visible.filter((r) => r.subdomain && !r.isCustomDomain), [visible]);
+
+  function toggleSelect(sub: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(sub)) next.delete(sub);
+      else next.add(sub);
+      return next;
+    });
+  }
+
+  async function api(path: string, init: RequestInit, okTitle: string): Promise<boolean> {
     try {
-      const res = await fetch(`/api/site-studio/deployments/${row.id}`, { method: "DELETE" });
+      const res = await fetch(path, init);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        // 409/error responses toast the server message verbatim.
-        toast({ kind: "error", title: body.error ?? "Take-down failed" });
-        return;
+        toast({ kind: "error", title: body.error ?? "Action failed" });
+        return false;
       }
-      toast({
-        kind: body.warning ? "info" : "success",
-        title: body.warning ?? `${row.leads?.business_name ?? "Site"} was taken down`,
+      toast({ kind: "success", title: okTitle });
+      await load();
+      return true;
+    } catch {
+      toast({ kind: "error", title: "Network error — try again" });
+      return false;
+    }
+  }
+
+  async function shuffle(row: BoardRow) {
+    setConfirmShuffle(null);
+    if (!row.id) return;
+    setBusyKey(row.id);
+    try {
+      const res = await fetch(`/api/site-studio/deployments/${row.id}/shuffle`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) toast({ kind: "error", title: body.error ?? "Shuffle failed" });
+      else
+        toast({
+          kind: "success",
+          title: `Now live at ${String(body.url ?? "").replace(/^https?:\/\//, "")}`,
+          body: body.oldDeleted ? "Old subdomain removed and the lead's link updated." : "Old subdomain could not be removed — check manually.",
+        });
+      await load();
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function takedown(row: BoardRow) {
+    setConfirmTakedown(null);
+    if (!row.id) return;
+    setBusyKey(row.id);
+    await api(`/api/site-studio/deployments/${row.id}`, { method: "DELETE" }, `${row.leadName ?? row.subdomain ?? "Site"} was taken down`);
+    setBusyKey(null);
+  }
+
+  async function deleteRecord(row: BoardRow) {
+    setConfirmRecord(null);
+    if (!row.id) return;
+    setBusyKey(row.id);
+    await api(`/api/site-studio/deployments/${row.id}?mode=record`, { method: "DELETE" }, "Deployment record deleted");
+    setBusyKey(null);
+  }
+
+  async function bulkDelete(subs: string[]) {
+    setConfirmBulk(null);
+    setBusyKey("bulk");
+    try {
+      const res = await fetch("/api/site-studio/deployments/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subdomains: subs }),
       });
-      await load();
-    } catch {
-      toast({ kind: "error", title: "Network error — try again" });
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  /** Remove a NON-LIVE row from the board entirely — pure bookkeeping, the
-   *  route refuses it for live rows (`?mode=record`). */
-  async function deleteRecord(row: DeploymentRow) {
-    setConfirmingRecord(null);
-    setBusyId(row.id);
-    try {
-      const res = await fetch(`/api/site-studio/deployments/${row.id}?mode=record`, { method: "DELETE" });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        toast({ kind: "error", title: body.error ?? "Delete failed" });
-        return;
+      if (!res.ok) toast({ kind: "error", title: body.error ?? "Delete failed" });
+      else {
+        const failed = ((body.results ?? []) as { ok: boolean; subdomain: string }[]).filter((r) => !r.ok);
+        toast(
+          failed.length
+            ? { kind: "error", title: `${subs.length - failed.length} deleted, ${failed.length} failed`, body: failed.map((f) => f.subdomain).join(", ") }
+            : { kind: "success", title: `${subs.length} subdomain${subs.length > 1 ? "s" : ""} deleted` },
+        );
       }
-      toast({ kind: "success", title: "Deployment record deleted" });
       await load();
-    } catch {
-      toast({ kind: "error", title: "Network error — try again" });
     } finally {
-      setBusyId(null);
+      setBusyKey(null);
     }
   }
 
-  const empty = useMemo(() => !loading && rows.length === 0, [loading, rows]);
+  async function transfer(row: BoardRow) {
+    // transfer is id-keyed — adopt untracked subdomains first
+    if (row.id) {
+      setTransferRow({ id: row.id, name: row.leadName ?? row.subdomain ?? row.url });
+      return;
+    }
+    if (!row.subdomain) return;
+    setBusyKey(row.subdomain);
+    try {
+      const res = await fetch("/api/site-studio/deployments/adopt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subdomain: row.subdomain }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) toast({ kind: "error", title: body.error ?? "Could not track this subdomain" });
+      else setTransferRow({ id: body.deploymentId, name: row.subdomain });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  function overrideCustom(row: BoardRow) {
+    overrideRowRef.current = row;
+    overrideInput.current?.click();
+  }
+
+  async function onOverrideFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    const row = overrideRowRef.current;
+    if (!file || !row?.id) return;
+    setBusyKey(row.id);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/site-studio/deployments/${row.id}/upload`, { method: "POST", body: fd });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) toast({ kind: "error", title: body.error ?? "Override failed" });
+      else toast({ kind: "success", title: `${row.url.replace(/^https?:\/\//, "")} updated` });
+      await load();
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  function onUploaded(result: UploadResult) {
+    void load();
+    if (result.deploymentId && !result.leadId) {
+      setLinkFor({ deploymentId: result.deploymentId, subdomain: result.subdomain, url: result.url, optional: true });
+    }
+  }
+
+  const empty = !loading && visible.length === 0;
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Deployments"
-        description="Every live and formerly-live client site — Site Studio and legacy v2 sites alike."
+        description="Every site on the hosting — generated, manual and custom-domain — in one board."
+        action={
+          <button
+            type="button"
+            onClick={() => setUploadOpen({})}
+            className="inline-flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-accent-ink"
+          >
+            <Upload className="h-4 w-4" /> Upload site
+          </button>
+        }
       />
 
-      <div className="flex items-center gap-1">
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => changeFilter(f.id)}
-            className={cn(
-              "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-              filter === f.id ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text",
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1">
+          {VIEWS.map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => changeView(v.id)}
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                view === v.id ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text",
+              )}
+            >
+              {v.label}
+              {typeof counts[v.id] === "number" ? ` (${counts[v.id]})` : ""}
+            </button>
+          ))}
+        </div>
+        <div className="relative ml-auto w-64">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-faint" />
+          <input
+            className={cn(inputCls, "pl-8")}
+            placeholder="Search subdomain or business…"
+            aria-label="Search deployments"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+        <button type="button" className={iconBtn} title="Refresh" aria-label="Refresh" onClick={() => void load()}>
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        </button>
       </div>
+
+      {selected.size > 0 ? (
+        <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm">
+          <span className="text-text">{selected.size} selected</span>
+          <button
+            type="button"
+            onClick={() => setConfirmBulk(Array.from(selected))}
+            disabled={busyKey !== null}
+            className="inline-flex items-center gap-1 rounded-md bg-dropped-fg px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {busyKey === "bulk" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            Delete selected
+          </button>
+          <button type="button" className="text-xs text-text-muted hover:text-text" onClick={() => setSelected(new Set())}>
+            Clear selection
+          </button>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="flex items-center gap-2 py-12 text-sm text-text-muted">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading deployments…
         </div>
       ) : empty ? (
-        <EmptyPanel icon={Globe} title="No deployments" hint="Deploy a ready run from Site Studio to see it here." />
+        <EmptyPanel icon={Globe} title="No sites in this view" hint="Deploy a run or upload a site zip to see it here." />
       ) : (
         <div className="overflow-auto rounded-lg border border-border bg-surface">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-faint">
-                <th className="px-3 py-2">Business</th>
+                <th className="w-8 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    className="accent-accent"
+                    aria-label="Select all subdomains"
+                    checked={selectable.length > 0 && selectable.every((r) => selected.has(r.subdomain as string))}
+                    onChange={(e) =>
+                      setSelected(e.target.checked ? new Set(selectable.map((r) => r.subdomain as string)) : new Set())
+                    }
+                  />
+                </th>
+                <th className="px-3 py-2">Business / site</th>
                 <th className="px-3 py-2">URL</th>
                 <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Origin</th>
+                <th className="px-3 py-2">Source</th>
                 <th className="px-3 py-2">Deployed</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr
-                  key={row.id}
-                  data-testid="ss-deployment-row"
-                  className="border-b border-border last:border-0 hover:bg-surface-2"
-                >
-                  <td className="px-3 py-2 text-text">{row.leads?.business_name ?? "(deleted lead)"}</td>
-                  <td className="px-3 py-2">
-                    <a
-                      href={row.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-accent-ink hover:underline"
-                    >
-                      {row.url.replace(/^https?:\/\//, "")}
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  </td>
-                  <td className="px-3 py-2">
-                    <Pill tone={STATUS_TONE[row.status]}>{row.status.replace("_", " ")}</Pill>
-                  </td>
-                  <td className="px-3 py-2">
-                    <Pill tone={row.origin === "v2_import" ? "neutral" : "accent"}>
-                      {row.origin === "v2_import" ? "v2 import" : row.origin === "builder" ? "builder" : "studio"}
-                    </Pill>
-                  </td>
-                  <td className="px-3 py-2 text-text-muted">
-                    <RelativeTime iso={row.deployed_at} />
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {row.status === "live" ? (
+              {visible.map((row) => {
+                const key = row.id ?? row.subdomain ?? row.url;
+                const busy = busyKey !== null;
+                const rowBusy = busyKey === (row.id ?? row.subdomain);
+                const canSelect = Boolean(row.subdomain) && !row.isCustomDomain;
+                const liveStaging = !row.isCustomDomain && (row.status === "live" || row.status === "untracked");
+                return (
+                  <tr key={key} data-testid="ss-deployment-row" className="border-b border-border last:border-0 hover:bg-surface-2">
+                    <td className="px-3 py-2">
+                      {canSelect ? (
+                        <input
+                          type="checkbox"
+                          className="accent-accent"
+                          aria-label={`Select ${row.subdomain}`}
+                          checked={selected.has(row.subdomain as string)}
+                          onChange={() => toggleSelect(row.subdomain as string)}
+                        />
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-text">
+                      {row.leadName ?? (row.subdomain ? <span className="font-mono text-xs">{row.subdomain}</span> : "—")}
+                      {row.leadStatus ? <span className="ml-2 text-xs text-text-faint">{row.leadStatus}</span> : null}
+                    </td>
+                    <td className="px-3 py-2">
+                      <a href={row.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-accent-ink hover:underline">
+                        {row.url.replace(/^https?:\/\//, "")}
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Pill tone={STATUS_TONE[row.status]}>{row.status.replace("_", " ")}</Pill>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Pill tone={row.category === "ready" ? "ready" : row.category === "live" ? "accent" : "neutral"}>
+                        {row.origin === "v2_import" ? "v2 import" : row.origin ?? "untracked"}
+                      </Pill>
+                    </td>
+                    <td className="px-3 py-2 text-text-muted">{row.deployedAt ? <RelativeTime iso={row.deployedAt} /> : "—"}</td>
+                    <td className="px-3 py-2 text-right">
                       <span className="inline-flex items-center gap-1">
-                        <button
-                          type="button"
-                          className={iconBtn}
-                          title="Transfer to custom domain"
-                          aria-label={`Transfer ${row.leads?.business_name ?? "site"} to a custom domain`}
-                          disabled={busyId !== null}
-                          onClick={() => setTransferRow(row)}
-                        >
-                          <Globe className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          className={iconBtnDanger}
-                          title="Take down"
-                          aria-label={`Take down ${row.leads?.business_name ?? "site"}`}
-                          disabled={busyId !== null}
-                          onClick={() => setConfirming(row)}
-                        >
-                          {busyId === row.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
+                        {rowBusy ? <Loader2 className="h-4 w-4 animate-spin text-text-faint" /> : null}
+                        {liveStaging ? (
+                          <>
+                            {row.id && row.status === "live" ? (
+                              <button type="button" className={iconBtn} title="Shuffle to a new subdomain"
+                                aria-label={`Shuffle ${row.subdomain}`} disabled={busy} onClick={() => setConfirmShuffle(row)}>
+                                <Shuffle className="h-4 w-4" />
+                              </button>
+                            ) : null}
+                            <button type="button" className={iconBtn} title="Upload new files (override or new version)"
+                              aria-label={`Upload to ${row.subdomain}`} disabled={busy}
+                              onClick={() => setUploadOpen({ target: row.subdomain })}>
+                              <Upload className="h-4 w-4" />
+                            </button>
+                            <button type="button" className={iconBtn} title="Transfer to custom domain"
+                              aria-label={`Transfer ${row.subdomain} to a custom domain`} disabled={busy}
+                              onClick={() => void transfer(row)}>
+                              <Globe className="h-4 w-4" />
+                            </button>
+                            {!row.leadId ? (
+                              <button type="button" className={iconBtn} title="Link to a lead"
+                                aria-label={`Link ${row.subdomain} to a lead`} disabled={busy}
+                                onClick={() => setLinkFor({ deploymentId: row.id, subdomain: row.subdomain, url: row.url })}>
+                                <Link2 className="h-4 w-4" />
+                              </button>
+                            ) : null}
+                            {row.id && row.status === "live" ? (
+                              <button type="button" className={iconBtnDanger} title="Take down"
+                                aria-label={`Take down ${row.subdomain}`} disabled={busy} onClick={() => setConfirmTakedown(row)}>
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            ) : (
+                              <button type="button" className={iconBtnDanger} title="Delete subdomain"
+                                aria-label={`Delete ${row.subdomain}`} disabled={busy}
+                                onClick={() => setConfirmBulk([row.subdomain as string])}>
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
+                          </>
+                        ) : row.isCustomDomain && row.id && row.status === "live" ? (
+                          <>
+                            <button type="button" className={iconBtn} title="Override with a zip upload"
+                              aria-label={`Upload new files to ${row.url}`} disabled={busy} onClick={() => overrideCustom(row)}>
+                              <Upload className="h-4 w-4" />
+                            </button>
+                            {!row.leadId ? (
+                              <button type="button" className={iconBtn} title="Link to a lead"
+                                aria-label={`Link ${row.url} to a lead`} disabled={busy}
+                                onClick={() => setLinkFor({ deploymentId: row.id, subdomain: null, url: row.url })}>
+                                <Link2 className="h-4 w-4" />
+                              </button>
+                            ) : null}
+                            <button type="button" className={iconBtnDanger} title="Take down"
+                              aria-label={`Take down ${row.url}`} disabled={busy} onClick={() => setConfirmTakedown(row)}>
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </>
+                        ) : row.id ? (
+                          <button type="button" className={iconBtnDanger} title="Delete record"
+                            aria-label={`Delete ${row.leadName ?? row.subdomain ?? "site"} deployment record`} disabled={busy}
+                            onClick={() => setConfirmRecord(row)}>
                             <Trash2 className="h-4 w-4" />
-                          )}
-                        </button>
+                          </button>
+                        ) : null}
                       </span>
-                    ) : (
-                      <button
-                        type="button"
-                        className={iconBtnDanger}
-                        title="Delete record"
-                        aria-label={`Delete ${row.leads?.business_name ?? "site"} deployment record`}
-                        disabled={busyId !== null}
-                        onClick={() => setConfirmingRecord(row)}
-                      >
-                        {busyId === row.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4" />
-                        )}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
+      <input ref={overrideInput} type="file" accept=".zip,application/zip" className="hidden" onChange={(e) => void onOverrideFile(e)} />
+
+      {uploadOpen ? (
+        <UploadModal
+          subdomains={rows.filter((r) => r.subdomain && !r.isCustomDomain).map((r) => r.subdomain as string)}
+          daDomain={daDomain}
+          initialTarget={uploadOpen.target}
+          onClose={() => setUploadOpen(null)}
+          onDone={onUploaded}
+        />
+      ) : null}
+
+      {linkFor ? (
+        <LinkLeadModal
+          deploymentId={linkFor.deploymentId}
+          subdomain={linkFor.subdomain}
+          siteUrl={linkFor.url}
+          optional={linkFor.optional}
+          onClose={() => setLinkFor(null)}
+          onDone={() => void load()}
+        />
+      ) : null}
+
       {transferRow ? (
         <TransferDeploymentModal
           deploymentId={transferRow.id}
-          businessName={transferRow.leads?.business_name ?? transferRow.subdomain}
+          businessName={transferRow.name}
           onClose={() => setTransferRow(null)}
           onDone={() => void load()}
         />
       ) : null}
 
-      {/* Record-delete confirm — closes only via its own buttons (house rule) */}
-      {confirmingRecord ? (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Delete this deployment record?"
-        >
-          <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5 shadow-lg">
-            <h3 className="text-sm font-semibold text-text">
-              Delete {confirmingRecord.leads?.business_name ?? "this site"}&apos;s deployment record?
-            </h3>
-            <p className="mt-2 text-sm text-text-muted">
-              The row disappears from this board. Nothing on the server changes — this site is already {confirmingRecord.status === "failed" ? "failed" : "taken down"}.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmingRecord(null)}
-                className="rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void deleteRecord(confirmingRecord)}
-                className="rounded-md bg-dropped-fg px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
-              >
-                Delete record
-              </button>
-            </div>
-          </div>
-        </div>
+      {confirmShuffle ? (
+        <ConfirmDialog
+          title={`Shuffle ${confirmShuffle.leadName ?? confirmShuffle.subdomain}'s site to a new subdomain?`}
+          body={`The current files move to a fresh versioned subdomain, ${confirmShuffle.subdomain}.${daDomain} is deleted, and the lead's website link is updated (the agent is notified).`}
+          confirmLabel="Shuffle"
+          onCancel={() => setConfirmShuffle(null)}
+          onConfirm={() => void shuffle(confirmShuffle)}
+        />
       ) : null}
 
-      {/* Take-down confirm — closes only via its own buttons (house rule) */}
-      {confirming ? (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Take down this site?"
-        >
-          <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5 shadow-lg">
-            <h3 className="text-sm font-semibold text-text">
-              Take down {confirming.leads?.business_name ?? "this site"}&apos;s site?
-            </h3>
-            <p className="mt-2 text-sm text-text-muted">
-              {confirming.url.replace(/^https?:\/\//, "")} goes offline immediately and the subdomain is removed.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirming(null)}
-                className="rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => takedown(confirming)}
-                className="rounded-md bg-dropped-fg px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
-              >
-                Take down
-              </button>
-            </div>
-          </div>
-        </div>
+      {confirmTakedown ? (
+        <ConfirmDialog
+          title={`Take down ${confirmTakedown.leadName ?? confirmTakedown.subdomain ?? confirmTakedown.url}?`}
+          body={`${confirmTakedown.url.replace(/^https?:\/\//, "")} goes offline immediately${confirmTakedown.isCustomDomain ? "." : " and the subdomain is removed."}`}
+          confirmLabel="Take down"
+          danger
+          onCancel={() => setConfirmTakedown(null)}
+          onConfirm={() => void takedown(confirmTakedown)}
+        />
       ) : null}
+
+      {confirmRecord ? (
+        <ConfirmDialog
+          title={`Delete ${confirmRecord.leadName ?? confirmRecord.subdomain ?? "this site"}'s deployment record?`}
+          body="The row disappears from this board. Nothing on the server changes."
+          confirmLabel="Delete record"
+          danger
+          onCancel={() => setConfirmRecord(null)}
+          onConfirm={() => void deleteRecord(confirmRecord)}
+        />
+      ) : null}
+
+      {confirmBulk ? (
+        <ConfirmDialog
+          title={`Delete ${confirmBulk.length} subdomain${confirmBulk.length > 1 ? "s" : ""}?`}
+          body={`${confirmBulk.map((s) => `${s}.${daDomain}`).join(", ")} — the sites go offline and their files are removed. Linked leads' website links are cleared.`}
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setConfirmBulk(null)}
+          onConfirm={() => void bulkDelete(confirmBulk)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Confirm dialog — closes only via its own buttons (house rule). */
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  danger,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5 shadow-lg">
+        <h3 className="text-sm font-semibold text-text">{title}</h3>
+        <p className="mt-2 text-sm text-text-muted">{body}</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onCancel}
+            className="rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text">
+            Cancel
+          </button>
+          <button type="button" onClick={onConfirm}
+            className={cn("rounded-md px-4 py-2 text-sm font-semibold text-white hover:opacity-90",
+              danger ? "bg-dropped-fg" : "bg-accent")}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

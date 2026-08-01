@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { RunPreview, SlotEditor, resolveClickTarget } from "@/components/site-studio/RunPreview";
 import { ThemePanel } from "@/components/site-studio/ThemePanel";
 import { ToastProvider } from "@/components/common/Toast";
-import { DeploymentsBoard, type DeploymentRow } from "@/components/site-studio/DeploymentsBoard";
+import { DeploymentsBoard, type BoardRow } from "@/components/site-studio/DeploymentsBoard";
 import type { TemplateManifest } from "@/lib/site-studio/schema";
 import type { StudioRunRow } from "@/lib/site-studio/run/types";
 import type { RunContentDoc } from "@/lib/site-studio/run/applyWritten";
@@ -405,34 +405,34 @@ describe("ThemePanel", () => {
  * `v2_import` row (the shape Phase 4b's cutover seeds) shows its own badge
  * rather than being mistaken for a studio-authored deployment.
  */
-function deploymentFixture(overrides: Partial<DeploymentRow> = {}): DeploymentRow {
+function boardRowFixture(overrides: Partial<BoardRow> = {}): BoardRow {
   return {
     id: "dep-1",
-    lead_id: "lead-1",
-    run_id: "run-1",
-    subdomain: "ace-plumbing",
-    docroot: "/domains/ace-plumbing.dmviral.com/public_html",
-    url: "https://ace-plumbing.dmviral.com",
+    subdomain: "ace-plumbingv1",
+    url: "https://ace-plumbingv1.dmviral.com",
     status: "live",
     origin: "studio",
-    deployed_at: "2026-07-26T00:00:00.000Z",
-    taken_down_at: null,
-    deployed_by: null,
-    created_at: "2026-07-25T00:00:00.000Z",
-    updated_at: "2026-07-26T00:00:00.000Z",
-    leads: { business_name: "Ace Plumbing" },
+    category: "ready",
+    leadId: "lead-1",
+    leadName: "Ace Plumbing",
+    leadStatus: "Ready",
+    deployedAt: "2026-07-26T00:00:00.000Z",
+    isCustomDomain: false,
     ...overrides,
   };
 }
 
-function stubDeploymentsFetch(handler: (url: string) => { deployments: DeploymentRow[] }) {
+function stubDeploymentsFetch(handler: (url: string) => { rows: BoardRow[] }) {
   const calls: string[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       calls.push(url);
-      return { ok: true, json: async () => handler(url) } as Response;
+      return {
+        ok: true,
+        json: async () => ({ counts: {}, daDomain: "dmviral.com", hostingWarning: null, ...handler(url) }),
+      } as Response;
     }),
   );
   return calls;
@@ -443,46 +443,93 @@ describe("DeploymentsBoard", () => {
     vi.unstubAllGlobals();
   });
 
+  function mount() {
+    return render(
+      <ToastProvider>
+        <DeploymentsBoard />
+      </ToastProvider>,
+    );
+  }
+
   it("renders rows from canned data — business name, URL, status, and deployed time", async () => {
-    stubDeploymentsFetch(() => ({ deployments: [deploymentFixture()] }));
-    render(<DeploymentsBoard />);
+    stubDeploymentsFetch(() => ({ rows: [boardRowFixture()] }));
+    mount();
 
     expect(await screen.findByText("Ace Plumbing")).toBeInTheDocument();
-    expect(screen.getByText("ace-plumbing.dmviral.com")).toBeInTheDocument();
+    expect(screen.getByText("ace-plumbingv1.dmviral.com")).toBeInTheDocument();
     expect(screen.getByText("live")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /ace-plumbing\.dmviral\.com/ })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /ace-plumbingv1\.dmviral\.com/ })).toHaveAttribute(
       "href",
-      "https://ace-plumbing.dmviral.com",
+      "https://ace-plumbingv1.dmviral.com",
     );
   });
 
-  it("the status filter re-requests with the matching ?status= and swaps the rows shown", async () => {
+  it("the view tabs re-request with the matching ?view= and swap the rows shown", async () => {
     const calls = stubDeploymentsFetch((url) => {
-      if (url.includes("status=taken_down")) {
-        return { deployments: [deploymentFixture({ id: "dep-2", status: "taken_down", leads: { business_name: "Old Roofing" } })] };
+      if (url.includes("view=live")) {
+        return {
+          rows: [
+            boardRowFixture({
+              id: "dep-2",
+              subdomain: null,
+              url: "https://oldroofing.com",
+              category: "live",
+              isCustomDomain: true,
+              leadName: "Old Roofing",
+            }),
+          ],
+        };
       }
-      return { deployments: [deploymentFixture()] };
+      return { rows: [boardRowFixture()] };
     });
-    render(<DeploymentsBoard />);
+    mount();
     expect(await screen.findByText("Ace Plumbing")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Taken down" }));
+    fireEvent.click(screen.getByRole("button", { name: /Live Websites/ }));
 
     await waitFor(() => expect(screen.getByText("Old Roofing")).toBeInTheDocument());
     expect(screen.queryByText("Ace Plumbing")).not.toBeInTheDocument();
-    expect(calls.some((u) => u.includes("status=taken_down"))).toBe(true);
+    expect(calls.some((u) => u.includes("view=live"))).toBe(true);
   });
 
-  it("shows a v2_import row's origin badge, distinct from a studio-authored row", async () => {
+  it("shows a v2_import row's origin badge and an untracked hosting subdomain row", async () => {
     stubDeploymentsFetch(() => ({
-      deployments: [
-        deploymentFixture({ id: "dep-3", origin: "v2_import", leads: { business_name: "Legacy Diner" } }),
+      rows: [
+        boardRowFixture({ id: "dep-3", origin: "v2_import", leadName: "Legacy Diner" }),
+        boardRowFixture({
+          id: null,
+          subdomain: "mystery-site",
+          url: "https://mystery-site.dmviral.com",
+          status: "untracked",
+          origin: null,
+          category: "other",
+          leadId: null,
+          leadName: null,
+          leadStatus: null,
+          deployedAt: null,
+        }),
       ],
     }));
-    render(<DeploymentsBoard />);
+    mount();
 
     expect(await screen.findByText("Legacy Diner")).toBeInTheDocument();
     expect(screen.getByText("v2 import")).toBeInTheDocument();
-    expect(screen.queryByText("studio")).not.toBeInTheDocument();
+    expect(screen.getByText("mystery-site")).toBeInTheDocument();
+    expect(screen.getAllByText("untracked").length).toBeGreaterThan(0);
+  });
+
+  it("bulk-selecting subdomains shows the delete bar with the count", async () => {
+    stubDeploymentsFetch(() => ({
+      rows: [
+        boardRowFixture(),
+        boardRowFixture({ id: "dep-2", subdomain: "beta-sitev1", url: "https://beta-sitev1.dmviral.com", leadName: "Beta Site" }),
+      ],
+    }));
+    mount();
+    expect(await screen.findByText("Ace Plumbing")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all subdomains" }));
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Delete selected/ })).toBeInTheDocument();
   });
 });

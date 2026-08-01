@@ -8,7 +8,7 @@ import {
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
   Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer, Images,
-  ClipboardList,
+  ClipboardList, ChevronDown,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -21,7 +21,8 @@ import { NavItemContent } from "@/components/layout/NavItemContent";
 import { BrandMark } from "@/components/branding/BrandMark";
 import type { Branding } from "@/lib/settings/appSettings";
 
-type NavItem = { href: string; label: string; icon: LucideIcon; perm?: string };
+type NavChild = { href: string; label: string };
+type NavItem = { href: string; label: string; icon: LucideIcon; perm?: string; children?: NavChild[] };
 
 /** Appended to MAIN only for users with a linked mailbox; badged with unread IMAP mail. */
 const MAILBOX_HREF = "/mailbox";
@@ -46,7 +47,7 @@ const PRELEADS: NavItem[] = [
   { href: "/pre-leads/all", label: "All Pre-Leads", icon: ListChecks, perm: "pre_leads.view" },
 ];
 
-type NavItemAny = { href: string; label: string; icon: LucideIcon; perms: string[] };
+type NavItemAny = { href: string; label: string; icon: LucideIcon; perms: string[]; children?: NavChild[] };
 
 const AI_TOOLS: NavItemAny[] = [
   { href: "/ai-tools", label: "Overview", icon: Sparkles, perms: ["ai_tools.webcraft", "ai_tools.deepseek", "analytics.view_webcraft", "analytics.view_deepseek", "analytics.view_all_agents"] },
@@ -55,10 +56,26 @@ const AI_TOOLS: NavItemAny[] = [
   { href: "/ai-tools/analytics", label: "Analytics", icon: LineChart, perms: ["analytics.view_webcraft", "analytics.view_deepseek", "analytics.view_all_agents"] },
   { href: "/ai-tools/wge", label: "Engine (WGE)", icon: Cog, perms: ["wge.manage"] },
   { href: "/ai-tools/template-engine", label: "Template Engine", icon: LayoutTemplate, perms: ["templates.generate"] },
-  { href: "/ai-tools/template-engine/deployments", label: "Deployed Sites", icon: Globe, perms: ["templates.deploy"] },
   { href: "/ai-tools/templates", label: "Templates", icon: Library, perms: ["templates.manage"] },
-  { href: "/ai-tools/site-studio", label: "Site Studio", icon: Wand2, perms: ["studio.manage"] },
-  { href: "/ai-tools/site-builder", label: "Site Builder", icon: Hammer, perms: ["studio.manage"] },
+  {
+    href: "/ai-tools/site-studio", label: "Site Studio", icon: Wand2, perms: ["studio.manage"],
+    children: [
+      { href: "/ai-tools/site-studio", label: "Templates" },
+      { href: "/ai-tools/site-studio/runs", label: "Runs" },
+      { href: "/ai-tools/site-studio/library", label: "Library" },
+      { href: "/ai-tools/site-studio/deployments", label: "Deployments" },
+      { href: "/ai-tools/site-studio/sops", label: "SOPs" },
+    ],
+  },
+  {
+    href: "/ai-tools/site-builder", label: "Site Builder", icon: Hammer, perms: ["studio.manage"],
+    children: [
+      { href: "/ai-tools/site-builder", label: "Templates" },
+      { href: "/ai-tools/site-builder/new", label: "New Site" },
+      { href: "/ai-tools/site-builder/runs", label: "Runs" },
+      { href: "/ai-tools/site-builder/deployments", label: "Deployments" },
+    ],
+  },
 ];
 
 const ADMIN: NavItem[] = [
@@ -98,6 +115,8 @@ export function Sidebar({
   const unreadMail = useUnreadMail(hasMailbox);
 
   const [hovering, setHovering] = useState(false);
+  // Manual submenu toggles; when unset, a submenu opens iff its branch is active.
+  const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const expanded = pinned || hovering;
 
@@ -117,7 +136,7 @@ export function Sidebar({
   const hasAiTools = hasAny(["ai_tools.webcraft", "ai_tools.deepseek"]);
   const aiVisible: NavItem[] = AI_TOOLS
     .filter((n) => hasAny(n.perms) && (n.href !== "/ai-tools/wge" || hasAiTools))
-    .map((n) => ({ href: n.href, label: n.label, icon: n.icon, perm: n.perms[0] }));
+    .map((n) => ({ href: n.href, label: n.label, icon: n.icon, perm: n.perms[0], children: n.children }));
   const adminVisible = ADMIN.filter((n) => (n.perm ? has(n.perm) : true));
 
   const all = [...mainVisible, ...preVisible, ...aiVisible, ...adminVisible];
@@ -126,30 +145,77 @@ export function Sidebar({
     if ((path === n.href || path.startsWith(n.href + "/")) && n.href.length > bestHref.length) bestHref = n.href;
   }
 
+  function branchActive(n: NavItem) {
+    return path === n.href || path.startsWith(n.href + "/");
+  }
+
+  function childActive(n: NavItem, c: NavChild) {
+    // The root child ("Templates") shares the parent href — exact match only,
+    // since every sibling path is prefixed by it (BuilderTabs' own rule).
+    return c.href === n.href ? path === c.href : path === c.href || path.startsWith(c.href + "/");
+  }
+
   function renderItem(n: NavItem, showLabels: boolean) {
     const active = n.href === bestHref;
     const key = navCountKey(n.href);
     const count = n.href === MAILBOX_HREF ? unreadMail : key ? counts[key] : undefined;
+    const hasChildren = Boolean(n.children?.length) && showLabels;
+    const open = hasChildren && (openMenus[n.href] ?? branchActive(n));
     return (
-      <Link
-        key={n.href}
-        href={n.href}
-        onClick={onMobileClose}
-        title={showLabels ? undefined : n.label}
-        className={cn(
-          "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-          showLabels ? "" : "justify-center",
-          active ? "bg-accent-soft text-accent-ink" : "text-text-muted hover:bg-surface hover:text-text"
+      <div key={n.href}>
+        <div className="relative">
+          <Link
+            href={n.href}
+            onClick={onMobileClose}
+            title={showLabels ? undefined : n.label}
+            className={cn(
+              "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+              showLabels ? "" : "justify-center",
+              active || (hasChildren && branchActive(n))
+                ? "bg-accent-soft text-accent-ink"
+                : "text-text-muted hover:bg-surface hover:text-text"
+            )}
+          >
+            <NavItemContent
+              icon={n.icon}
+              label={n.label}
+              count={count}
+              showLabels={showLabels}
+              tone={navCountTone(key)}
+            />
+          </Link>
+          {hasChildren && (
+            <button
+              type="button"
+              aria-label={`${open ? "Collapse" : "Expand"} ${n.label} submenu`}
+              aria-expanded={open}
+              onClick={() => setOpenMenus((m) => ({ ...m, [n.href]: !open }))}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-text-faint hover:bg-surface hover:text-text"
+            >
+              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open ? "" : "-rotate-90")} />
+            </button>
+          )}
+        </div>
+        {open && (
+          <div className="ml-5 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
+            {(n.children ?? []).map((c) => (
+              <Link
+                key={`${n.href}:${c.href}`}
+                href={c.href}
+                onClick={onMobileClose}
+                className={cn(
+                  "rounded-md px-2.5 py-1.5 text-[13px] transition-colors",
+                  childActive(n, c)
+                    ? "bg-accent-soft font-medium text-accent-ink"
+                    : "text-text-muted hover:bg-surface hover:text-text"
+                )}
+              >
+                {c.label}
+              </Link>
+            ))}
+          </div>
         )}
-      >
-        <NavItemContent
-          icon={n.icon}
-          label={n.label}
-          count={count}
-          showLabels={showLabels}
-          tone={navCountTone(key)}
-        />
-      </Link>
+      </div>
     );
   }
 
