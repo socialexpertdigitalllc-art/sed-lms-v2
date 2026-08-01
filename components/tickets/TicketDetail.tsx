@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
 import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime } from "@/lib/leads/format";
@@ -16,6 +16,7 @@ type LeadInfo = {
   agent_id: string | null;
   closed_by: string | null;
   status: string;
+  website_link: string | null;
 };
 
 type TechMember = { id: string; display_name: string };
@@ -163,6 +164,17 @@ export function TicketDetail({
             <span>Opened by {nameOf(ticket.created_by)}</span>
             <span>Assigned to {ticket.assigned_to ? nameOf(ticket.assigned_to) : "Unassigned"}</span>
             <span>{formatDateTime(ticket.created_at)}</span>
+            {lead.website_link && (
+              <a
+                href={lead.website_link}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 font-medium text-accent-ink hover:underline"
+              >
+                {lead.website_link.replace(/^https?:\/\//, "")}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
           </div>
         </div>
       </div>

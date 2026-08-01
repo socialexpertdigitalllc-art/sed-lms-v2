@@ -77,7 +77,7 @@ export default async function TicketDetailPage({
 
   const { data: leadRow } = await admin
     .from("leads")
-    .select("id, business_name, agent_id, closed_by, status")
+    .select("id, business_name, agent_id, closed_by, status, website_link")
     .eq("id", ticket.lead_id)
     .single();
   if (!leadRow) notFound();
@@ -87,6 +87,7 @@ export default async function TicketDetailPage({
     agent_id: string | null;
     closed_by: string | null;
     status: string;
+    website_link: string | null;
   };
 
   // Resolve display names for every actor referenced on the page (creator,

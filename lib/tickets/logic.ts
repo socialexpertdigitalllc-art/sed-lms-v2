@@ -1,4 +1,3 @@
-import { isFollowUpEligible } from "@/lib/leads/followups";
 import type { TicketStatus, TicketItem, TicketPriority } from "@/lib/tickets/types";
 
 const ALLOWED: Record<TicketStatus, TicketStatus[]> = {
@@ -13,8 +12,11 @@ export function canTransition(from: TicketStatus, to: TicketStatus): boolean {
 export function itemProgress(items: Pick<TicketItem, "is_done">[]): { done: number; total: number } {
   return { done: items.filter((i) => i.is_done).length, total: items.length };
 }
+// Deliberately NOT aliased to follow-up eligibility: closed clients still file
+// change requests, while follow-ups make no sense on a closed lead.
+export const TICKET_ELIGIBLE_STATUSES = ["Ready", "Long Term", "Closed"] as const;
 export function isTicketEligible(leadStatus: string): boolean {
-  return isFollowUpEligible(leadStatus);
+  return (TICKET_ELIGIBLE_STATUSES as readonly string[]).includes(leadStatus);
 }
 export function dedupKey(event: string, ticketId: string, userId: string, nonce: string): string {
   return `${event}:${ticketId}:${userId}:${nonce}`;

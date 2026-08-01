@@ -32,7 +32,7 @@ export function useNavCounts(): Record<string, number> {
     let active = true;
     (async () => {
       try {
-        const res = await fetch("/api/nav-counts");
+        const res = await fetch("/api/nav-counts", { cache: "no-store" });
         if (res.ok && active) {
           setCounts(((await res.json()).counts ?? {}) as Record<string, number>);
         }
@@ -44,6 +44,25 @@ export function useNavCounts(): Record<string, number> {
       active = false;
     };
   }, [refreshTick]);
+
+  // Realtime events are RLS-filtered per subscriber, so users without
+  // wide-view permissions receive none for tables they can't select — their
+  // badges would only refresh on a hard reload. Poll + refetch on focus as a
+  // floor (the useUnreadMail pattern) so every badge stays honest.
+  useEffect(() => {
+    const tick = () => setRefreshTick((n) => n + 1);
+    const interval = setInterval(tick, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   useEffect(() => {
     const supabase = createClient();

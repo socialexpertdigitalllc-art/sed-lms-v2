@@ -15,7 +15,8 @@ describe("itemProgress", () => {
 });
 describe("isTicketEligible", () => {
   it("Ready/Long Term eligible", () => { expect(isTicketEligible("Ready")).toBe(true); expect(isTicketEligible("Long Term")).toBe(true); });
-  it("Not Ready ineligible", () => expect(isTicketEligible("Not Ready")).toBe(false));
+  it("Closed leads can open tickets (post-sale change requests)", () => expect(isTicketEligible("Closed")).toBe(true));
+  it("Not Ready/Dropped ineligible", () => { expect(isTicketEligible("Not Ready")).toBe(false); expect(isTicketEligible("Dropped")).toBe(false); });
 });
 describe("dedupKey", () => {
   it("includes event, ticket, recipient, nonce", () => expect(dedupKey("ticket_assigned", "t1", "u1", "n1")).toBe("ticket_assigned:t1:u1:n1"));

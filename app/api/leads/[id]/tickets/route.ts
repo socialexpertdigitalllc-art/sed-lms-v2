@@ -135,7 +135,7 @@ export async function POST(
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
   if (!isTicketEligible(lead.status))
     return NextResponse.json(
-      { error: "Tickets apply only to Ready or Long Term leads." },
+      { error: "Tickets apply only to Ready, Long Term, or Closed leads." },
       { status: 422 }
     );
 
