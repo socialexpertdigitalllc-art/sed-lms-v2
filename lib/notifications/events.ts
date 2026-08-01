@@ -100,6 +100,16 @@ export const NOTIFICATION_EVENTS = [
     timingMode: "none",
   },
   {
+    key: "website_custom_domain",
+    label: "Website live on custom domain",
+    description: "A lead's website was moved to a custom domain and is live.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: ["lead_agent", "lead_closer"],
+    timingMode: "none",
+  },
+  {
     key: "lead_submitted",
     label: "New lead submitted",
     description: "A sales user created a new lead.",

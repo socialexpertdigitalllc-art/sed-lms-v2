@@ -163,6 +163,7 @@ export async function PATCH(
             body: `${before.business_name}'s website is ready`,
             dedupKey: `website_ready:${id}:${nonce}`,
             targetUrl: `/leads/${id}`,
+            websiteUrl: parsed.data.website_link ?? before.website_link ?? null,
           }
         );
       } catch {}
@@ -181,6 +182,7 @@ export async function PATCH(
           body: `${before.business_name}'s website is live: ${newLink}`,
           dedupKey: `website_link_added:${id}:${nonce}`,
           targetUrl: `/leads/${id}`,
+          websiteUrl: newLink,
         }
       );
     } catch {}

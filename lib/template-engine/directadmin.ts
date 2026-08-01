@@ -139,14 +139,20 @@ export async function deleteSubdomain(sub: string): Promise<DaResult> {
   });
 }
 
-export async function subdomainExists(sub: string): Promise<boolean> {
+/** All subdomain labels on DA_DOMAIN. Null when the listing itself fails (never []). */
+export async function listSubdomains(): Promise<string[] | null> {
   const res = await daCall("CMD_API_SUBDOMAINS", { domain: process.env.DA_DOMAIN ?? "" });
-  if (res.error) return false;
+  if (res.error) return null;
   try {
-    return new URLSearchParams(res.raw.trim()).getAll("list[]").includes(sub);
+    return new URLSearchParams(res.raw.trim()).getAll("list[]").filter(Boolean);
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function subdomainExists(sub: string): Promise<boolean> {
+  const list = await listSubdomains();
+  return list !== null && list.includes(sub);
 }
 
 interface JsonCallResult {

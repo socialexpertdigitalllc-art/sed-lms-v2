@@ -132,6 +132,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           body: `${lead.business_name}'s website is now live at ${url}`,
           dedupKey: `website_link_added:${gen.lead_id}:${new Date().toISOString()}`,
           targetUrl: `/leads/${gen.lead_id}`,
+          websiteUrl: url,
         }
       );
     } catch {}

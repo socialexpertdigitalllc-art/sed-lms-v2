@@ -137,16 +137,34 @@ export async function POST(req: Request, ctx: Ctx) {
 
   if (lead && url !== priorLink) {
     try {
+      // website_custom_domain reaches the lead's agent AND Management (rule
+      // seeded by migration 0066); falls back to website_link_added when the
+      // new rule row isn't in the DB yet.
       await notify(
-        "website_link_added",
+        "website_custom_domain",
         { leadId: lead.id, lead: { agent_id: lead.agent_id, closed_by: lead.closed_by }, actorId: auth.userId },
         {
-          title: "Website on custom domain",
+          title: "Website live on custom domain",
           body: `${lead.business_name}'s website is now live at ${url}`,
-          dedupKey: `website_link_added:${lead.id}:${now}`,
+          dedupKey: `website_custom_domain:${lead.id}:${domain}`,
           targetUrl: `/leads/${lead.id}`,
+          websiteUrl: url,
         },
       );
+      const { getRule } = await import("@/lib/notifications/rules");
+      if (!(await getRule("website_custom_domain"))) {
+        await notify(
+          "website_link_added",
+          { leadId: lead.id, lead: { agent_id: lead.agent_id, closed_by: lead.closed_by }, actorId: auth.userId },
+          {
+            title: "Website on custom domain",
+            body: `${lead.business_name}'s website is now live at ${url}`,
+            dedupKey: `website_link_added:${lead.id}:${now}`,
+            targetUrl: `/leads/${lead.id}`,
+            websiteUrl: url,
+          },
+        );
+      }
     } catch {}
   }
 
