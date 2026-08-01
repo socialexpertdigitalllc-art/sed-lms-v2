@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Inbox } from "lucide-react";
+import { ExternalLink, Inbox } from "lucide-react";
 import type { AppNotification, NotifyBell } from "@/lib/notifications/types";
 import { formatDateTime } from "@/lib/leads/format";
 import { createClient } from "@/lib/supabase/client";
@@ -140,17 +140,18 @@ export function BellBase({
               <span>You&apos;re all caught up.</span>
             </div>
           ) : (
-            <div className="max-h-96 overflow-y-auto">
+            <div className="max-h-[70vh] overflow-y-auto">
+              {/* Every unread notification — the badge and this list always agree. */}
               <ul className="pb-1">
-                {notes.slice(0, 8).map((n) => (
-                  <li key={n.id}>
+                {notes.map((n) => (
+                  <li key={n.id} className="flex items-stretch hover:bg-surface-2 transition-colors">
                     <Link
                       href={n.target_url ?? (n.lead_id ? `/leads/${n.lead_id}` : "#")}
                       onClick={() => {
                         void markRead(n.id);
                         setOpen(false);
                       }}
-                      className="block px-3 py-2 hover:bg-surface-2 transition-colors"
+                      className="block min-w-0 flex-1 px-3 py-2"
                     >
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-sm font-medium text-text truncate">{n.title}</span>
@@ -158,11 +159,32 @@ export function BellBase({
                       </div>
                       <div className="text-xs text-text-muted truncate">{n.body}</div>
                     </Link>
+                    {n.website_url && (
+                      <button
+                        type="button"
+                        title="Open the website in a new tab"
+                        aria-label={`Open ${n.title}'s website in a new tab`}
+                        onClick={() => {
+                          window.open(n.website_url as string, "_blank", "noopener");
+                          void markRead(n.id);
+                        }}
+                        className="grid w-9 shrink-0 place-items-center text-text-faint hover:text-accent-ink"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             </div>
           )}
+          <Link
+            href="/notifications"
+            onClick={() => setOpen(false)}
+            className="block border-t border-border px-4 py-2 text-center text-xs font-medium text-accent-ink hover:bg-surface-2"
+          >
+            View all notifications
+          </Link>
         </div>
       )}
     </div>

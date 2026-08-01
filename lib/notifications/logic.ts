@@ -9,6 +9,21 @@ export function effectiveSetting(
   return { enabled: true, leadTimeMinutes: d?.defaultLeadTimeMinutes ?? 15 };
 }
 
+/**
+ * Per-user follow-up reminder gate. No settings row = remind for everything
+ * (opt-out model). `statuses` null/empty = all statuses; otherwise the lead's
+ * status must be selected.
+ */
+export function reminderAllowed(
+  leadStatus: string,
+  setting: { enabled: boolean; statuses?: string[] | null } | undefined | null,
+): boolean {
+  if (!setting) return true;
+  if (!setting.enabled) return false;
+  if (setting.statuses && setting.statuses.length > 0) return setting.statuses.includes(leadStatus);
+  return true;
+}
+
 /** True when `now` is in [followUpTime - leadTimeMinutes, followUpTime). */
 export function shouldRemind(
   followUpTime: string | null,

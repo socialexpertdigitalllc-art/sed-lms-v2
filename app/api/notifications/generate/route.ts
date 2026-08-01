@@ -1,7 +1,41 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { shouldRemind } from "@/lib/notifications/logic";
+import { reminderAllowed, shouldRemind } from "@/lib/notifications/logic";
 import { getRule } from "@/lib/notifications/rules";
+
+type ReminderSetting = { enabled: boolean; statuses?: string[] | null };
+
+/**
+ * Per-user reminder settings for the agents in play. Tolerates the `statuses`
+ * column not existing yet (migration 0066): falls back to enabled-only rows.
+ */
+async function loadReminderSettings(
+  admin: ReturnType<typeof createAdminClient>,
+  userIds: string[],
+): Promise<Map<string, ReminderSetting>> {
+  const map = new Map<string, ReminderSetting>();
+  if (!userIds.length) return map;
+  let { data, error } = await admin
+    .from("user_notification_settings")
+    .select("user_id, enabled, statuses")
+    .eq("event_key", "followup_reminder")
+    .in("user_id", userIds);
+  if (error && /statuses/i.test(error.message)) {
+    const fallback = await admin
+      .from("user_notification_settings")
+      .select("user_id, enabled")
+      .eq("event_key", "followup_reminder")
+      .in("user_id", userIds);
+    data = (fallback.data ?? []) as unknown as typeof data;
+  }
+  for (const row of data ?? []) {
+    map.set(row.user_id as string, {
+      enabled: Boolean(row.enabled),
+      statuses: (row as { statuses?: string[] | null }).statuses ?? null,
+    });
+  }
+  return map;
+}
 
 export const runtime = "nodejs";
 
@@ -34,6 +68,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ created: 0 });
     }
 
+    const agentIds = Array.from(new Set(leads.map((l) => l.agent_id as string)));
+    const settings = await loadReminderSettings(admin, agentIds);
+
     const now = new Date();
     const rows: {
       user_id: string;
@@ -49,6 +86,7 @@ export async function POST(req: Request) {
 
     for (const lead of leads) {
       if (!shouldRemind(lead.follow_up_time, rule.delay_minutes, now)) continue;
+      if (!reminderAllowed(lead.status, settings.get(lead.agent_id))) continue;
       rows.push({
         user_id: lead.agent_id,
         event_key: "followup_reminder",

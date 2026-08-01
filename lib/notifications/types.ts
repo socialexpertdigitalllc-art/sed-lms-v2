@@ -37,4 +37,6 @@ export interface AppNotification {
   created_at: string;
   read_at: string | null;
   bell: NotifyBell;
+  /** Live-site URL for website notifications — powers "open in new tab". */
+  website_url?: string | null;
 }

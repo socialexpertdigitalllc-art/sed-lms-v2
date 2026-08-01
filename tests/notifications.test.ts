@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { effectiveSetting, shouldRemind } from "@/lib/notifications/logic";
+import { effectiveSetting, shouldRemind, reminderAllowed } from "@/lib/notifications/logic";
 
 describe("effectiveSetting", () => {
   it("falls back to event defaults when no row", () => {
@@ -32,5 +32,23 @@ describe("shouldRemind", () => {
   it("null / bad time → false", () => {
     expect(shouldRemind(null, 15, now)).toBe(false);
     expect(shouldRemind("nope", 15, now)).toBe(false);
+  });
+});
+
+describe("reminderAllowed (per-user follow-up reminder statuses)", () => {
+  it("no settings row => remind", () => {
+    expect(reminderAllowed("Ready", null)).toBe(true);
+    expect(reminderAllowed("Long Term", undefined)).toBe(true);
+  });
+  it("disabled => never remind", () => {
+    expect(reminderAllowed("Ready", { enabled: false, statuses: null })).toBe(false);
+  });
+  it("null/empty statuses => all statuses remind", () => {
+    expect(reminderAllowed("Long Term", { enabled: true, statuses: null })).toBe(true);
+    expect(reminderAllowed("Long Term", { enabled: true, statuses: [] })).toBe(true);
+  });
+  it("selected statuses filter", () => {
+    expect(reminderAllowed("Ready", { enabled: true, statuses: ["Ready"] })).toBe(true);
+    expect(reminderAllowed("Long Term", { enabled: true, statuses: ["Ready"] })).toBe(false);
   });
 });
