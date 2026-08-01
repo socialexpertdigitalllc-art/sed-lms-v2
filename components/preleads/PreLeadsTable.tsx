@@ -29,13 +29,13 @@ import { useViewState } from "@/hooks/useViewState";
 import { serialColumn } from "@/components/common/tableSerial";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Select } from "@/components/common/Select";
+import MultiSelect from "@/components/common/MultiSelect";
 import { useUiPrefs } from "@/providers/UiPrefsProvider";
 import { DensityToggle } from "@/components/common/DensityToggle";
 import { ColumnsMenu } from "@/components/common/ColumnsMenu";
 import { EmptyState } from "@/components/common/EmptyState";
 import "@/lib/tables/columnMeta";
 
-type FollowFilter = "all" | "due" | "past";
 type Modal = { mode: "follow" | null; lead: PreLead | null };
 
 // NOTE: the plan's PRELEADS_DEFAULTS only listed q/category/follow/sort, but
@@ -44,7 +44,7 @@ type Modal = { mode: "follow" | null; lead: PreLead | null };
 // state var, wired straight to `table.getColumn("status").setFilterValue`).
 // Deriving columnFilters from category alone would silently stop that select
 // from doing anything, so `status` is URL-persisted too.
-const PRELEADS_DEFAULTS = { q: "", category: "All", follow: "all", sort: "created_at:desc", status: "", page: "0", size: "15" };
+const PRELEADS_DEFAULTS = { q: "", category: "All", follow: "", sort: "created_at:desc", status: "", page: "0", size: "15" };
 
 export function PreLeadsTable({
   preLeads,
@@ -63,7 +63,13 @@ export function PreLeadsTable({
 
   const [ps, setPs] = useViewState(PRELEADS_DEFAULTS);
   const categoryTab = ps.category;
-  const followFilter = ps.follow as FollowFilter;
+  // Comma-joined multiselects ("" = all). `follow: "all"` may linger in
+  // sessionStorage from the old single-select — treat it as no filter.
+  const followSel = useMemo(
+    () => (ps.follow && ps.follow !== "all" ? ps.follow.split(",") : []),
+    [ps.follow],
+  );
+  const statusSel = useMemo(() => (ps.status ? ps.status.split(",") : []), [ps.status]);
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = ps.sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
@@ -71,9 +77,9 @@ export function PreLeadsTable({
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const f: ColumnFiltersState = [];
     if (ps.category !== "All") f.push({ id: "lead_category", value: ps.category });
-    if (ps.status) f.push({ id: "status", value: ps.status });
+    if (statusSel.length) f.push({ id: "status", value: statusSel });
     return f;
-  }, [ps.category, ps.status]);
+  }, [ps.category, statusSel]);
   const pagination = useMemo(
     () => ({ pageIndex: Math.max(0, Number(ps.page) || 0), pageSize: Math.max(1, Number(ps.size) || 15) }),
     [ps.page, ps.size]
@@ -81,9 +87,9 @@ export function PreLeadsTable({
   const columnVisibility = useMemo<VisibilityState>(() => columnPrefs.preleads ?? {}, [columnPrefs]);
   const [modal, setModal] = useState<Modal>({ mode: null, lead: null });
 
-  // Follow-up quick filter applied BEFORE building the table.
+  // Follow-up quick filter applied BEFORE building the table (union of picks).
   const data = useMemo(() => {
-    if (followFilter === "all") return preLeads;
+    if (!followSel.length) return preLeads;
     const now = Date.now();
     const in24h = now + 24 * 60 * 60 * 1000;
     return preLeads.filter((l) => {
@@ -91,10 +97,11 @@ export function PreLeadsTable({
       if (!active || !l.follow_up_time) return false;
       const t = new Date(l.follow_up_time).getTime();
       if (Number.isNaN(t)) return false;
-      if (followFilter === "due") return t >= now && t <= in24h;
-      return t < now; // past
+      const due = t >= now && t <= in24h;
+      const past = t < now;
+      return (followSel.includes("due") && due) || (followSel.includes("past") && past);
     });
-  }, [preLeads, followFilter]);
+  }, [preLeads, followSel]);
 
   const categoryCounts = useMemo(() => {
     const c: Record<string, number> = { All: preLeads.length };
@@ -148,7 +155,7 @@ export function PreLeadsTable({
       {
         accessorKey: "status",
         header: "Status",
-        filterFn: "equalsString",
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
         cell: (c) => <PreLeadStatusPill status={c.getValue<string>()} />,
       },
       {
@@ -307,31 +314,25 @@ export function PreLeadsTable({
           placeholder="Search business, owner, email, phone…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
-        <Select
-          value={followFilter}
-          onChange={(e) => setPs({ follow: e.target.value, page: "0" })}
-          className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
-        >
-          <option value="all">All follow-ups</option>
-          <option value="due">Due 24h</option>
-          <option value="past">Past due</option>
-        </Select>
-        <Select
-          value={ps.status}
-          onChange={(e) => setPs({ status: e.target.value, page: "0" })}
-          className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
-        >
-          <option value="">All statuses</option>
-          {PRELEAD_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </Select>
-        {(ps.q !== "" || ps.category !== "All" || ps.follow !== "all" || ps.status !== "") && (
+        <MultiSelect
+          label="Follow-ups"
+          options={[
+            { value: "due", label: "Due 24h" },
+            { value: "past", label: "Past due" },
+          ]}
+          selected={followSel}
+          onChange={(next) => setPs({ follow: next.join(","), page: "0" })}
+        />
+        <MultiSelect
+          label="Status"
+          options={PRELEAD_STATUSES.map((s) => ({ value: s }))}
+          selected={statusSel}
+          onChange={(next) => setPs({ status: next.join(","), page: "0" })}
+        />
+        {(ps.q !== "" || ps.category !== "All" || followSel.length > 0 || ps.status !== "") && (
           <button
             type="button"
-            onClick={() => setPs({ q: "", category: "All", follow: "all", status: "", page: "0" })}
+            onClick={() => setPs({ q: "", category: "All", follow: "", status: "", page: "0" })}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-dropped-fg/40 text-sm text-dropped-fg hover:bg-dropped-bg whitespace-nowrap"
           >
             <FilterX className="w-4 h-4" /> Clear filters

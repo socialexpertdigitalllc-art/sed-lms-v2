@@ -31,7 +31,8 @@ export async function GET(req: Request) {
     .select("*")
     .order("created_at", { ascending: false });
   if (mine) query = query.eq("assigned_to", user.id);
-  if (status) query = query.eq("status", status);
+  // `status` accepts a comma list (multiselect filters); .in() handles both.
+  if (status) query = query.in("status", status.split(","));
   if (lead) query = query.eq("lead_id", lead);
 
   const { data: rows, error } = await query;

@@ -37,7 +37,7 @@ import { filterLeadsByRegions, type RegionFacet } from "@/lib/geo/regions";
 import { RegionFilter } from "@/components/leads/RegionFilter";
 import { useViewState } from "@/hooks/useViewState";
 import { MonthFilter } from "@/components/common/MonthFilter";
-import { Select } from "@/components/common/Select";
+import MultiSelect from "@/components/common/MultiSelect";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
 
 type FollowUpRow = { fu_status: string; lead_id: string | null };
@@ -96,19 +96,19 @@ export function DashboardBoard({
 
   // Ephemeral, session-scoped per-agent analytics filter (admins only). Not
   // persisted to view state on purpose.
-  const [agentId, setAgentId] = useState("");
+  const [agentIds, setAgentIds] = useState<string[]>([]);
 
   const [dashUrl, setDashUrl] = useViewState(DASH_DEFAULTS);
   const month = canScopeMonth ? dashUrl.month : "";
   const monthOpts = useMemo(() => monthOptions(leads), [leads]);
-  const scoping = selSet.size > 0 || month !== "" || agentId !== "";
+  const scoping = selSet.size > 0 || month !== "" || agentIds.length > 0;
 
   // Velocity KPIs scope by closed_at/dropped_at, so they get region+agent
   // filtering but NOT the created_at month filter — the month is applied
   // internally to the right timestamp.
   const fLeadsAllTime = useMemo(
-    () => filterLeadsByRegions(leads, selSet).filter((l) => !agentId || l.agent_id === agentId),
-    [leads, selSet, agentId]
+    () => filterLeadsByRegions(leads, selSet).filter((l) => !agentIds.length || (l.agent_id !== null && agentIds.includes(l.agent_id))),
+    [leads, selSet, agentIds]
   );
   const fLeads = useMemo(
     () => fLeadsAllTime.filter((l) => inMonth(l.created_at, month)),
@@ -236,30 +236,22 @@ export function DashboardBoard({
       <div className="flex flex-wrap items-center gap-2">
         {canScopeMonth && <MonthFilter options={monthOpts} value={month} onChange={(v) => setDashUrl({ month: v })} />}
         {canScopeMonth && (
-          <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted focus-within:ring-2 focus-within:ring-accent">
-            <Users className="w-4 h-4 shrink-0" />
-            <Select
-              value={agentId}
-              onChange={(e) => setAgentId(e.target.value)}
-              className="bg-transparent outline-none text-sm text-text-muted"
-            >
-              <option value="">All agents</option>
-              {salesUsers.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.display_name}
-                </option>
-              ))}
-            </Select>
-          </label>
+          <MultiSelect
+            label="Agent"
+            icon={Users}
+            options={salesUsers.map((u) => ({ value: u.id, label: u.display_name }))}
+            selected={agentIds}
+            onChange={setAgentIds}
+          />
         )}
         <RegionFilter facets={facets} selected={selected} onChange={setSelected} />
-        {(month !== "" || selected.length > 0 || agentId !== "") && (
+        {(month !== "" || selected.length > 0 || agentIds.length > 0) && (
           <button
             type="button"
             onClick={() => {
               setDashUrl({ month: "" });
               setSelected([]);
-              setAgentId("");
+              setAgentIds([]);
             }}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-dropped-fg/40 text-sm text-dropped-fg hover:bg-dropped-bg whitespace-nowrap"
           >

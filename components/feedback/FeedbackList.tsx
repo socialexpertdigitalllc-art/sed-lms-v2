@@ -6,7 +6,7 @@ import { FEEDBACK_STATUSES, type Feedback, type FeedbackStatus } from "@/lib/fee
 import { formatDateTime } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
-import { Select } from "@/components/common/Select";
+import MultiSelect from "@/components/common/MultiSelect";
 
 const STATUS_CLS: Record<FeedbackStatus, string> = {
   Open: "bg-surface-2 text-text-muted",
@@ -43,16 +43,16 @@ export function FeedbackList({
   // — mirrors TicketQueue, which subscribes regardless of the viewer's role.
   useRealtimeRefresh("feedback");
 
-  const [statusFilter, setStatusFilter] = useState<FeedbackStatus | "">("");
+  const [statusSel, setStatusSel] = useState<string[]>([]);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
-    if (!manage || !statusFilter) return items;
-    return items.filter((f) => f.status === statusFilter);
-  }, [items, manage, statusFilter]);
+    if (!manage || !statusSel.length) return items;
+    return items.filter((f) => statusSel.includes(f.status));
+  }, [items, manage, statusSel]);
 
   const labelCls = "block text-[10px] uppercase tracking-wide text-text-faint mb-1";
 
@@ -90,18 +90,13 @@ export function FeedbackList({
       <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div className="text-sm font-semibold text-text">{title}</div>
         {manage && (
-          <Select
-            className={inputCls + " w-auto"}
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as FeedbackStatus | "")}
-          >
-            <option value="">All statuses</option>
-            {FEEDBACK_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </Select>
+          <MultiSelect
+            label="Status"
+            align="right"
+            options={FEEDBACK_STATUSES.map((s) => ({ value: s }))}
+            selected={statusSel}
+            onChange={setStatusSel}
+          />
         )}
       </div>
 

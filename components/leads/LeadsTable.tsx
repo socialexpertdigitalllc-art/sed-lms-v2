@@ -46,6 +46,7 @@ import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { CopyButton } from "@/components/common/CopyButton";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { Select } from "@/components/common/Select";
+import MultiSelect from "@/components/common/MultiSelect";
 import { useUiPrefs } from "@/providers/UiPrefsProvider";
 import { DensityToggle } from "@/components/common/DensityToggle";
 import { ColumnsMenu } from "@/components/common/ColumnsMenu";
@@ -121,6 +122,8 @@ export function LeadsTable({
   const month = canScopeMonth ? urlState.month : "";
   const regionSel = useMemo(() => (urlState.region ? urlState.region.split(",") : []), [urlState.region]);
   const tagSel = useMemo(() => (urlState.tags ? urlState.tags.split(",") : []), [urlState.tags]);
+  const agentSel = useMemo(() => (agent ? agent.split(",") : []), [agent]);
+  const typeSel = useMemo(() => (type ? type.split(",") : []), [type]);
   // Any non-default filter — drives a visible "Clear filters" escape so a
   // persisted filter can never silently hide leads.
   const filtersActive =
@@ -136,12 +139,12 @@ export function LeadsTable({
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const f: ColumnFiltersState = [];
     if (status !== "All") f.push({ id: "status", value: status });
-    if (agent) f.push({ id: "agent", value: agent });
-    if (type) f.push({ id: "site_type", value: type });
+    if (agentSel.length) f.push({ id: "agent", value: agentSel });
+    if (typeSel.length) f.push({ id: "site_type", value: typeSel });
     if (regionSel.length) f.push({ id: "region", value: regionSel });
     if (tagSel.length) f.push({ id: "tags", value: tagSel });
     return f;
-  }, [status, agent, type, regionSel, tagSel]);
+  }, [status, agentSel, typeSel, regionSel, tagSel]);
 
   const scopedLeads = useMemo(() => leads.filter((l) => inMonth(l.created_at, month)), [leads, month]);
 
@@ -211,7 +214,7 @@ export function LeadsTable({
         id: "agent",
         accessorFn: (row) => (row.agent_id && agentNameById[row.agent_id]) || "Unassigned",
         header: "Agent",
-        filterFn: "equalsString",
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
         cell: (c) => (
           <span className="inline-flex items-center gap-2 whitespace-nowrap">
             <span className="w-5 h-5 rounded-full bg-accent-soft text-accent-ink grid place-items-center text-[9px] font-semibold">
@@ -224,7 +227,7 @@ export function LeadsTable({
       {
         accessorKey: "site_type",
         header: "Type",
-        filterFn: "equalsString",
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
         meta: { responsiveClass: "hidden lg:table-cell" },
         cell: (c) => <span className="text-text-muted">{c.getValue<string>() ?? "—"}</span>,
       },
@@ -487,22 +490,18 @@ export function LeadsTable({
           placeholder="Search business, email, agent…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
-        <Select
-          value={agent}
-          onChange={(e) => setUrlState({ agent: e.target.value, page: "0" })}
-          className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
-        >
-          <option value="">All agents</option>
-          {agentOptions.map((a) => <option key={a} value={a}>{a}</option>)}
-        </Select>
-        <Select
-          value={type}
-          onChange={(e) => setUrlState({ type: e.target.value, page: "0" })}
-          className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent"
-        >
-          <option value="">All types</option>
-          {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </Select>
+        <MultiSelect
+          label="Agent"
+          options={agentOptions.map((a) => ({ value: a }))}
+          selected={agentSel}
+          onChange={(next) => setUrlState({ agent: next.join(","), page: "0" })}
+        />
+        <MultiSelect
+          label="Type"
+          options={SITE_TYPES.map((t) => ({ value: t }))}
+          selected={typeSel}
+          onChange={(next) => setUrlState({ type: next.join(","), page: "0" })}
+        />
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(","), page: "0" })} />
         {canViewTags && (
           <TagFilter

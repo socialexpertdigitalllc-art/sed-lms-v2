@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import MultiSelect from "@/components/common/MultiSelect";
 import { formatDateTime } from "@/lib/leads/format";
 import { summarize } from "@/lib/signin/analytics";
 import type { AppSettings } from "@/lib/settings/appSettings";
@@ -25,7 +26,7 @@ export function LogsViewer({
 }) {
   const [tab, setTab] = useState<Tab>("movement");
   const [q, setQ] = useState("");
-  const [actor, setActor] = useState("");
+  const [actorSel, setActorSel] = useState<string[]>([]);
 
   const actors = useMemo(() => {
     const s = new Set<string>();
@@ -34,8 +35,8 @@ export function LogsViewer({
     return [...s].map((id) => ({ id, name: nameById[id] ?? id })).sort((a, b) => a.name.localeCompare(b.name));
   }, [audit, activity, sessions, nameById]);
 
-  const auditRows = useMemo(() => audit.filter((r) => (!actor || r.user_id === actor) && (!q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()))), [audit, actor, q]);
-  const moveRows = useMemo(() => activity.filter((r) => (!actor || r.user_id === actor) && (!q || `${r.type} ${r.path} ${r.label}`.toLowerCase().includes(q.toLowerCase()))), [activity, actor, q]);
+  const auditRows = useMemo(() => audit.filter((r) => (!actorSel.length || actorSel.includes(r.user_id ?? "")) && (!q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()))), [audit, actorSel, q]);
+  const moveRows = useMemo(() => activity.filter((r) => (!actorSel.length || actorSel.includes(r.user_id ?? "")) && (!q || `${r.type} ${r.path} ${r.label}`.toLowerCase().includes(q.toLowerCase()))), [activity, actorSel, q]);
 
   const { perUserDay, online } = useMemo(
     () =>
@@ -51,10 +52,10 @@ export function LogsViewer({
     () =>
       perUserDay.filter(
         (r) =>
-          (!actor || r.userId === actor) &&
+          (!actorSel.length || actorSel.includes(r.userId ?? "")) &&
           (!q || `${r.date} ${nameById[r.userId] ?? r.userId}`.toLowerCase().includes(q.toLowerCase()))
       ),
-    [perUserDay, actor, q, nameById]
+    [perUserDay, actorSel, q, nameById]
   );
 
   return (
@@ -74,10 +75,12 @@ export function LogsViewer({
 
       <div className="flex flex-wrap gap-2 mb-3">
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent" />
-        <select value={actor} onChange={(e) => setActor(e.target.value)} className="px-3 py-2 rounded-md border border-border bg-surface text-sm text-text-muted outline-none focus:ring-2 focus:ring-accent">
-          <option value="">All users</option>
-          {actors.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
+        <MultiSelect
+          label="User"
+          options={actors.map((a) => ({ value: a.id, label: a.name }))}
+          selected={actorSel}
+          onChange={setActorSel}
+        />
       </div>
 
       {tab === "signin" ? (
