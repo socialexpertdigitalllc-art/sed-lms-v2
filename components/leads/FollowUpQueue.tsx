@@ -13,11 +13,25 @@ import { RegionFilter } from "./RegionFilter";
 import MultiSelect from "@/components/common/MultiSelect";
 import { bucketOf, groupByBucket, FOLLOWUP_STATUSES } from "@/lib/leads/followups";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
+import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { useViewState } from "@/hooks/useViewState";
+import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
 import { cn } from "@/lib/utils";
+
+/** Whole days a follow-up is past due; 0 when not overdue/unset. */
+function daysOverdue(followUpTime: string | null, now = Date.now()): number {
+  if (!followUpTime) return 0;
+  const t = new Date(followUpTime).getTime();
+  if (Number.isNaN(t) || t >= now) return 0;
+  return Math.floor((now - t) / 86_400_000);
+}
+
+// Past this, a follow-up is stale enough that parking or dropping the lead is
+// usually the honest move — surface those as one-click actions on the row.
+const STALE_DAYS = 30;
 
 // Ready by default — the statuses agents actually work; the status filter can
 // widen back to every follow-up-eligible status.
@@ -38,12 +52,33 @@ export function FollowUpQueue({
   leads: Lead[];
   agentNameById: Record<string, string>;
 }) {
-  const { has } = usePermissions();
+  const { has, all } = usePermissions();
+  const { toast } = useToast();
   useRealtimeRefresh("leads");
   const canFollowUp = has("leads.followup");
+  const settable = settableStatuses(all);
+  const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
 
   const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
   const [urlState, setUrlState] = useViewState(FOLLOWUPS_DEFAULTS);
+
+  async function quickStatus(lead: Lead, status: "Long Term" | "Dropped") {
+    setStatusBusyId(lead.id);
+    try {
+      const res = await fetch(`/api/leads/${lead.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) toast({ kind: "error", title: body.error ?? `Could not move to ${status}` });
+      else toast({ kind: "success", title: `${lead.business_name} moved to ${status}` });
+    } catch {
+      toast({ kind: "error", title: "Network error — try again" });
+    } finally {
+      setStatusBusyId(null);
+    }
+  }
 
   const statusSel = useMemo(() => (urlState.status ? urlState.status.split(",") : []), [urlState.status]);
   const agentSel = useMemo(() => (urlState.agent ? urlState.agent.split(",") : []), [urlState.agent]);
@@ -96,6 +131,8 @@ export function FollowUpQueue({
   const row = (lead: Lead) => {
     const agent = (lead.agent_id && agentNameById[lead.agent_id]) || "Unassigned";
     const overdue = bucketOf(lead.follow_up_time) === "overdue";
+    const lateDays = daysOverdue(lead.follow_up_time);
+    const stale = lateDays >= STALE_DAYS;
     return (
       <div
         key={lead.id}
@@ -120,6 +157,17 @@ export function FollowUpQueue({
           >
             {formatDateTime(lead.follow_up_time)}
           </span>
+          {lateDays >= 1 && (
+            <span
+              className={
+                "rounded-full px-1.5 py-0.5 text-[10px] font-semibold " +
+                (stale ? "bg-dropped-bg text-dropped-fg" : "bg-surface-2 text-text-muted")
+              }
+              title={`Follow-up overdue by ${lateDays} day${lateDays === 1 ? "" : "s"}`}
+            >
+              {lateDays}d overdue
+            </span>
+          )}
           {lead.last_followup_status && <FuStatusChip status={lead.last_followup_status} />}
           {lead.no_pickup_streak > 1 && (
             <span className="text-xs font-medium text-dropped-fg">×{lead.no_pickup_streak}</span>
@@ -127,6 +175,26 @@ export function FollowUpQueue({
         </div>
 
         <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+          {stale && lead.status !== "Long Term" && settable.includes("Long Term") && (
+            <button
+              onClick={() => void quickStatus(lead, "Long Term")}
+              disabled={statusBusyId !== null}
+              title="Park this stale lead in Long Term"
+              className="text-xs font-medium text-longterm-fg px-2 py-1 rounded border border-border hover:bg-surface-2 disabled:opacity-50"
+            >
+              {statusBusyId === lead.id ? "…" : "Long Term"}
+            </button>
+          )}
+          {stale && settable.includes("Dropped") && (
+            <button
+              onClick={() => void quickStatus(lead, "Dropped")}
+              disabled={statusBusyId !== null}
+              title="Drop this stale lead"
+              className="text-xs font-medium text-dropped-fg px-2 py-1 rounded border border-border hover:bg-dropped-bg disabled:opacity-50"
+            >
+              {statusBusyId === lead.id ? "…" : "Drop"}
+            </button>
+          )}
           {canFollowUp && (
             <button
               onClick={() => setFollowUpLead(lead)}

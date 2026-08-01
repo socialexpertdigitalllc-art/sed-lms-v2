@@ -150,6 +150,10 @@ export async function POST(
     );
   }
 
+  // Untitled tickets render as "—" everywhere they're listed; default the
+  // title to the first checklist item so queues stay scannable.
+  const defaultTitle = parsed.data.items[0]?.trim().slice(0, 80) || null;
+
   const { data: ticket, error } = await admin
     .from("lead_tickets")
     .insert({
@@ -158,7 +162,7 @@ export async function POST(
       category: parsed.data.category,
       signature: parsed.data.signature,
       priority: parsed.data.priority,
-      title: parsed.data.title ?? null,
+      title: parsed.data.title?.trim() || defaultTitle,
       due_date: parsed.data.due_date ?? null,
       status: "Open",
     })

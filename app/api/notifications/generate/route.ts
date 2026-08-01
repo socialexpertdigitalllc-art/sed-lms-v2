@@ -106,6 +106,20 @@ export async function POST(req: Request) {
         .upsert(rows, { onConflict: "dedup_key", ignoreDuplicates: true });
     }
 
+    // Housekeeping piggybacked on the poller: a notification nobody opened in
+    // 30 days is noise, not news — auto-mark it read so bells stay honest
+    // signals. Cheap: the (user_id, read_at, created_at) index covers it.
+    try {
+      const cutoff = new Date(now.getTime() - 30 * 86_400_000).toISOString();
+      await admin
+        .from("notifications")
+        .update({ read_at: now.toISOString() })
+        .is("read_at", null)
+        .lt("created_at", cutoff);
+    } catch {
+      /* best-effort */
+    }
+
     return NextResponse.json({ created: rows.length });
   } catch (error) {
     return NextResponse.json({ error }, { status: 500 });

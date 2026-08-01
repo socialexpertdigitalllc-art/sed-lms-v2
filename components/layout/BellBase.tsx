@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Inbox } from "lucide-react";
+import { Check, ExternalLink, Inbox, Layers } from "lucide-react";
 import type { AppNotification, NotifyBell } from "@/lib/notifications/types";
+import { eventDefault } from "@/lib/notifications/events";
 import { formatDateTime } from "@/lib/leads/format";
 import { createClient } from "@/lib/supabase/client";
+
+// An event type with this many unread collapses into one summary row — a
+// burst of "New lead submitted" shouldn't bury the one-off notifications.
+const GROUP_THRESHOLD = 4;
 
 /** Shared notification-table-backed bell. Wrapped by WebsiteBell/GeneralBell with a fixed `bell`. */
 export function BellBase({
@@ -77,10 +82,39 @@ export function BellBase({
 
   const count = notes.length;
 
+  // Bursty event types collapse into one row; everything else stays a normal
+  // chronological entry.
+  const { groups, singles } = useMemo(() => {
+    const byKey = new Map<string, AppNotification[]>();
+    for (const n of notes) {
+      const list = byKey.get(n.event_key);
+      if (list) list.push(n);
+      else byKey.set(n.event_key, [n]);
+    }
+    const groups: { key: string; label: string; latest: AppNotification; items: AppNotification[] }[] = [];
+    const grouped = new Set<string>();
+    for (const [key, items] of byKey) {
+      if (items.length >= GROUP_THRESHOLD) {
+        grouped.add(key);
+        groups.push({ key, label: eventDefault(key)?.label ?? items[0].title, latest: items[0], items });
+      }
+    }
+    return { groups, singles: notes.filter((n) => !grouped.has(n.event_key)) };
+  }, [notes]);
+
   async function markRead(id: string) {
     setNotes((ns) => ns.filter((n) => n.id !== id));
     try {
       await fetch("/api/notifications/" + id + "/read", { method: "POST" });
+    } catch {
+      /* optimistic — ignore network errors */
+    }
+  }
+
+  async function markGroupRead(ids: string[]) {
+    setNotes((ns) => ns.filter((n) => !ids.includes(n.id)));
+    try {
+      await Promise.all(ids.map((id) => fetch(`/api/notifications/${id}/read`, { method: "POST" })));
     } catch {
       /* optimistic — ignore network errors */
     }
@@ -143,7 +177,35 @@ export function BellBase({
             <div className="max-h-[70vh] overflow-y-auto">
               {/* Every unread notification — the badge and this list always agree. */}
               <ul className="pb-1">
-                {notes.map((n) => (
+                {groups.map((g) => (
+                  <li key={`group:${g.key}`} className="flex items-stretch hover:bg-surface-2 transition-colors">
+                    <Link
+                      href="/notifications"
+                      onClick={() => setOpen(false)}
+                      className="block min-w-0 flex-1 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium text-text">
+                          <Layers className="h-3.5 w-3.5 shrink-0 text-text-faint" />
+                          <span className="truncate">{g.label}</span>
+                          <span className="shrink-0 rounded-full bg-accent-soft px-1.5 text-[10px] font-semibold text-accent-ink">{g.items.length}</span>
+                        </span>
+                        <span className="text-[11px] text-text-faint whitespace-nowrap">{formatDateTime(g.latest.created_at)}</span>
+                      </div>
+                      <div className="text-xs text-text-muted truncate">Latest: {g.latest.body}</div>
+                    </Link>
+                    <button
+                      type="button"
+                      title={`Mark all ${g.items.length} read`}
+                      aria-label={`Mark all ${g.items.length} ${g.label} notifications read`}
+                      onClick={() => void markGroupRead(g.items.map((n) => n.id))}
+                      className="grid w-9 shrink-0 place-items-center text-text-faint hover:text-accent-ink"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+                {singles.map((n) => (
                   <li key={n.id} className="flex items-stretch hover:bg-surface-2 transition-colors">
                     <Link
                       href={n.target_url ?? (n.lead_id ? `/leads/${n.lead_id}` : "#")}

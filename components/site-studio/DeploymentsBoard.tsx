@@ -72,6 +72,10 @@ export function DeploymentsBoard() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const [syncing, setSyncing] = useState(false);
+
   const [uploadOpen, setUploadOpen] = useState<{ target?: string | null } | null>(null);
   const [linkFor, setLinkFor] = useState<{ deploymentId: string | null; subdomain: string | null; url: string; optional?: boolean } | null>(null);
   const [transferRow, setTransferRow] = useState<{ id: string; name: string } | null>(null);
@@ -82,27 +86,51 @@ export function DeploymentsBoard() {
   const overrideInput = useRef<HTMLInputElement>(null);
   const overrideRowRef = useRef<BoardRow | null>(null);
 
+  const fetchBoard = useCallback(async (v: View, fast: boolean) => {
+    const res = await fetch(`/api/site-studio/deployments?view=${v}${fast ? "&fast=1" : ""}`);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? "Could not load deployments");
+    return body as {
+      rows?: BoardRow[];
+      counts?: Counts;
+      daDomain?: string;
+      hostingWarning?: string | null;
+    };
+  }, []);
+
+  /**
+   * Two-phase load: tracked DB rows paint immediately (fast=1 skips the
+   * hosting round-trips), then the hosting-merged truth replaces them. The
+   * server caches the hosting inventory for 60s, so only a cold load pays
+   * the slow DirectAdmin listing.
+   */
   const load = useCallback(
-    async (opts?: { view?: View }) => {
+    async (opts?: { view?: View; skipFastPhase?: boolean }) => {
+      const v = opts?.view ?? view;
       setLoading(true);
       try {
-        const v = opts?.view ?? view;
-        const res = await fetch(`/api/site-studio/deployments?view=${v}`);
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(body.error ?? "Could not load deployments");
-        setRows((body.rows ?? []) as BoardRow[]);
-        setCounts((body.counts ?? {}) as Counts);
-        if (body.daDomain) setDaDomain(body.daDomain);
-        if (body.hostingWarning) toast({ kind: "info", title: body.hostingWarning });
+        if (!opts?.skipFastPhase) {
+          const quick = await fetchBoard(v, true);
+          setRows((quick.rows ?? []) as BoardRow[]);
+          if (quick.daDomain) setDaDomain(quick.daDomain);
+          setLoading(false);
+          setSyncing(true);
+        }
+        const full = await fetchBoard(v, false);
+        setRows((full.rows ?? []) as BoardRow[]);
+        setCounts((full.counts ?? {}) as Counts);
+        if (full.daDomain) setDaDomain(full.daDomain);
+        if (full.hostingWarning) toast({ kind: "info", title: full.hostingWarning });
         setSelected(new Set());
       } catch (e) {
         toast({ kind: "error", title: e instanceof Error ? e.message : "Could not load deployments" });
       } finally {
         setLoading(false);
+        setSyncing(false);
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [toast, view],
+    [toast, view, fetchBoard],
   );
 
   useEffect(() => {
@@ -112,6 +140,7 @@ export function DeploymentsBoard() {
 
   function changeView(next: View) {
     setView(next);
+    setPage(0);
     void load({ view: next });
   }
 
@@ -126,7 +155,16 @@ export function DeploymentsBoard() {
     );
   }, [rows, q]);
 
+  // Selection spans the whole filtered view (all pages), so "select all" +
+  // bulk delete works as a cleanup tool on hundreds of stale subdomains.
   const selectable = useMemo(() => visible.filter((r) => r.subdomain && !r.isCustomDomain), [visible]);
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = useMemo(
+    () => visible.slice(safePage * pageSize, safePage * pageSize + pageSize),
+    [visible, safePage, pageSize],
+  );
 
   function toggleSelect(sub: string) {
     setSelected((prev) => {
@@ -194,21 +232,33 @@ export function DeploymentsBoard() {
     setConfirmBulk(null);
     setBusyKey("bulk");
     try {
-      const res = await fetch("/api/site-studio/deployments/bulk-delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subdomains: subs }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) toast({ kind: "error", title: body.error ?? "Delete failed" });
-      else {
-        const failed = ((body.results ?? []) as { ok: boolean; subdomain: string }[]).filter((r) => !r.ok);
-        toast(
-          failed.length
-            ? { kind: "error", title: `${subs.length - failed.length} deleted, ${failed.length} failed`, body: failed.map((f) => f.subdomain).join(", ") }
-            : { kind: "success", title: `${subs.length} subdomain${subs.length > 1 ? "s" : ""} deleted` },
-        );
+      // The route caps a batch at 50 — chunk sequentially so a full-view
+      // cleanup of hundreds of stale subdomains works in one click.
+      const failed: string[] = [];
+      let deleted = 0;
+      for (let i = 0; i < subs.length; i += 50) {
+        const chunk = subs.slice(i, i + 50);
+        const res = await fetch("/api/site-studio/deployments/bulk-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subdomains: chunk }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          toast({ kind: "error", title: body.error ?? "Delete failed", body: `${deleted} deleted before the error.` });
+          await load();
+          return;
+        }
+        for (const r of (body.results ?? []) as { ok: boolean; subdomain: string }[]) {
+          if (r.ok) deleted++;
+          else failed.push(r.subdomain);
+        }
       }
+      toast(
+        failed.length
+          ? { kind: "error", title: `${deleted} deleted, ${failed.length} failed`, body: failed.slice(0, 10).join(", ") + (failed.length > 10 ? ` +${failed.length - 10} more` : "") }
+          : { kind: "success", title: `${deleted} subdomain${deleted === 1 ? "" : "s"} deleted` },
+      );
       await load();
     } finally {
       setBusyKey(null);
@@ -310,12 +360,13 @@ export function DeploymentsBoard() {
             placeholder="Search subdomain or business…"
             aria-label="Search deployments"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => { setQ(e.target.value); setPage(0); }}
           />
         </div>
-        <button type="button" className={iconBtn} title="Refresh" aria-label="Refresh" onClick={() => void load()}>
-          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        <button type="button" className={iconBtn} title="Refresh" aria-label="Refresh" onClick={() => void load({ skipFastPhase: true })}>
+          <RefreshCw className={cn("h-4 w-4", (loading || syncing) && "animate-spin")} />
         </button>
+        {syncing ? <span className="text-xs text-text-faint">Syncing hosting…</span> : null}
       </div>
 
       {selected.size > 0 ? (
@@ -367,7 +418,7 @@ export function DeploymentsBoard() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((row) => {
+              {pageRows.map((row) => {
                 const key = row.id ?? row.subdomain ?? row.url;
                 const busy = busyKey !== null;
                 const rowBusy = busyKey === (row.id ?? row.subdomain);
@@ -481,6 +532,32 @@ export function DeploymentsBoard() {
         </div>
       )}
 
+      {!loading && visible.length > pageSize ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          <label className="flex items-center gap-2 text-text-muted">
+            Rows per page
+            <select
+              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text outline-none focus:ring-2 focus:ring-accent"
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(0); }}
+            >
+              {[25, 50, 100].map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <div className="flex items-center gap-2">
+            <span className="text-text-muted">Page {safePage + 1} of {pageCount} · {visible.length} sites</span>
+            <button type="button" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}
+              className="rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted hover:text-text disabled:opacity-40">
+              Prev
+            </button>
+            <button type="button" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)}
+              className="rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted hover:text-text disabled:opacity-40">
+              Next
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <input ref={overrideInput} type="file" accept=".zip,application/zip" className="hidden" onChange={(e) => void onOverrideFile(e)} />
 
       {uploadOpen ? (
@@ -548,7 +625,7 @@ export function DeploymentsBoard() {
       {confirmBulk ? (
         <ConfirmDialog
           title={`Delete ${confirmBulk.length} subdomain${confirmBulk.length > 1 ? "s" : ""}?`}
-          body={`${confirmBulk.map((s) => `${s}.${daDomain}`).join(", ")} — the sites go offline and their files are removed. Linked leads' website links are cleared.`}
+          body={`${confirmBulk.slice(0, 10).map((s) => `${s}.${daDomain}`).join(", ")}${confirmBulk.length > 10 ? ` +${confirmBulk.length - 10} more` : ""} — the sites go offline and their files are removed. Linked leads' website links are cleared.`}
           confirmLabel="Delete"
           danger
           onCancel={() => setConfirmBulk(null)}

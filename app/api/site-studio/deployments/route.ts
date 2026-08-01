@@ -11,6 +11,31 @@ export const maxDuration = 60;
 const LEGACY_STATUSES = new Set(["live", "taken_down", "failed"]);
 const VIEWS = new Set(["all", "ready", "manual", "other", "live"]);
 
+// The DirectAdmin subdomain listing takes seconds on a 700-subdomain account
+// and Hostinger adds another round-trip — far too slow to pay on every tab
+// click. One in-process cache (single pm2 process) with a short TTL keeps the
+// board snappy; mutating routes don't invalidate it, so a just-created
+// subdomain may take up to TTL to appear as "untracked" (its tracked DB row
+// shows immediately, which is what the board leads with anyway).
+const HOSTING_CACHE_TTL_MS = 60_000;
+let hostingCache: { at: number; subs: string[] | null; domains: string[] | null } | null = null;
+
+async function fetchHostingInventory(): Promise<{ subs: string[] | null; domains: string[] | null }> {
+  const now = Date.now();
+  if (hostingCache && now - hostingCache.at < HOSTING_CACHE_TTL_MS) {
+    return hostingCache;
+  }
+  const [subs, domains] = await Promise.all([
+    daConfigured() ? listSubdomains() : Promise.resolve(null),
+    hostingerConfigured()
+      ? listDomains().then((ds) => ds.filter((d) => (d.status ?? "").toLowerCase() === "active").map((d) => d.domain))
+      : Promise.resolve(null),
+  ]);
+  // Don't cache a failed listing — retry on the next request instead.
+  if (subs !== null || domains !== null) hostingCache = { at: now, subs, domains };
+  return { subs, domains };
+}
+
 /**
  * GET /api/site-studio/deployments — the unified deployments board.
  *
@@ -49,17 +74,17 @@ export async function GET(req: Request) {
   if (!view) return NextResponse.json({ deployments: data ?? [] });
 
   const daDomain = process.env.DA_DOMAIN ?? "";
-  const [subs, domains] = await Promise.all([
-    daConfigured() ? listSubdomains() : Promise.resolve(null),
-    hostingerConfigured()
-      ? listDomains().then((ds) => ds.filter((d) => (d.status ?? "").toLowerCase() === "active").map((d) => d.domain))
-      : Promise.resolve(null),
-  ]);
+  // `fast=1` = first-paint request: DB rows only, no hosting round-trips.
+  // The client follows up with a full request that merges hosting truth.
+  const fast = searchParams.get("fast") === "1";
+  const { subs, domains } = fast
+    ? { subs: null as string[] | null, domains: null as string[] | null }
+    : await fetchHostingInventory();
 
   const board = buildBoard((data ?? []) as unknown as TrackedRow[], subs, domains, daDomain);
   const warnings: string[] = [];
-  if (daConfigured() && subs === null) warnings.push("Could not list hosting subdomains — showing tracked rows only.");
-  if (hostingerConfigured() && domains === null) warnings.push("Could not list hosting domains.");
+  if (!fast && daConfigured() && subs === null) warnings.push("Could not list hosting subdomains — showing tracked rows only.");
+  if (!fast && hostingerConfigured() && domains === null) warnings.push("Could not list hosting domains.");
 
   return NextResponse.json({
     rows: filterByView(board, VIEWS.has(view) ? view : "all"),
@@ -73,5 +98,6 @@ export async function GET(req: Request) {
     daDomain,
     hostingerConfigured: hostingerConfigured(),
     hostingWarning: warnings.length ? warnings.join(" ") : null,
+    hostingSynced: !fast,
   });
 }

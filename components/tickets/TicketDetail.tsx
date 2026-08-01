@@ -149,7 +149,7 @@ export function TicketDetail({
           <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-accent-ink">Ticket</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <h1 className="font-display text-2xl font-semibold leading-tight text-text">
-              {ticket.title || ticket.category}
+              {ticket.title || items[0]?.body || ticket.category}
             </h1>
             <TicketStatusChip status={ticket.status} />
             <TicketPriorityBadge priority={ticket.priority} />

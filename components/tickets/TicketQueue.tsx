@@ -260,7 +260,9 @@ export function TicketQueue({
                           {t.business_name ?? "—"}
                         </Link>
                       </td>
-                      <td className="max-w-56 truncate px-3 py-2 text-text-muted">{t.title ?? "—"}</td>
+                      <td className="max-w-56 truncate px-3 py-2 text-text-muted">
+                        {t.title ?? t.items?.[0]?.body ?? "—"}
+                      </td>
                       <td className="px-3 py-2 text-xs text-text-muted">{t.category}</td>
                       <td className="px-3 py-2">
                         <span className="inline-flex items-center gap-1.5">

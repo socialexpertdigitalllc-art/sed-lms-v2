@@ -51,7 +51,10 @@ export async function GET() {
         return count ?? 0;
       })
     );
-    // Overdue actionable follow-ups: past follow-up time, still an open lead.
+    // Overdue actionable follow-ups. Scoped to the follow-up-ELIGIBLE statuses
+    // (Ready, Long Term) so the badge counts the same population the
+    // Follow-ups page shows — a badge that disagrees with its page erodes
+    // trust in every other badge.
     tasks.push(
       run("followups", async () => {
         const { count, error } = await supabase
@@ -59,7 +62,7 @@ export async function GET() {
           .select("*", { count: "exact", head: true })
           .is("deleted_at", null)
           .lt("follow_up_time", nowIso)
-          .not("status", "in", "(Closed,Dropped)");
+          .in("status", ["Ready", "Long Term"]);
         if (error) throw error;
         return count ?? 0;
       })
