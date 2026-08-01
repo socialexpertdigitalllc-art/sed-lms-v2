@@ -8,3 +8,12 @@ export function toDateTimeLocal(d: Date): string {
 export function inMinutes(mins: number, from?: Date): string {
   return toDateTimeLocal(new Date((from ?? new Date()).getTime() + mins * 60_000));
 }
+
+/** datetime-local value a combined days/hours/minutes offset after `from` (defaults to now). */
+export function inOffset(
+  offset: { days?: number; hours?: number; minutes?: number },
+  from?: Date,
+): string {
+  const mins = (offset.days ?? 0) * 24 * 60 + (offset.hours ?? 0) * 60 + (offset.minutes ?? 0);
+  return inMinutes(mins, from);
+}

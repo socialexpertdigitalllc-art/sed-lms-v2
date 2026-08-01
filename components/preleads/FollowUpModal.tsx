@@ -9,7 +9,7 @@ import {
   LEAD_CATEGORIES,
 } from "@/lib/preleads/types";
 import { toDateTimeLocal } from "@/lib/leads/format";
-import { inMinutes } from "@/lib/dates/datetimeLocal";
+import { inOffset } from "@/lib/dates/datetimeLocal";
 
 const QUICK_MINUTE_PRESETS = [15, 30, 60, 120] as const;
 
@@ -26,7 +26,9 @@ export function FollowUpModal({
   const [status, setStatus] = useState(preLead.status);
   const [reason, setReason] = useState("");
   const [followUpTime, setFollowUpTime] = useState(toDateTimeLocal(preLead.follow_up_time));
-  // "In X minutes" quick-set; cleared when the datetime is edited by hand (one-way).
+  // "In X days/hours/minutes" quick-set; cleared when the datetime is edited by hand (one-way).
+  const [quickDays, setQuickDays] = useState("");
+  const [quickHours, setQuickHours] = useState("");
   const [quickMins, setQuickMins] = useState("");
   const [category, setCategory] = useState("");
   const [busy, setBusy] = useState(false);
@@ -36,12 +38,21 @@ export function FollowUpModal({
 
   const isFollowUp = status === "Next follow up";
 
-  /** Typing a minute count (or clicking a preset) sets the datetime to now + n minutes. */
-  function applyQuickMinutes(raw: string) {
-    setQuickMins(raw);
-    const n = Number(raw);
-    if (raw !== "" && Number.isFinite(n) && n >= 1) {
-      setFollowUpTime(inMinutes(Math.floor(n)));
+  /** Any quick field (or a preset click) sets the datetime to now + combined offset. */
+  function applyQuickOffset(next: { days?: string; hours?: string; mins?: string }) {
+    const days = next.days ?? quickDays;
+    const hours = next.hours ?? quickHours;
+    const mins = next.mins ?? quickMins;
+    if (next.days !== undefined) setQuickDays(next.days);
+    if (next.hours !== undefined) setQuickHours(next.hours);
+    if (next.mins !== undefined) setQuickMins(next.mins);
+    const num = (raw: string) => {
+      const n = Number(raw);
+      return raw !== "" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+    };
+    const total = { days: num(days), hours: num(hours), minutes: num(mins) };
+    if (total.days + total.hours + total.minutes >= 1) {
+      setFollowUpTime(inOffset(total));
     }
   }
 
@@ -129,9 +140,27 @@ export function FollowUpModal({
                 <span className="text-xs text-text-muted">In</span>
                 <input
                   type="number"
-                  min={1}
+                  min={0}
+                  value={quickDays}
+                  onChange={(e) => applyQuickOffset({ days: e.target.value })}
+                  aria-label="Next follow-up in days"
+                  className="w-14 rounded-md border border-border bg-surface px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-accent"
+                />
+                <span className="text-xs text-text-muted">d</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={quickHours}
+                  onChange={(e) => applyQuickOffset({ hours: e.target.value })}
+                  aria-label="Next follow-up in hours"
+                  className="w-14 rounded-md border border-border bg-surface px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-accent"
+                />
+                <span className="text-xs text-text-muted">h</span>
+                <input
+                  type="number"
+                  min={0}
                   value={quickMins}
-                  onChange={(e) => applyQuickMinutes(e.target.value)}
+                  onChange={(e) => applyQuickOffset({ mins: e.target.value })}
                   aria-label="Next follow-up in minutes"
                   className="w-16 rounded-md border border-border bg-surface px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-accent"
                 />
@@ -140,10 +169,10 @@ export function FollowUpModal({
                   <button
                     key={m}
                     type="button"
-                    onClick={() => applyQuickMinutes(String(m))}
+                    onClick={() => applyQuickOffset({ days: "", hours: "", mins: String(m) })}
                     className={
                       "rounded-full border px-2.5 py-1 text-xs transition-colors " +
-                      (quickMins === String(m)
+                      (quickMins === String(m) && !quickDays && !quickHours
                         ? "border-accent bg-accent-soft font-medium text-accent-ink"
                         : "border-border text-text-muted hover:bg-surface-2")
                     }
@@ -157,6 +186,8 @@ export function FollowUpModal({
                 value={followUpTime}
                 onChange={(e) => {
                   setFollowUpTime(e.target.value);
+                  setQuickDays("");
+                  setQuickHours("");
                   setQuickMins("");
                 }}
                 className="w-full mt-1.5 px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
