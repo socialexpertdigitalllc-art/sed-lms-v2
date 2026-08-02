@@ -10,8 +10,10 @@ import {
   deleteSubdomain,
   subdomainExists,
   uploadZipAndExtract,
+  clearDocroot,
   docrootFor,
 } from "@/lib/template-engine/directadmin";
+import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import {
   baseSubdomain,
   parseVersion,
@@ -69,15 +71,33 @@ export async function POST(_req: Request, ctx: Ctx) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "No free subdomain" }, { status: 502 });
   }
 
-  // 1. current live files
-  const zip = await archiveDocroot(oldSub);
-  if (!zip) return NextResponse.json({ error: "Could not read the current site files" }, { status: 502 });
+  // 1. current live files. DirectAdmin's archive nests everything under the
+  // docroot folder name (e.g. "public_html/…"); re-pack it through
+  // unzipToMap (strips the shared root, guards zip-slip) so extraction lands
+  // the files at the new docroot's ROOT — the transfer flow's own trick.
+  const rawZip = await archiveDocroot(oldSub);
+  if (!rawZip) return NextResponse.json({ error: "Could not read the current site files" }, { status: 502 });
+  let zip: Uint8Array;
+  try {
+    const map = unzipToMap(rawZip);
+    if (!Object.keys(map).length) throw new Error("archive is empty");
+    zip = zipFromMap(map);
+  } catch (e) {
+    return NextResponse.json(
+      { error: `Could not repack the site files: ${e instanceof Error ? e.message : "bad archive"}` },
+      { status: 502 },
+    );
+  }
 
   // 2. create + upload to the new subdomain; roll it back on failure
   const created = await createSubdomain(newSub);
   if (created.error) {
     return NextResponse.json({ error: `Could not create ${newSub}: ${created.text || created.details}` }, { status: 502 });
   }
+  // Drop DirectAdmin's auto-created placeholder so nothing stale shadows the
+  // real site (warning-only, same as the deploy flows).
+  const cleared = await clearDocroot(newSub);
+  if (!cleared.ok) console.warn(`[shuffle] clearDocroot(${newSub}) failed: ${cleared.message}`);
   const uploaded = await uploadZipAndExtract(newSub, zip, "site.zip");
   if (!uploaded.ok && uploaded.failedStep !== "delete") {
     await deleteSubdomain(newSub); // rollback — the old site is untouched
