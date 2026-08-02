@@ -29,6 +29,77 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.10.0",
+    date: "2026-08-02",
+    title: "One deployments board",
+    changes: [
+      {
+        kind: "feature",
+        text: "All deployments now live in a single board under Site Builder, showing every site on the hosting — generated, hand-uploaded and custom-domain — categorised into Ready, Manual, Others and Live Websites. The old Deployed Sites page redirects here.",
+      },
+      {
+        kind: "feature",
+        text: "Shuffle a live site to a fresh subdomain in one click: the current files move to the next version of its address, the old subdomain is removed, the lead's website link is updated and the agent is notified.",
+      },
+      {
+        kind: "feature",
+        text: "Uploading over an existing subdomain now asks whether to override it in place or publish a new version subdomain; either way the site stays tracked on the board. New uploads can be linked to a lead right after publishing (optional).",
+      },
+      {
+        kind: "feature",
+        text: "Any subdomain — including ones uploaded outside the dashboard — can be linked to a lead, moved to a custom .com domain, or overridden with a zip upload. Going live on a custom domain updates the lead's website link and notifies the agent and management.",
+      },
+      {
+        kind: "feature",
+        text: "Bulk-select subdomains and delete them together — selection spans the whole filtered view, so clearing out hundreds of stale sites is one click.",
+      },
+      {
+        kind: "feature",
+        text: "New subdomain naming: the first two words of the business name (up to 20 characters) plus a version, e.g. joes-plumbingv1.dmviral.com.",
+      },
+      {
+        kind: "feature",
+        text: "Sidebar items with multiple screens now expand into a submenu — jump straight to Site Builder's Templates, New Site, Runs or Deployments.",
+      },
+      {
+        kind: "feature",
+        text: "The Follow-ups page opens on Ready leads by default and gained the full filter set: search, status, agent, type, region and due-date buckets. Leads overdue by 30+ days show their age and offer one-click Long Term or Drop.",
+      },
+      {
+        kind: "feature",
+        text: "Follow-up scheduling now takes days and hours as well as minutes for the quick time pick.",
+      },
+      {
+        kind: "feature",
+        text: "Tickets can now be opened for Closed leads, and the Tickets page works like the Leads page: status tabs with counts, filters, and a paginated table. Ticket pages show the lead's website with an open-in-new-tab link.",
+      },
+      {
+        kind: "feature",
+        text: "Choose which lead statuses trigger your follow-up reminders — for example, Ready only — from the Notifications page.",
+      },
+      {
+        kind: "improvement",
+        text: "The notification bells now show every unread notification, collapse bursts of the same kind into one row, and website notifications open the live site in a new tab (marking themselves read).",
+      },
+      {
+        kind: "improvement",
+        text: "Filter dropdowns across the dashboard are now multi-select — combine several agents, types, statuses or regions at once.",
+      },
+      {
+        kind: "improvement",
+        text: "Sidebar counters refresh reliably for everyone, and the Follow-ups badge now counts the same leads the page shows.",
+      },
+      {
+        kind: "improvement",
+        text: "The deployments board paints instantly and pages its rows; the hosting inventory is cached so tab switches are immediate.",
+      },
+      {
+        kind: "improvement",
+        text: "New tickets without a title take their first checklist item as the title, so lists stay scannable. Notifications unread for over 30 days clear themselves.",
+      },
+    ],
+  },
+  {
     version: "2.9.0",
     date: "2026-07-28",
     title: "Photos from Google profiles",
