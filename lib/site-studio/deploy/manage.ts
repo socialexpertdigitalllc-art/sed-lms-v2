@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { docrootFor } from "@/lib/template-engine/directadmin";
+import { getWebsite } from "@/lib/hostinger/client";
 
 type Admin = SupabaseClient;
 
@@ -78,6 +79,54 @@ export async function adoptSubdomain(
     return {
       error: /origin/.test(msg)
         ? "Tracking this subdomain needs DB migration 0066 (origin 'manual') applied first."
+        : msg,
+    };
+  }
+  return { row: created as DeploymentRecord };
+}
+
+/**
+ * Find-or-create the board row for a custom hosting DOMAIN (an addon website
+ * on the Hostinger plan). The domain doubles as the row's `subdomain` label —
+ * the unique key — while the url/docroot mark it as a custom-domain row, so
+ * override-upload and takedown route to the Hostinger paths.
+ */
+export async function adoptDomain(
+  admin: Admin,
+  domain: string,
+  actorId: string,
+): Promise<{ row: DeploymentRecord } | { error: string }> {
+  const url = `https://${domain}`;
+  const { data: existing } = await admin
+    .from("studio_deployments")
+    .select("id, lead_id, subdomain, url, status, origin")
+    .or(`subdomain.eq.${domain},url.eq.${url}`)
+    .maybeSingle();
+  if (existing) return { row: existing as DeploymentRecord };
+
+  const site = await getWebsite(domain);
+  if (!site) return { error: `No hosting website found for ${domain}` };
+
+  const { data: created, error } = await admin
+    .from("studio_deployments")
+    .insert({
+      lead_id: null,
+      run_id: null,
+      subdomain: domain,
+      docroot: site.root_directory,
+      url,
+      status: "live",
+      origin: "manual",
+      deployed_at: new Date().toISOString(),
+      deployed_by: actorId,
+    })
+    .select("id, lead_id, subdomain, url, status, origin")
+    .single();
+  if (error || !created) {
+    const msg = error?.message ?? "insert failed";
+    return {
+      error: /origin/.test(msg)
+        ? "Tracking this domain needs DB migration 0066 (origin 'manual') applied first."
         : msg,
     };
   }

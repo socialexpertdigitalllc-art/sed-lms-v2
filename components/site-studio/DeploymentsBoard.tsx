@@ -287,9 +287,49 @@ export function DeploymentsBoard() {
     }
   }
 
-  function overrideCustom(row: BoardRow) {
-    overrideRowRef.current = row;
+  /** Track an untracked custom domain so id-keyed actions can run on it. */
+  async function adoptDomainRow(row: BoardRow): Promise<BoardRow | null> {
+    const domain = row.url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    setBusyKey(row.url);
+    try {
+      const res = await fetch("/api/site-studio/deployments/adopt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ kind: "error", title: body.error ?? "Could not track this domain" });
+        return null;
+      }
+      return { ...row, id: body.deploymentId as string, status: "live" };
+    } catch {
+      toast({ kind: "error", title: "Network error — try again" });
+      return null;
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function overrideCustom(row: BoardRow) {
+    let target = row;
+    if (!target.id && target.isCustomDomain) {
+      const adopted = await adoptDomainRow(target);
+      if (!adopted) return;
+      target = adopted;
+    }
+    overrideRowRef.current = target;
     overrideInput.current?.click();
+  }
+
+  async function takedownCustom(row: BoardRow) {
+    let target = row;
+    if (!target.id && target.isCustomDomain) {
+      const adopted = await adoptDomainRow(target);
+      if (!adopted) return;
+      target = adopted;
+    }
+    setConfirmTakedown(target);
   }
 
   async function onOverrideFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -421,7 +461,10 @@ export function DeploymentsBoard() {
               {pageRows.map((row) => {
                 const key = row.id ?? row.subdomain ?? row.url;
                 const busy = busyKey !== null;
-                const rowBusy = busyKey === (row.id ?? row.subdomain);
+                // Guard against null === null: untracked custom-domain rows
+                // have neither id nor subdomain, and must not read as busy
+                // whenever the board is idle.
+                const rowBusy = busyKey !== null && busyKey === key;
                 const canSelect = Boolean(row.subdomain) && !row.isCustomDomain;
                 const liveStaging = !row.isCustomDomain && (row.status === "live" || row.status === "untracked");
                 return (
@@ -497,13 +540,13 @@ export function DeploymentsBoard() {
                               </button>
                             )}
                           </>
-                        ) : row.isCustomDomain && row.id && row.status === "live" ? (
+                        ) : row.isCustomDomain && (row.status === "live" || row.status === "untracked") ? (
                           <>
                             <button type="button" className={iconBtn} title="Override with a zip upload"
-                              aria-label={`Upload new files to ${row.url}`} disabled={busy} onClick={() => overrideCustom(row)}>
+                              aria-label={`Upload new files to ${row.url}`} disabled={busy} onClick={() => void overrideCustom(row)}>
                               <Upload className="h-4 w-4" />
                             </button>
-                            {!row.leadId ? (
+                            {row.id && !row.leadId ? (
                               <button type="button" className={iconBtn} title="Link to a lead"
                                 aria-label={`Link ${row.url} to a lead`} disabled={busy}
                                 onClick={() => setLinkFor({ deploymentId: row.id, subdomain: null, url: row.url })}>
@@ -511,7 +554,7 @@ export function DeploymentsBoard() {
                               </button>
                             ) : null}
                             <button type="button" className={iconBtnDanger} title="Take down"
-                              aria-label={`Take down ${row.url}`} disabled={busy} onClick={() => setConfirmTakedown(row)}>
+                              aria-label={`Take down ${row.url}`} disabled={busy} onClick={() => void takedownCustom(row)}>
                               <Trash2 className="h-4 w-4" />
                             </button>
                           </>
