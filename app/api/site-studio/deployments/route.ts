@@ -1,9 +1,25 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { daConfigured, listSubdomains } from "@/lib/template-engine/directadmin";
+import { daConfigured, ensureWildcardDns, listSubdomains } from "@/lib/template-engine/directadmin";
 import { hostingerConfigured, listDomains } from "@/lib/hostinger/client";
 import { buildBoard, filterByView, type TrackedRow } from "@/lib/site-studio/deploy/categorize";
+import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
+
+// One shot per server process: make sure *.DA_DOMAIN resolves via a wildcard
+// A record, so fresh subdomains don't sit behind DNS propagation. Fail-soft —
+// a DNS API hiccup must never break the board.
+let wildcardEnsured: Promise<void> | null = null;
+function ensureWildcardOnce(): void {
+  if (!wildcardEnsured && daConfigured()) {
+    wildcardEnsured = ensureWildcardDns()
+      .then((r) => {
+        if (r === "added") console.log("[deployments] wildcard DNS record added for *." + (process.env.DA_DOMAIN ?? ""));
+        if (r === "failed") console.warn("[deployments] could not verify/add the wildcard DNS record");
+      })
+      .catch(() => {});
+  }
+}
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -81,7 +97,16 @@ export async function GET(req: Request) {
     ? { subs: null as string[] | null, domains: null as string[] | null }
     : await fetchHostingInventory();
 
-  const board = buildBoard((data ?? []) as unknown as TrackedRow[], subs, domains, daDomain);
+  ensureWildcardOnce();
+
+  const board = buildBoard((data ?? []) as unknown as TrackedRow[], subs, domains, daDomain).map((r) => {
+    if (!r.isCustomDomain) return { ...r, protected: false };
+    let host: string | null = null;
+    try {
+      host = new URL(r.url).hostname;
+    } catch {}
+    return { ...r, protected: isProtectedDomain(host) };
+  });
   const warnings: string[] = [];
   if (!fast && daConfigured() && subs === null) warnings.push("Could not list hosting subdomains — showing tracked rows only.");
   if (!fast && hostingerConfigured() && domains === null) warnings.push("Could not list hosting domains.");

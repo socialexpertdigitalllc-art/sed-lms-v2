@@ -6,6 +6,7 @@ import {
   Globe,
   Link2,
   Loader2,
+  Lock,
   RefreshCw,
   Search,
   Shuffle,
@@ -34,6 +35,8 @@ export interface BoardRow {
   leadStatus: string | null;
   deployedAt: string | null;
   isCustomDomain: boolean;
+  /** Company infrastructure (PROTECTED_DOMAINS) — destructive actions hidden. */
+  protected?: boolean;
 }
 
 type View = "all" | "ready" | "manual" | "other" | "live";
@@ -540,6 +543,13 @@ export function DeploymentsBoard() {
                               </button>
                             )}
                           </>
+                        ) : row.isCustomDomain && row.protected ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-xs text-text-faint"
+                            title="Protected company domain — destructive actions are disabled (PROTECTED_DOMAINS)"
+                          >
+                            <Lock className="h-3.5 w-3.5" /> Protected
+                          </span>
                         ) : row.isCustomDomain && (row.status === "live" || row.status === "untracked") ? (
                           <>
                             <button type="button" className={iconBtn} title="Override with a zip upload"

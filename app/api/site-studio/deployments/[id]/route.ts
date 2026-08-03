@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { deleteSubdomain, subFromWebsiteLink } from "@/lib/template-engine/directadmin";
 import { hostingerConfigured, deleteWebsite } from "@/lib/hostinger/client";
+import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -80,6 +81,12 @@ export async function DELETE(req: Request, ctx: Ctx) {
     }
   } else {
     const domain = row.url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (isProtectedDomain(domain)) {
+      return NextResponse.json(
+        { error: `${domain} is a protected company domain — it cannot be taken down from the board.` },
+        { status: 403 },
+      );
+    }
     if (!hostingerConfigured()) {
       return NextResponse.json(
         { error: `This site lives on ${domain} (custom domain) and Hostinger is not configured to remove it.` },

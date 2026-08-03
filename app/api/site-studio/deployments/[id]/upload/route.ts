@@ -9,6 +9,7 @@ import {
 } from "@/lib/template-engine/directadmin";
 import { hostingerConfigured, getWebsite } from "@/lib/hostinger/client";
 import { deployZipToDir } from "@/lib/template-engine/fsDeploy";
+import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -73,6 +74,12 @@ export async function POST(req: Request, ctx: Ctx) {
       domain = new URL(row.url).hostname.toLowerCase();
     } catch {
       return NextResponse.json({ error: "Deployment URL is not valid" }, { status: 409 });
+    }
+    if (isProtectedDomain(domain)) {
+      return NextResponse.json(
+        { error: `${domain} is a protected company domain — its files cannot be overridden from the board.` },
+        { status: 403 },
+      );
     }
     const site = await getWebsite(domain);
     if (!site) return NextResponse.json({ error: `No hosting website found for ${domain}` }, { status: 502 });

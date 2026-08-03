@@ -139,6 +139,36 @@ export async function deleteSubdomain(sub: string): Promise<DaResult> {
   });
 }
 
+/**
+ * Ensure a wildcard A record (*.DA_DOMAIN -> the apex's own IP) exists in the
+ * zone. Without it every new subdomain waits on per-record DNS propagation —
+ * minutes of "site not found" after a deploy/shuffle even though the vhost is
+ * already live. Idempotent and fail-soft; returns what it did.
+ */
+export async function ensureWildcardDns(): Promise<"exists" | "added" | "failed"> {
+  const domain = process.env.DA_DOMAIN ?? "";
+  const zone = await daCall("CMD_API_DNS_CONTROL", { domain, json: "yes" });
+  if (zone.error) return "failed";
+  let apexIp: string | null = null;
+  try {
+    const parsed = JSON.parse(zone.raw) as { records?: { type?: string; name?: string; value?: string }[] };
+    const records = parsed.records ?? [];
+    if (records.some((r) => r.type === "A" && r.name === "*")) return "exists";
+    apexIp = records.find((r) => r.type === "A" && (r.name === domain + "." || r.name === "" || r.name === "@"))?.value ?? null;
+  } catch {
+    return "failed";
+  }
+  if (!apexIp) return "failed";
+  const added = await daCall("CMD_API_DNS_CONTROL", {
+    domain,
+    action: "add",
+    type: "A",
+    name: "*",
+    value: apexIp,
+  });
+  return added.error ? "failed" : "added";
+}
+
 /** All subdomain labels on DA_DOMAIN. Null when the listing itself fails (never []). */
 export async function listSubdomains(): Promise<string[] | null> {
   const res = await daCall("CMD_API_SUBDOMAINS", { domain: process.env.DA_DOMAIN ?? "" });

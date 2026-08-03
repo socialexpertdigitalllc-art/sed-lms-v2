@@ -4,6 +4,7 @@ import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { subdomainExists } from "@/lib/template-engine/directadmin";
 import { hostingerConfigured } from "@/lib/hostinger/client";
 import { adoptDomain, adoptSubdomain } from "@/lib/site-studio/deploy/manage";
+import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -29,8 +30,8 @@ export async function POST(req: Request) {
 
   if (domain) {
     if (!DOMAIN_RE.test(domain)) return NextResponse.json({ error: "Invalid domain" }, { status: 422 });
-    if (domain === (process.env.DA_DOMAIN ?? "").toLowerCase()) {
-      return NextResponse.json({ error: "The staging apex is infrastructure, not a client site" }, { status: 422 });
+    if (isProtectedDomain(domain)) {
+      return NextResponse.json({ error: `${domain} is a protected company domain.` }, { status: 403 });
     }
     if (!hostingerConfigured()) return NextResponse.json({ error: "Hostinger is not configured." }, { status: 422 });
     const adopted = await adoptDomain(admin, domain, auth.userId);
