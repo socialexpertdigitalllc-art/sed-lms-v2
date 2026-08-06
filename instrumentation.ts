@@ -10,6 +10,12 @@ export async function register() {
   if (started) return; // guard against dev HMR double-registration
   started = true;
 
+  // Poller cadences: every tick below runs DB queries (often writes), and the
+  // aggregate was a meaningful slice of the shared instance's disk-IO burst
+  // budget. All of these are RECOVERY sweeps, not the primary delivery path —
+  // enqueue kicks and realtime handle the interactive cases — so minutes-scale
+  // lag is acceptable everywhere here.
+
   // Close sessions left open past the idle timeout (e.g. tab closed without logout).
   setInterval(async () => {
     try {
@@ -17,7 +23,7 @@ export async function register() {
     } catch {
       // best-effort
     }
-  }, 120_000);
+  }, 300_000);
 
   const origin = process.env.WGE_SELF_ORIGIN || "http://localhost:3000";
   const secret = process.env.WGE_PROCESSOR_SECRET || "";
@@ -25,19 +31,19 @@ export async function register() {
 
   setInterval(() => {
     fetch(`${origin}/api/ai-tools/wge/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
-  }, 120_000);
+  }, 300_000);
 
   setInterval(() => {
     fetch(`${origin}/api/notifications/generate`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
-  }, 60_000);
+  }, 180_000);
 
   setInterval(() => {
     fetch(`${origin}/api/tickets/maintenance`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
-  }, 300_000);
+  }, 900_000);
 
   // Site Builder processor: starts queued runs and resumes parked ones
   // (failed + due resume_at + auto_resume on). Single-flight per tick.
   setInterval(() => {
     fetch(`${origin}/api/site-builder/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
-  }, 60_000);
+  }, 180_000);
 }

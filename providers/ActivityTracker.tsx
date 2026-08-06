@@ -29,8 +29,13 @@ export function ActivityTracker() {
 
   function push(ev: Ev) {
     queue.current.push(ev);
-    if (queue.current.length >= 20) flush();
-    else if (!timer.current) timer.current = setTimeout(flush, 5000);
+    // 30s batching (was 5s). Every flush is a DB commit — an insert plus a
+    // session heartbeat — and with the whole team's tabs open, 5s flushes
+    // produced a steady stream of tiny writes that ate the database's burstable
+    // disk-IO budget. Nothing user-facing reads this data live; the admin logs
+    // page tolerates 30s of lag. The cap stays under the schema's max(50).
+    if (queue.current.length >= 40) flush();
+    else if (!timer.current) timer.current = setTimeout(flush, 30_000);
   }
 
   useEffect(() => {

@@ -1,6 +1,23 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+/** Reject rather than let a stalled auth call hold the request open forever. */
+function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("auth verification timed out")), ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -25,9 +42,28 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Gate on locally-verified JWT claims rather than getUser(). getUser() is a
+  // network round-trip to GoTrue (two DB queries) on EVERY request that reaches
+  // this matcher — prefetches, RSC payloads and API calls included. Under load
+  // that round-trip was taking 10-50s, and because middleware blocks the whole
+  // request, the gateway hit its ~60s ceiling and returned 504 for the entire
+  // site. getClaims() verifies the ES256 signature against the project's cached
+  // JWKS with no network call at all, so a struggling database can no longer
+  // stall page delivery. It still calls getSession() internally, so expired
+  // tokens are refreshed and the rotated cookies are written through setAll().
+  //
+  // This is a gate, not the authorisation itself: routes and pages still call
+  // getUser() (now deduped per request) for anything that acts on the user.
+  let claims: unknown = null;
+  try {
+    const { data } = await withTimeout(supabase.auth.getClaims(), 5_000);
+    claims = data?.claims ?? null;
+  } catch {
+    // Verification unavailable (auth server unreachable or too slow). Fail
+    // closed: treat as signed out rather than hanging the request open.
+    claims = null;
+  }
+  const user = claims;
 
   const path = request.nextUrl.pathname;
 
