@@ -29,6 +29,17 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.10.1",
+    date: "2026-08-13",
+    title: "Download live website files",
+    changes: [
+      {
+        kind: "feature",
+        text: "Download any website's current files as a zip, straight from the hosting: a download icon on every live deployments-board row, next to the website link on tickets (tech team), and on the lead screen's website link. Always the files that are live right now — manual edits included — never a stale generator copy.",
+      },
+    ],
+  },
+  {
     version: "2.10.0",
     date: "2026-08-02",
     title: "One deployments board",
