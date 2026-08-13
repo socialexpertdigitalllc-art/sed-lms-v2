@@ -1,0 +1,195 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  siteHostFrom,
+  hostCandidates,
+  siteZipFilename,
+  zipDirFromDisk,
+  fetchLiveSiteZip,
+} from "@/lib/site-studio/deploy/liveFiles";
+import { unzipToMap } from "@/lib/template-engine/zip";
+
+const KEYS = ["DA_HOST", "DA_USERNAME", "DA_LOGIN_KEY", "DA_DOMAIN", "HOSTINGER_API_TOKEN", "PROTECTED_DOMAINS"] as const;
+let saved: Record<string, string | undefined>;
+
+const setEnv = () => {
+  process.env.DA_HOST = "https://server.example.com:2222";
+  process.env.DA_USERNAME = "sedadmin";
+  process.env.DA_LOGIN_KEY = "loginkey";
+  process.env.DA_DOMAIN = "dmviral.com";
+  process.env.HOSTINGER_API_TOKEN = "token";
+  process.env.PROTECTED_DOMAINS = "sedlms.com";
+};
+
+beforeEach(() => {
+  saved = {};
+  for (const k of KEYS) saved[k] = process.env[k];
+  setEnv();
+});
+
+afterEach(() => {
+  for (const k of KEYS) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
+  vi.unstubAllGlobals();
+});
+
+describe("siteHostFrom", () => {
+  it("parses full URLs, bare hosts, and paths down to a lowercase hostname", () => {
+    expect(siteHostFrom("https://Foo.dmviral.com/page?a=1")).toBe("foo.dmviral.com");
+    expect(siteHostFrom("foo.dmviral.com")).toBe("foo.dmviral.com");
+    expect(siteHostFrom("http://www.client.com/about")).toBe("www.client.com");
+    expect(siteHostFrom("client.com.")).toBe("client.com");
+  });
+
+  it("rejects empties, garbage, and dotless hosts", () => {
+    expect(siteHostFrom("")).toBeNull();
+    expect(siteHostFrom("   ")).toBeNull();
+    expect(siteHostFrom("ht tp://x")).toBeNull();
+    expect(siteHostFrom("localhost")).toBeNull();
+  });
+});
+
+describe("hostCandidates", () => {
+  it("adds the apex when the host has a www prefix", () => {
+    expect(hostCandidates("www.client.com")).toEqual(["www.client.com", "client.com"]);
+    expect(hostCandidates("client.com")).toEqual(["client.com"]);
+  });
+});
+
+describe("siteZipFilename", () => {
+  it("sanitizes the host and stamps the day", () => {
+    expect(siteZipFilename("foo.dmviral.com", new Date("2026-08-13T10:00:00Z"))).toBe(
+      "foo.dmviral.com-files-2026-08-13.zip",
+    );
+    expect(siteZipFilename('we"ird host', new Date("2026-08-13T10:00:00Z"))).toBe("we_ird_host-files-2026-08-13.zip");
+  });
+});
+
+describe("zipDirFromDisk", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "livefiles-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("zips a nested tree with forward-slash paths", async () => {
+    await writeFile(join(dir, "index.html"), "<h1>hi</h1>");
+    await mkdir(join(dir, "assets", "css"), { recursive: true });
+    await writeFile(join(dir, "assets", "css", "site.css"), "body{}");
+    const res = await zipDirFromDisk(dir);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.files).toBe(2);
+    const map = unzipToMap(res.zip);
+    // unzipToMap strips a single shared root; two top-level entries here, so paths survive as-is
+    expect(Object.keys(map).sort()).toEqual(["assets/css/site.css", "index.html"]);
+    expect(new TextDecoder().decode(map["index.html"])).toBe("<h1>hi</h1>");
+  });
+
+  it("errors on a missing directory instead of returning an empty zip", async () => {
+    const res = await zipDirFromDisk(join(dir, "nope"));
+    expect(res.ok).toBe(false);
+  });
+});
+
+/** fetch stub routing by URL substring — DA archive vs Hostinger website list. */
+function stubFetch(routes: { match: string; respond: () => Response }[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const hit = routes.find((r) => url.includes(r.match));
+      if (!hit) throw new Error(`unexpected fetch: ${url}`);
+      return hit.respond();
+    }),
+  );
+}
+
+// valid-enough archive: PK magic + padding past the 100-byte sanity floor.
+// Inferred return type keeps the backing buffer as ArrayBuffer — the
+// annotation-free form BodyInit accepts (same quirk as directadmin.ts's upload).
+function zipBytes() {
+  const b = new Uint8Array(200);
+  b[0] = 0x50;
+  b[1] = 0x4b;
+  return b;
+}
+
+describe("fetchLiveSiteZip", () => {
+  it("pulls staging subdomains through the DirectAdmin archive", async () => {
+    stubFetch([
+      {
+        match: "/api/filemanager/download-archive",
+        respond: () => new Response(zipBytes(), { status: 200 }),
+      },
+    ]);
+    const res = await fetchLiveSiteZip("https://greenlawn.dmviral.com/");
+    expect(res).toMatchObject({ ok: true, host: "greenlawn.dmviral.com", source: "staging" });
+  });
+
+  it("refuses protected domains, including the DA apex itself and subdomains of protected entries", async () => {
+    for (const site of ["sedlms.com", "www.sedlms.com", "dmviral.com"]) {
+      const res = await fetchLiveSiteZip(site);
+      expect(res).toMatchObject({ ok: false, status: 403 });
+    }
+  });
+
+  it("422s for a domain that is not on the company hosting", async () => {
+    stubFetch([
+      {
+        match: "developers.hostinger.com/api/hosting/v1/websites",
+        respond: () => Response.json({ data: [] }),
+      },
+    ]);
+    const res = await fetchLiveSiteZip("https://elsewhere.com");
+    expect(res).toMatchObject({ ok: false, status: 422 });
+  });
+
+  it("zips a custom domain's docroot from disk, falling back from www to the apex", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "livefiles-custom-"));
+    await writeFile(join(dir, "index.html"), "<p>live</p>");
+    try {
+      stubFetch([
+        {
+          match: "domain=www.client.com",
+          respond: () => Response.json({ data: [] }),
+        },
+        {
+          match: "domain=client.com",
+          respond: () =>
+            Response.json({
+              data: [{ domain: "client.com", root_directory: dir, vhost_type: "", order_id: 1, is_enabled: true }],
+            }),
+        },
+      ]);
+      const res = await fetchLiveSiteZip("https://www.client.com");
+      expect(res).toMatchObject({ ok: true, host: "client.com", source: "custom" });
+      if (res.ok) {
+        expect(new TextDecoder().decode(unzipToMap(res.zip)["index.html"])).toBe("<p>live</p>");
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names the unconfigured platform instead of a generic failure", async () => {
+    delete process.env.DA_HOST;
+    const staging = await fetchLiveSiteZip("foo.dmviral.com");
+    expect(staging).toMatchObject({ ok: false, status: 422, error: "DirectAdmin is not configured." });
+
+    delete process.env.HOSTINGER_API_TOKEN;
+    const custom = await fetchLiveSiteZip("client.com");
+    expect(custom).toMatchObject({ ok: false, status: 422, error: "Hostinger is not configured." });
+  });
+
+  it("rejects unparseable input", async () => {
+    const res = await fetchLiveSiteZip("not a url");
+    expect(res).toMatchObject({ ok: false, status: 422 });
+  });
+});

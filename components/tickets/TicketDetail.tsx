@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
+import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
 import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime } from "@/lib/leads/format";
@@ -165,15 +166,24 @@ export function TicketDetail({
             <span>Assigned to {ticket.assigned_to ? nameOf(ticket.assigned_to) : "Unassigned"}</span>
             <span>{formatDateTime(ticket.created_at)}</span>
             {lead.website_link && (
-              <a
-                href={lead.website_link}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 font-medium text-accent-ink hover:underline"
-              >
-                {lead.website_link.replace(/^https?:\/\//, "")}
-                <ExternalLink className="h-3 w-3" />
-              </a>
+              <span className="inline-flex items-center gap-1">
+                <a
+                  href={lead.website_link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-medium text-accent-ink hover:underline"
+                >
+                  {lead.website_link.replace(/^https?:\/\//, "")}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+                {canResolve && (
+                  <DownloadSiteFilesButton
+                    site={lead.website_link}
+                    className="grid h-6 w-6 place-items-center rounded text-text-muted hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
+                    iconSize={14}
+                  />
+                )}
+              </span>
             )}
           </div>
         </div>

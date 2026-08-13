@@ -20,6 +20,7 @@ import { DeleteLeadModal } from "./DeleteLeadModal";
 import { RecentFollowUps } from "./RecentFollowUps";
 import { TicketsCard } from "@/components/tickets/TicketsCard";
 import { SectionCard } from "@/components/forms/formShell";
+import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
 import { FieldRow, type SelectOption } from "@/components/detail/FieldRow";
 import { RatingStars } from "@/components/common/RatingStars";
 import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
@@ -232,7 +233,25 @@ export function LeadDetail({
                 />
               )}
               <FieldRow label="Profile link" value={lead.business_profile_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ business_profile_link: nz(v) })} />
-              <FieldRow label="Website link" value={lead.website_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ website_link: nz(v) })} />
+              <FieldRow
+                label="Website link"
+                value={lead.website_link ?? ""}
+                type="url"
+                canEdit={canEdit}
+                onSave={(v) => patch({ website_link: nz(v) })}
+                display={
+                  lead.website_link ? (
+                    <span className="inline-flex max-w-full items-center gap-1">
+                      <span className="min-w-0 break-words">{lead.website_link}</span>
+                      <DownloadSiteFilesButton
+                        site={lead.website_link}
+                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
+                        iconSize={13}
+                      />
+                    </span>
+                  ) : undefined
+                }
+              />
               {/* A logo sent by SMS is uploaded to an image host afterwards, so the
                   link arrives LATER — the field must stay editable rather than being
                   replaced by static text. The note only shows until a link exists. */}

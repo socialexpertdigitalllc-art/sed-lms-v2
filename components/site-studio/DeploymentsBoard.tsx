@@ -13,6 +13,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
+import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
 import { EmptyPanel, PageHeader, Pill, type PillTone } from "@/components/common/Panel";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { useToast } from "@/components/common/Toast";
@@ -507,6 +508,7 @@ export function DeploymentsBoard() {
                         {rowBusy ? <Loader2 className="h-4 w-4 animate-spin text-text-faint" /> : null}
                         {liveStaging ? (
                           <>
+                            <DownloadSiteFilesButton site={row.url} disabled={busy} />
                             {row.id && row.status === "live" ? (
                               <button type="button" className={iconBtn} title="Shuffle to a new subdomain"
                                 aria-label={`Shuffle ${row.subdomain}`} disabled={busy} onClick={() => setConfirmShuffle(row)}>
@@ -552,6 +554,7 @@ export function DeploymentsBoard() {
                           </span>
                         ) : row.isCustomDomain && (row.status === "live" || row.status === "untracked") ? (
                           <>
+                            <DownloadSiteFilesButton site={row.url} disabled={busy} />
                             <button type="button" className={iconBtn} title="Override with a zip upload"
                               aria-label={`Upload new files to ${row.url}`} disabled={busy} onClick={() => void overrideCustom(row)}>
                               <Upload className="h-4 w-4" />
