@@ -29,6 +29,25 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.11.0",
+    date: "2026-08-14",
+    title: "Website update safety",
+    changes: [
+      {
+        kind: "feature",
+        text: "One-click rollback: a snapshot of the site's current files is saved automatically before every upload. Each live site on the deployments board has a File history where any of the last 5 versions can be restored — and restoring snapshots the current files first, so it can be undone too.",
+      },
+      {
+        kind: "feature",
+        text: "Upload proof on tickets: website files uploaded from a ticket are recorded on that ticket — who uploaded, which zip, how many files, when — so the resolution carries evidence of the fix going live.",
+      },
+      {
+        kind: "feature",
+        text: "Forgotten-upload check: resolving a ticket whose lead has a website, with no files uploaded during the ticket, asks \"resolve anyway?\" first — a nudge, never a block.",
+      },
+    ],
+  },
+  {
     version: "2.10.2",
     date: "2026-08-13",
     title: "Upload website fixes from the ticket",
