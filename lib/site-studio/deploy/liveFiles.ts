@@ -1,8 +1,15 @@
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { archiveDocroot, daConfigured, subFromWebsiteLink } from "@/lib/template-engine/directadmin";
+import {
+  archiveDocroot,
+  clearDocroot,
+  daConfigured,
+  subFromWebsiteLink,
+  uploadZipAndExtract,
+} from "@/lib/template-engine/directadmin";
 import { getWebsite, hostingerConfigured } from "@/lib/hostinger/client";
-import { zipFromMap } from "@/lib/template-engine/zip";
+import { deployZipToDir } from "@/lib/template-engine/fsDeploy";
+import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import { isProtectedDomain } from "./protected";
 
 /**
@@ -85,9 +92,96 @@ export async function zipDirFromDisk(
   return { ok: true, zip: zipFromMap(map), files: Object.keys(map).length };
 }
 
+/**
+ * Normalize + sanity-check an uploaded site zip BEFORE it touches a live
+ * docroot: strip a single shared root folder (a folder-zipped site would
+ * otherwise land nested one level deep and break), reject zip-slip paths,
+ * and require an index.html so a random archive can't wipe a working site.
+ * Returns a re-zipped normalized archive.
+ */
+export function prepareSiteZip(
+  bytes: Uint8Array,
+): { ok: true; zip: Uint8Array; files: number } | { ok: false; message: string } {
+  let map: Record<string, Uint8Array>;
+  try {
+    map = unzipToMap(bytes);
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "not a readable zip" };
+  }
+  const names = Object.keys(map);
+  if (names.length === 0) return { ok: false, message: "the zip is empty" };
+  if (!names.some((n) => /^index\.html?$/i.test(n))) {
+    return { ok: false, message: "the zip has no index.html at its root — this does not look like a website" };
+  }
+  return { ok: true, zip: zipFromMap(map), files: names.length };
+}
+
 export type LiveSiteZip =
   | { ok: true; zip: Uint8Array; host: string; source: "staging" | "custom" }
   | { ok: false; status: 403 | 422 | 502; error: string };
+
+export type LiveSiteOverride =
+  | { ok: true; host: string; source: "staging" | "custom"; files: number; sub: string | null }
+  | { ok: false; status: 403 | 422 | 502; error: string };
+
+/**
+ * Replace a hosted site's live files with a (already prepareSiteZip'd) zip —
+ * the write mirror of fetchLiveSiteZip, branching identically: staging
+ * subdomains through DirectAdmin (clear + extract in place, same subdomain so
+ * the lead's link stays valid), custom domains through the shared Hostinger
+ * disk. Same ordering constraint: the staging check MUST precede the
+ * protected-domain check.
+ */
+export async function overrideLiveSite(rawSite: string, zip: Uint8Array, files: number): Promise<LiveSiteOverride> {
+  const host = siteHostFrom(rawSite);
+  if (!host) return { ok: false, status: 422, error: "That is not a valid website address." };
+
+  const daDomain = process.env.DA_DOMAIN ?? "";
+  const sub = daDomain ? subFromWebsiteLink(`https://${host}`, daDomain) : null;
+  if (sub) {
+    if (!daConfigured()) return { ok: false, status: 422, error: "DirectAdmin is not configured." };
+    const cleared = await clearDocroot(sub);
+    if (!cleared.ok) console.warn(`[override] clearDocroot(${sub}) failed: ${cleared.message}`);
+    const uploaded = await uploadZipAndExtract(sub, zip, "override.zip");
+    if (!uploaded.ok && uploaded.failedStep !== "delete") {
+      return {
+        ok: false,
+        status: 502,
+        error: `Upload failed at ${uploaded.failedStep}: ${uploaded.message ?? "failed"}`,
+      };
+    }
+    return { ok: true, host, source: "staging", files, sub };
+  }
+
+  if (isProtectedDomain(host)) {
+    return {
+      ok: false,
+      status: 403,
+      error: `${host} is a protected company domain — its files cannot be overridden from the dashboard.`,
+    };
+  }
+  if (!hostingerConfigured()) return { ok: false, status: 422, error: "Hostinger is not configured." };
+
+  for (const candidate of hostCandidates(host)) {
+    const site = await getWebsite(candidate);
+    if (!site) continue;
+    try {
+      await deployZipToDir(zip, site.root_directory);
+    } catch (e) {
+      return {
+        ok: false,
+        status: 502,
+        error: `Could not write the site to ${candidate}: ${e instanceof Error ? e.message : "write failed"}`,
+      };
+    }
+    return { ok: true, host: candidate, source: "custom", files, sub: null };
+  }
+  return {
+    ok: false,
+    status: 422,
+    error: `${host} is not hosted on the company hosting, so its files cannot be updated here.`,
+  };
+}
 
 /** The live files of a hosted site as zip bytes, from whichever platform
  *  serves it. Never throws; failures carry the HTTP status a route should return. */

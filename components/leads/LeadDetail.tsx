@@ -21,6 +21,7 @@ import { RecentFollowUps } from "./RecentFollowUps";
 import { TicketsCard } from "@/components/tickets/TicketsCard";
 import { SectionCard } from "@/components/forms/formShell";
 import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
+import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
 import { FieldRow, type SelectOption } from "@/components/detail/FieldRow";
 import { RatingStars } from "@/components/common/RatingStars";
 import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
@@ -248,6 +249,13 @@ export function LeadDetail({
                         className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
                         iconSize={13}
                       />
+                      {(has("tickets.resolve") || has("studio.manage")) && (
+                        <UploadSiteFilesButton
+                          site={lead.website_link}
+                          className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
+                          iconSize={13}
+                        />
+                      )}
                     </span>
                   ) : undefined
                 }

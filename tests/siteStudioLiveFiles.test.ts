@@ -8,8 +8,10 @@ import {
   siteZipFilename,
   zipDirFromDisk,
   fetchLiveSiteZip,
+  prepareSiteZip,
+  overrideLiveSite,
 } from "@/lib/site-studio/deploy/liveFiles";
-import { unzipToMap } from "@/lib/template-engine/zip";
+import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 
 const KEYS = ["DA_HOST", "DA_USERNAME", "DA_LOGIN_KEY", "DA_DOMAIN", "HOSTINGER_API_TOKEN", "PROTECTED_DOMAINS"] as const;
 let saved: Record<string, string | undefined>;
@@ -191,5 +193,87 @@ describe("fetchLiveSiteZip", () => {
   it("rejects unparseable input", async () => {
     const res = await fetchLiveSiteZip("not a url");
     expect(res).toMatchObject({ ok: false, status: 422 });
+  });
+});
+
+const enc = (s: string) => new TextEncoder().encode(s);
+
+describe("prepareSiteZip", () => {
+  it("strips a folder-zipped site's shared root so files land at the docroot", () => {
+    const zipped = zipFromMap({ "my-site/index.html": enc("<h1>hi</h1>"), "my-site/css/a.css": enc("body{}") });
+    const res = prepareSiteZip(zipped);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.files).toBe(2);
+    expect(Object.keys(unzipToMap(res.zip)).sort()).toEqual(["css/a.css", "index.html"]);
+  });
+
+  it("refuses archives that do not look like a website", () => {
+    expect(prepareSiteZip(zipFromMap({ "notes.txt": enc("hello") }))).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("index.html"),
+    });
+    expect(prepareSiteZip(enc("this is not a zip")).ok).toBe(false);
+    expect(prepareSiteZip(zipFromMap({})).ok).toBe(false);
+  });
+});
+
+describe("overrideLiveSite", () => {
+  const siteZip = () => {
+    const prepared = prepareSiteZip(zipFromMap({ "index.html": enc("<p>v2</p>") }));
+    if (!prepared.ok) throw new Error("fixture zip failed");
+    return prepared;
+  };
+
+  it("overrides a staging subdomain in place through DirectAdmin (clear, upload, extract)", async () => {
+    const calls: string[] = [];
+    stubFetch([
+      { match: "/api/filemanager/list", respond: () => Response.json({ files: [{ name: "old.html", type: "file" }] }) },
+      { match: "/api/filemanager-actions/remove", respond: () => Response.json({}) },
+      { match: "/api/filemanager-actions/upload", respond: () => Response.json({}) },
+      { match: "/api/filemanager-actions/extract-archive", respond: () => Response.json({}) },
+    ]);
+    const inner = global.fetch as ReturnType<typeof vi.fn>;
+    const prepared = siteZip();
+    const res = await overrideLiveSite("https://greenlawn.dmviral.com", prepared.zip, prepared.files);
+    for (const c of inner.mock.calls) calls.push(String(c[0]));
+    expect(res).toMatchObject({ ok: true, host: "greenlawn.dmviral.com", source: "staging", sub: "greenlawn" });
+    expect(calls.some((u) => u.includes("extract-archive"))).toBe(true);
+  });
+
+  it("writes a custom domain's docroot on disk, replacing stale files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "livefiles-override-"));
+    await writeFile(join(dir, "stale.html"), "old");
+    try {
+      stubFetch([
+        {
+          match: "domain=client.com",
+          respond: () =>
+            Response.json({
+              data: [{ domain: "client.com", root_directory: dir, vhost_type: "", order_id: 1, is_enabled: true }],
+            }),
+        },
+      ]);
+      const prepared = siteZip();
+      const res = await overrideLiveSite("client.com", prepared.zip, prepared.files);
+      expect(res).toMatchObject({ ok: true, host: "client.com", source: "custom", sub: null });
+      const after = await zipDirFromDisk(dir);
+      expect(after.ok).toBe(true);
+      if (after.ok) {
+        expect(Object.keys(unzipToMap(after.zip))).toEqual(["index.html"]);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses protected domains and off-hosting domains", async () => {
+    const prepared = siteZip();
+    expect(await overrideLiveSite("sedlms.com", prepared.zip, prepared.files)).toMatchObject({ ok: false, status: 403 });
+    stubFetch([{ match: "developers.hostinger.com", respond: () => Response.json({ data: [] }) }]);
+    expect(await overrideLiveSite("elsewhere.com", prepared.zip, prepared.files)).toMatchObject({
+      ok: false,
+      status: 422,
+    });
   });
 });
