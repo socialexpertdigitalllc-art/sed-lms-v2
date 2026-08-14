@@ -29,6 +29,21 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.10.2",
+    date: "2026-08-13",
+    title: "Upload website fixes from the ticket",
+    changes: [
+      {
+        kind: "feature",
+        text: "Tech users can now upload updated website files right from the ticket page (and the lead screen): an upload icon next to the download icon replaces the live site's files in place. The button is tied to that lead's website and asks for confirmation naming the site, so fixes can't land on the wrong lead's website.",
+      },
+      {
+        kind: "improvement",
+        text: "Uploaded site zips are checked before going live: archives without an index.html are refused, and folder-zipped sites are unpacked correctly instead of landing one folder deep.",
+      },
+    ],
+  },
+  {
     version: "2.10.1",
     date: "2026-08-13",
     title: "Download live website files",
