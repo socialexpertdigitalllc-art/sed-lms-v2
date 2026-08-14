@@ -23,6 +23,14 @@ type LeadInfo = {
 
 type TechMember = { id: string; display_name: string };
 
+export type SiteUpdate = {
+  by: string | null;
+  at: string;
+  site: string;
+  files: number | null;
+  zipName: string | null;
+};
+
 export function TicketDetail({
   ticket,
   items,
@@ -32,6 +40,7 @@ export function TicketDetail({
   canAssign,
   canResolve,
   isCreator,
+  siteUpdates = [],
 }: {
   ticket: Ticket;
   items: TicketItem[];
@@ -41,6 +50,8 @@ export function TicketDetail({
   canAssign: boolean;
   canResolve: boolean;
   isCreator: boolean;
+  /** Website uploads pinned to this ticket, newest first (upload proof). */
+  siteUpdates?: SiteUpdate[];
 }) {
   const router = useRouter();
 
@@ -50,6 +61,7 @@ export function TicketDetail({
   const [resolving, setResolving] = useState(false);
   const [resolutionNote, setResolutionNote] = useState("");
   const [itemBusy, setItemBusy] = useState<string | null>(null);
+  const [confirmNoUpload, setConfirmNoUpload] = useState(false);
 
   const nameOf = (id: string | null | undefined) => (id ? names[id] ?? "—" : "—");
   const { done, total } = itemProgress(items);
@@ -109,6 +121,20 @@ export function TicketDetail({
       setResolving(false);
       setResolutionNote("");
     }
+  }
+
+  /** The nudge: resolving a website ticket with no files uploaded during its
+   *  life is usually a forgotten upload — ask once, never block. */
+  function onConfirmResolveClick() {
+    if (!resolutionNote.trim()) {
+      setError("A resolution note is required.");
+      return;
+    }
+    if (lead.website_link && siteUpdates.length === 0) {
+      setConfirmNoUpload(true);
+      return;
+    }
+    void resolve();
   }
 
   async function reopen() {
@@ -186,6 +212,7 @@ export function TicketDetail({
                     />
                     <UploadSiteFilesButton
                       site={lead.website_link}
+                      ticketId={ticket.id}
                       className="grid h-6 w-6 place-items-center rounded text-text-muted hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
                       iconSize={14}
                       onUploaded={() => router.refresh()}
@@ -253,6 +280,27 @@ export function TicketDetail({
             )}
           </div>
         </div>
+
+        {/* Website updates — proof that fixed files actually went live */}
+        {siteUpdates.length > 0 && (
+          <div className="rounded-2xl border border-border bg-surface shadow-sm p-5">
+            <h2 className="text-sm font-semibold text-text">Website updates</h2>
+            <ul className="mt-3 space-y-1.5">
+              {siteUpdates.map((u, i) => (
+                <li key={i} className="text-sm text-text-muted">
+                  <span className="text-text">{u.files ?? "?"} file(s)</span> uploaded to{" "}
+                  <span className="font-mono text-xs">{u.site}</span>
+                  {u.zipName ? (
+                    <>
+                      {" "}from <span className="font-mono text-xs">{u.zipName}</span>
+                    </>
+                  ) : null}{" "}
+                  by {u.by ? names[u.by] ?? "—" : "—"} — {formatDateTime(u.at)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Assignment */}
         {canAssign && (
@@ -324,7 +372,7 @@ export function TicketDetail({
                 >
                   Cancel
                 </button>
-                <button onClick={resolve} disabled={busyAction === "resolve"} className={primaryBtn}>
+                <button onClick={onConfirmResolveClick} disabled={busyAction === "resolve"} className={primaryBtn}>
                   {busyAction === "resolve" ? "Resolving…" : "Confirm resolve"}
                 </button>
               </div>
@@ -347,6 +395,43 @@ export function TicketDetail({
           )}
         </div>
       </div>
+
+      {confirmNoUpload && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="No updated files were uploaded"
+        >
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5 shadow-lg">
+            <h3 className="text-sm font-semibold text-text">No updated files were uploaded</h3>
+            <p className="mt-2 text-sm text-text-muted">
+              This ticket has no website upload recorded. If the fix changed the website files, upload them with the{" "}
+              <span className="font-semibold text-text">upload icon next to the website link</span> before resolving —
+              otherwise the live site still runs the old files.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmNoUpload(false)}
+                className="rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text"
+              >
+                Go back
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmNoUpload(false);
+                  void resolve();
+                }}
+                className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+              >
+                Resolve anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ExternalLink,
   Globe,
+  History,
   Link2,
   Loader2,
   Lock,
@@ -22,6 +23,7 @@ import { inputCls } from "@/components/forms/Field";
 import { TransferDeploymentModal } from "@/components/site-studio/TransferDeploymentModal";
 import { UploadModal, type UploadResult } from "@/components/site-studio/board/UploadModal";
 import { LinkLeadModal } from "@/components/site-studio/board/LinkLeadModal";
+import { SnapshotsModal } from "@/components/site-studio/board/SnapshotsModal";
 import { cn } from "@/lib/utils";
 
 export interface BoardRow {
@@ -83,6 +85,7 @@ export function DeploymentsBoard() {
   const [uploadOpen, setUploadOpen] = useState<{ target?: string | null } | null>(null);
   const [linkFor, setLinkFor] = useState<{ deploymentId: string | null; subdomain: string | null; url: string; optional?: boolean } | null>(null);
   const [transferRow, setTransferRow] = useState<{ id: string; name: string } | null>(null);
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [confirmShuffle, setConfirmShuffle] = useState<BoardRow | null>(null);
   const [confirmTakedown, setConfirmTakedown] = useState<BoardRow | null>(null);
   const [confirmRecord, setConfirmRecord] = useState<BoardRow | null>(null);
@@ -509,6 +512,11 @@ export function DeploymentsBoard() {
                         {liveStaging ? (
                           <>
                             <DownloadSiteFilesButton site={row.url} disabled={busy} />
+                            <button type="button" className={iconBtn} title="File history / restore"
+                              aria-label={`File history of ${row.subdomain}`} disabled={busy}
+                              onClick={() => setHistoryFor(row.url)}>
+                              <History className="h-4 w-4" />
+                            </button>
                             {row.id && row.status === "live" ? (
                               <button type="button" className={iconBtn} title="Shuffle to a new subdomain"
                                 aria-label={`Shuffle ${row.subdomain}`} disabled={busy} onClick={() => setConfirmShuffle(row)}>
@@ -555,6 +563,11 @@ export function DeploymentsBoard() {
                         ) : row.isCustomDomain && (row.status === "live" || row.status === "untracked") ? (
                           <>
                             <DownloadSiteFilesButton site={row.url} disabled={busy} />
+                            <button type="button" className={iconBtn} title="File history / restore"
+                              aria-label={`File history of ${row.url}`} disabled={busy}
+                              onClick={() => setHistoryFor(row.url)}>
+                              <History className="h-4 w-4" />
+                            </button>
                             <button type="button" className={iconBtn} title="Override with a zip upload"
                               aria-label={`Upload new files to ${row.url}`} disabled={busy} onClick={() => void overrideCustom(row)}>
                               <Upload className="h-4 w-4" />
@@ -615,6 +628,14 @@ export function DeploymentsBoard() {
       ) : null}
 
       <input ref={overrideInput} type="file" accept=".zip,application/zip" className="hidden" onChange={(e) => void onOverrideFile(e)} />
+
+      {historyFor ? (
+        <SnapshotsModal
+          site={historyFor}
+          onClose={() => setHistoryFor(null)}
+          onRestored={() => void load({ skipFastPhase: true })}
+        />
+      ) : null}
 
       {uploadOpen ? (
         <UploadModal

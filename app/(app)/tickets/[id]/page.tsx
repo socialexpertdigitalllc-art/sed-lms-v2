@@ -90,14 +90,41 @@ export default async function TicketDetailPage({
     website_link: string | null;
   };
 
+  // Website uploads pinned to this ticket (the override route writes them
+  // with entity_type "ticket") — rendered as upload proof, and the resolve
+  // flow nudges when there are none.
+  const { data: uploadsRaw } = await admin
+    .from("activity_log")
+    .select("user_id, created_at, new_value")
+    .eq("entity_type", "ticket")
+    .eq("entity_id", ticket.id)
+    .eq("action", "studio.site.files_overridden")
+    .order("created_at", { ascending: false });
+  const siteUpdates = (uploadsRaw ?? []).map((r) => {
+    const v = (r.new_value ?? {}) as { site?: string; files?: number; zip_name?: string };
+    return {
+      by: (r.user_id as string | null) ?? null,
+      at: r.created_at as string,
+      site: v.site ?? "",
+      files: v.files ?? null,
+      zipName: v.zip_name ?? null,
+    };
+  });
+
   // Resolve display names for every actor referenced on the page (creator,
-  // assignee, resolver, plus the lead's agent/closer for the signature line)
-  // via the admin client so display_name is never RLS-nulled for others.
+  // assignee, resolver, the lead's agent/closer for the signature line, and
+  // anyone who uploaded website files) via the admin client so display_name
+  // is never RLS-nulled for others.
   const userIds = Array.from(
     new Set(
-      [ticket.created_by, ticket.assigned_to, ticket.resolved_by, lead.agent_id, lead.closed_by].filter(
-        (v): v is string => Boolean(v)
-      )
+      [
+        ticket.created_by,
+        ticket.assigned_to,
+        ticket.resolved_by,
+        lead.agent_id,
+        lead.closed_by,
+        ...siteUpdates.map((u) => u.by),
+      ].filter((v): v is string => Boolean(v))
     )
   );
   const names: Record<string, string | null> = {};
@@ -122,6 +149,7 @@ export default async function TicketDetailPage({
       canAssign={canAssign}
       canResolve={perms.has("tickets.resolve")}
       isCreator={ticket.created_by === user.id}
+      siteUpdates={siteUpdates}
     />
   );
 }

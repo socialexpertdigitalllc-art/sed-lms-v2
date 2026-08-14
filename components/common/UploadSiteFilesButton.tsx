@@ -16,6 +16,7 @@ import { iconBtn } from "@/components/common/buttons";
  */
 export function UploadSiteFilesButton({
   site,
+  ticketId,
   className = iconBtn,
   iconSize = 16,
   disabled = false,
@@ -23,6 +24,9 @@ export function UploadSiteFilesButton({
 }: {
   /** Site URL or hostname — the lead's website_link or a deployment url. */
   site: string;
+  /** When the upload happens from a ticket, pins it to that ticket in the
+   *  activity log — the ticket page shows it as upload proof. */
+  ticketId?: string;
   className?: string;
   iconSize?: number;
   disabled?: boolean;
@@ -41,7 +45,8 @@ export function UploadSiteFilesButton({
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`/api/site-studio/deployments/override?site=${encodeURIComponent(site)}`, {
+      const ticketQuery = ticketId ? `&ticket=${encodeURIComponent(ticketId)}` : "";
+      const res = await fetch(`/api/site-studio/deployments/override?site=${encodeURIComponent(site)}${ticketQuery}`, {
         method: "POST",
         body: form,
       });
