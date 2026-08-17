@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { ttlCached } from "@/lib/cache/ttl";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 
@@ -21,7 +22,18 @@ export async function GET() {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const perms = await getUserPermissions(user.id);
+  // 30s per-user cache with inflight dedup. The badge counts are RLS-heavy
+  // (the leads count alone measured ~335ms — disk-IO budget incident,
+  // 2026-08-17) and every open tab refetches on the same realtime bumps, so
+  // coalescing a user's tabs and bursts into one query set per window is a
+  // large IO cut for ≤30s of badge staleness.
+  const counts = await ttlCached("nav-counts", user.id, 30_000, () => computeCounts(user.id));
+  return NextResponse.json({ counts });
+}
+
+async function computeCounts(userId: string): Promise<Record<string, number>> {
+  const supabase = await createClient();
+  const perms = await getUserPermissions(userId);
   const admin = createAdminClient();
   const nowIso = new Date().toISOString();
 
@@ -75,7 +87,7 @@ export async function GET() {
     // avoids an unbounded lead_id IN() list in the query string).
     tasks.push(
       run("tickets", async () => {
-        const scope = await allowedTicketScope(admin, user.id, perms);
+        const scope = await allowedTicketScope(admin, userId, perms);
         if (scope.all) {
           const { count, error } = await admin
             .from("lead_tickets")
@@ -90,7 +102,7 @@ export async function GET() {
           .neq("status", "Resolved");
         if (error) throw error;
         return (data ?? []).filter((t) =>
-          ticketInScope(t as { created_by: string | null; lead_id: string }, user.id, scope)
+          ticketInScope(t as { created_by: string | null; lead_id: string }, userId, scope)
         ).length;
       })
     );
@@ -176,5 +188,5 @@ export async function GET() {
 
   await Promise.all(tasks);
 
-  return NextResponse.json({ counts });
+  return counts;
 }

@@ -10,6 +10,17 @@ export async function register() {
   if (started) return; // guard against dev HMR double-registration
   started = true;
 
+  // EVERY instance sharing the prod database runs these pollers, and the
+  // load multiplies: the 2026-08-17 disk-IO budget incident measured ~3x the
+  // configured cadences because the local/dev boxes polled alongside the real
+  // Hostinger prod. Exactly ONE instance needs the recovery sweeps — set
+  // WGE_POLLERS_DISABLED=1 in every other environment's .env.local (the
+  // Windows box has it; Hostinger prod must NOT).
+  if (process.env.WGE_POLLERS_DISABLED === "1") {
+    console.log("[instrumentation] pollers disabled by WGE_POLLERS_DISABLED=1");
+    return;
+  }
+
   // Poller cadences: every tick below runs DB queries (often writes), and the
   // aggregate was a meaningful slice of the shared instance's disk-IO burst
   // budget. All of these are RECOVERY sweeps, not the primary delivery path —

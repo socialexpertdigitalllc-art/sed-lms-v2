@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { NOTIFICATION_EVENTS } from "@/lib/notifications/events";
+import { invalidateRuleCache } from "@/lib/notifications/rules";
 import type { NotificationRule } from "@/lib/notifications/types";
 
 async function guard(): Promise<{ error: 401 } | { error: 403 } | { userId: string }> {
@@ -87,6 +88,7 @@ export async function PUT(
   if (error || !data) {
     return NextResponse.json({ error: error?.message ?? "Update failed" }, { status: 400 });
   }
+  invalidateRuleCache(eventKey);
 
   await admin.from("activity_log").insert({
     user_id: auth.userId,

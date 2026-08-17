@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { ttlGateOpen } from "@/lib/cache/ttl";
 import { reminderAllowed, shouldRemind } from "@/lib/notifications/logic";
 import { getRule } from "@/lib/notifications/rules";
 
@@ -15,11 +16,13 @@ async function loadReminderSettings(
 ): Promise<Map<string, ReminderSetting>> {
   const map = new Map<string, ReminderSetting>();
   if (!userIds.length) return map;
-  let { data, error } = await admin
+  const res = await admin
     .from("user_notification_settings")
     .select("user_id, enabled, statuses")
     .eq("event_key", "followup_reminder")
     .in("user_id", userIds);
+  let data = res.data;
+  const error = res.error;
   if (error && /statuses/i.test(error.message)) {
     const fallback = await admin
       .from("user_notification_settings")
@@ -108,16 +111,20 @@ export async function POST(req: Request) {
 
     // Housekeeping piggybacked on the poller: a notification nobody opened in
     // 30 days is noise, not news — auto-mark it read so bells stay honest
-    // signals. Cheap: the (user_id, read_at, created_at) index covers it.
-    try {
-      const cutoff = new Date(now.getTime() - 30 * 86_400_000).toISOString();
-      await admin
-        .from("notifications")
-        .update({ read_at: now.toISOString() })
-        .is("read_at", null)
-        .lt("created_at", cutoff);
-    } catch {
-      /* best-effort */
+    // signals. Gated to every 6h: running it on EVERY tick was thousands of
+    // needless daily UPDATE scans + WAL for a 30-DAY policy (disk-IO budget
+    // incident, 2026-08-17) — hours of lag on a month-scale rule costs nothing.
+    if (ttlGateOpen("notifications", "auto-read-housekeeping", 6 * 3_600_000)) {
+      try {
+        const cutoff = new Date(now.getTime() - 30 * 86_400_000).toISOString();
+        await admin
+          .from("notifications")
+          .update({ read_at: now.toISOString() })
+          .is("read_at", null)
+          .lt("created_at", cutoff);
+      } catch {
+        /* best-effort */
+      }
     }
 
     return NextResponse.json({ created: rows.length });

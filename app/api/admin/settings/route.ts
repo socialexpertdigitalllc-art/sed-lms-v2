@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { getAppSettings } from "@/lib/settings/appSettings";
+import { getAppSettings, invalidateAppSettingsCache } from "@/lib/settings/appSettings";
 
 async function assertSettingsManage(): Promise<{ userId: string } | { error: number }> {
   const supabase = await createClient();
@@ -78,6 +78,7 @@ export async function PUT(req: Request) {
     { onConflict: "singleton" }
   );
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  invalidateAppSettingsCache();
 
   await admin.from("activity_log").insert({
     user_id: auth.userId,

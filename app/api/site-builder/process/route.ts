@@ -41,8 +41,17 @@ export async function POST(req: Request) {
    * worth of runs), and the `coalesce(options->>'auto_resume','true')`
    * semantics — ABSENT MEANS TRUE — are clearer and more testable spelled
    * out here than encoded in a filter string.
+   *
+   * COLUMN LIST IS LOAD-BEARING: this poller fires every ~3 min on every
+   * instance forever, and `select("*")` here dragged each run's multi-MB
+   * `pages` JSONB through TOAST on every tick — measured at ~740ms/call and
+   * ~half of ALL database time (the Supabase disk-IO budget incident,
+   * 2026-08-17). Eligibility needs exactly these five small fields;
+   * generateRunNow refetches the full row for the one run it claims.
    */
-  const { data: rows, error } = await admin.from("builder_runs").select("*");
+  const { data: rows, error } = await admin
+    .from("builder_runs")
+    .select("id, status, resume_at, options, created_at");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const now = Date.now();

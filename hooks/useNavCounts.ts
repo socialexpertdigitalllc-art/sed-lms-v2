@@ -49,9 +49,18 @@ export function useNavCounts(): Record<string, number> {
   // wide-view permissions receive none for tables they can't select — their
   // badges would only refresh on a hard reload. Poll + refetch on focus as a
   // floor (the useUnreadMail pattern) so every badge stays honest.
+  //
+  // The floor poll only runs while the tab is VISIBLE: an overnight
+  // background tab polling badge counts every minute was a leading burner of
+  // the shared database's disk-IO budget (incident 2026-08-17). A hidden tab
+  // goes fully quiet and catches up through the visibilitychange tick the
+  // moment it's looked at; 180s is plenty for a floor whose real-time path
+  // is the realtime subscription below.
   useEffect(() => {
     const tick = () => setRefreshTick((n) => n + 1);
-    const interval = setInterval(tick, 60_000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") tick();
+    }, 180_000);
     const onVisible = () => {
       if (document.visibilityState === "visible") tick();
     };
