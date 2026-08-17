@@ -29,6 +29,17 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.11.1",
+    date: "2026-08-17",
+    title: "Database load diet",
+    changes: [
+      {
+        kind: "improvement",
+        text: "Background jobs and sidebar badges now use a fraction of the database: the site-builder poller stopped re-reading every run's full generated pages each cycle, badge counts are cached for 30 seconds and no longer poll from hidden browser tabs, settings and notification rules are cached in memory, and old-notification cleanup runs a few times a day instead of every minute. Fixes the Supabase disk-IO budget warning.",
+      },
+    ],
+  },
+  {
     version: "2.11.0",
     date: "2026-08-14",
     title: "Website update safety",
