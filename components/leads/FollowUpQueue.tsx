@@ -123,7 +123,11 @@ export function FollowUpQueue({
       // "Specific" = the client asked for this exact time. Agents work those
       // first, so the page has to be able to show only them.
       if (specificOnly && !l.follow_up_is_specific) return false;
-      if (teamScope && !(l.agent_id && teamIds.has(l.agent_id))) return false;
+      // Same rule as the leads table: a closer sees their OWN follow-ups
+      // until they ask for the team.
+      if (isCloser) {
+        if (teamScope ? !(l.agent_id && teamIds.has(l.agent_id)) : l.agent_id !== currentUserId) return false;
+      }
       if (q) {
         const agent = (l.agent_id && agentNameById[l.agent_id]) || "";
         const hay = `${l.business_name} ${agent} ${l.business_phone ?? ""} ${l.business_email ?? ""}`.toLowerCase();
@@ -131,7 +135,7 @@ export function FollowUpQueue({
       }
       return true;
     });
-  }, [eligible, statusSel, agentSel, typeSel, regionSel, specificOnly, teamScope, teamIds, q, agentNameById]);
+  }, [eligible, statusSel, agentSel, typeSel, regionSel, specificOnly, isCloser, teamScope, teamIds, currentUserId, q, agentNameById]);
 
   const groups = useMemo(() => groupByBucket(filtered, new Date()), [filtered]);
 
@@ -311,7 +315,7 @@ export function FollowUpQueue({
             type="button"
             onClick={() => setUrlState({ scope: teamScope ? "" : "team" })}
             aria-pressed={teamScope}
-            title="Only follow-ups owned by you and the sales agents on your team"
+            title="Also show the follow-ups of the sales agents on your team"
             className={cn(
               "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
               teamScope ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text",

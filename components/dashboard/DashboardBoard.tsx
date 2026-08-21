@@ -101,7 +101,11 @@ export function DashboardBoard({
 
   // Ephemeral, session-scoped per-agent analytics filter (admins only). Not
   // persisted to view state on purpose.
-  const [agentIds, setAgentIds] = useState<string[]>([]);
+  // A closer's dashboard opens on THEIR OWN numbers; "My team" widens it to
+  // their agents. Everyone else starts unfiltered, as before.
+  const [agentIds, setAgentIds] = useState<string[]>(() =>
+    teamAgentIds.length > 0 && currentUserId ? [currentUserId] : [],
+  );
 
   // A closer's own scope: themselves plus their team. It drives the SAME
   // agentIds filter the admin picker uses, so every KPI, chart, follow-up and
@@ -254,9 +258,9 @@ export function DashboardBoard({
         {isCloser && (
           <button
             type="button"
-            onClick={() => setAgentIds(teamScopeOn ? [] : myTeamIds)}
+            onClick={() => setAgentIds(teamScopeOn ? [currentUserId].filter(Boolean) : myTeamIds)}
             aria-pressed={teamScopeOn}
-            title="Scope every figure to you and the sales agents on your team"
+            title="Include the sales agents on your team in every figure (off = your own numbers)"
             className={
               "inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors " +
               (teamScopeOn ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text")

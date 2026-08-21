@@ -6,9 +6,10 @@ import { ToastProvider } from "@/components/common/Toast";
 import type { Lead } from "@/lib/leads/types";
 
 /**
- * The "My team" scope a closer gets on the list views: it must narrow to the
- * closer PLUS their own agents — never another closer's agents, and never
- * unassigned leads — and it must not appear at all for someone with no team.
+ * A closer's list views open on THEIR OWN work; the team is opt-in behind the
+ * "My team" chip, which then adds their agents to their own — never another
+ * closer's agents, never unassigned leads. Someone with no team sees no chip
+ * and no scoping at all.
  */
 
 // The queue subscribes to realtime; the test only exercises filtering.
@@ -73,13 +74,22 @@ describe("My team scope", () => {
     expect(screen.queryByRole("button", { name: /my team/i })).not.toBeInTheDocument();
   });
 
-  it("shows every lead until the closer turns it on", () => {
+  it("defaults a closer to their OWN leads only", () => {
     mount([MINE_A, MINE_B]);
-    expect(screen.getByText("Other Team Co")).toBeInTheDocument();
-    expect(screen.getByText("Agent A Co")).toBeInTheDocument();
+    expect(screen.getByText("Closer Own Co")).toBeInTheDocument();
+    expect(screen.queryByText("Agent A Co")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent B Co")).not.toBeInTheDocument();
+    expect(screen.queryByText("Other Team Co")).not.toBeInTheDocument();
   });
 
-  it("narrows to the closer and their own agents, excluding another closer's agent and unassigned", () => {
+  it("leaves someone with no team completely unscoped", () => {
+    mount([]);
+    expect(screen.getByText("Closer Own Co")).toBeInTheDocument();
+    expect(screen.getByText("Agent A Co")).toBeInTheDocument();
+    expect(screen.getByText("Other Team Co")).toBeInTheDocument();
+  });
+
+  it("adds the team on, keeping the closer's own and excluding other teams and unassigned", () => {
     mount([MINE_A, MINE_B]);
     fireEvent.click(screen.getByRole("button", { name: /my team/i }));
 
@@ -90,12 +100,13 @@ describe("My team scope", () => {
     expect(screen.queryByText("Nobody Co")).not.toBeInTheDocument();
   });
 
-  it("toggles back off", () => {
+  it("toggles back to own-only", () => {
     mount([MINE_A, MINE_B]);
     const chip = screen.getByRole("button", { name: /my team/i });
     fireEvent.click(chip);
-    expect(screen.queryByText("Other Team Co")).not.toBeInTheDocument();
+    expect(screen.getByText("Agent A Co")).toBeInTheDocument();
     fireEvent.click(chip);
-    expect(screen.getByText("Other Team Co")).toBeInTheDocument();
+    expect(screen.queryByText("Agent A Co")).not.toBeInTheDocument();
+    expect(screen.getByText("Closer Own Co")).toBeInTheDocument();
   });
 });

@@ -130,9 +130,10 @@ export function LeadsTable({
   const tagSel = useMemo(() => (urlState.tags ? urlState.tags.split(",") : []), [urlState.tags]);
   const agentSel = useMemo(() => (agent ? agent.split(",") : []), [agent]);
   const typeSel = useMemo(() => (type ? type.split(",") : []), [type]);
-  // "My team" = the closer plus the sales agents reporting to them. Applied
-  // BEFORE every other filter and count, so the status tabs, the agent list
-  // and the export all describe the same set the operator is looking at.
+  // A closer's table defaults to THEIR OWN leads; the team is opt-in behind
+  // the "My team" chip, which then adds their agents' leads to their own.
+  // Applied BEFORE every other filter and count, so the status tabs, the
+  // agent list and the export all describe the set on screen.
   const isCloser = teamAgentIds.length > 0;
   const teamScope = isCloser && urlState.scope === "team";
   const teamIds = useMemo(
@@ -163,10 +164,12 @@ export function LeadsTable({
 
   const scopedLeads = useMemo(
     () =>
-      leads.filter(
-        (l) => inMonth(l.created_at, month) && (!teamScope || (l.agent_id ? teamIds.has(l.agent_id) : false)),
-      ),
-    [leads, month, teamScope, teamIds],
+      leads.filter((l) => {
+        if (!inMonth(l.created_at, month)) return false;
+        if (!isCloser) return true;
+        return teamScope ? Boolean(l.agent_id && teamIds.has(l.agent_id)) : l.agent_id === currentUserId;
+      }),
+    [leads, month, isCloser, teamScope, teamIds, currentUserId],
   );
 
   const statusCounts = useMemo(() => {
@@ -516,7 +519,7 @@ export function LeadsTable({
             type="button"
             onClick={() => setUrlState({ scope: teamScope ? "" : "team", page: "0" })}
             aria-pressed={teamScope}
-            title="Only leads owned by you and the sales agents on your team"
+            title="Also show the leads of the sales agents on your team (your own are always shown)"
             className={
               "rounded-md px-3 py-2 text-sm font-medium transition-colors " +
               (teamScope ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text")

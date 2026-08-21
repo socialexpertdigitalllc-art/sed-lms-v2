@@ -51,7 +51,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       },
       {
         kind: "feature",
-        text: "\"My team\" scope for closers: one click on the Leads page, the Follow-ups page or the Dashboard narrows everything — rows, status counts, KPIs, charts and exports — to the closer and their own sales agents. It only appears for someone who actually has a team.",
+        text: "\"My team\" for closers: a closer's Leads page, Follow-ups page and Dashboard open on their OWN work, and one click adds their sales agents' — rows, status counts, KPIs, charts and exports all follow together. The button only appears for someone who actually has a team.",
       },
       {
         kind: "fix",
