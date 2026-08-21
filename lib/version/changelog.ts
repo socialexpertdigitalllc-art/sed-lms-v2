@@ -53,6 +53,10 @@ export const CHANGELOG: ChangelogEntry[] = [
         kind: "feature",
         text: "\"My team\" scope for closers: one click on the Leads page, the Follow-ups page or the Dashboard narrows everything — rows, status counts, KPIs, charts and exports — to the closer and their own sales agents. It only appears for someone who actually has a team.",
       },
+      {
+        kind: "fix",
+        text: "A closer now actually sees their team's leads, follow-ups and tickets. Lead visibility was granted only by the blanket \"view all agents' leads\" permission, so a closer without it saw nothing but their own work no matter who was on their team. Visibility now follows the org chart — and still respects which lead statuses each person is allowed to see.",
+      },
     ],
   },
   {
