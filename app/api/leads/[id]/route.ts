@@ -6,9 +6,18 @@ import { notify } from "@/lib/notifications/notify";
 import { updateLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
 import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
+import { isAdminMember } from "@/lib/permissions/isAdminMember";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
+
+/** Fields only an Admin-department member may change (see the PATCH gate). */
+const ADMIN_ONLY_FIELDS = ["agent_id", "closed_by", "rating"] as const;
+const ADMIN_ONLY_FIELD_LABELS: Record<(typeof ADMIN_ONLY_FIELDS)[number], string> = {
+  agent_id: "the agent",
+  closed_by: "closed by",
+  rating: "the rating",
+};
 
 /** True when the user belongs to the Sales department (slug "sales"). */
 async function isSalesMember(
@@ -78,10 +87,28 @@ export async function PATCH(
   if (!before) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
   // Ownership scope (defense-in-depth mirror of the leads read policy):
-  // without leads.view_all a user may only touch their own leads. The Sales
-  // closed-by path stays intact — it applies to the member's own leads.
+  // without leads.view_all a user may only touch their own leads. NOTE: the
+  // Sales closed-by carve-out below now only helps a member who is ALSO in
+  // the Admin department — `closed_by` became an admin-only field (see the
+  // ADMIN_ONLY_FIELDS gate), which is checked first.
   if (!perms.has("leads.view_all") && before.agent_id !== user.id) {
     return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
+  }
+
+  // Agent, Closed by and Rating are ADMINISTRATIVE fields: only members of the
+  // Admin department may change them, whatever else a role can edit (mirrors
+  // the SQL is_admin() helper via isAdminMember). Checked against `before` so
+  // a no-op resubmit of the same value never trips the gate.
+  const adminOnlyChanged = ADMIN_ONLY_FIELDS.filter(
+    (f) => parsed.data[f] !== undefined && parsed.data[f] !== (before as Record<string, unknown>)[f],
+  );
+  if (adminOnlyChanged.length > 0 && !(await isAdminMember(admin, user.id))) {
+    return NextResponse.json(
+      {
+        error: `Only an admin can change ${adminOnlyChanged.map((f) => ADMIN_ONLY_FIELD_LABELS[f]).join(", ")}.`,
+      },
+      { status: 403 },
+    );
   }
 
   // Reassignment is sensitive and has its own permission — leads.edit alone

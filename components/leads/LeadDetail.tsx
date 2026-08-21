@@ -46,6 +46,7 @@ export function LeadDetail({
   closedByName,
   closingUsers,
   canEditClosedBy,
+  isAdmin,
   tickets,
   sla,
   allTags,
@@ -65,6 +66,8 @@ export function LeadDetail({
   closedByName: string | null;
   closingUsers: { id: string; display_name: string }[];
   canEditClosedBy: boolean;
+  /** Member of the Admin department — gates Agent / Closed by / Rating. */
+  isAdmin: boolean;
   tickets: Ticket[];
   sla: Record<TicketPriority, number>;
   allTags: LeadTag[];
@@ -221,18 +224,23 @@ export function LeadDetail({
             <div className={grid}>
               <FieldRow label="Business name" value={lead.business_name ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_name: v.trim() })} />
               <FieldRow label="Phone" value={lead.business_phone ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_phone: nz(v) })} />
-              {lead.no_email ? (
-                <FieldRow label="Email" value="" display={muted("No email")} />
-              ) : (
-                <FieldRow
-                  label="Email"
-                  value={lead.business_email ?? ""}
-                  canEdit={canEdit}
-                  onSave={(v) => patch({ business_email: nz(v) })}
-                  // Advisory only — checks the draft while editing, never gates the save.
-                  editExtra={(draft, setDraft) => <EmailFieldVerify email={draft} onAccept={setDraft} />}
-                />
-              )}
+              {/* A lead submitted with "no email" must still accept one later —
+                  the address often arrives after the first call, so this row
+                  stays EDITABLE and only its empty-state text differs. Saving an
+                  address clears the no_email flag, which re-enables the mail and
+                  contract features that skip flagged leads. */}
+              <FieldRow
+                label="Email"
+                value={lead.business_email ?? ""}
+                canEdit={canEdit}
+                display={lead.no_email && !lead.business_email ? muted("No email — add one if you get it") : undefined}
+                onSave={(v) => {
+                  const email = nz(v);
+                  return patch(email && lead.no_email ? { business_email: email, no_email: false } : { business_email: email });
+                }}
+                // Advisory only — checks the draft while editing, never gates the save.
+                editExtra={(draft, setDraft) => <EmailFieldVerify email={draft} onAccept={setDraft} />}
+              />
               <FieldRow label="Profile link" value={lead.business_profile_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ business_profile_link: nz(v) })} />
               <FieldRow
                 label="Website link"
@@ -289,14 +297,14 @@ export function LeadDetail({
 
           <SectionCard n={2} icon={ClipboardList} title="Lead info" subtitle="Status, pricing & rating" done={false} delay={60}>
             <div className={grid}>
-              <FieldRow label="Agent" value={lead.agent_id ?? ""} type="select" options={agentOptions} display={agentName} canEdit={canAssign} onSave={(v) => patch({ agent_id: v || null })} />
+              <FieldRow label="Agent" value={lead.agent_id ?? ""} type="select" options={agentOptions} display={agentName} canEdit={isAdmin && canAssign} onSave={(v) => patch({ agent_id: v || null })} />
               <FieldRow
                 label="Closed by"
                 value={lead.closed_by ?? ""}
                 type="select"
                 options={[{ value: "", label: "— (none) —" }, ...closingUsers.map((u) => ({ value: u.id, label: u.display_name }))]}
                 display={closedByName}
-                canEdit={canEditClosedBy}
+                canEdit={isAdmin && canEditClosedBy}
                 onSave={(v) => patch({ closed_by: v || null })}
               />
               {/* Status is read-only here — edited via the "Change status" button (respects category permissions). */}
@@ -323,7 +331,7 @@ export function LeadDetail({
               ) : (
                 <FieldRow className="sm:col-span-2" label="Add-ons" value="" />
               )}
-              <FieldRow label="Rating (1–10)" value={lead.rating?.toString() ?? ""} type="number" display={<RatingStars value={lead.rating} />} canEdit={canEdit} onSave={(v) => patch({ rating: num(v) })} />
+              <FieldRow label="Rating (1–10)" value={lead.rating?.toString() ?? ""} type="number" display={<RatingStars value={lead.rating} />} canEdit={isAdmin} onSave={(v) => patch({ rating: num(v) })} />
               <FieldRow label="Fresh or follow-up" value={lead.fresh_or_followup ?? ""} type="select" options={[{ value: "", label: "—" }, ...FRESH_OPTIONS.map((s) => ({ value: s, label: s }))]} canEdit={canEdit} onSave={(v) => patch({ fresh_or_followup: v || null })} />
             </div>
           </SectionCard>

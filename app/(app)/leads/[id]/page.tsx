@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { isAdminMember } from "@/lib/permissions/isAdminMember";
 import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { LeadDetail } from "@/components/leads/LeadDetail";
 import type { Lead } from "@/lib/leads/types";
@@ -150,6 +151,9 @@ export default async function LeadDetailPage({
     }
   }
   const canEditClosedBy = perms.has("leads.edit") || isSalesMember;
+  // Agent / Closed by / Rating are administrative fields — only Admin-department
+  // members may edit them (same definition the PATCH route enforces).
+  const isAdmin = user ? await isAdminMember(admin, user.id) : false;
 
   const canSendContracts = perms.has("contracts.send");
   const canViewContracts = canSendContracts || perms.has("contracts.view");
@@ -176,6 +180,7 @@ export default async function LeadDetailPage({
       closedByName={closedByName}
       closingUsers={closingUsers}
       canEditClosedBy={canEditClosedBy}
+      isAdmin={isAdmin}
       tickets={visibleTickets}
       sla={settings.ticket_sla}
       allTags={allTags ?? []}

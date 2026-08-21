@@ -8,6 +8,7 @@ import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { buildTagLinkRows } from "@/lib/leads/tagFilter";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 import { bulkRecordStatusChanges } from "@/lib/leads/statusEvents";
+import { isAdminMember } from "@/lib/permissions/isAdminMember";
 
 const schema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(500),
@@ -80,6 +81,12 @@ export async function POST(req: Request) {
     if (gateError) return NextResponse.json({ error: gateError }, { status: 403 });
     update = { status: value };
   } else if (action === "assign") {
+    // The agent is an ADMIN-ONLY field (same rule the single-lead PATCH
+    // enforces). Without this check bulk-assign would be a way around it:
+    // `leads.assign` alone could still move dozens of leads between agents.
+    if (!(await isAdminMember(admin, user.id))) {
+      return NextResponse.json({ error: "Only an admin can change the agent." }, { status: 403 });
+    }
     if (value) {
       const { data: salesDept } = await admin
         .from("departments")
