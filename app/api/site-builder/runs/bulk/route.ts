@@ -44,7 +44,12 @@ export async function POST(req: Request) {
       { status: 422 },
     );
   }
-  const options = body?.options && typeof body.options === "object" && !Array.isArray(body.options) ? body.options : {};
+  const rawOptions = body?.options && typeof body.options === "object" && !Array.isArray(body.options) ? body.options : {};
+  // Bulk queues up to MAX_BULK_LEADS runs from a single click. Auto-deploy is
+  // deliberately STRIPPED here: one click must never publish dozens of client
+  // sites to public URLs and rewrite dozens of leads' website links. Bulk runs
+  // land in review and are deployed individually, as before.
+  const options = { ...rawOptions, auto_deploy: false };
 
   const admin = createAdminClient();
 

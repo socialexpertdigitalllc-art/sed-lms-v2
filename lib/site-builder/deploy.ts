@@ -265,6 +265,33 @@ export async function deployBuilderRun(
       return fail(500, `Deployed to ${url}, but could not write the activity log entry: ${logErr.message}. The site IS live.`);
     }
 
+    // Tell the lead's agent their site is live. Best-effort by design: the
+    // site IS deployed and every record is written by this point, so a
+    // notification problem must never turn a successful deploy into a
+    // failure. Lives HERE rather than in the route so the headless
+    // auto-deploy path (lib/site-builder/autoDeploy.ts) delivers exactly the
+    // same notification as an operator's manual deploy click.
+    try {
+      const { notify } = await import("@/lib/notifications/notify");
+      await notify(
+        "website_link_added",
+        {
+          leadId,
+          lead: { agent_id: lead.agent_id as string | null, closed_by: lead.closed_by as string | null },
+          actorId: actorUserId,
+        },
+        {
+          title: "Website live",
+          body: `${String(lead.business_name ?? "This lead")}'s website is live: ${url}`,
+          dedupKey: `website_link_added:${leadId}:${url}`,
+          targetUrl: `/leads/${leadId}`,
+          websiteUrl: url,
+        },
+      );
+    } catch {
+      /* notification is never worth failing a live deploy over */
+    }
+
     return { ok: true, url, sub, reused, existed, clearWarning };
   } catch (e) {
     return fail(500, e instanceof Error ? e.message : "Deploy failed unexpectedly");

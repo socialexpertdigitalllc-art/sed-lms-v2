@@ -118,6 +118,12 @@ export interface GenerateRunDeps {
   budgetMs?: number;
   /** Escalation schedule between rounds; default DEFAULT_WAITS_MS. */
   waitsMs?: number[];
+  /**
+   * Publish the finished run (see lib/site-builder/autoDeploy.ts). Injected
+   * so this module's tests never reach DirectAdmin: the default resolves
+   * lazily, and only runs whose `options.auto_deploy` is true ever call it.
+   */
+  autoDeployImpl?: (admin: SupabaseClient, runId: string, actorId: string | null) => Promise<{ ok: boolean; url?: string; error?: string }>;
 }
 
 /**
@@ -501,7 +507,35 @@ export async function generateRunNow(
     if (!released) return { kind: "superseded", error: SUPERSEDED_MESSAGE };
     if (uploadError) return { kind: "refused", status: 500, error: uploadError };
 
-    return { kind: "done", run: released as Row };
+    /*
+     * AUTO-DEPLOY — the run is finished and every row is written, so this is
+     * the one place both entry paths share: the operator's generate route and
+     * the headless background processor call this same function, and a run
+     * that parked and resumed hours later reaches here with no screen open.
+     * Hooking the routes instead would miss exactly the unattended cases the
+     * feature exists for.
+     *
+     * Opt-in only (absent means false), success only, and never fatal: a
+     * deploy failure leaves the run in `review` for a manual retry rather
+     * than discarding a good generation.
+     */
+    const finished = released as Row;
+    // Absent means FALSE — the opposite polarity to `auto_resume`. Publishing
+    // a real client site is never a safe default, and every run created before
+    // this feature carries `options: {}`. Checked inline so this module's graph
+    // stays free of the deploy/DirectAdmin chain (autoDeploy is imported only
+    // when a run actually opted in).
+    const autoDeployWanted = (finished.options as { auto_deploy?: unknown } | null)?.auto_deploy === true;
+    if (autoDeployWanted && finished.status === "review") {
+      const deployImpl = deps.autoDeployImpl ?? (await import("./autoDeploy")).autoDeployRun;
+      const outcome = await deployImpl(admin, runId, (finished.created_by as string | null) ?? null);
+      if (outcome.ok) {
+        const { data: after } = await admin.from("builder_runs").select("*").eq("id", runId).maybeSingle();
+        if (after) return { kind: "done", run: after as Row };
+      }
+    }
+
+    return { kind: "done", run: finished };
   } catch (e) {
     const message = e instanceof Error ? e.message : "Generation failed";
     // Guarded the same way as the terminal write: a superseded attempt must

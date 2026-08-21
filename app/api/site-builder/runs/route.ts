@@ -52,7 +52,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "lead_id and template_id are required" }, { status: 422 });
   }
   const images = sanitizeImages(body?.images);
-  const options = body?.options && typeof body.options === "object" && !Array.isArray(body.options) ? body.options : {};
+  const rawOptions = body?.options && typeof body.options === "object" && !Array.isArray(body.options) ? body.options : {};
+  // `auto_deploy` publishes a real client site with no review step, so it is
+  // normalised to a STRICT boolean here rather than stored verbatim: a
+  // truthy-but-not-true value ("false", 1, {}) must never read as consent
+  // downstream (lib/site-builder/generateRun.ts tests it with ===).
+  const options = { ...rawOptions, auto_deploy: rawOptions.auto_deploy === true };
 
   const admin = createAdminClient();
 
