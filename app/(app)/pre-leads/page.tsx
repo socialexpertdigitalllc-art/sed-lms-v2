@@ -2,12 +2,13 @@ import { createClient } from "@/lib/supabase/server";
 import type { PreLead } from "@/lib/preleads/types";
 import { PreLeadOverview } from "@/components/preleads/PreLeadOverview";
 import { WorldClocks } from "@/components/layout/WorldClocks";
+import { getUserDirectory } from "@/lib/users/directory";
 
 export default async function PreLeadsPage() {
   const supabase = await createClient();
-  const [{ data }, { data: agents }] = await Promise.all([
+  const [{ data }, agents] = await Promise.all([
     supabase.from("pre_leads").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
-    supabase.from("profiles").select("id, display_name"),
+    getUserDirectory(),
   ]);
   const preLeads = (data ?? []) as PreLead[];
 

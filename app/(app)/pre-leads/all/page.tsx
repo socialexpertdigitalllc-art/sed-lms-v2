@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { PreLeadsTable } from "@/components/preleads/PreLeadsTable";
 import type { PreLead } from "@/lib/preleads/types";
+import { getUserDirectory } from "@/lib/users/directory";
 
 export default async function AllPreLeadsPage() {
   const supabase = await createClient();
@@ -11,7 +12,7 @@ export default async function AllPreLeadsPage() {
     .order("created_at", { ascending: false });
   const preLeads = (preLeadsData ?? []) as PreLead[];
 
-  const { data: agents } = await supabase.from("profiles").select("id, display_name");
+  const agents = await getUserDirectory();
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 

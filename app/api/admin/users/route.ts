@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { createUserSchema } from "@/lib/admin/createUserSchema";
+import { invalidateUserDirectory } from "@/lib/users/directory";
 
 export async function POST(req: Request) {
   const supabase = await createClient();
@@ -60,6 +61,7 @@ export async function POST(req: Request) {
   await admin.from("department_members").insert(
     departmentIds.map((d) => ({ user_id: uid, department_id: d, added_by: user.id }))
   );
+  invalidateUserDirectory(); // a new colleague must appear in name lookups now
   await admin.from("activity_log").insert({
     user_id: user.id,
     action: "user.created",

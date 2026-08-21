@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { FollowUpQueue } from "@/components/leads/FollowUpQueue";
 import type { Lead } from "@/lib/leads/types";
+import { getUserDirectory } from "@/lib/users/directory";
 
 export default async function FollowUpsPage() {
   const supabase = await createClient();
@@ -21,7 +22,7 @@ export default async function FollowUpsPage() {
     .order("created_at", { ascending: false });
   const leads = (leadsData ?? []) as Lead[];
 
-  const { data: agents } = await supabase.from("profiles").select("id, display_name");
+  const agents = await getUserDirectory();
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 

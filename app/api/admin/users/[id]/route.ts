@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { invalidateUserDirectory } from "@/lib/users/directory";
 
 export async function PATCH(
   req: Request,
@@ -23,6 +24,7 @@ export async function PATCH(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     await admin.from("profiles").update({ is_active: body.isActive }).eq("id", id);
+    invalidateUserDirectory();
     await admin.auth.admin.updateUserById(id, {
       ban_duration: body.isActive ? "none" : "876000h",
     });
@@ -86,6 +88,7 @@ export async function PATCH(
     }
     const { error } = await admin.from("profiles").update({ username: uname }).eq("id", id);
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    invalidateUserDirectory();
     await admin.from("activity_log").insert({
       user_id: user.id,
       action: "user.username_changed",

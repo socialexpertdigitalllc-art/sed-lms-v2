@@ -5,6 +5,7 @@ import { GenerationsTable } from "@/components/ai-tools/GenerationsTable";
 import { GenerationsTrend, ToolDonut, CountBars } from "@/components/ai-tools/AiCharts";
 import { computeAiKpis, byTool, byModel, generationsOverTime } from "@/lib/ai-tools/analytics";
 import type { AiGeneration } from "@/lib/ai-tools/types";
+import { getUserDirectory } from "@/lib/users/directory";
 
 const GATE = ["analytics.view_webcraft", "analytics.view_deepseek", "analytics.view_all_agents", "ai_tools.webcraft", "ai_tools.deepseek"];
 
@@ -24,7 +25,7 @@ export default async function AiAnalyticsPage() {
     .order("created_at", { ascending: false });
   const rows = (genData ?? []) as AiGeneration[];
 
-  const { data: profiles } = await supabase.from("profiles").select("id, display_name");
+  const profiles = await getUserDirectory();
   const agentNameById: Record<string, string> = {};
   for (const p of profiles ?? []) agentNameById[p.id] = p.display_name ?? p.id;
 

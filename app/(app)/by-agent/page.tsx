@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import type { Lead } from "@/lib/leads/types";
 import { StatusPill } from "@/components/leads/StatusPill";
 import { formatCompactCurrency, initials } from "@/lib/leads/format";
+import { getUserDirectory } from "@/lib/users/directory";
 
 export default async function ByAgentPage() {
   const supabase = await createClient();
@@ -16,9 +17,9 @@ export default async function ByAgentPage() {
   const perms = await getUserPermissions(user.id);
   if (!perms.has("analytics.by_agent")) redirect("/dashboard");
 
-  const [{ data: leadsData }, { data: agents }] = await Promise.all([
+  const [{ data: leadsData }, agents] = await Promise.all([
     supabase.from("leads").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
-    supabase.from("profiles").select("id, display_name"),
+    getUserDirectory(),
   ]);
   const leads = (leadsData ?? []) as Lead[];
 

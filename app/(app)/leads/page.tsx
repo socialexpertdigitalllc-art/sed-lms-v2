@@ -4,20 +4,21 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { sentContractLeadIds } from "@/lib/contracts/badge";
 import { LeadsTable } from "@/components/leads/LeadsTable";
 import type { Lead, LeadTag } from "@/lib/leads/types";
+import { getUserDirectory } from "@/lib/users/directory";
 
 export default async function LeadsPage() {
   const supabase = await createClient();
 
   // Independent reads fire together. `department_members` still follows because
   // it depends on the resolved `salesDept.id`.
-  const [{ data: leadsData }, { data: agents }, { data: salesDept }, { data: tagsData }] =
+  const [{ data: leadsData }, agents, { data: salesDept }, { data: tagsData }] =
     await Promise.all([
       supabase
         .from("leads")
         .select("*, lead_tag_links(tag_id)")
         .is("deleted_at", null)
         .order("created_at", { ascending: false }),
-      supabase.from("profiles").select("id, display_name"),
+      getUserDirectory(),
       supabase.from("departments").select("id").eq("slug", "sales").single(),
       supabase.from("lead_tags").select("id, name, color, owner_id").order("name"),
     ]);

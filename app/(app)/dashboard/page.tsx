@@ -6,6 +6,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { visibleStatuses } from "@/lib/leads/categories";
 import { buildRegionFacets } from "@/lib/geo/regions";
 import { DashboardBoard } from "@/components/dashboard/DashboardBoard";
+import { getUserDirectory } from "@/lib/users/directory";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -34,10 +35,10 @@ export default async function DashboardPage() {
   })();
 
   // Independent reads fire together; salesUsers resolves in parallel.
-  const [{ data: leadsData }, { data: agents }, { data: followUps }, { data: tickets }, salesUsers] =
+  const [{ data: leadsData }, agents, { data: followUps }, { data: tickets }, salesUsers] =
     await Promise.all([
       supabase.from("leads").select("*").is("deleted_at", null),
-      supabase.from("profiles").select("id, display_name"),
+      getUserDirectory(),
       supabase.from("lead_follow_ups").select("fu_status, lead_id"),
       supabase.from("lead_tickets").select("status, due_date, created_at, resolved_at, lead_id"),
       salesUsersPromise,

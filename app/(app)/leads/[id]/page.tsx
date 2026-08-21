@@ -9,6 +9,7 @@ import type { LeadFollowUp } from "@/lib/leads/followups";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
 import { getAppSettings } from "@/lib/settings/appSettings";
 import { notFound } from "next/navigation";
+import { getActiveUsers } from "@/lib/users/directory";
 
 export default async function LeadDetailPage({
   params,
@@ -27,11 +28,7 @@ export default async function LeadDetailPage({
   if (!leadRaw) notFound();
   const lead = leadRaw as Lead;
 
-  const { data: agents } = await supabase
-    .from("profiles")
-    .select("id, display_name")
-    .eq("is_active", true)
-    .order("display_name");
+  const agents = await getActiveUsers();
 
   const { data: followUpsRaw } = await supabase
     .from("lead_follow_ups")
