@@ -29,6 +29,29 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.13.0",
+    date: "2026-08-22",
+    title: "Closer teams, and everyone's name",
+    changes: [
+      {
+        kind: "fix",
+        text: "Agents' names now appear everywhere you can see their leads. Anyone without admin rights was shown \"Unassigned\" on every lead but their own — the leads were there, the names were not — so a user given permission to view all agents' leads could not tell whose they were.",
+      },
+      {
+        kind: "feature",
+        text: "Closer teams: each closer now has their own sales agents, managed on the Closing department screen. A closer can work on their team's leads, and every change is recorded against the closer — never as if the agent had made it — so it is always clear who actually did what.",
+      },
+      {
+        kind: "improvement",
+        text: "The hierarchy is enforced by the database itself: a sales agent belongs to exactly one closer, and a closer can never be placed under another closer. Moving an agent to a different closer just moves them.",
+      },
+      {
+        kind: "fix",
+        text: "Dropping a lead from the follow-up window works end to end — the server was still refusing it without a future follow-up time.",
+      },
+    ],
+  },
+  {
     version: "2.12.0",
     date: "2026-08-18",
     title: "Image picking, rebuilt",
