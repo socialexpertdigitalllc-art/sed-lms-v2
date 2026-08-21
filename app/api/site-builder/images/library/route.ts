@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
+import { ttlCached } from "@/lib/cache/ttl";
 import { searchBuilderImages } from "@/lib/site-builder/imageLibrary";
 
 export const runtime = "nodejs";
@@ -23,8 +24,16 @@ export async function GET(req: Request) {
   const subject = searchParams.get("subject")?.trim() || undefined;
   const leadId = searchParams.get("lead_id")?.trim() || undefined;
 
+  // The picker re-runs this on every open and on every keystroke (debounced).
+  // The library changes only when somebody picks an image, so a short cache
+  // turns a burst of identical searches into one query.
   const admin = createAdminClient();
-  const rows = await searchBuilderImages(admin, { subject, leadId });
+  const rows = await ttlCached(
+    "builder-image-library",
+    `${subject ?? ""}|${leadId ?? ""}`,
+    30_000,
+    () => searchBuilderImages(admin, { subject, leadId }),
+  );
 
   return NextResponse.json({
     images: rows.map((r) => ({

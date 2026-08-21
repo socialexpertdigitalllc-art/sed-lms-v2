@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ImageOff, Loader2, Rocket, Search } from "lucide-react";
+import { Check, ImageOff, Loader2, Rocket, Search } from "lucide-react";
 import { PageHeader } from "@/components/common/Panel";
 import { btnPrimary, btnSecondarySm } from "@/components/common/buttons";
 import { inputCls } from "@/components/forms/Field";
 import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
+import { SmartImage, prefetchImages } from "@/components/common/SmartImage";
 import { BuilderImagePicker, type PickedImage } from "@/components/site-builder/BuilderImagePicker";
 import type { BuilderTemplateRow } from "@/components/site-builder/TemplatesBoard";
 
@@ -95,6 +96,29 @@ interface SourceApiResponse {
 const HERO_PICK_LIMIT = 3;
 
 /**
+ * Candidate tiles were fixed 64x64 squares in rows that had the full page
+ * width to play with, so an operator could not actually SEE what they were
+ * choosing (feedback, 2026-08-18). They now fill the available width: as
+ * many ~190px tiles per row as fit, growing to share leftover space.
+ */
+const TILE_GRID = "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(190px,1fr))]";
+const TILE_SIZES = "(max-width: 640px) 45vw, 240px";
+
+const tileCls = (selected: boolean) =>
+  cn(
+    "relative aspect-[4/3] overflow-hidden rounded-lg border-2 bg-surface-2 transition-all",
+    selected ? "border-accent ring-2 ring-accent" : "border-border hover:border-accent/60",
+  );
+
+function SelectedTick() {
+  return (
+    <span className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-accent text-white shadow">
+      <Check className="h-4 w-4" />
+    </span>
+  );
+}
+
+/**
  * The Site Builder image step: sourcing fires automatically the moment a
  * lead is picked (`POST /api/site-builder/images/source`), landing the
  * operator on an already-populated screen — a Hero row (up to 5 candidates,
@@ -115,6 +139,11 @@ export function NewSiteFlow() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [templateId, setTemplateId] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Publish automatically once generation finishes. Defaults OFF and is never
+  // remembered between runs: this puts a real client site on a public URL and
+  // writes the lead's website link with nobody reviewing it first, so it must
+  // be a deliberate choice every time.
+  const [autoDeploy, setAutoDeploy] = useState(false);
 
   const [needsLoading, setNeedsLoading] = useState(false);
   const [heroCandidates, setHeroCandidates] = useState<DisplayCandidate[]>([]);
@@ -178,6 +207,10 @@ export function NewSiteFlow() {
       return;
     }
     setGallerySelected(new Set(selectedLead.image_links ?? []));
+    // Warm the thumbnail cache the moment a lead is chosen, so the photos are
+    // already there when the operator opens the picker instead of loading
+    // from scratch on every open.
+    prefetchImages(selectedLead.image_links ?? []);
     let cancelled = false;
     setNeedsLoading(true);
     setHeroCandidates([]);
@@ -254,20 +287,51 @@ export function NewSiteFlow() {
     setServiceRows((prev) => prev.map((r) => (r.purpose === purpose ? { ...r, pickedKey: null } : r)));
   }
 
-  function applyManualPick(purpose: string, img: PickedImage) {
-    const key = `manual:${++manualKeyCounter.current}`;
-    const candidate: DisplayCandidate = { kind: "manual", key, thumb_url: img.url, url: img.url };
+  /** Take everything the picker handed back in ONE go. The picker used to
+   *  close after a single pick, so filling a 3-image Hero row from the
+   *  client's photos meant opening it three times (operator feedback,
+   *  2026-08-18); it now multi-selects and commits a batch. */
+  function applyManualPicks(purpose: string, images: PickedImage[]) {
+    if (images.length === 0) return;
+    const candidates: DisplayCandidate[] = images.map((img) => ({
+      kind: "manual",
+      key: `manual:${++manualKeyCounter.current}`,
+      thumb_url: img.url,
+      url: img.url,
+    }));
+
     if (purpose === "Hero") {
-      setHeroCandidates((prev) => [...prev, candidate]);
+      setHeroCandidates((prev) => [...prev, ...candidates]);
       setHeroSelected((prev) => {
-        if (prev.size >= HERO_PICK_LIMIT) return prev;
         const next = new Set(prev);
-        next.add(key);
+        let dropped = 0;
+        for (const c of candidates) {
+          if (next.size >= HERO_PICK_LIMIT) {
+            dropped++;
+            continue;
+          }
+          next.add(c.key);
+        }
+        // Hero holds three. Anything past that lands in the row as a
+        // candidate but is NOT selected — say so, or the operator counts
+        // their picks and finds one missing with no explanation.
+        if (dropped > 0) {
+          toast({
+            kind: "error",
+            title: `${dropped} image${dropped === 1 ? "" : "s"} added to the row but not selected — Hero holds ${HERO_PICK_LIMIT}`,
+          });
+        }
         return next;
       });
     } else {
+      // A service row holds one image: the last pick wins, the rest stay
+      // available as candidates in the row.
       setServiceRows((prev) =>
-        prev.map((r) => (r.purpose === purpose ? { ...r, candidates: [...r.candidates, candidate], pickedKey: key } : r)),
+        prev.map((r) =>
+          r.purpose === purpose
+            ? { ...r, candidates: [...r.candidates, ...candidates], pickedKey: candidates[candidates.length - 1].key }
+            : r,
+        ),
       );
     }
     setSearchRowFor(null);
@@ -384,14 +448,19 @@ export function NewSiteFlow() {
       const res = await fetch("/api/site-builder/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_id: selectedLead.id, template_id: templateId, images: picks }),
+        body: JSON.stringify({
+          lead_id: selectedLead.id,
+          template_id: templateId,
+          images: picks,
+          options: { auto_deploy: autoDeploy },
+        }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast({ kind: "error", title: body.error ?? "Could not start the run" });
         return;
       }
-      toast({ kind: "success", title: "Generating…" });
+      toast({ kind: "success", title: autoDeploy ? "Generating — will deploy automatically" : "Generating…" });
       router.push(`/ai-tools/site-builder/runs/${body.run.id}`);
     } catch (e) {
       toast({ kind: "error", title: e instanceof Error ? e.message : "Could not start the run" });
@@ -509,33 +578,43 @@ export function NewSiteFlow() {
                         Pick up to {HERO_PICK_LIMIT} — {heroSelected.size} selected
                       </p>
                     </div>
-                    <button type="button" className={btnSecondarySm} onClick={() => setSearchRowFor("Hero")}>
+                    <button
+                      type="button"
+                      className={btnSecondarySm}
+                      // At the limit the picker would open offering a slot that
+                      // applyManualPicks then drops on the floor (a click that
+                      // does nothing). Say so instead.
+                      onClick={() =>
+                        heroSelected.size >= HERO_PICK_LIMIT
+                          ? toast({
+                              kind: "error",
+                              title: `Already ${HERO_PICK_LIMIT} hero images — deselect one to swap`,
+                            })
+                          : setSearchRowFor("Hero")
+                      }
+                    >
                       <Search className="h-3.5 w-3.5" /> Search instead
                     </button>
                   </div>
                   {needsLoading ? (
                     <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Searching…</p>
+                  ) : heroCandidates.length === 0 ? (
+                    <p className="text-xs text-text-muted">No candidates found — try &ldquo;Search instead&rdquo;.</p>
                   ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {heroCandidates.map((c) => (
+                    <div className={TILE_GRID}>
+                      {heroCandidates.map((c, i) => (
                         <button
                           key={c.key}
                           type="button"
                           onClick={() => toggleHero(c.key)}
                           aria-pressed={heroSelected.has(c.key)}
                           aria-label="Use this image for Hero"
-                          className={cn(
-                            "relative h-16 w-16 shrink-0 overflow-hidden rounded-md border",
-                            heroSelected.has(c.key) ? "border-accent ring-2 ring-accent" : "border-border",
-                          )}
+                          className={tileCls(heroSelected.has(c.key))}
                         >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={c.thumb_url ?? ""} alt="" loading="lazy" className="h-full w-full object-cover" />
+                          <SmartImage src={c.thumb_url ?? ""} sizes={TILE_SIZES} priority={i < 6} />
+                          {heroSelected.has(c.key) ? <SelectedTick /> : null}
                         </button>
                       ))}
-                      {heroCandidates.length === 0 ? (
-                        <p className="self-center text-xs text-text-muted">No candidates found — try &ldquo;Search instead&rdquo;.</p>
-                      ) : null}
                     </div>
                   )}
                 </div>
@@ -561,7 +640,7 @@ export function NewSiteFlow() {
                     {needsLoading ? (
                       <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Searching…</p>
                     ) : (
-                      <div className="flex flex-wrap gap-2">
+                      <div className={TILE_GRID}>
                         <button
                           type="button"
                           onClick={() => pickServiceNone(row.purpose)}
@@ -569,31 +648,30 @@ export function NewSiteFlow() {
                           title="No image for this"
                           aria-label={`No image for ${row.purpose}`}
                           className={cn(
-                            "grid h-16 w-16 shrink-0 place-items-center rounded-md border text-center text-[10px] leading-tight text-text-muted",
-                            row.pickedKey === null ? "border-accent ring-2 ring-accent" : "border-border",
+                            "grid aspect-[4/3] place-items-center rounded-lg border-2 text-center text-xs leading-tight text-text-muted",
+                            row.pickedKey === null ? "border-accent ring-2 ring-accent" : "border-border hover:border-accent/60",
                           )}
                         >
-                          <ImageOff className="mb-0.5 h-4 w-4" />
-                          No image
+                          <span>
+                            <ImageOff className="mx-auto mb-1 h-5 w-5" />
+                            No image
+                          </span>
                         </button>
-                        {row.candidates.map((c) => (
+                        {row.candidates.map((c, i) => (
                           <button
                             key={c.key}
                             type="button"
                             onClick={() => pickService(row.purpose, c.key)}
                             aria-pressed={row.pickedKey === c.key}
                             aria-label={`Use this image for ${row.purpose}`}
-                            className={cn(
-                              "relative h-16 w-16 shrink-0 overflow-hidden rounded-md border",
-                              row.pickedKey === c.key ? "border-accent ring-2 ring-accent" : "border-border",
-                            )}
+                            className={tileCls(row.pickedKey === c.key)}
                           >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={c.thumb_url ?? ""} alt="" loading="lazy" className="h-full w-full object-cover" />
+                            <SmartImage src={c.thumb_url ?? ""} sizes={TILE_SIZES} priority={i < 3} />
+                            {row.pickedKey === c.key ? <SelectedTick /> : null}
                           </button>
                         ))}
                         {row.candidates.length === 0 ? (
-                          <p className="self-center text-xs text-text-muted">No candidates found — try &ldquo;Search instead&rdquo;.</p>
+                          <p className="self-center text-xs text-text-muted">No candidates — try &ldquo;Search instead&rdquo;.</p>
                         ) : null}
                       </div>
                     )}
@@ -608,8 +686,8 @@ export function NewSiteFlow() {
               {clientPhotos.length === 0 ? (
                 <p className="text-sm text-text-muted">This lead has no photos on file.</p>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  {clientPhotos.map((url) => {
+                <div className={TILE_GRID}>
+                  {clientPhotos.map((url, i) => {
                     const selected = gallerySelected.has(url);
                     return (
                       <button
@@ -618,13 +696,10 @@ export function NewSiteFlow() {
                         onClick={() => toggleGallery(url)}
                         aria-pressed={selected}
                         aria-label={selected ? "Remove from gallery" : "Add to gallery"}
-                        className={cn(
-                          "relative h-16 w-16 shrink-0 overflow-hidden rounded-md border",
-                          selected ? "border-accent ring-2 ring-accent" : "border-border opacity-50",
-                        )}
+                        className={cn(tileCls(selected), selected ? "" : "opacity-60 hover:opacity-100")}
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={url} alt="" loading="lazy" className="h-full w-full object-cover" />
+                        <SmartImage src={url} sizes={TILE_SIZES} priority={i < 6} />
+                        {selected ? <SelectedTick /> : null}
                       </button>
                     );
                   })}
@@ -635,7 +710,22 @@ export function NewSiteFlow() {
         )}
       </section>
 
-      <div className="flex justify-end">
+      <div className="flex flex-wrap items-center justify-end gap-4">
+        <label className="mr-auto flex items-start gap-2.5 text-sm text-text">
+          <input
+            type="checkbox"
+            className="accent-accent mt-0.5 h-4 w-4 shrink-0"
+            checked={autoDeploy}
+            onChange={(e) => setAutoDeploy(e.target.checked)}
+          />
+          <span>
+            Auto deploy
+            <span className="block text-xs text-text-muted">
+              Publish to a subdomain as soon as generation finishes — no review step. The lead&apos;s website link is
+              updated and its agent is notified automatically.
+            </span>
+          </span>
+        </label>
         <button className={btnPrimary} onClick={() => void generate()} disabled={submitting || !selectedLead || !templateId}>
           {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
           Generate
@@ -647,7 +737,10 @@ export function NewSiteFlow() {
           leadId={selectedLead.id}
           purposeSuggestions={[searchRow, ...purposeSuggestions.filter((p) => p !== searchRow)]}
           clientPhotos={clientPhotos}
-          onAdded={(img) => applyManualPick(searchRow, img)}
+          // Hero can still take whatever is left of its 3 slots; a service
+          // row takes exactly one.
+          maxSelectable={searchRow === "Hero" ? Math.max(1, HERO_PICK_LIMIT - heroSelected.size) : 1}
+          onAdded={(images) => applyManualPicks(searchRow, images)}
           onClose={() => setSearchRowFor(null)}
         />
       ) : null}
