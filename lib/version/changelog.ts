@@ -49,6 +49,10 @@ export const CHANGELOG: ChangelogEntry[] = [
         kind: "fix",
         text: "Dropping a lead from the follow-up window works end to end — the server was still refusing it without a future follow-up time.",
       },
+      {
+        kind: "feature",
+        text: "\"My team\" scope for closers: one click on the Leads page, the Follow-ups page or the Dashboard narrows everything — rows, status counts, KPIs, charts and exports — to the closer and their own sales agents. It only appears for someone who actually has a team.",
+      },
     ],
   },
   {
