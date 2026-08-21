@@ -7,6 +7,7 @@ import { updateLeadSchema } from "@/lib/leads/schema";
 import { catSetKey } from "@/lib/leads/categories";
 import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
 import { isAdminMember } from "@/lib/permissions/isAdminMember";
+import { actingAs, canActForAgent } from "@/lib/teams/closers";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
@@ -91,7 +92,11 @@ export async function PATCH(
   // Sales closed-by carve-out below now only helps a member who is ALSO in
   // the Admin department — `closed_by` became an admin-only field (see the
   // ADMIN_ONLY_FIELDS gate), which is checked first.
-  if (!perms.has("leads.view_all") && before.agent_id !== user.id) {
+  // A CLOSER may also act on the leads of the sales agents on their team
+  // (migration 0069 / lib/teams/closers.ts). The action stays recorded against
+  // the closer — see `actingAs` at the activity-log write below.
+  const actsForOwner = await canActForAgent(admin, user.id, before.agent_id as string | null);
+  if (!perms.has("leads.view_all") && before.agent_id !== user.id && !actsForOwner) {
     return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
   }
 
@@ -155,13 +160,17 @@ export async function PATCH(
   const oldValue: Record<string, unknown> = {};
   for (const k of changedKeys) oldValue[k] = (before as Record<string, unknown>)[k];
 
+  // The CLOSER TOKEN: when a closer edits a team member's lead the log keeps
+  // the real actor in `user_id` AND records whose work was touched, so the
+  // change can never read as if the agent had made it themselves.
+  const onBehalf = actingAs(user.id, before.agent_id as string | null);
   await admin.from("activity_log").insert({
     user_id: user.id,
     action: statusOnly ? "lead.status_changed" : "lead.updated",
     entity_type: "lead",
     entity_id: id,
     old_value: oldValue,
-    new_value: parsed.data,
+    new_value: onBehalf ? { ...parsed.data, acting_as: onBehalf } : parsed.data,
   });
 
   if (parsed.data.status !== undefined && parsed.data.status !== before.status) {
@@ -245,7 +254,10 @@ export async function DELETE(
     .is("deleted_at", null)
     .single();
   if (!before) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
-  if (!perms.has("leads.view_all") && before.agent_id !== user.id) {
+  // Same team rule as PATCH: a closer may act on their agents' leads. The
+  // `leads.delete` permission is still required on top of this.
+  const deletingForOwner = await canActForAgent(admin, user.id, before.agent_id as string | null);
+  if (!perms.has("leads.view_all") && before.agent_id !== user.id && !deletingForOwner) {
     return NextResponse.json({ error: "You can only modify your own leads." }, { status: 403 });
   }
 
@@ -269,6 +281,7 @@ export async function DELETE(
     action: "lead.deleted",
     entity_type: "lead",
     entity_id: id,
+    new_value: actingAs(user.id, before.agent_id as string | null) ?? undefined,
   });
 
   return NextResponse.json({ ok: true });
