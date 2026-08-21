@@ -106,19 +106,27 @@ export async function POST(
     );
 
   const admin = createAdminClient();
-  const { data: fu, error } = await admin
-    .from("lead_follow_ups")
-    .insert({
-      lead_id: id,
-      user_id: user.id,
-      fu_status: parsed.data.fu_status,
-      comments: isPickup ? parsed.data.comments : null,
-      next_follow_up_time: next,
-      status_change: statusChange,
-    })
-    .select("*")
-    .single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  // Only meaningful when a time was actually set: "specific" describes the
+  // scheduled time, so a dropped lead with no next time is never specific.
+  const isSpecificTime = Boolean(parsed.data.is_specific_time) && Boolean(next);
+  const insertRow = {
+    lead_id: id,
+    user_id: user.id,
+    fu_status: parsed.data.fu_status,
+    comments: isPickup ? parsed.data.comments : null,
+    next_follow_up_time: next,
+    status_change: statusChange,
+    is_specific_time: isSpecificTime,
+  };
+  let { data: fu, error } = await admin.from("lead_follow_ups").insert(insertRow).select("*").single();
+  if (error && /is_specific_time/i.test(error.message)) {
+    // Migration 0068 not applied yet — log the follow-up rather than losing
+    // it, just without the flag (same tolerance the notification settings
+    // reader uses for its own late column).
+    const { is_specific_time: _drop, ...legacy } = insertRow;
+    ({ data: fu, error } = await admin.from("lead_follow_ups").insert(legacy).select("*").single());
+  }
+  if (error || !fu) return NextResponse.json({ error: error?.message ?? "Insert failed" }, { status: 400 });
 
   // First follow-up ever = the lead's first touch. Guarded server-side so a
   // concurrent second call cannot overwrite it.
@@ -130,15 +138,22 @@ export async function POST(
       .is("first_touch_at", null);
   }
 
-  const { error: leadUpdateError } = await admin
+  const leadPatch = {
+    follow_up_time: next,
+    last_followup_status: parsed.data.fu_status,
+    no_pickup_streak: nextStreak(lead.no_pickup_streak ?? 0, parsed.data.fu_status),
+    ...(statusChange ? { status: statusChange } : {}),
+  };
+  // The Follow-ups page filters LEADS, so the flag has to travel with the
+  // schedule it describes — and be cleared by any later follow-up that
+  // reschedules loosely, which this unconditional write does.
+  let { error: leadUpdateError } = await admin
     .from("leads")
-    .update({
-      follow_up_time: next,
-      last_followup_status: parsed.data.fu_status,
-      no_pickup_streak: nextStreak(lead.no_pickup_streak ?? 0, parsed.data.fu_status),
-      ...(statusChange ? { status: statusChange } : {}),
-    })
+    .update({ ...leadPatch, follow_up_is_specific: isSpecificTime })
     .eq("id", id);
+  if (leadUpdateError && /follow_up_is_specific/i.test(leadUpdateError.message)) {
+    ({ error: leadUpdateError } = await admin.from("leads").update(leadPatch).eq("id", id));
+  }
 
   if (leadUpdateError && isReadyGuardError(leadUpdateError)) {
     return NextResponse.json({ error: READY_GUARD_MESSAGE }, { status: 422 });

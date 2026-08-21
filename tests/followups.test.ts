@@ -1,12 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  bucketOf,
-  groupByBucket,
-  validateFollowUp,
-  nextStreak,
-  isFollowUpEligible,
-  FOLLOWUP_STATUSES,
-} from "@/lib/leads/followups";
+import { bucketOf, groupByBucket, validateFollowUp, nextStreak, isFollowUpEligible, FOLLOWUP_STATUSES, endsFollowUps } from "@/lib/leads/followups";
 
 const NOW = new Date("2026-07-07T12:00:00");
 
@@ -66,5 +59,42 @@ describe("nextStreak", () => {
   it("increments on No Pickup, resets on Pickup", () => {
     expect(nextStreak(2, "No Pickup")).toBe(3);
     expect(nextStreak(2, "Pickup")).toBe(0);
+  });
+});
+
+describe("validateFollowUp — dropping a lead", () => {
+  const now = new Date("2026-08-22T10:00:00.000Z");
+
+  it("does not require a next time when the lead is being Dropped", () => {
+    const errs = validateFollowUp(
+      { fu_status: "Pickup", next_follow_up_time: "", status_change: "Dropped" },
+      now,
+    );
+    expect(errs).toEqual({});
+  });
+
+  it("still requires a future time for every non-terminal status change", () => {
+    for (const status of ["", "Ready", "Long Term", "Closed"]) {
+      const errs = validateFollowUp(
+        { fu_status: "Pickup", next_follow_up_time: "", status_change: status },
+        now,
+      );
+      expect(errs.next_follow_up_time, `status "${status}" must still require a time`).toBeTruthy();
+    }
+  });
+
+  it("still reports a missing fu_status when dropping", () => {
+    const errs = validateFollowUp({ fu_status: "", status_change: "Dropped" }, now);
+    expect(errs.fu_status).toBeTruthy();
+    expect(errs.next_follow_up_time).toBeUndefined();
+  });
+});
+
+describe("endsFollowUps", () => {
+  it("is true only for Dropped", () => {
+    expect(endsFollowUps("Dropped")).toBe(true);
+    expect(endsFollowUps("Ready")).toBe(false);
+    expect(endsFollowUps(null)).toBe(false);
+    expect(endsFollowUps(undefined)).toBe(false);
   });
 });

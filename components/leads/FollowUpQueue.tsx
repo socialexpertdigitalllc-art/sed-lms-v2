@@ -35,7 +35,7 @@ const STALE_DAYS = 30;
 
 // Ready by default — the statuses agents actually work; the status filter can
 // widen back to every follow-up-eligible status.
-const FOLLOWUPS_DEFAULTS = { q: "", status: "Ready", agent: "", type: "", region: "", bucket: "all" };
+const FOLLOWUPS_DEFAULTS = { q: "", status: "Ready", agent: "", type: "", region: "", bucket: "all", specific: "" };
 
 const BUCKETS = [
   { id: "all", label: "All" },
@@ -100,12 +100,17 @@ export function FollowUpQueue({
 
   const regionFacets = useMemo(() => buildRegionFacets(eligible), [eligible]);
 
+  const specificOnly = urlState.specific === "1";
+  const specificCount = useMemo(() => eligible.filter((l) => l.follow_up_is_specific).length, [eligible]);
   const filtered = useMemo(() => {
     return eligible.filter((l) => {
       if (statusSel.length && !statusSel.includes(l.status)) return false;
       if (agentSel.length && !agentSel.includes(l.agent_id ?? "")) return false;
       if (typeSel.length && !typeSel.includes(l.site_type ?? "")) return false;
       if (regionSel.length && !regionSel.includes(leadRegion(l) ?? "")) return false;
+      // "Specific" = the client asked for this exact time. Agents work those
+      // first, so the page has to be able to show only them.
+      if (specificOnly && !l.follow_up_is_specific) return false;
       if (q) {
         const agent = (l.agent_id && agentNameById[l.agent_id]) || "";
         const hay = `${l.business_name} ${agent} ${l.business_phone ?? ""} ${l.business_email ?? ""}`.toLowerCase();
@@ -113,14 +118,14 @@ export function FollowUpQueue({
       }
       return true;
     });
-  }, [eligible, statusSel, agentSel, typeSel, regionSel, q, agentNameById]);
+  }, [eligible, statusSel, agentSel, typeSel, regionSel, specificOnly, q, agentNameById]);
 
   const groups = useMemo(() => groupByBucket(filtered, new Date()), [filtered]);
 
   const bucket = urlState.bucket || "all";
   const filtersActive =
     q !== "" || urlState.status !== FOLLOWUPS_DEFAULTS.status || urlState.agent !== "" ||
-    urlState.type !== "" || urlState.region !== "" || bucket !== "all";
+    urlState.type !== "" || urlState.region !== "" || bucket !== "all" || specificOnly;
 
   const isEmpty =
     groups.overdue.length === 0 &&
@@ -157,6 +162,14 @@ export function FollowUpQueue({
           >
             {formatDateTime(lead.follow_up_time)}
           </span>
+          {lead.follow_up_is_specific && (
+            <span
+              className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-semibold text-accent-ink"
+              title="The client asked for this exact time"
+            >
+              Specific
+            </span>
+          )}
           {lateDays >= 1 && (
             <span
               className={
@@ -280,6 +293,18 @@ export function FollowUpQueue({
           onChange={(next) => setUrlState({ type: next.join(",") })}
         />
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(",") })} />
+        <button
+          type="button"
+          onClick={() => setUrlState({ specific: specificOnly ? "" : "1" })}
+          aria-pressed={specificOnly}
+          title="Only follow-ups at a time the client specifically asked for"
+          className={cn(
+            "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+            specificOnly ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text",
+          )}
+        >
+          Specific{specificCount > 0 ? ` (${specificCount})` : ""}
+        </button>
         <div className="flex items-center gap-1">
           {BUCKETS.map((b) => (
             <button

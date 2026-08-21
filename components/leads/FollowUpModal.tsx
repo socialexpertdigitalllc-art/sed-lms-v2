@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { validateFollowUp } from "@/lib/leads/followups";
+import { endsFollowUps, validateFollowUp } from "@/lib/leads/followups";
 import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
 import { inOffset } from "@/lib/dates/datetimeLocal";
@@ -32,6 +32,9 @@ export function FollowUpModal({
   const [quickHours, setQuickHours] = useState("");
   const [quickMins, setQuickMins] = useState("");
   const [status_change, setStatusChange] = useState("");
+  // "The client asked for 3:15pm", not "sometime Tuesday". Surfaces as a
+  // Specific badge on the Follow-ups page and can be filtered there.
+  const [isSpecificTime, setIsSpecificTime] = useState(false);
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -68,8 +71,16 @@ export function FollowUpModal({
     }
   }
 
+  // A status change only applies on a Pickup — computed once so validation
+  // and the request can never disagree about whether this drops the lead.
+  const effectiveStatusChange = fu_status === "Pickup" && status_change ? status_change : null;
+  const dropsLead = endsFollowUps(effectiveStatusChange);
+
   async function save() {
-    const errs = validateFollowUp({ fu_status, next_follow_up_time }, new Date());
+    const errs = validateFollowUp(
+      { fu_status, next_follow_up_time, status_change: effectiveStatusChange },
+      new Date(),
+    );
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
@@ -84,7 +95,8 @@ export function FollowUpModal({
         next_follow_up_time: next_follow_up_time
           ? new Date(next_follow_up_time).toISOString()
           : null,
-        status_change: fu_status === "Pickup" && status_change ? status_change : null,
+        status_change: effectiveStatusChange,
+        is_specific_time: isSpecificTime,
       }),
     });
     setBusy(false);
@@ -202,7 +214,23 @@ export function FollowUpModal({
                   clearError("next_follow_up_time");
                 }}
               />
-              <p className="text-[11px] text-text-faint mt-1">Required</p>
+              <p className="text-[11px] text-text-faint mt-1">
+                {dropsLead ? "Not needed — this lead is being dropped" : "Required"}
+              </p>
+              <label className="mt-2 flex items-start gap-2 text-xs text-text">
+                <input
+                  type="checkbox"
+                  className="accent-accent mt-0.5 h-3.5 w-3.5 shrink-0"
+                  checked={isSpecificTime}
+                  onChange={(e) => setIsSpecificTime(e.target.checked)}
+                />
+                <span>
+                  Specific time
+                  <span className="block text-[11px] text-text-faint">
+                    The client asked for this exact time — shows as a Specific badge and can be filtered.
+                  </span>
+                </span>
+              </label>
               {errors.next_follow_up_time && (
                 <p className="text-[11px] text-dropped-fg mt-1">{errors.next_follow_up_time}</p>
               )}

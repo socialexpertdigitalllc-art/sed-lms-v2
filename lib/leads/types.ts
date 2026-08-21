@@ -52,6 +52,8 @@ export interface Lead {
   price_quoted: number | null;
   yearly_price: string | null;
   follow_up_time: string | null;
+  /** The scheduled follow_up_time is an exact time the client asked for. */
+  follow_up_is_specific?: boolean | null;
   last_followup_status: string | null;
   no_pickup_streak: number;
   /** Set when the lead enters Closed; cleared if it leaves. Ledger: lead_status_events. */

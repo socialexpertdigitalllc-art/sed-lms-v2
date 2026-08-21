@@ -8,6 +8,8 @@ export interface LeadFollowUp {
   fu_status: string;
   comments: string | null;
   next_follow_up_time: string | null;
+  /** The client asked for this exact time, not an approximate window. */
+  is_specific_time?: boolean;
   status_change: string | null;
   created_at: string;
   logger_name?: string | null;
@@ -48,12 +50,24 @@ export function nextStreak(prev: number, fu_status: string): number {
   return fu_status === "No Pickup" ? prev + 1 : 0;
 }
 
+/** Statuses that END the pipeline — nothing is scheduled after them. */
+const TERMINAL_STATUS_CHANGES = ["Dropped"] as const;
+
+/** True when this follow-up closes the lead out, so no next time is needed. */
+export function endsFollowUps(statusChange: string | null | undefined): boolean {
+  return !!statusChange && (TERMINAL_STATUS_CHANGES as readonly string[]).includes(statusChange);
+}
+
 export function validateFollowUp(
-  input: { fu_status: string; next_follow_up_time?: string },
+  input: { fu_status: string; next_follow_up_time?: string; status_change?: string | null },
   now: Date = new Date()
 ): Record<string, string> {
   const e: Record<string, string> = {};
   if (!input.fu_status) e.fu_status = "Select Pickup or No Pickup.";
+  // Dropping a lead is the end of the conversation: demanding a future
+  // follow-up time to record that is busywork, and agents were inventing
+  // throwaway times to get past the form.
+  if (endsFollowUps(input.status_change)) return e;
   const raw = input.next_follow_up_time ?? "";
   const t = new Date(raw).getTime();
   if (!raw || Number.isNaN(t) || t <= now.getTime())
