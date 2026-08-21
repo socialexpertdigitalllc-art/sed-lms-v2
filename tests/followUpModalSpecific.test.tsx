@@ -22,7 +22,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 function mount() {
   return render(
-    <PermissionProvider value={["leads.followup", "leads.status_change", "leads.set_status.dropped"]}>
+    <PermissionProvider value={["leads.followup", "leads.status_change", "leads.cat_set.dropped"]}>
       <FollowUpModal leadId="lead-1" businessName="Acme" open onClose={vi.fn()} />
     </PermissionProvider>,
   );

@@ -5,7 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { catSetKey } from "@/lib/leads/categories";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
-import { nextStreak, isFollowUpEligible } from "@/lib/leads/followups";
+import { endsFollowUps, isFollowUpEligible, nextStreak } from "@/lib/leads/followups";
 import { logFollowUpSchema } from "@/lib/leads/followupSchema";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
 
@@ -93,12 +93,16 @@ export async function POST(
   const next = parsed.data.next_follow_up_time
     ? new Date(parsed.data.next_follow_up_time).toISOString()
     : null;
-  if (!next || new Date(next).getTime() <= Date.now())
+  const statusChange = isPickup ? parsed.data.status_change : null;
+  // Dropping a lead ENDS the pipeline, so it needs no next time — the same
+  // rule validateFollowUp applies in the modal (lib/leads/followups.ts). Every
+  // other follow-up still schedules the next one, and the check stays
+  // server-side because the client's is only a convenience.
+  if (!endsFollowUps(statusChange) && (!next || new Date(next).getTime() <= Date.now()))
     return NextResponse.json(
       { error: "A future next follow-up time is required." },
       { status: 422 }
     );
-  const statusChange = isPickup ? parsed.data.status_change : null;
   if (statusChange && !perms.has(catSetKey(statusChange)))
     return NextResponse.json(
       { error: `You cannot set status "${statusChange}".` },
