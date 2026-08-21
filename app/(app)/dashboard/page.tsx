@@ -7,6 +7,7 @@ import { visibleStatuses } from "@/lib/leads/categories";
 import { buildRegionFacets } from "@/lib/geo/regions";
 import { DashboardBoard } from "@/components/dashboard/DashboardBoard";
 import { getUserDirectory } from "@/lib/users/directory";
+import { getTeamAgentIds } from "@/lib/teams/closers";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -66,6 +67,8 @@ export default async function DashboardPage() {
   }
 
   const facets = buildRegionFacets(leads);
+  // Sales agents reporting to this viewer — empty unless they are a closer.
+  const teamAgentIds = user ? await getTeamAgentIds(admin, user.id) : [];
 
   return (
     <DashboardBoard
@@ -78,6 +81,8 @@ export default async function DashboardPage() {
       facets={facets}
       now={new Date().toISOString()}
       canScopeMonth={perms.has("analytics.view_all_agents")}
+      currentUserId={user?.id ?? ""}
+      teamAgentIds={teamAgentIds}
       salesUsers={salesUsers}
     />
   );

@@ -56,7 +56,7 @@ import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", tags: "", month: "", sort: "created_at:desc", page: "0", size: "15" };
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", tags: "", month: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
 
 export function LeadsTable({
@@ -69,6 +69,7 @@ export function LeadsTable({
   canShareTags,
   currentUserId,
   contractSentLeadIds = [],
+  teamAgentIds = [],
 }: {
   leads: Lead[];
   agentNameById: Record<string, string>;
@@ -79,6 +80,11 @@ export function LeadsTable({
   canShareTags: boolean;
   currentUserId: string;
   contractSentLeadIds?: string[];
+  /**
+   * The sales agents reporting to this viewer (empty unless they are a
+   * closer). Drives the "My team" scope — see the chip in the toolbar.
+   */
+  teamAgentIds?: string[];
 }) {
   const { has, all } = usePermissions();
   const tagById = useMemo(() => Object.fromEntries(tags.map((t) => [t.id, t])), [tags]);
@@ -124,12 +130,21 @@ export function LeadsTable({
   const tagSel = useMemo(() => (urlState.tags ? urlState.tags.split(",") : []), [urlState.tags]);
   const agentSel = useMemo(() => (agent ? agent.split(",") : []), [agent]);
   const typeSel = useMemo(() => (type ? type.split(",") : []), [type]);
+  // "My team" = the closer plus the sales agents reporting to them. Applied
+  // BEFORE every other filter and count, so the status tabs, the agent list
+  // and the export all describe the same set the operator is looking at.
+  const isCloser = teamAgentIds.length > 0;
+  const teamScope = isCloser && urlState.scope === "team";
+  const teamIds = useMemo(
+    () => new Set<string>([currentUserId, ...teamAgentIds]),
+    [currentUserId, teamAgentIds],
+  );
   // Any non-default filter — drives a visible "Clear filters" escape so a
   // persisted filter can never silently hide leads.
   const filtersActive =
-    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "";
+    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "" || teamScope;
   const clearFilters = () =>
-    setUrlState({ q: "", status: "All", agent: "", type: "", region: "", tags: "", month: "", page: "0" });
+    setUrlState({ q: "", status: "All", agent: "", type: "", region: "", tags: "", month: "", scope: "", page: "0" });
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
@@ -146,7 +161,13 @@ export function LeadsTable({
     return f;
   }, [status, agentSel, typeSel, regionSel, tagSel]);
 
-  const scopedLeads = useMemo(() => leads.filter((l) => inMonth(l.created_at, month)), [leads, month]);
+  const scopedLeads = useMemo(
+    () =>
+      leads.filter(
+        (l) => inMonth(l.created_at, month) && (!teamScope || (l.agent_id ? teamIds.has(l.agent_id) : false)),
+      ),
+    [leads, month, teamScope, teamIds],
+  );
 
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = { All: scopedLeads.length };
@@ -490,6 +511,20 @@ export function LeadsTable({
           placeholder="Search business, email, agent…"
           className="flex-1 min-w-[220px] px-3 py-2 rounded-md border border-border bg-surface text-sm outline-none focus:ring-2 focus:ring-accent"
         />
+        {isCloser && (
+          <button
+            type="button"
+            onClick={() => setUrlState({ scope: teamScope ? "" : "team", page: "0" })}
+            aria-pressed={teamScope}
+            title="Only leads owned by you and the sales agents on your team"
+            className={
+              "rounded-md px-3 py-2 text-sm font-medium transition-colors " +
+              (teamScope ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text")
+            }
+          >
+            My team
+          </button>
+        )}
         <MultiSelect
           label="Agent"
           options={agentOptions.map((a) => ({ value: a }))}

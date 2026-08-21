@@ -79,6 +79,8 @@ export function DashboardBoard({
   now,
   canScopeMonth,
   salesUsers,
+  currentUserId = "",
+  teamAgentIds = [],
 }: {
   leads: Lead[];
   followUps: FollowUpRow[];
@@ -90,6 +92,9 @@ export function DashboardBoard({
   now: string;
   canScopeMonth: boolean;
   salesUsers: { id: string; display_name: string }[];
+  currentUserId?: string;
+  /** Sales agents reporting to the viewer; empty unless they are a closer. */
+  teamAgentIds?: string[];
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const selSet = useMemo(() => new Set(selected), [selected]);
@@ -97,6 +102,17 @@ export function DashboardBoard({
   // Ephemeral, session-scoped per-agent analytics filter (admins only). Not
   // persisted to view state on purpose.
   const [agentIds, setAgentIds] = useState<string[]>([]);
+
+  // A closer's own scope: themselves plus their team. It drives the SAME
+  // agentIds filter the admin picker uses, so every KPI, chart, follow-up and
+  // ticket count follows it without any separate code path.
+  const isCloser = teamAgentIds.length > 0;
+  const myTeamIds = useMemo(
+    () => [currentUserId, ...teamAgentIds].filter(Boolean),
+    [currentUserId, teamAgentIds],
+  );
+  const teamScopeOn =
+    isCloser && myTeamIds.length === agentIds.length && myTeamIds.every((id) => agentIds.includes(id));
 
   const [dashUrl, setDashUrl] = useViewState(DASH_DEFAULTS);
   const month = canScopeMonth ? dashUrl.month : "";
@@ -235,6 +251,20 @@ export function DashboardBoard({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
         {canScopeMonth && <MonthFilter options={monthOpts} value={month} onChange={(v) => setDashUrl({ month: v })} />}
+        {isCloser && (
+          <button
+            type="button"
+            onClick={() => setAgentIds(teamScopeOn ? [] : myTeamIds)}
+            aria-pressed={teamScopeOn}
+            title="Scope every figure to you and the sales agents on your team"
+            className={
+              "inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors " +
+              (teamScopeOn ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text")
+            }
+          >
+            <Users className="h-4 w-4" /> My team
+          </button>
+        )}
         {canScopeMonth && (
           <MultiSelect
             label="Agent"

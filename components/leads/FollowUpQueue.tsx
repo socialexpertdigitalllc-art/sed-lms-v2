@@ -35,7 +35,7 @@ const STALE_DAYS = 30;
 
 // Ready by default — the statuses agents actually work; the status filter can
 // widen back to every follow-up-eligible status.
-const FOLLOWUPS_DEFAULTS = { q: "", status: "Ready", agent: "", type: "", region: "", bucket: "all", specific: "" };
+const FOLLOWUPS_DEFAULTS = { q: "", status: "Ready", agent: "", type: "", region: "", bucket: "all", specific: "", scope: "" };
 
 const BUCKETS = [
   { id: "all", label: "All" },
@@ -48,9 +48,14 @@ const BUCKETS = [
 export function FollowUpQueue({
   leads,
   agentNameById,
+  currentUserId = "",
+  teamAgentIds = [],
 }: {
   leads: Lead[];
   agentNameById: Record<string, string>;
+  currentUserId?: string;
+  /** Sales agents reporting to the viewer; empty unless they are a closer. */
+  teamAgentIds?: string[];
 }) {
   const { has, all } = usePermissions();
   const { toast } = useToast();
@@ -101,6 +106,13 @@ export function FollowUpQueue({
   const regionFacets = useMemo(() => buildRegionFacets(eligible), [eligible]);
 
   const specificOnly = urlState.specific === "1";
+  // A closer working their team's follow-ups: themselves plus their agents.
+  const isCloser = teamAgentIds.length > 0;
+  const teamScope = isCloser && urlState.scope === "team";
+  const teamIds = useMemo(
+    () => new Set<string>([currentUserId, ...teamAgentIds].filter(Boolean)),
+    [currentUserId, teamAgentIds],
+  );
   const specificCount = useMemo(() => eligible.filter((l) => l.follow_up_is_specific).length, [eligible]);
   const filtered = useMemo(() => {
     return eligible.filter((l) => {
@@ -111,6 +123,7 @@ export function FollowUpQueue({
       // "Specific" = the client asked for this exact time. Agents work those
       // first, so the page has to be able to show only them.
       if (specificOnly && !l.follow_up_is_specific) return false;
+      if (teamScope && !(l.agent_id && teamIds.has(l.agent_id))) return false;
       if (q) {
         const agent = (l.agent_id && agentNameById[l.agent_id]) || "";
         const hay = `${l.business_name} ${agent} ${l.business_phone ?? ""} ${l.business_email ?? ""}`.toLowerCase();
@@ -118,14 +131,14 @@ export function FollowUpQueue({
       }
       return true;
     });
-  }, [eligible, statusSel, agentSel, typeSel, regionSel, specificOnly, q, agentNameById]);
+  }, [eligible, statusSel, agentSel, typeSel, regionSel, specificOnly, teamScope, teamIds, q, agentNameById]);
 
   const groups = useMemo(() => groupByBucket(filtered, new Date()), [filtered]);
 
   const bucket = urlState.bucket || "all";
   const filtersActive =
     q !== "" || urlState.status !== FOLLOWUPS_DEFAULTS.status || urlState.agent !== "" ||
-    urlState.type !== "" || urlState.region !== "" || bucket !== "all" || specificOnly;
+    urlState.type !== "" || urlState.region !== "" || bucket !== "all" || specificOnly || teamScope;
 
   const isEmpty =
     groups.overdue.length === 0 &&
@@ -293,6 +306,20 @@ export function FollowUpQueue({
           onChange={(next) => setUrlState({ type: next.join(",") })}
         />
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(",") })} />
+        {isCloser && (
+          <button
+            type="button"
+            onClick={() => setUrlState({ scope: teamScope ? "" : "team" })}
+            aria-pressed={teamScope}
+            title="Only follow-ups owned by you and the sales agents on your team"
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+              teamScope ? "bg-accent text-white" : "bg-surface-2 text-text-muted hover:text-text",
+            )}
+          >
+            My team
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setUrlState({ specific: specificOnly ? "" : "1" })}

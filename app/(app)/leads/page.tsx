@@ -5,6 +5,7 @@ import { sentContractLeadIds } from "@/lib/contracts/badge";
 import { LeadsTable } from "@/components/leads/LeadsTable";
 import type { Lead, LeadTag } from "@/lib/leads/types";
 import { getUserDirectory } from "@/lib/users/directory";
+import { getTeamAgentIds } from "@/lib/teams/closers";
 
 export default async function LeadsPage() {
   const supabase = await createClient();
@@ -57,6 +58,9 @@ export default async function LeadsPage() {
   const canShareTags = perms.has("leads.tags.share");
 
   const admin = createAdminClient();
+  // Sales agents reporting to this viewer — empty unless they are a closer.
+  // Drives the "My team" scope on the table (migration 0069).
+  const teamAgentIds = user ? await getTeamAgentIds(admin, user.id) : [];
   const { data: sentRows } = await admin.from("contracts").select("lead_id, status").eq("status", "sent");
   const contractSentLeadIds = Array.from(sentContractLeadIds(sentRows ?? []));
 
@@ -71,6 +75,7 @@ export default async function LeadsPage() {
       canShareTags={canShareTags}
       currentUserId={user?.id ?? ""}
       contractSentLeadIds={contractSentLeadIds}
+      teamAgentIds={teamAgentIds}
     />
   );
 }

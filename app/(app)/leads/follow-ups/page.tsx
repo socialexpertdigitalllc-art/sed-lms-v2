@@ -4,6 +4,8 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { FollowUpQueue } from "@/components/leads/FollowUpQueue";
 import type { Lead } from "@/lib/leads/types";
 import { getUserDirectory } from "@/lib/users/directory";
+import { getTeamAgentIds } from "@/lib/teams/closers";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export default async function FollowUpsPage() {
   const supabase = await createClient();
@@ -26,5 +28,15 @@ export default async function FollowUpsPage() {
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 
-  return <FollowUpQueue leads={leads} agentNameById={agentNameById} />;
+  const admin = createAdminClient();
+  const teamAgentIds = await getTeamAgentIds(admin, user.id);
+
+  return (
+    <FollowUpQueue
+      leads={leads}
+      agentNameById={agentNameById}
+      currentUserId={user.id}
+      teamAgentIds={teamAgentIds}
+    />
+  );
 }
