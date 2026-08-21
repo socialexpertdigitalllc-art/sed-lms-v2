@@ -29,6 +29,57 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.12.0",
+    date: "2026-08-18",
+    title: "Image picking, rebuilt",
+    changes: [
+      {
+        kind: "feature",
+        text: "Pick several images at once: the picker now multi-selects up to the slot's limit and stays open until you press Add, so filling a 3-image Hero from the client's photos is one dialog instead of three.",
+      },
+      {
+        kind: "improvement",
+        text: "Images load about 40× lighter. Client photos were being downloaded at full size (roughly 800 KB and several seconds each) just to draw a small tile; they are now resized and cached, so a lead's photos appear almost instantly — and instantly again every time after.",
+      },
+      {
+        kind: "improvement",
+        text: "Thumbnails are much bigger and fill the available width instead of sitting as tiny squares in empty space, so you can actually see what you are choosing.",
+      },
+      {
+        kind: "improvement",
+        text: "Selecting is instant — the highlight no longer waits on the server — and the picker opens on the client's photos with Library and Pexels searching as you type, with results remembered between openings.",
+      },
+      {
+        kind: "improvement",
+        text: "No more pop-up after every picked image. Notifications are reserved for real problems.",
+      },
+      {
+        kind: "improvement",
+        text: "The photo extractor now collects up to 30 photos from a Google listing instead of the 3-4 it used to return. Google unloads photos as you scroll past them, so everything scrolled by was being thrown away; the capture now keeps every photo it sees.",
+      },
+      {
+        kind: "feature",
+        text: "Auto deploy: tick it on the New Site screen and the website publishes to its subdomain as soon as generation finishes — no approve or deploy click. The lead's website link is filled in and its agent is notified, exactly as with a manual deploy. Off by default, and never applied to bulk generations.",
+      },
+      {
+        kind: "feature",
+        text: "Follow-ups can be marked \"Specific time\" when the client asked for an exact slot. They carry a Specific badge on the Follow-ups page and can be filtered down to just those.",
+      },
+      {
+        kind: "improvement",
+        text: "Dropping a lead from the follow-up window no longer demands a future follow-up time.",
+      },
+      {
+        kind: "fix",
+        text: "A lead saved with \"no email\" is no longer stuck without one — the email field stays editable, and filling it in clears the no-email flag.",
+      },
+      {
+        kind: "improvement",
+        text: "Agent, Closed by and Rating are now editable by admins only, on the lead screen and in bulk actions alike.",
+      },
+    ],
+  },
+  {
     version: "2.11.1",
     date: "2026-08-17",
     title: "Database load diet",
