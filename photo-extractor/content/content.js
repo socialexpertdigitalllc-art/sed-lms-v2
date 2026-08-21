@@ -39,6 +39,33 @@
     };
   };
 
+  // ---- session accumulator (mirror core/harvest.js) ----
+  // Google Maps VIRTUALIZES the photo grid: tiles scrolled out of view are
+  // unmounted, so a DOM snapshot taken after scrolling holds only what is on
+  // screen. That is why a full scroll of a 60-photo gallery used to yield 3-4
+  // photos — everything scrolled past was already gone by the time GET_ITEMS
+  // read the DOM. Every scroll tick now folds the current snapshot in here,
+  // and GET_ITEMS returns the UNION.
+  const MAX_WANTED = 30;
+  let seen = new Map(); // id -> url, insertion order = page order
+  let seenKey = null;
+
+  // One content script survives SPA navigation between businesses, so scope
+  // the session: absorbing under a new place must never mix the previous
+  // business's photos into this lead's capture.
+  const placeKey = () => {
+    const m = location.href.match(/\/maps\/place\/([^/@]+)/);
+    return m ? decodeURIComponent(m[1]) : location.host + location.pathname;
+  };
+  const harvest = () => {
+    const key = placeKey();
+    if (key !== seenKey) { seen = new Map(); seenKey = key; }
+    let snapshot;
+    try { snapshot = adapter.collect(); } catch { snapshot = new Map(); }
+    for (const [id, url] of snapshot) { if (id && url && !seen.has(id)) seen.set(id, url); }
+    return seen.size;
+  };
+
   // ---- render/scope helpers (mirror core/collect-filter.js) ----
   // getBoundingClientRect() forces layout; called per-node per scroll tick.
   // If a very large gallery ever makes this feel janky, check el.offsetParent
@@ -104,7 +131,8 @@
       }
       return map;
     },
-    items() { return [...this.collect()].map(([id, u]) => ({ id, thumbUrl: u, originalUrl: gToOriginal(u), site: 'google-maps' })); },
+    itemsFrom(map) { return [...map].map(([id, u]) => ({ id, thumbUrl: u, originalUrl: gToOriginal(u), site: 'google-maps' })); },
+    items() { return this.itemsFrom(this.collect()); },
   };
 
   const yelpAdapter = {
@@ -113,10 +141,11 @@
     async prepare() { /* user opens the gallery; nothing to click */ },
     getScrollContainer() { return document.scrollingElement || document.documentElement; },
     collect() { const m = new Map(); for (const { id, url } of findYelp(document.documentElement.outerHTML)) if (!m.has(id)) m.set(id, url); return m; },
-    items() {
+    itemsFrom(map) {
       let tab; try { tab = new URL(location.href).searchParams.get('tab') || undefined; } catch { tab = undefined; }
-      return [...this.collect()].map(([id, u]) => ({ id, thumbUrl: u, originalUrl: u, category: tab, site: 'yelp' }));
+      return [...map].map(([id, u]) => ({ id, thumbUrl: u, originalUrl: u, category: tab, site: 'yelp' }));
     },
+    items() { return this.itemsFrom(this.collect()); },
   };
 
   const genericAdapter = {
@@ -125,7 +154,8 @@
     async prepare() { /* none */ },
     getScrollContainer() { return document.scrollingElement || document.documentElement; },
     collect() { const m = new Map(); for (const img of document.querySelectorAll('img')) { const u = bestSrc(img); if (u && /^https?:/.test(u) && !m.has(u)) m.set(u, u); } return m; },
-    items() { return [...this.collect()].map(([u]) => ({ id: u, thumbUrl: u, originalUrl: u, site: 'generic' })); },
+    itemsFrom(map) { return [...map].map(([id, u]) => ({ id, thumbUrl: u, originalUrl: u, site: 'generic' })); },
+    items() { return this.itemsFrom(this.collect()); },
   };
 
   const pick = () => {
@@ -143,10 +173,11 @@
         if (msg?.type === 'PING') { adapter = pick(); return sendResponse({ ok: true, site: adapter.site }); }
         if (msg?.type === 'STOP') { stop = true; return sendResponse({ ok: true }); }
         if (msg?.type === 'GET_ITEMS') {
-          const items = adapter.items();
+          harvest(); // fold in whatever is on screen right now
+          const items = adapter.itemsFrom(seen);
           return sendResponse({ site: adapter.site, items, health: { ok: items.length > 0, reachedTier: items.length ? 'primary' : 'none', count: items.length } });
         }
-        if (msg?.type === 'LOAD_ALL') { stop = false; await loadAll(); return sendResponse({ ok: true }); }
+        if (msg?.type === 'LOAD_ALL') { stop = false; seen = new Map(); seenKey = placeKey(); await loadAll(); return sendResponse({ ok: true }); }
         sendResponse({ ok: false, error: 'unknown message' });
       } catch (e) {
         sendResponse({ ok: false, error: String(e?.message || e) });
@@ -164,7 +195,11 @@
     for (;;) {
       if (stop) break;
       forceLazy();
-      const count = adapter.collect().size;
+      // Accumulated, NOT the DOM count: in a virtualized grid the live count
+      // stays flat (or shrinks) while new photos keep streaming past, so the
+      // stall detector used to call it "stable" and stop early.
+      const count = harvest();
+      if (count >= MAX_WANTED) break; // enough for the picker; stop scrolling
       const sh = (c && c.scrollHeight) || document.body.scrollHeight;
       const atBottom = c
         ? (c.scrollTop + c.clientHeight >= c.scrollHeight - 8)
@@ -174,7 +209,7 @@
       if (c && c.scrollBy) c.scrollBy(0, c.clientHeight * 0.85); else window.scrollBy(0, window.innerHeight * 0.85);
       await sleep(550);
     }
-    safeSend({ type: 'PROGRESS', loaded: adapter.collect().size, done: true });
+    safeSend({ type: 'PROGRESS', loaded: harvest(), done: true });
   }
 
   function forceLazy() {
