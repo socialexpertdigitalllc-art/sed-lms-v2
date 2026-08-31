@@ -112,7 +112,18 @@ export const runAgy: AgyDriver = (opts, onEvent) =>
     let conversationId: string | null = opts.conversationId ?? null;
     let result: Extract<AgyEvent, { kind: "result" }> | null = null;
     let killed = false;
-    const kill = () => { killed = true; try { child.kill(); } catch { /* already gone */ } };
+    const kill = () => {
+      killed = true;
+      try {
+        // agy can have its own children (browser tooling); on Windows,
+        // child.kill() would orphan them — take the whole tree down.
+        if (process.platform === "win32" && child.pid) {
+          spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+        } else {
+          child.kill();
+        }
+      } catch { /* already gone */ }
+    };
     const timer = setTimeout(kill, opts.timeoutMs);
     const cancelPoll = opts.shouldCancel
       ? setInterval(() => { if (opts.shouldCancel!()) kill(); }, 5_000)
