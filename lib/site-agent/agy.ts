@@ -118,7 +118,8 @@ export const runAgy: AgyDriver = (opts, onEvent) =>
         // agy can have its own children (browser tooling); on Windows,
         // child.kill() would orphan them — take the whole tree down.
         if (process.platform === "win32" && child.pid) {
-          spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+          spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" })
+            .on("error", () => { /* best-effort cleanup; the child's own close still resolves */ });
         } else {
           child.kill();
         }
