@@ -27,6 +27,16 @@ create unique index if not exists site_agent_runs_one_active_per_ticket
   on public.site_agent_runs (ticket_id)
   where status in ('queued','running','review','deploying');
 
+-- The worker polls `where status in (...) order by created_at` every ~20s
+-- forever — same reason studio_runs (0053) and builder_runs (0057) carry
+-- their (status, created_at) composite. And the ticket screen lists a
+-- ticket's FULL run history (terminal statuses too), which the partial
+-- unique index above cannot serve.
+create index if not exists site_agent_runs_status_created
+  on public.site_agent_runs (status, created_at);
+create index if not exists site_agent_runs_ticket
+  on public.site_agent_runs (ticket_id);
+
 -- Service-role only, like studio_deployments: RLS on, zero policies.
 alter table public.site_agent_runs enable row level security;
 
