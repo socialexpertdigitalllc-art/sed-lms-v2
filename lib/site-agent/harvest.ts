@@ -8,10 +8,23 @@ export type HarvestOutcome =
   | { ok: false; error: string };
 
 /** Forward-slash relative paths only — the same shape unzipToMap produces.
- *  Anything else in the edited map means the agent (or the fs walk) escaped. */
+ *  Anything else in the edited map means the agent (or the fs walk) escaped.
+ *  Also refuses names that are hazardous once materialized on a real
+ *  filesystem (Task 6 writes these to disk on a Windows worker): colons
+ *  (drive letters + NTFS alternate data streams), reserved device names,
+ *  trailing dots/spaces (Win32 strips them silently), control chars. */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 function isSafeRelPath(p: string): boolean {
-  if (!p || p.includes("\\") || p.startsWith("/") || /^[a-zA-Z]:/.test(p)) return false;
-  return !p.split("/").some((seg) => seg === ".." || seg === "" || seg === ".");
+  if (!p || p.includes("\\") || p.startsWith("/") || p.includes(":")) return false;
+  // Refuses C0 control characters (0x00-0x1f) via code-point comparison
+  // rather than a regex escape range, to avoid any ambiguity in how a
+  // literal control-character escape is represented in this source file.
+  if ([...p].some((ch) => ch.charCodeAt(0) < 0x20)) return false;
+  return !p.split("/").some(
+    (seg) =>
+      seg === ".." || seg === "" || seg === "." ||
+      WINDOWS_RESERVED.test(seg) || /[. ]$/.test(seg),
+  );
 }
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
@@ -33,8 +46,16 @@ export function harvestChanges(
   for (const p of Object.keys(edited)) {
     if (!isSafeRelPath(p)) return { ok: false, error: `Unsafe path in the agent's output: "${p}"` };
   }
-  if (!Object.keys(edited).some((n) => /^index\.html?$/i.test(n))) {
-    return { ok: false, error: "The agent removed index.html — the site would not be deployable. Refused." };
+  // The root index must SURVIVE: matched against the exact filenames the
+  // original actually had, so a case-rename (index.html -> INDEX.HTML) counts
+  // as removal on a case-sensitive host. Originals always have one
+  // (prepareSiteZip refuses zips without it), but fall back to a presence
+  // check just in case.
+  const rootIndexes = Object.keys(original).filter((n) => /^index\.html?$/i.test(n));
+  const missingIndex = rootIndexes.find((n) => !(n in edited));
+  if (missingIndex !== undefined ||
+      (rootIndexes.length === 0 && !Object.keys(edited).some((n) => /^index\.html?$/i.test(n)))) {
+    return { ok: false, error: `The agent removed ${missingIndex ?? "index.html"} — the site would not be deployable. Refused.` };
   }
 
   const changes: Record<string, AgentFileChange> = {};
@@ -42,10 +63,20 @@ export function harvestChanges(
   for (const [path, bytes] of Object.entries(edited)) {
     totalBytes += bytes.byteLength;
     const before = original[path];
-    if (!before) changes[path] = { action: "create", bytes: bytes.byteLength };
-    else if (!sameBytes(before, bytes)) changes[path] = { action: "edit", bytes: bytes.byteLength };
-    if (bytes.byteLength > MAX_FILE_BYTES) {
-      return { ok: false, error: `"${path}" is too large (${bytes.byteLength} bytes; per-file cap ${MAX_FILE_BYTES}).` };
+    const change: AgentFileChange | null = !before
+      ? { action: "create", bytes: bytes.byteLength }
+      : !sameBytes(before, bytes)
+        ? { action: "edit", bytes: bytes.byteLength }
+        : null;
+    if (change) {
+      // The cap gates what the AGENT produced. A pre-existing oversized
+      // asset (hero video, photo) it never touched must not block an
+      // unrelated edit — sameBytes short-circuits on length, so unchanged
+      // big files cost only a length check.
+      if (bytes.byteLength > MAX_FILE_BYTES) {
+        return { ok: false, error: `"${path}" is too large (${bytes.byteLength} bytes; per-file cap ${MAX_FILE_BYTES}).` };
+      }
+      changes[path] = change;
     }
   }
   for (const path of Object.keys(original)) {
@@ -61,5 +92,7 @@ export function harvestChanges(
     return { ok: false, error: `The edited site is too large (${totalBytes} bytes; cap ${MAX_RESULT_BYTES}).` };
   }
 
+  // resultMap intentionally aliases `edited` (no copy of up to 50MB);
+  // callers must treat it as read-only.
   return { ok: true, changes, resultMap: edited };
 }

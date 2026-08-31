@@ -61,4 +61,28 @@ describe("harvestChanges", () => {
     const out = harvestChanges(site(), { ...site(), "big.bin": big });
     expect(out).toMatchObject({ ok: false, error: expect.stringMatching(/too large/i) });
   });
+
+  it("a pre-existing oversized file the agent never touched does not block an unrelated edit", () => {
+    const big = new Uint8Array(5 * 1024 * 1024 + 1);
+    const original = { ...site(), "media/hero.mp4": big };
+    const edited = { ...original, "index.html": enc("<html>edited</html>") };
+    const out = harvestChanges(original, edited);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(Object.keys(out.changes)).toEqual(["index.html"]);
+  });
+
+  it("a case-rename of the root index counts as removing it", () => {
+    const edited = { ...site(), "INDEX.HTML": site()["index.html"] };
+    delete (edited as Record<string, Uint8Array>)["index.html"];
+    const out = harvestChanges(site(), edited);
+    expect(out).toMatchObject({ ok: false, error: expect.stringMatching(/index\.html/i) });
+  });
+
+  it("refuses Windows-hazardous names: reserved devices, colons, trailing dots/spaces", () => {
+    for (const bad of ["con.html", "a/nul.css", "evil.html:hidden", "dir./f.html", "a/b.html ", "COM1"]) {
+      const out = harvestChanges(site(), { ...site(), [bad]: enc("x") });
+      expect(out.ok, bad).toBe(false);
+    }
+  });
 });
