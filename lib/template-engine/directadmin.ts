@@ -31,6 +31,16 @@ export interface DaResult {
 
 const CALL_TIMEOUT_MS = 30000;
 const UPLOAD_TIMEOUT_MS = 120000; // site zips are small (<1MB) but allow slow links
+/**
+ * Subdomain creation is PROVISIONING, not a config write: DA builds the vhost
+ * and issues the certificate before it answers, which the header note above
+ * measures at 30-60s on this server. Under the shared 30s budget the slow half
+ * of those calls aborted mid-provision — the deploy reported "This operation
+ * was aborted" while DA went on to create the subdomain anyway, orphaning it
+ * (seen in prod 2026-08-27 and 2026-08-31; two dead subdomains left behind).
+ * `lib/site-studio/deploy/ensureSubdomain.ts` covers whatever still slips past.
+ */
+const CREATE_SUBDOMAIN_TIMEOUT_MS = 180000;
 
 export function daConfigured(): boolean {
   return Boolean(
@@ -101,14 +111,14 @@ export function parseDaResponse(text: string): { error: boolean; text: string; d
 export async function daCall(
   cmd: string,
   params: Record<string, string>,
-  opts?: { method?: "GET" | "POST" }
+  opts?: { method?: "GET" | "POST"; timeoutMs?: number }
 ): Promise<DaResult> {
   const method = opts?.method ?? "GET";
   const query = new URLSearchParams(params).toString();
   const url = `${host()}/${cmd}${query ? `?${query}` : ""}`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), opts?.timeoutMs ?? CALL_TIMEOUT_MS);
   try {
     const res = await fetch(url, { method, headers: { Authorization: authHeader() }, signal: controller.signal });
     const raw = await res.text();
@@ -122,11 +132,15 @@ export async function daCall(
 }
 
 export async function createSubdomain(sub: string): Promise<DaResult> {
-  return daCall("CMD_API_SUBDOMAINS", {
-    action: "create", // NOT "add" — this build rejects it
-    domain: process.env.DA_DOMAIN ?? "",
-    subdomain: sub,
-  });
+  return daCall(
+    "CMD_API_SUBDOMAINS",
+    {
+      action: "create", // NOT "add" — this build rejects it
+      domain: process.env.DA_DOMAIN ?? "",
+      subdomain: sub,
+    },
+    { timeoutMs: CREATE_SUBDOMAIN_TIMEOUT_MS }
+  );
 }
 
 /** Delete the subdomain AND its directory tree (take-down / failed-deploy cleanup). */

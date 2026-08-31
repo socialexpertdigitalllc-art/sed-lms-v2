@@ -29,6 +29,25 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.13.1",
+    date: "2026-08-31",
+    title: "Generate really is the last click",
+    changes: [
+      {
+        kind: "fix",
+        text: "Auto deploy no longer gives up while the hosting is still working. Creating a site's address takes the hosting up to a minute — it builds the address and issues the security certificate before it answers — but we stopped waiting after thirty seconds and called it a failure. The site was left waiting for a manual Deploy even though the address had been created, and the address itself was abandoned. We now wait as long as the hosting needs, and check whether the address appeared before reporting any failure.",
+      },
+      {
+        kind: "improvement",
+        text: "Auto deploy is now on by default on the New site screen: pick a lead and a template, press Generate, and the site publishes itself. Untick the box for a client whose site you want to look at before it goes live.",
+      },
+      {
+        kind: "improvement",
+        text: "When a site is set to publish itself and cannot, the run now says so and why. Previously it simply sat waiting for review, which looked exactly like a run that was never asked to publish at all.",
+      },
+    ],
+  },
+  {
     version: "2.13.0",
     date: "2026-08-22",
     title: "Closer teams, and everyone's name",

@@ -223,4 +223,60 @@ describe("NewSiteFlow", () => {
       expect(runsCall).toBeTruthy();
     });
   });
+
+  /**
+   * Generate is meant to be the LAST click: the operator picks a lead and a
+   * template, and the site goes live on its own. Auto deploy shipped opt-in
+   * and the operator ticked it on every single run, so the default was simply
+   * wrong — it stays a checkbox only as an escape hatch for a client whose
+   * site must not publish itself.
+   */
+  it("deploys automatically by default — Generate is the only click needed", async () => {
+    stubFetch();
+    render(<NewSiteFlow />);
+    fireEvent.click(await screen.findByText("Ace Plumbing"));
+    await screen.findByText("Hero");
+    fireEvent.change(screen.getByLabelText(/^template$/i), { target: { value: "t1" } });
+
+    const autoDeploy = screen.getByRole("checkbox", { name: /auto deploy/i });
+    expect(autoDeploy).toBeChecked();
+
+    const generate = await screen.findByRole("button", { name: /^generate$/i });
+    await waitFor(() => expect(generate).not.toBeDisabled());
+    fireEvent.click(generate);
+
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const runsCall = fetchMock.mock.calls.find(
+        (call: unknown[]) => String(call[0]).includes("/api/site-builder/runs") && (call[1] as RequestInit)?.method === "POST",
+      );
+      expect(runsCall).toBeTruthy();
+      const sent = JSON.parse(String((runsCall![1] as RequestInit).body)) as { options: { auto_deploy: boolean } };
+      expect(sent.options.auto_deploy).toBe(true);
+    });
+  });
+
+  it("still lets the operator opt OUT of publishing before generating", async () => {
+    stubFetch();
+    render(<NewSiteFlow />);
+    fireEvent.click(await screen.findByText("Ace Plumbing"));
+    await screen.findByText("Hero");
+    fireEvent.change(screen.getByLabelText(/^template$/i), { target: { value: "t1" } });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /auto deploy/i }));
+
+    const generate = await screen.findByRole("button", { name: /^generate$/i });
+    await waitFor(() => expect(generate).not.toBeDisabled());
+    fireEvent.click(generate);
+
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const runsCall = fetchMock.mock.calls.find(
+        (call: unknown[]) => String(call[0]).includes("/api/site-builder/runs") && (call[1] as RequestInit)?.method === "POST",
+      );
+      expect(runsCall).toBeTruthy();
+      const sent = JSON.parse(String((runsCall![1] as RequestInit).body)) as { options: { auto_deploy: boolean } };
+      expect(sent.options.auto_deploy).toBe(false);
+    });
+  });
 });

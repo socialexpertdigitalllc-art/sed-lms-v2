@@ -12,7 +12,10 @@ import {
 import { deployBuilderRun } from "@/lib/site-builder/deploy";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+// Subdomain creation alone can hold for ~3 minutes (DA provisions the vhost
+// and issues the cert before answering — see CREATE_SUBDOMAIN_TIMEOUT_MS),
+// and the zip upload follows it.
+export const maxDuration = 600;
 
 type Ctx = { params: Promise<{ id: string }> };
 

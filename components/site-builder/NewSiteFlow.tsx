@@ -139,11 +139,13 @@ export function NewSiteFlow() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [templateId, setTemplateId] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  // Publish automatically once generation finishes. Defaults OFF and is never
-  // remembered between runs: this puts a real client site on a public URL and
-  // writes the lead's website link with nobody reviewing it first, so it must
-  // be a deliberate choice every time.
-  const [autoDeploy, setAutoDeploy] = useState(false);
+  // Publish automatically once generation finishes. Defaults ON: Generate is
+  // meant to be the last click, and the whole point of a generated site is
+  // that it goes live. It shipped opt-in, the operator then ticked it on
+  // every run, so the box survives only as an escape hatch — a client whose
+  // site must be eyeballed before it reaches a public URL — and is never
+  // remembered between runs.
+  const [autoDeploy, setAutoDeploy] = useState(true);
 
   const [needsLoading, setNeedsLoading] = useState(false);
   const [heroCandidates, setHeroCandidates] = useState<DisplayCandidate[]>([]);
@@ -721,8 +723,9 @@ export function NewSiteFlow() {
           <span>
             Auto deploy
             <span className="block text-xs text-text-muted">
-              Publish to a subdomain as soon as generation finishes — no review step. The lead&apos;s website link is
-              updated and its agent is notified automatically.
+              On by default: the site publishes to a subdomain the moment generation finishes, the lead&apos;s website
+              link is updated, and its agent is notified — Generate is the only click. Untick to hold it for review
+              and deploy it by hand instead.
             </span>
           </span>
         </label>

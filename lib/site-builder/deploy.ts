@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveSubdomain, InvalidSlugError } from "@/lib/site-studio/deploy/slug";
+import { ensureSubdomain } from "@/lib/site-studio/deploy/ensureSubdomain";
 import { BUILDER_SITES_BUCKET } from "./run";
 
 /**
@@ -35,6 +36,10 @@ export interface DeployBuilderRunDeps {
     zipName: string,
   ) => Promise<{ ok: boolean; failedStep?: "upload" | "extract" | "delete"; message?: string }>;
   docrootFor: (sub: string) => string;
+  /** Optional, and injected only by tests: the pause `ensureSubdomain` takes
+   *  between re-checks after a create reports failure. Production leaves it
+   *  unset and gets real seconds. */
+  wait?: (ms: number) => Promise<void>;
 }
 
 export type DeployBuilderRunOutcome =
@@ -42,10 +47,6 @@ export type DeployBuilderRunOutcome =
   | { ok: false; status: number; error: string };
 
 const fail = (status: number, error: string): DeployBuilderRunOutcome => ({ ok: false, status, error });
-
-function isAlreadyExistsError(r: { text: string; details: string }): boolean {
-  return /exist/i.test(`${r.text} ${r.details}`);
-}
 
 function slugify(s: string): string {
   return s
@@ -162,17 +163,9 @@ export async function deployBuilderRun(
       );
     }
 
-    let existed = await deps.subdomainExists(sub);
-    if (!existed) {
-      const created = await deps.createSubdomain(sub);
-      if (created.error) {
-        if (!isAlreadyExistsError(created)) {
-          const message = created.text || created.details || "subdomain creation failed";
-          return fail(502, `Could not create subdomain: ${message}`);
-        }
-        existed = true;
-      }
-    }
+    const ensured = await ensureSubdomain(deps, sub);
+    if (!ensured.ok) return fail(502, `Could not create subdomain: ${ensured.error}`);
+    const existed = ensured.existed;
 
     // Fetch and validate the zip BEFORE touching the live docroot — a
     // storage failure must never leave a live site wiped with nothing to

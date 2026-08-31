@@ -49,9 +49,13 @@ interface BuilderRunRow {
    *  waiting "generating" run (the engine's next-attempt marker between
    *  retry rounds). Null/absent otherwise. */
   resume_at?: string | null;
-  /** Per-run operator preferences. `auto_resume` gates the background
-   *  processor's automatic resumption of a parked run; ABSENT MEANS TRUE. */
-  options?: { auto_resume?: boolean } | null;
+  /** Per-run operator preferences, plus what auto-deploy left behind.
+   *  `auto_resume` gates the background processor's automatic resumption of a
+   *  parked run; ABSENT MEANS TRUE. `auto_deploy` opted this run into
+   *  publishing itself; ABSENT MEANS FALSE. `auto_deploy_error` is set when
+   *  that publish was attempted and refused — the run is back in `review`
+   *  waiting for a manual Deploy, and this says why. */
+  options?: { auto_resume?: boolean; auto_deploy?: boolean; auto_deploy_error?: string | null } | null;
   created_at: string;
   updated_at: string;
 }
@@ -513,6 +517,10 @@ export function BuilderRun({ runId }: { runId: string }) {
   const resumeAtMs = run.resume_at ? new Date(run.resume_at).getTime() : null;
   const parked = run.status === "failed" && resumeAtMs !== null;
   const autoResume = run.options?.auto_resume !== false; // absent means true
+  /* A run that asked to publish itself, tried, and was refused. It looks
+     identical to an ordinary "awaiting review" run otherwise, which is
+     precisely why auto-deploy failures went unnoticed for a month. */
+  const autoDeployError = run.status === "review" ? run.options?.auto_deploy_error ?? null : null;
   const resumeInMin = resumeAtMs !== null ? Math.max(1, Math.ceil((resumeAtMs - now) / 60_000)) : null;
   const nextAttemptInSec =
     run.status === "generating" && resumeAtMs !== null && resumeAtMs > now
@@ -606,6 +614,22 @@ export function BuilderRun({ runId }: { runId: string }) {
             {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             Retry failed pages
           </button>
+        </div>
+      ) : null}
+
+      {autoDeployError ? (
+        /* The site generated fine — only publishing it failed. Approve and
+           Deploy above still work, and the hosting is usually the thing to
+           look at. */
+        <div className="rounded-lg border border-notready-bg bg-notready-bg/40 p-4" data-testid="sb-auto-deploy-error">
+          <p className="flex items-center gap-2 font-medium text-text">
+            <AlertTriangle className="h-4 w-4" /> This run was set to deploy itself, and could not.
+          </p>
+          <p className="mt-1 text-sm text-text-muted">{autoDeployError}</p>
+          <p className="mt-2 text-xs text-text-muted">
+            The site itself generated fine — nothing was lost. Approve it and deploy by hand, or fix the hosting and
+            try again.
+          </p>
         </div>
       ) : null}
 

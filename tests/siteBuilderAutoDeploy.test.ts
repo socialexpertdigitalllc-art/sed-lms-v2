@@ -30,8 +30,13 @@ interface Recorded {
   inserts: { table: string; row: Record<string, unknown> }[];
 }
 
-/** Fake admin whose builder_runs UPDATE honours a status CAS. */
-function makeAdmin(runStatus: { value: string }): { admin: SupabaseClient; rec: Recorded } {
+/** Fake admin whose builder_runs UPDATE honours a status CAS, and whose
+ *  SELECT hands back the run's current `options` (auto-deploy reads them so
+ *  it can merge rather than clobber). */
+function makeAdmin(
+  runStatus: { value: string },
+  options: Record<string, unknown> = {},
+): { admin: SupabaseClient; rec: Recorded } {
   const rec: Recorded = { updates: [], inserts: [] };
   const admin = {
     from(table: string) {
@@ -39,6 +44,14 @@ function makeAdmin(runStatus: { value: string }): { admin: SupabaseClient; rec: 
         insert: async (row: Record<string, unknown>) => {
           rec.inserts.push({ table, row });
           return { error: null };
+        },
+        select() {
+          const chain = {
+            eq: () => chain,
+            maybeSingle: async () => ({ data: { id: "run-1", options }, error: null }),
+            single: async () => ({ data: { id: "run-1", options }, error: null }),
+          };
+          return chain;
         },
         update(patch: Record<string, unknown>) {
           const entry = { patch, filters: [] as [string, string][] };
@@ -120,6 +133,41 @@ describe("autoDeployRun", () => {
     expect(out).toMatchObject({ ok: false, error: "Could not create subdomain" });
     expect(status.value).toBe("review");
     expect(rec.inserts.some((i) => i.row.action === "site_builder.run.auto_deploy_failed")).toBe(true);
+  });
+
+  /**
+   * The activity log is not a place the operator looks. When auto-deploy gave
+   * up silently, all they saw was a run sitting in review — indistinguishable
+   * from auto-deploy never having been asked for, which is exactly how a
+   * month of aborted subdomain creates went unnoticed. The reason has to ride
+   * on the run itself, where the run screen can show it.
+   */
+  it("records WHY on the run, so the screen can say more than 'awaiting review'", async () => {
+    const status = { value: "review" };
+    const { admin, rec } = makeAdmin(status, { auto_deploy: true, auto_resume: false });
+    deployMock.mockResolvedValue({ ok: false, status: 502, error: "Could not create subdomain: aborted" });
+
+    await autoDeployRun(admin, "run-1", "user-1");
+
+    const rollback = rec.updates.find((u) => u.patch.options !== undefined);
+    expect(rollback?.patch.options).toMatchObject({
+      auto_deploy_error: "Could not create subdomain: aborted",
+      // …without trampling the run's other options
+      auto_deploy: true,
+      auto_resume: false,
+    });
+  });
+
+  it("clears a previous failure reason when a later attempt deploys", async () => {
+    const status = { value: "review" };
+    const { admin, rec } = makeAdmin(status, { auto_deploy: true, auto_deploy_error: "an older failure" });
+    deployMock.mockResolvedValue({ ok: true, url: "https://acme-ab12cd.dmviral.com" });
+
+    await autoDeployRun(admin, "run-1", "user-1");
+
+    const cleared = rec.updates.find((u) => u.patch.options !== undefined);
+    expect(cleared?.patch.options).toMatchObject({ auto_deploy: true });
+    expect((cleared?.patch.options as Record<string, unknown>).auto_deploy_error ?? null).toBeNull();
   });
 
   it("never throws — a deploy that blows up is reported, not propagated", async () => {

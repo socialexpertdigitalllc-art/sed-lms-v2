@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { SITES_BUCKET } from "../run/finalize";
 import type { StudioRunRow } from "../run/types";
 import { resolveSubdomain, InvalidSlugError } from "./slug";
+import { ensureSubdomain } from "./ensureSubdomain";
 
 /**
  * The exact DirectAdmin surface this service needs, injected so tests never
@@ -22,6 +23,10 @@ export interface DeployRunDeps {
     zipName: string,
   ) => Promise<{ ok: boolean; failedStep?: "upload" | "extract" | "delete"; message?: string }>;
   docrootFor: (sub: string) => string;
+  /** Optional, and injected only by tests: the pause `ensureSubdomain` takes
+   *  between re-checks after a create reports failure. Production leaves it
+   *  unset and gets real seconds. */
+  wait?: (ms: number) => Promise<void>;
 }
 
 export type DeployRunOutcome =
@@ -29,14 +34,6 @@ export type DeployRunOutcome =
   | { ok: false; status: number; error: string };
 
 const fail = (status: number, error: string): DeployRunOutcome => ({ ok: false, status, error });
-
-/** "subdomain already exists" comes back as an error from `createSubdomain`
- *  on a rare random collision — that is a race won by someone/something
- *  else between our `subdomainExists` check and the create call, not a real
- *  failure, so it's treated as "it exists now" and the deploy proceeds. */
-function isAlreadyExistsError(r: { text: string; details: string }): boolean {
-  return /exist/i.test(`${r.text} ${r.details}`);
-}
 
 /**
  * Deploy handoff to the kept DirectAdmin layer (spec §9/§13, Phase 4a Task
@@ -137,17 +134,12 @@ export async function deployRun(
     // can have been removed out-of-band. Checking uniformly means a vanished
     // reused subdomain is simply recreated instead of failing confusingly
     // deeper in clear/upload.
-    let existed = await deps.subdomainExists(sub);
-    if (!existed) {
-      const created = await deps.createSubdomain(sub);
-      if (created.error) {
-        if (!isAlreadyExistsError(created)) {
-          const message = created.text || created.details || "subdomain creation failed";
-          return fail(502, `Could not create subdomain: ${message}`);
-        }
-        existed = true; // race: it appeared between our check and the create
-      }
-    }
+    // ...and creation is not believed on its first "no" — see
+    // ensureSubdomain.ts for the aborted-but-actually-created case that
+    // orphaned two subdomains in production.
+    const ensured = await ensureSubdomain(deps, sub);
+    if (!ensured.ok) return fail(502, `Could not create subdomain: ${ensured.error}`);
+    const existed = ensured.existed;
 
     // deploy:fetch — download and validate the zip BEFORE touching the live
     // docroot (review FIX 1, CRITICAL). The old ordering cleared the docroot

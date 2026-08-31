@@ -133,6 +133,58 @@ describe("daCall / createSubdomain / deleteSubdomain / subdomainExists", () => {
     expect(auth).toMatch(/^Basic /);
   });
 
+  /**
+   * REGRESSION (prod, 2026-08-27 + 2026-08-31): subdomain creation provisions
+   * the vhost AND issues the cert before DA answers — 30-60s on this server,
+   * as this module's own header note says — but every call shared one 30s
+   * timeout. Auto-deploy aborted the request mid-provision, reported "This
+   * operation was aborted", and left the subdomain DA went on to create
+   * orphaned on the hosting. Creation gets its own, provisioning-sized budget.
+   */
+  it("gives subdomain creation a longer timeout than an ordinary DA call", async () => {
+    setEnv();
+    vi.useFakeTimers();
+    try {
+      const aborts: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (url: string, init?: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => {
+                aborts.push(url);
+                reject(new Error("This operation was aborted"));
+              });
+            })
+        )
+      );
+
+      const list = daCall("CMD_API_SUBDOMAINS", { domain: "dmviral.com" });
+      let created = false;
+      const create = createSubdomain("acme-x1y2z3").then((r) => {
+        created = true;
+        return r;
+      });
+
+      // 90s in — three times the ordinary budget, and past the slow end of
+      // DA's documented 30-60s cert issuance. The list call is long gone; the
+      // create must still be waiting, because this is exactly the window the
+      // old shared timeout cut off.
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect((await list).error).toBe(true);
+      expect(aborts).toHaveLength(1);
+      expect(created).toBe(false);
+
+      // It is still bounded, though — a wedged connection must not hang a
+      // deploy forever.
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect((await create).error).toBe(true);
+      expect(aborts).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("deleteSubdomain removes the subdomain AND its directory contents", async () => {
     setEnv();
     const calls = stubFetch(() => ({ ok: true, status: 200, text: "error=0&text=Subdomains+deleted" }));

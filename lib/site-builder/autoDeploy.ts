@@ -27,11 +27,31 @@ import { deployBuilderRun } from "@/lib/site-builder/deploy";
  * NEVER THROWS. Generation has already succeeded and its row is written by
  * the time this runs; a deploy problem must leave the run sitting in
  * `review` for a manual deploy, not turn a good generation into a failure.
+ *
+ * A failure also writes its reason to `options.auto_deploy_error`, because a
+ * run silently parked in `review` looks exactly like a run that was never
+ * asked to publish — which is how a month of aborted subdomain creates went
+ * unnoticed. The run screen reads it back.
  */
 export interface AutoDeployOutcome {
   ok: boolean;
   url?: string;
   error?: string;
+}
+
+/** Read-modify-write of the run's `options` jsonb: a bare update would
+ *  replace the whole object, taking `auto_deploy`/`auto_resume` with it. */
+async function patchOptions(
+  admin: SupabaseClient,
+  runId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const { data } = await admin.from("builder_runs").select("options").eq("id", runId).maybeSingle();
+  const current = (data?.options as Record<string, unknown> | null) ?? {};
+  await admin
+    .from("builder_runs")
+    .update({ options: { ...current, ...patch } })
+    .eq("id", runId);
 }
 
 export async function autoDeployRun(
@@ -99,9 +119,12 @@ export async function autoDeployRun(
         entity_id: runId,
         new_value: { error: outcome.error },
       });
+      await patchOptions(admin, runId, { auto_deploy_error: outcome.error ?? "Auto deploy failed" });
       return { ok: false, error: outcome.error };
     }
 
+    // Clear any reason a previous attempt left behind — this run published.
+    await patchOptions(admin, runId, { auto_deploy_error: null });
     return { ok: true, url: outcome.url };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "auto-deploy failed unexpectedly" };

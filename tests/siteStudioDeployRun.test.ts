@@ -62,6 +62,8 @@ function makeDeps(overrides: Partial<DeployRunDeps> = {}) {
       return { ok: true };
     }),
     docrootFor: vi.fn((sub: string) => `/domains/${sub}.${DA_DOMAIN}/public_html`),
+    // No real seconds spent on ensureSubdomain's post-failure re-checks.
+    wait: vi.fn(async () => {}),
     ...overrides,
   };
   return { deps, calls };
