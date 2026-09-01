@@ -89,7 +89,10 @@ export async function updateSession(request: NextRequest) {
     // LIVE deploy verification — a 307-to-login here silently kills the
     // background processor, and no route test can catch it (they import the
     // handler directly, bypassing middleware entirely).
-    path === "/api/site-builder/process";
+    path === "/api/site-builder/process" ||
+    // Ticket Agent processor: x-wge-secret auth, enabled only where
+    // AGENT_WORKER_ENABLED=1 (the operator's worker box).
+    path === "/api/site-agent/process";
 
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));

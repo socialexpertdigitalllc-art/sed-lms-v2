@@ -10,6 +10,19 @@ export async function register() {
   if (started) return; // guard against dev HMR double-registration
   started = true;
 
+  // Ticket Agent worker poller — gated by ITS OWN env var, independent of
+  // WGE_POLLERS_DISABLED: the Windows box disables the recovery sweeps
+  // (prod runs those) but IS the one instance that drives `agy`.
+  if (process.env.AGENT_WORKER_ENABLED === "1") {
+    const agentOrigin = process.env.WGE_SELF_ORIGIN || "http://localhost:3000";
+    const agentSecret = process.env.WGE_PROCESSOR_SECRET || "";
+    if (agentSecret) {
+      setInterval(() => {
+        fetch(`${agentOrigin}/api/site-agent/process`, { method: "POST", headers: { "x-wge-secret": agentSecret } }).catch(() => {});
+      }, 20_000);
+    }
+  }
+
   // EVERY instance sharing the prod database runs these pollers, and the
   // load multiplies: the 2026-08-17 disk-IO budget incident measured ~3x the
   // configured cadences because the local/dev boxes polled alongside the real
