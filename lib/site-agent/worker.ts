@@ -25,8 +25,9 @@ import { buildTaskPrompt } from "./task";
 import { harvestChanges } from "./harvest";
 import { summarizeEventForTail, type AgyDriver, type AgyRunOutcome } from "./agy";
 import {
-  AGENT_SITES_BUCKET, AGY_TIMEOUT_MS, KEEPALIVE_MS, PROGRESS_THROTTLE_MS,
-  STALE_RUNNING_MS, TAIL_MAX_CHARS, originalZipPath, resultZipPath, type AgentRunRow,
+  AGENT_SITES_BUCKET, AGY_TIMEOUT_MS, KEEPALIVE_MS, MODELS_REFRESH_MS, PROGRESS_THROTTLE_MS,
+  STALE_RUNNING_MS, TAIL_MAX_CHARS, originalZipPath, resultZipPath,
+  type AgentRunRow, type AgyModel,
 } from "./types";
 
 export interface Workspace {
@@ -49,6 +50,10 @@ export interface WorkerDeps {
     ctx: { leadId?: string | null; ticket?: { assigned_to: string | null; created_by: string | null } | null },
     opts: { title: string; body: string; dedupKey: string; targetUrl?: string | null },
   ) => Promise<void>;
+  /** Live `agy models` catalogue (listAgyModels on the worker box); MUST
+   *  return [] on failure — an empty list is treated as "agy is unwell,
+   *  publish nothing" so the panel's model select never goes blank. */
+  listModels: () => Promise<AgyModel[]>;
   now?: () => Date;
 }
 
@@ -68,6 +73,44 @@ async function download(
 }
 
 export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutcome> {
+  const outcome = await claimAndProcessOne(deps);
+  // v2 F2: refresh the published model catalogue only AFTER the run outcome is
+  // decided (or when nothing was picked) — never before or during a claim, so
+  // a queued run never waits on a multi-second `agy models` fetch.
+  await publishModelsIfStale(deps);
+  return outcome;
+}
+
+/**
+ * v2 F2 — publish agy's live model catalogue to
+ * app_settings.agent_worker_models ({fetched_at, models}), refetching at most
+ * every MODELS_REFRESH_MS. Entirely best-effort and column-tolerant (0072 may
+ * lag code locally): a read/write error or a throwing listModels changes
+ * nothing about the poll's outcome. An EMPTY list writes NOTHING — a transient
+ * agy failure must not blank the panel's model select.
+ */
+async function publishModelsIfStale(deps: WorkerDeps): Promise<void> {
+  const now = deps.now ?? (() => new Date());
+  try {
+    const { data } = await deps.admin
+      .from("app_settings")
+      .select("agent_worker_models")
+      .eq("singleton", true)
+      .maybeSingle();
+    const existing = (data as { agent_worker_models?: { fetched_at?: string } | null } | null)
+      ?.agent_worker_models;
+    const fetchedAt = existing?.fetched_at ? new Date(existing.fetched_at).getTime() : NaN;
+    if (Number.isFinite(fetchedAt) && now().getTime() - fetchedAt < MODELS_REFRESH_MS) return;
+    const models = await deps.listModels();
+    if (!models.length) return;
+    await deps.admin
+      .from("app_settings")
+      .update({ agent_worker_models: { fetched_at: now().toISOString(), models } })
+      .eq("singleton", true);
+  } catch { /* best-effort — the outcome already belongs to the caller */ }
+}
+
+async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
   const admin = deps.admin;
   const now = deps.now ?? (() => new Date());
   const iso = () => now().toISOString();
@@ -163,7 +206,7 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
     if (!run.ticket_id) return await fail("This run's ticket no longer exists (retention purge?) — nothing to do.");
     const { data: ticket } = await admin
       .from("lead_tickets")
-      .select("id, title, assigned_to, created_by, lead_id, items:ticket_items(body, sort)")
+      .select("id, title, assigned_to, created_by, lead_id, items:ticket_items(id, body, sort)")
       .eq("id", run.ticket_id)
       .maybeSingle();
     if (!ticket) return await fail("This run's ticket no longer exists — nothing to do.");
@@ -188,12 +231,19 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
     // the seeded files (fsWorkspace, Task 6).
     const cwd = await deps.workspace.materialize(seedMap, wsKey);
 
-    const items = ((ticket.items as { body: string; sort: number }[] | null) ?? []);
+    const items = ((ticket.items as { id: string; body: string; sort: number }[] | null) ?? []);
+    // v2 F1: a run scoped to selected items feeds ONLY those to the prompt.
+    // Unknown ids simply match nothing — the create route validates upstream.
+    const scoped = Array.isArray(run.item_ids) && run.item_ids.length
+      ? items.filter((i) => run.item_ids!.includes(i.id))
+      : items;
     const prompt = buildTaskPrompt({
       businessName: String((lead?.business_name as string | undefined) ?? "this client"),
       ticketTitle: (ticket.title as string | null) ?? "Untitled change request",
-      ticketItems: [...items].sort((a, b) => a.sort - b.sort).map((i) => i.body),
+      ticketItems: [...scoped].sort((a, b) => a.sort - b.sort).map((i) => i.body),
       instructions: run.instructions,
+      // v2 F4: operator-edited task text replaces the composed block verbatim.
+      taskText: run.task_text ?? null,
     });
 
     // Progress: throttled tail patches; a patch matching zero rows means we
@@ -226,18 +276,25 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
           prompt,
           conversationId: run.conversation_id,
           timeoutMs: AGY_TIMEOUT_MS,
+          // v2 F2: the run's chosen model (null = Antigravity default).
+          model: run.model ?? null,
           shouldCancel: () => cancelled,
         },
         (e) => {
           const line = summarizeEventForTail(e);
           if (!line) return;
           // agy's result.response echoes the closing agent_response text_delta
-          // verbatim (both real success captures) — skip a line whose trimmed
-          // text is exactly what the tail already ends with, at a chunk
-          // boundary. Lives here so summarizeEventForTail stays pure.
-          const t = line.trim();
-          const prior = tail.trimEnd();
-          if (t && (prior === t || prior.endsWith("\n" + t))) return;
+          // verbatim (both real success captures) — skip the RESULT line when
+          // its trimmed text is exactly what the tail already ends with, at a
+          // chunk boundary. Scoped to result on purpose: a genuinely repeated
+          // narration line (say, a retried identical tool call) is real
+          // progress and must be kept. Lives here so summarizeEventForTail
+          // stays pure.
+          if (e.kind === "result") {
+            const t = line.trim();
+            const prior = tail.trimEnd();
+            if (t && (prior === t || prior.endsWith("\n" + t))) return;
+          }
           tail += (tail ? "\n" : "") + line;
           flush().catch(() => {});
         },

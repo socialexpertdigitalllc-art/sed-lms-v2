@@ -27,7 +27,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createClient } from "@supabase/supabase-js";
-import { runAgy } from "@/lib/site-agent/agy";
+import { runAgy, listAgyModels } from "@/lib/site-agent/agy";
 import { processNextAgentRun } from "@/lib/site-agent/worker";
 import { fsWorkspace } from "@/lib/site-agent/workspaceFs";
 import { notify } from "@/lib/notifications/notify";
@@ -167,7 +167,9 @@ describe.skipIf(process.env.AGY_E2E_TEST !== "1")("ticket agent end-to-end (LIVE
       runInserted = true;
 
       // ---- 3. the worker, with every REAL dependency ----
-      const outcome = await processNextAgentRun({ admin, driver: runAgy, workspace: fsWorkspace, notify });
+      const outcome = await processNextAgentRun({
+        admin, driver: runAgy, workspace: fsWorkspace, notify, listModels: () => listAgyModels(),
+      });
       console.log("[sa-live] worker outcome:", JSON.stringify(outcome));
       expect(outcome).toMatchObject({ picked: true, runId, outcome: "review" });
 

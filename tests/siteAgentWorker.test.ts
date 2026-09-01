@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { processNextAgentRun, type WorkerDeps } from "@/lib/site-agent/worker";
 import type { AgyDriver } from "@/lib/site-agent/agy";
+import type { AgyModel } from "@/lib/site-agent/types";
 import { zipFromMap } from "@/lib/template-engine/zip";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -11,17 +12,37 @@ const SITE = { "index.html": enc("<h1>old</h1>"), "about.html": enc("<p>about</p
 
 /** In-memory stand-in for the service-role client: one runs table honouring
  *  chained .eq filters on update (that is what makes the claim CAS and the
- *  claim_id guard testable), ticket/lead selects, an activity recorder, and a
- *  storage bucket backed by a plain record. */
-function makeFakeAdmin(seed: Record<string, Record<string, unknown>>) {
+ *  claim_id guard testable), ticket/lead selects, an app_settings singleton
+ *  (heartbeat + published model list), an activity recorder, and a storage
+ *  bucket backed by a plain record. */
+function makeFakeAdmin(
+  seed: Record<string, Record<string, unknown>>,
+  settingsSeed: Record<string, unknown> = {},
+) {
   const runs = { ...seed };
+  const settings: Record<string, unknown> = { singleton: true, ...settingsSeed };
   const storage: Record<string, Uint8Array> = {};
   const activity: { action: string; row: Record<string, unknown> }[] = [];
 
   const admin = {
     from(table: string) {
       if (table === "app_settings") {
-        return { update: () => ({ eq: async () => ({ error: null }) }) };
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { agent_worker_models: settings.agent_worker_models ?? null },
+                error: null,
+              }),
+            }),
+          }),
+          update: (patch: Record<string, unknown>) => ({
+            eq: async () => {
+              Object.assign(settings, patch);
+              return { error: null };
+            },
+          }),
+        };
       }
       if (table === "activity_log") {
         return {
@@ -41,7 +62,12 @@ function makeFakeAdmin(seed: Record<string, Record<string, unknown>>) {
                     ? null
                     : {
                         id, title: "Fix phone", assigned_to: "dev-1", created_by: "sales-1",
-                        lead_id: "lead-1", items: [{ body: "swap number", sort: 0 }],
+                        lead_id: "lead-1",
+                        items: [
+                          { id: "item-1", body: "swap number", sort: 0 },
+                          { id: "item-2", body: "fix footer email", sort: 1 },
+                          { id: "item-3", body: "update hours", sort: 2 },
+                        ],
                       },
                 error: null,
               }),
@@ -111,7 +137,7 @@ function makeFakeAdmin(seed: Record<string, Record<string, unknown>>) {
       }),
     },
   };
-  return { admin: admin as unknown as SupabaseClient, runs, storage, activity };
+  return { admin: admin as unknown as SupabaseClient, runs, settings, storage, activity };
 }
 
 /** Fake workspace + notify around the fake admin. materialize returns ONE
@@ -121,7 +147,10 @@ function makeFakeAdmin(seed: Record<string, Record<string, unknown>>) {
  *  (run id + claim prefix) for materialize/collect/cleanup, so a reclaimer
  *  can never wipe a still-live predecessor's dir. Drivers mutate the
  *  in-memory workspace through `mutate` instead of a real fs. */
-function makeHarness(fake: ReturnType<typeof makeFakeAdmin>) {
+function makeHarness(
+  fake: ReturnType<typeof makeFakeAdmin>,
+  listModelsImpl?: () => Promise<AgyModel[]>,
+) {
   let files: Record<string, Uint8Array> = {};
   const wsKeys: string[] = [];
   const materialize = vi.fn(async (map: Record<string, Uint8Array>, key: string) => {
@@ -130,6 +159,7 @@ function makeHarness(fake: ReturnType<typeof makeFakeAdmin>) {
     return "C:/scratch/agent-run";
   });
   const notify = vi.fn(async () => {});
+  const listModels = vi.fn(listModelsImpl ?? (async () => [] as AgyModel[]));
   const mutate = (fn: (f: Record<string, Uint8Array>) => void) => fn(files);
   const deps = (driver: AgyDriver): WorkerDeps => ({
     admin: fake.admin,
@@ -140,9 +170,10 @@ function makeHarness(fake: ReturnType<typeof makeFakeAdmin>) {
       cleanup: async (key: string) => { wsKeys.push(key); },
     },
     notify,
+    listModels,
     now: () => new Date("2026-09-01T12:00:00Z"),
   });
-  return { deps, notify, materialize, mutate, wsKeys };
+  return { deps, notify, materialize, listModels, mutate, wsKeys };
 }
 
 /** For tests where the engine must fail BEFORE ever driving agy. */
@@ -402,5 +433,167 @@ describe("processNextAgentRun", () => {
     const out = await processNextAgentRun(h.deps(neverDriver));
     expect(out).toMatchObject({ picked: true, outcome: "failed" });
     expect(fake.runs["run-1"].error).toMatch(/original\.zip/);
+  });
+
+  // ---- v2: run scope (item_ids), task_text, model ----
+
+  /** Success driver that records the opts it was given and makes one edit. */
+  function capturingDriver(h: ReturnType<typeof makeHarness>, seen: { prompt?: string; model?: string | null }): AgyDriver {
+    return async (opts, onEvent) => {
+      seen.prompt = opts.prompt;
+      seen.model = opts.model ?? null;
+      h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+      const result = {
+        kind: "result" as const, status: "SUCCESS" as const, response: "done", error: null,
+        usage: null, numTurns: 1, durationSeconds: 2,
+      };
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "c", killed: false };
+    };
+  }
+
+  it("item_ids scopes the prompt to the selected ticket items only", async () => {
+    const fake = makeFakeAdmin(seedRun({ item_ids: ["item-2"] }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const seen: { prompt?: string; model?: string | null } = {};
+
+    const out = await processNextAgentRun(h.deps(capturingDriver(h, seen)));
+    expect(out).toMatchObject({ picked: true, outcome: "review" });
+    expect(seen.prompt).toContain("fix footer email");
+    expect(seen.prompt).not.toContain("swap number");
+    expect(seen.prompt).not.toContain("update hours");
+  });
+
+  it("task_text feeds the prompt VERBATIM instead of the composed title/items; model defaults to null", async () => {
+    const fake = makeFakeAdmin(seedRun({ task_text: "Make the hero banner green, nothing else." }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const seen: { prompt?: string; model?: string | null } = {};
+
+    const out = await processNextAgentRun(h.deps(capturingDriver(h, seen)));
+    expect(out).toMatchObject({ picked: true, outcome: "review" });
+    expect(seen.prompt).toContain("Make the hero banner green, nothing else.");
+    expect(seen.prompt).not.toContain("Fix phone");
+    expect(seen.prompt).not.toContain("swap number");
+    // No model on the run → no model handed to the driver.
+    expect(seen.model).toBeNull();
+  });
+
+  it("the run's model is handed to the driver", async () => {
+    const fake = makeFakeAdmin(seedRun({ model: "claude-sonnet-4-6" }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const seen: { prompt?: string; model?: string | null } = {};
+
+    const out = await processNextAgentRun(h.deps(capturingDriver(h, seen)));
+    expect(out).toMatchObject({ picked: true, outcome: "review" });
+    expect(seen.model).toBe("claude-sonnet-4-6");
+  });
+
+  // ---- v2: models publish (app_settings.agent_worker_models) ----
+
+  it("publishes the fetched model list when app_settings has none — after a processed run", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake, async () => [
+      { id: "m-1", label: "Model One" }, { id: "m-2", label: "Model Two" },
+    ]);
+    const seen: { prompt?: string; model?: string | null } = {};
+
+    const out = await processNextAgentRun(h.deps(capturingDriver(h, seen)));
+    expect(out).toMatchObject({ picked: true, outcome: "review" });
+    expect(h.listModels).toHaveBeenCalledTimes(1);
+    expect(fake.settings.agent_worker_models).toEqual({
+      fetched_at: "2026-09-01T12:00:00.000Z",
+      models: [{ id: "m-1", label: "Model One" }, { id: "m-2", label: "Model Two" }],
+    });
+  });
+
+  it("a fresh published list skips the fetch entirely", async () => {
+    const fresh = { fetched_at: "2026-09-01T12:00:00Z", models: [{ id: "m-1", label: "One" }] };
+    const fake = makeFakeAdmin({}, { agent_worker_models: fresh });
+    const h = makeHarness(fake, async () => [{ id: "m-2", label: "Two" }]);
+
+    const out = await processNextAgentRun(h.deps(neverDriver));
+    expect(out).toEqual({ picked: false });
+    expect(h.listModels).not.toHaveBeenCalled();
+    expect(fake.settings.agent_worker_models).toEqual(fresh);
+  });
+
+  it("a stale published list (11 min) is refetched and rewritten", async () => {
+    const fake = makeFakeAdmin({}, {
+      agent_worker_models: { fetched_at: "2026-09-01T11:49:00Z", models: [{ id: "m-old", label: "Old" }] },
+    });
+    const h = makeHarness(fake, async () => [{ id: "m-new", label: "New" }]);
+
+    await processNextAgentRun(h.deps(neverDriver));
+    expect(h.listModels).toHaveBeenCalledTimes(1);
+    expect(fake.settings.agent_worker_models).toEqual({
+      fetched_at: "2026-09-01T12:00:00.000Z",
+      models: [{ id: "m-new", label: "New" }],
+    });
+  });
+
+  it("an EMPTY model list writes NOTHING — a transient agy failure keeps the old list", async () => {
+    const stale = { fetched_at: "2026-09-01T11:49:00Z", models: [{ id: "m-old", label: "Old" }] };
+    const fake = makeFakeAdmin({}, { agent_worker_models: stale });
+    const h = makeHarness(fake); // default listModels → []
+
+    await processNextAgentRun(h.deps(neverDriver));
+    expect(h.listModels).toHaveBeenCalledTimes(1);
+    expect(fake.settings.agent_worker_models).toEqual(stale);
+  });
+
+  it("a throwing listModels never affects the run outcome", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake, async () => { throw new Error("agy exploded"); });
+    const seen: { prompt?: string; model?: string | null } = {};
+
+    const out = await processNextAgentRun(h.deps(capturingDriver(h, seen)));
+    expect(out).toMatchObject({ picked: true, runId: "run-1", outcome: "review" });
+    expect(fake.runs["run-1"].status).toBe("review");
+  });
+
+  it("publishes models even when no run was picked", async () => {
+    const fake = makeFakeAdmin({});
+    const h = makeHarness(fake, async () => [{ id: "m-1", label: "One" }]);
+
+    const out = await processNextAgentRun(h.deps(neverDriver));
+    expect(out).toEqual({ picked: false });
+    expect(fake.settings.agent_worker_models).toEqual({
+      fetched_at: "2026-09-01T12:00:00.000Z",
+      models: [{ id: "m-1", label: "One" }],
+    });
+  });
+
+  // ---- v2: tail dedupe is scoped to the result echo only ----
+
+  it("keeps two identical tool lines separated by a silenced event — dedupe is result-only", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+
+    const out = await processNextAgentRun(h.deps(async (_opts, onEvent) => {
+      const tool = {
+        kind: "step" as const, stepType: "tool_call", state: "ACTIVE", index: 1,
+        toolName: "write_file", toolParams: "index.html", textDelta: null,
+      };
+      onEvent(tool); // ▸ write_file (index.html)
+      onEvent({ ...tool, state: "DONE" }); // silenced (ACTIVE already announced)
+      onEvent({ ...tool, index: 2 }); // the agent genuinely retries the same call
+      h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+      const result = {
+        kind: "result" as const, status: "SUCCESS" as const, response: "done", error: null,
+        usage: null, numTurns: 1, durationSeconds: 2,
+      };
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "c", killed: false };
+    }));
+
+    expect(out).toMatchObject({ picked: true, outcome: "review" });
+    const tail = String(fake.runs["run-1"].output_tail ?? "");
+    expect(tail.split("▸ write_file (index.html)").length - 1).toBe(2);
   });
 });

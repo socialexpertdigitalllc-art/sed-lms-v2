@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { processNextAgentRun } from "@/lib/site-agent/worker";
 import { fsWorkspace } from "@/lib/site-agent/workspaceFs";
-import { runAgy } from "@/lib/site-agent/agy";
+import { runAgy, listAgyModels } from "@/lib/site-agent/agy";
 import { notify } from "@/lib/notifications/notify";
 
 export const runtime = "nodejs";
@@ -42,6 +42,7 @@ export async function POST(req: Request) {
     driver: runAgy,
     workspace: fsWorkspace,
     notify,
+    listModels: () => listAgyModels(),
   });
   return NextResponse.json(out);
 }
