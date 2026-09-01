@@ -247,11 +247,24 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
 
     if (outcome.killed) return await fail("The agent hit the 15-minute time cap and was stopped.");
     if (!outcome.result) {
-      return await fail(
-        outcome.spawnError
-          ? `agy could not be launched: ${outcome.spawnError}`
-          : "agy ran but produced no result event — check the CLI's sign-in and its log on the worker box.",
-      );
+      if (outcome.spawnError) {
+        // The CLI could not even LAUNCH on this machine (missing binary/cwd).
+        // That is a broken WORKER, not a broken RUN — release the claim so a
+        // healthy worker can pick it up, instead of eating the run with a
+        // failure bell (a misconfigured instance once burned 5 runs this way).
+        console.warn(`[site-agent] releasing run ${run.id}: agy launch failed here: ${outcome.spawnError}`);
+        const { data: released } = await admin
+          .from("site_agent_runs")
+          .update({ status: "queued", claim_id: null, updated_at: iso() })
+          .eq("id", run.id)
+          .eq("claim_id", claimId)
+          .select("id")
+          .maybeSingle();
+        if (!released) console.warn(`[site-agent] release of ${run.id} lost its claim first (discarded?)`);
+        await deps.workspace.cleanup(wsKey).catch(() => {});
+        return { picked: true, runId: run.id, outcome: "superseded" };
+      }
+      return await fail("agy ran but produced no result event — check the CLI's sign-in and its log on the worker box.");
     }
     if (outcome.result.status !== "SUCCESS") {
       return await fail(`Antigravity reported an error: ${outcome.result.error ?? "unknown"}`);

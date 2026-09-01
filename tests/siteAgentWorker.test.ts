@@ -358,15 +358,17 @@ describe("processNextAgentRun", () => {
     expect(fake.runs["run-1"].error).toMatch(/sign-in|log on the worker box/i);
   });
 
-  it("a spawn-level failure surfaces the real error, not the sign-in hint", async () => {
+  it("a spawn-level failure RELEASES the run for a healthy worker instead of eating it", async () => {
     const fake = makeFakeAdmin(seedRun());
     fake.storage["run-1/original.zip"] = zipFromMap(SITE);
     const h = makeHarness(fake);
     const out = await processNextAgentRun(
       h.deps(async () => ({ exitCode: null, result: null, conversationId: null, killed: false, spawnError: "spawn agy ENOENT" })),
     );
-    expect(out).toMatchObject({ picked: true, outcome: "failed" });
-    expect(fake.runs["run-1"].error).toMatch(/could not be launched.*ENOENT/i);
+    expect(out).toMatchObject({ picked: true, outcome: "superseded" });
+    expect(fake.runs["run-1"]).toMatchObject({ status: "queued", claim_id: null });
+    expect(fake.runs["run-1"].error ?? null).toBeNull();
+    expect(h.notify).not.toHaveBeenCalled();
   });
 
   it("a missing original.zip fails the run before the driver ever starts", async () => {

@@ -123,7 +123,7 @@ import { POST as createRunPOST, GET as listRunsGET } from "@/app/api/tickets/[id
 import { GET as pollGET } from "@/app/api/site-agent/runs/[id]/route";
 import { NOTIFICATION_EVENTS } from "@/lib/notifications/events";
 
-const ENV_KEYS = ["WGE_PROCESSOR_SECRET", "AGENT_WORKER_ENABLED"] as const;
+const ENV_KEYS = ["WGE_PROCESSOR_SECRET", "AGENT_WORKER_ENABLED", "AGY_BIN"] as const;
 let savedEnv: Record<string, string | undefined>;
 
 describe("POST /api/site-agent/process", () => {
@@ -133,6 +133,8 @@ describe("POST /api/site-agent/process", () => {
     processMock.mockReset();
     process.env.WGE_PROCESSOR_SECRET = "s3cret";
     process.env.AGENT_WORKER_ENABLED = "1";
+    // Any real on-disk file satisfies the machine-intrinsic gate in tests.
+    process.env.AGY_BIN = "package.json";
   });
   afterEach(() => {
     for (const k of ENV_KEYS) {
@@ -153,6 +155,17 @@ describe("POST /api/site-agent/process", () => {
     expect((await processPOST(new Request("http://x", { method: "POST" }))).status).toBe(503);
     process.env.WGE_PROCESSOR_SECRET = "s3cret";
     expect((await processPOST(new Request("http://x", { method: "POST", headers: { "x-wge-secret": "wrong" } }))).status).toBe(401);
+    expect(processMock).not.toHaveBeenCalled();
+  });
+
+  it("503s when AGY_BIN is unset or missing — the env flag alone once leaked onto prod", async () => {
+    delete process.env.AGY_BIN;
+    let res = await processPOST(new Request("http://x", { method: "POST", headers: { "x-wge-secret": "s3cret" } }));
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/AGY_BIN/);
+    process.env.AGY_BIN = "Z:/definitely/not/here/agy.exe";
+    res = await processPOST(new Request("http://x", { method: "POST", headers: { "x-wge-secret": "s3cret" } }));
+    expect(res.status).toBe(503);
     expect(processMock).not.toHaveBeenCalled();
   });
 
