@@ -171,7 +171,7 @@ describe("processNextAgentRun", () => {
     const out = await processNextAgentRun(h.deps(async (opts, onEvent) => {
       driverCwd = opts.cwd;
       onEvent({ kind: "init", conversationId: "conv-1", permissionMode: "always-proceed" });
-      onEvent({ kind: "step", stepType: "tool_call", state: "DONE", index: 1 });
+      onEvent({ kind: "step", stepType: "tool_call", state: "DONE", index: 1, toolName: null, toolParams: null, textDelta: null });
       h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
       const result = {
         kind: "result" as const, status: "SUCCESS" as const, response: "done", error: null,
