@@ -116,11 +116,16 @@ function makeFakeAdmin(seed: Record<string, Record<string, unknown>>) {
 
 /** Fake workspace + notify around the fake admin. materialize returns ONE
  *  fixed path and must be called ONCE — the engine passes that cwd to the
- *  driver rather than materializing again. Drivers mutate the in-memory
- *  workspace through `mutate` instead of a real fs. */
+ *  driver rather than materializing again. Every workspace call records the
+ *  scratch KEY it was given: the engine must use ONE claim-scoped key
+ *  (run id + claim prefix) for materialize/collect/cleanup, so a reclaimer
+ *  can never wipe a still-live predecessor's dir. Drivers mutate the
+ *  in-memory workspace through `mutate` instead of a real fs. */
 function makeHarness(fake: ReturnType<typeof makeFakeAdmin>) {
   let files: Record<string, Uint8Array> = {};
-  const materialize = vi.fn(async (map: Record<string, Uint8Array>) => {
+  const wsKeys: string[] = [];
+  const materialize = vi.fn(async (map: Record<string, Uint8Array>, key: string) => {
+    wsKeys.push(key);
     files = { ...map };
     return "C:/scratch/agent-run";
   });
@@ -129,11 +134,15 @@ function makeHarness(fake: ReturnType<typeof makeFakeAdmin>) {
   const deps = (driver: AgyDriver): WorkerDeps => ({
     admin: fake.admin,
     driver,
-    workspace: { materialize, collect: async () => files, cleanup: async () => {} },
+    workspace: {
+      materialize,
+      collect: async (key: string) => { wsKeys.push(key); return files; },
+      cleanup: async (key: string) => { wsKeys.push(key); },
+    },
     notify,
     now: () => new Date("2026-09-01T12:00:00Z"),
   });
-  return { deps, notify, materialize, mutate };
+  return { deps, notify, materialize, mutate, wsKeys };
 }
 
 /** For tests where the engine must fail BEFORE ever driving agy. */
@@ -180,6 +189,11 @@ describe("processNextAgentRun", () => {
     // ONE scratch dir: the engine materializes once and hands that path to agy.
     expect(h.materialize).toHaveBeenCalledTimes(1);
     expect(driverCwd).toBe("C:/scratch/agent-run");
+    // Claim-scoped workspace key: materialize, collect, and cleanup all used
+    // the SAME key, namespaced by run id + claim — never the bare run id.
+    expect(h.wsKeys).toHaveLength(3);
+    expect(new Set(h.wsKeys).size).toBe(1);
+    expect(h.wsKeys[0]).toMatch(/^run-1-/);
     expect(fake.activity.some((a) => a.action === "site_agent.run.completed")).toBe(true);
   });
 
@@ -289,5 +303,66 @@ describe("processNextAgentRun", () => {
     // The engine never overwrote the discard (upload may have happened; the ROW may not move).
     expect(fake.runs["run-1"].status).toBe("discarded");
     expect(h.notify).not.toHaveBeenCalled();
+    // …and no failure was recorded either: a discarded run is nobody's failure.
+    expect(fake.activity.some((a) => a.action === "site_agent.run.failed")).toBe(false);
+  });
+
+  it("reclaims a running run whose row went quiet past the stale window (dead worker)", async () => {
+    // 21 minutes since updated_at (injected now is 12:00) — past the 20m wall.
+    const fake = makeFakeAdmin(seedRun({ status: "running", claim_id: "old-claim", updated_at: "2026-09-01T11:39:00Z" }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+
+    const out = await processNextAgentRun(h.deps(async (_opts, onEvent) => {
+      h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+      const result = {
+        kind: "result" as const, status: "SUCCESS" as const, response: "done", error: null,
+        usage: null, numTurns: 1, durationSeconds: 5,
+      };
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "conv-2", killed: false };
+    }));
+
+    expect(out).toMatchObject({ picked: true, runId: "run-1", outcome: "review" });
+    expect(fake.runs["run-1"].status).toBe("review");
+  });
+
+  it("does NOT reclaim a fresh running run — a live worker owns it", async () => {
+    const fake = makeFakeAdmin(seedRun({ status: "running", claim_id: "live-claim", updated_at: "2026-09-01T11:59:00Z" }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(h.deps(neverDriver));
+    expect(out).toEqual({ picked: false });
+    expect(fake.runs["run-1"]).toMatchObject({ status: "running", claim_id: "live-claim" });
+  });
+
+  it("a killed driver (time cap) fails the run", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(
+      h.deps(async () => ({ exitCode: null, result: null, conversationId: null, killed: true })),
+    );
+    expect(out).toMatchObject({ picked: true, outcome: "failed" });
+    expect(fake.runs["run-1"].error).toMatch(/time cap/i);
+  });
+
+  it("a driver with no result event fails with the install/sign-in hint", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(
+      h.deps(async () => ({ exitCode: 1, result: null, conversationId: null, killed: false })),
+    );
+    expect(out).toMatchObject({ picked: true, outcome: "failed" });
+    expect(fake.runs["run-1"].error).toMatch(/signed in|installed/i);
+  });
+
+  it("a missing original.zip fails the run before the driver ever starts", async () => {
+    const fake = makeFakeAdmin(seedRun()); // storage left empty
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(h.deps(neverDriver));
+    expect(out).toMatchObject({ picked: true, outcome: "failed" });
+    expect(fake.runs["run-1"].error).toMatch(/original\.zip/);
   });
 });

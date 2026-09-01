@@ -8,35 +8,47 @@
  * Concurrency: a CAS claim stamps a fresh claim_id; EVERY later write is
  * guarded .eq("claim_id", …), so a reclaimed/superseded attempt matches zero
  * rows and silently discards its own result (the generation_id discipline
- * from lib/site-builder/generateRun.ts). Cancellation rides the same guard:
- * discard flips status, the next guarded write matches nothing, and the
- * driver's shouldCancel kills the child.
+ * from lib/site-builder/generateRun.ts). The scratch dir is claim-scoped too
+ * ({runId}-{claim prefix}), so an attempt that reclaims a stale run can never
+ * wipe or collect a still-live predecessor's workspace. Cancellation rides
+ * the claim guard, and the contract is precise: the discard route must set
+ * claim_id: NULL (a status flip alone would NOT break the guard — the guard
+ * filters on claim_id, not status); once the token is nulled, the worker's
+ * next guarded patch matches nothing and the driver's shouldCancel kills the
+ * child. While agy runs, a guarded keepalive patch (KEEPALIVE_MS) keeps a
+ * live row's updated_at moving — that is what makes the STALE_RUNNING_MS
+ * reclaim safe — and doubles as the discard listener between events.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import { buildTaskPrompt } from "./task";
 import { harvestChanges } from "./harvest";
-import { summarizeEventForTail, type AgyDriver } from "./agy";
+import { summarizeEventForTail, type AgyDriver, type AgyRunOutcome } from "./agy";
 import {
-  AGENT_SITES_BUCKET, AGY_TIMEOUT_MS, PROGRESS_THROTTLE_MS, STALE_RUNNING_MS,
-  TAIL_MAX_CHARS, originalZipPath, resultZipPath, type AgentRunRow,
+  AGENT_SITES_BUCKET, AGY_TIMEOUT_MS, KEEPALIVE_MS, PROGRESS_THROTTLE_MS,
+  STALE_RUNNING_MS, TAIL_MAX_CHARS, originalZipPath, resultZipPath, type AgentRunRow,
 } from "./types";
 
 export interface Workspace {
-  /** Write the map to a scratch dir; returns its absolute path. */
-  materialize(map: Record<string, Uint8Array>, runId: string): Promise<string>;
+  /** Write the map to a scratch dir for `key`; returns its absolute path.
+   *  `key` is the engine's claim-scoped scratch key, not a bare run id. */
+  materialize(map: Record<string, Uint8Array>, key: string): Promise<string>;
   /** Read the scratch dir back as a relative-path map (forward slashes). */
-  collect(runId: string): Promise<Record<string, Uint8Array>>;
-  cleanup(runId: string): Promise<void>;
+  collect(key: string): Promise<Record<string, Uint8Array>>;
+  cleanup(key: string): Promise<void>;
 }
 
 export interface WorkerDeps {
   admin: SupabaseClient;
   driver: AgyDriver;
   workspace: Workspace;
-  notify: (eventKey: string, ctx: Record<string, unknown>, opts: {
-    title: string; body: string; dedupKey: string; targetUrl?: string | null;
-  }) => Promise<void>;
+  /** Structurally matches lib/notifications/notify.ts, so the real notify
+   *  drops in without an adapter (ctx is a subset of NotifyContext). */
+  notify: (
+    eventKey: string,
+    ctx: { leadId?: string | null; ticket?: { assigned_to: string | null; created_by: string | null } | null },
+    opts: { title: string; body: string; dedupKey: string; targetUrl?: string | null },
+  ) => Promise<void>;
   now?: () => Date;
 }
 
@@ -44,10 +56,15 @@ export type WorkerOutcome =
   | { picked: false }
   | { picked: true; runId: string; outcome: "review" | "failed" | "superseded" };
 
-async function download(admin: SupabaseClient, path: string): Promise<Uint8Array | null> {
-  const { data } = await admin.storage.from(AGENT_SITES_BUCKET).download(path);
-  if (!data) return null;
-  return new Uint8Array(await data.arrayBuffer());
+/** A storage error and an absent object are different failures: a network
+ *  blip must not be reported as a missing file. */
+async function download(
+  admin: SupabaseClient, path: string,
+): Promise<{ bytes: Uint8Array | null; error: string | null }> {
+  const { data, error } = await admin.storage.from(AGENT_SITES_BUCKET).download(path);
+  if (error) return { bytes: null, error: error.message || "storage error" };
+  if (!data) return { bytes: null, error: null };
+  return { bytes: new Uint8Array(await data.arrayBuffer()), error: null };
 }
 
 export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutcome> {
@@ -89,6 +106,11 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
   if (!claimed) return { picked: false }; // lost the race — next tick retries
   const run = claimed as AgentRunRow;
 
+  /** Claim-scoped scratch key: two attempts at one run (stale reclaim racing
+   *  a not-actually-dead predecessor) get DIFFERENT dirs, so neither can wipe
+   *  or harvest the other's workspace. */
+  const wsKey = `${run.id}-${claimId.slice(0, 8)}`;
+
   /** Guarded write; returns false when this attempt no longer owns the run
    *  (discarded, or reclaimed after a stale window). */
   const patch = async (fields: Record<string, unknown>): Promise<boolean> => {
@@ -103,7 +125,14 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
   };
 
   const fail = async (message: string): Promise<WorkerOutcome> => {
-    await patch({ status: "failed", error: message });
+    // Ownership first: if the guarded write matches nothing, the dashboard
+    // already discarded (or another attempt reclaimed) this run — no failure
+    // bell, no activity row, for a failure nobody owns any more.
+    const owned = await patch({ status: "failed", error: message });
+    if (!owned) {
+      await deps.workspace.cleanup(wsKey).catch(() => {});
+      return { picked: true, runId: run.id, outcome: "superseded" };
+    }
     // Audit + bell are best-effort: the row already says failed, and a
     // notification hiccup must not blow up the worker loop.
     try {
@@ -125,7 +154,7 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
           });
       }
     } catch { /* the failure itself is already recorded on the row */ }
-    await deps.workspace.cleanup(run.id).catch(() => {});
+    await deps.workspace.cleanup(wsKey).catch(() => {});
     return { picked: true, runId: run.id, outcome: "failed" };
   };
 
@@ -146,17 +175,18 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
     // RESULT so the agent sees its own prior work; the diff stays against
     // ORIGINAL so the change list is cumulative.
     const original = await download(admin, originalZipPath(run.id));
-    if (!original) return await fail("original.zip is missing from storage — recreate the run.");
-    const originalMap = unzipToMap(original);
+    if (original.error) return await fail(`original.zip could not be read from storage: ${original.error}`);
+    if (!original.bytes) return await fail("original.zip is missing from storage — recreate the run.");
+    const originalMap = unzipToMap(original.bytes);
     let seedMap = originalMap;
     if (run.conversation_id) {
       const prior = await download(admin, resultZipPath(run.id));
-      if (prior) seedMap = unzipToMap(prior);
+      if (prior.bytes) seedMap = unzipToMap(prior.bytes);
     }
     // ONE materialize: the scratch dir is created here and its path handed to
     // the driver — materialize wipes the dir, so a second call would destroy
     // the seeded files (fsWorkspace, Task 6).
-    const cwd = await deps.workspace.materialize(seedMap, run.id);
+    const cwd = await deps.workspace.materialize(seedMap, wsKey);
 
     const items = ((ticket.items as { body: string; sort: number }[] | null) ?? []);
     const prompt = buildTaskPrompt({
@@ -179,25 +209,39 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
       if (!owned) cancelled = true;
     };
 
-    const outcome = await deps.driver(
-      {
-        cwd,
-        prompt,
-        conversationId: run.conversation_id,
-        timeoutMs: AGY_TIMEOUT_MS,
-        shouldCancel: () => cancelled,
-      },
-      (e) => {
-        const line = summarizeEventForTail(e);
-        if (line) {
-          tail += (tail ? "\n" : "") + line;
-          flush().catch(() => {});
-        }
-      },
-    );
+    // Keepalive: agy can run for minutes without emitting an event, and the
+    // stale-reclaim predicate reads updated_at. This guarded no-field patch
+    // (it touches ONLY updated_at) keeps a live run visibly alive — so it can
+    // never be reclaimed as stale — and doubles as the discard listener
+    // between events: a missed patch flips `cancelled`, and shouldCancel
+    // kills the child.
+    const keepalive = setInterval(() => {
+      patch({}).then((owned) => { if (!owned) cancelled = true; }).catch(() => {});
+    }, KEEPALIVE_MS);
+    let outcome: AgyRunOutcome;
+    try {
+      outcome = await deps.driver(
+        {
+          cwd,
+          prompt,
+          conversationId: run.conversation_id,
+          timeoutMs: AGY_TIMEOUT_MS,
+          shouldCancel: () => cancelled,
+        },
+        (e) => {
+          const line = summarizeEventForTail(e);
+          if (line) {
+            tail += (tail ? "\n" : "") + line;
+            flush().catch(() => {});
+          }
+        },
+      );
+    } finally {
+      clearInterval(keepalive);
+    }
     await flush(true);
     if (cancelled) {
-      await deps.workspace.cleanup(run.id).catch(() => {});
+      await deps.workspace.cleanup(wsKey).catch(() => {});
       return { picked: true, runId: run.id, outcome: "superseded" };
     }
 
@@ -207,7 +251,7 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
       return await fail(`Antigravity reported an error: ${outcome.result.error ?? "unknown"}`);
     }
 
-    const edited = await deps.workspace.collect(run.id);
+    const edited = await deps.workspace.collect(wsKey);
     const harvested = harvestChanges(originalMap, edited);
     if (!harvested.ok) return await fail(harvested.error);
 
@@ -226,7 +270,7 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
       output_tail: tail.slice(-TAIL_MAX_CHARS),
     });
     if (!owned) {
-      await deps.workspace.cleanup(run.id).catch(() => {});
+      await deps.workspace.cleanup(wsKey).catch(() => {});
       return { picked: true, runId: run.id, outcome: "superseded" };
     }
 
@@ -246,11 +290,13 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
         {
           title: "AI site edit ready for review",
           body: `${Object.keys(harvested.changes).length} file(s) changed — review and deploy from the ticket.`,
-          dedupKey: `site_agent_run_ready:${run.id}`, targetUrl: `/tickets/${run.ticket_id}`,
+          // Per-cycle dedup (the :iso suffix): a revise cycle's second "ready"
+          // bell must not be swallowed by the first cycle's dedup row.
+          dedupKey: `site_agent_run_ready:${run.id}:${iso()}`, targetUrl: `/tickets/${run.ticket_id}`,
         });
     } catch { /* the review row is the source of truth */ }
 
-    await deps.workspace.cleanup(run.id).catch(() => {});
+    await deps.workspace.cleanup(wsKey).catch(() => {});
     return { picked: true, runId: run.id, outcome: "review" };
   } catch (e) {
     return await fail(e instanceof Error ? e.message : "The agent worker crashed unexpectedly.");

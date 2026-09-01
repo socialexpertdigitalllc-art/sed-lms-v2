@@ -56,8 +56,16 @@ export const TAIL_MAX_CHARS = 2048;
  *  but never write per-chunk. */
 export const PROGRESS_THROTTLE_MS = 2500;
 /** A `running` run whose row hasn't moved for this long is reclaimable — the
- *  worker died mid-run (box rebooted, process killed). */
-export const STALE_RUNNING_MS = 10 * 60_000;
+ *  worker died mid-run (box rebooted, process killed). MUST exceed
+ *  AGY_TIMEOUT_MS (15m) plus scheduling overhead: a LIVE run may legitimately
+ *  go the full agy wall-clock without a terminal write, and it must never
+ *  look stale merely because agy is slow. (The keepalive below keeps a live
+ *  row far fresher than this in practice; this wall is the backstop.) */
+export const STALE_RUNNING_MS = 20 * 60_000;
+/** Cadence of the worker's guarded keepalive patch while agy runs — keeps a
+ *  live run's updated_at moving (so it can't be reclaimed as stale) and
+ *  notices a dashboard discard even when agy emits no events for minutes. */
+export const KEEPALIVE_MS = 30_000;
 /** Hard wall-clock cap on one agy invocation. */
 export const AGY_TIMEOUT_MS = 15 * 60_000;
 /** Heartbeat is stale (worker offline) after this. */
