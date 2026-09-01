@@ -40,15 +40,31 @@ export type AgyEvent =
 const PARAM_VALUE_MAX = 60;
 const PARAMS_MAX = 120;
 
-/** tool_info.parameters → "value1, value2" (string values only, truncated). */
+/** tool_info.parameters → "value1, value2" (string values only, whitespace
+ *  flattened so the narration stays one line per event, truncated). */
 function formatToolParams(params: unknown): string | null {
   if (!params || typeof params !== "object") return null;
   const vals = Object.values(params as Record<string, unknown>)
     .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .map((v) => v.replace(/\s+/g, " ").trim())
     .map((v) => (v.length > PARAM_VALUE_MAX ? `${v.slice(0, PARAM_VALUE_MAX)}…` : v));
   if (vals.length === 0) return null;
   const joined = vals.join(", ");
   return joined.length > PARAMS_MAX ? `${joined.slice(0, PARAMS_MAX)}…` : joined;
+}
+
+/** Kill a child and — on Windows — its whole process tree: agy can have its
+ *  own children (browser tooling), and child.kill() alone would orphan them.
+ *  Best-effort; the child's own close event still resolves the caller. */
+function killTree(child: ReturnType<typeof spawn>): void {
+  try {
+    if (process.platform === "win32" && child.pid) {
+      spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" })
+        .on("error", () => { /* best-effort cleanup */ });
+    } else {
+      child.kill();
+    }
+  } catch { /* already gone */ }
 }
 
 export function parseAgyEventLine(line: string): AgyEvent | null {
@@ -99,7 +115,8 @@ export function parseAgyEventLine(line: string): AgyEvent | null {
  * tools announce once on ACTIVE as `▸ name (params)` and stay silent on
  * DONE/ERROR (the ACTIVE line already showed them). Bare 1.1.22-shaped steps
  * (no tool_name — error-run.ndjson) keep their v1 `[stepType]` label on DONE,
- * except user_input and textless agent_response which were always noise.
+ * except user_input, system_message, and textless agent_response — always
+ * noise ("system lines minimal", v2 spec F6).
  */
 export function summarizeEventForTail(e: AgyEvent): string | null {
   switch (e.kind) {
@@ -109,7 +126,7 @@ export function summarizeEventForTail(e: AgyEvent): string | null {
         const text = e.textDelta?.trim();
         return text ? text : null;
       }
-      if (e.stepType === "user_input") return null;
+      if (e.stepType === "user_input" || e.stepType === "system_message") return null;
       if (e.toolName) {
         return e.state === "ACTIVE" ? `▸ ${e.toolName}${e.toolParams ? ` (${e.toolParams})` : ""}` : null;
       }
@@ -173,16 +190,7 @@ export const runAgy: AgyDriver = (opts, onEvent) =>
     let killed = false;
     const kill = () => {
       killed = true;
-      try {
-        // agy can have its own children (browser tooling); on Windows,
-        // child.kill() would orphan them — take the whole tree down.
-        if (process.platform === "win32" && child.pid) {
-          spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" })
-            .on("error", () => { /* best-effort cleanup; the child's own close still resolves */ });
-        } else {
-          child.kill();
-        }
-      } catch { /* already gone */ }
+      killTree(child);
     };
     const timer = setTimeout(kill, opts.timeoutMs);
     const cancelPoll = opts.shouldCancel
@@ -231,12 +239,13 @@ export function parseModelsOutput(text: string): AgyModel[] {
  * Live model catalogue via `agy models` (worker box only). Returns [] on any
  * failure — spawn error, timeout, or unparseable output — so a broken agy
  * degrades to "Antigravity default" in the dialog instead of crashing a poll.
+ * `spawnImpl` is the test seam; production callers never pass it.
  */
-export function listAgyModels(agyBin?: string): Promise<AgyModel[]> {
+export function listAgyModels(agyBin?: string, spawnImpl: typeof spawn = spawn): Promise<AgyModel[]> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(agyBin ?? process.env.AGY_BIN ?? "agy", ["models"], {
+      child = spawnImpl(agyBin ?? process.env.AGY_BIN ?? "agy", ["models"], {
         windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
       });
     } catch { resolve([]); return; }
@@ -250,7 +259,7 @@ export function listAgyModels(agyBin?: string): Promise<AgyModel[]> {
       resolve(models);
     };
     const timer = setTimeout(() => {
-      try { child.kill(); } catch { /* already gone */ }
+      killTree(child);
       finish([]);
     }, 60_000);
 

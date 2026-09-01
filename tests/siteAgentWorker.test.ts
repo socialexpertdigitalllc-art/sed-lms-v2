@@ -197,6 +197,31 @@ describe("processNextAgentRun", () => {
     expect(fake.activity.some((a) => a.action === "site_agent.run.completed")).toBe(true);
   });
 
+  it("the tail carries the final message ONCE when result.response echoes the last text delta", async () => {
+    // agy's result.response duplicates the closing agent_response text_delta
+    // verbatim (both real success captures) — the tail must not say it twice.
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+
+    const out = await processNextAgentRun(h.deps(async (_opts, onEvent) => {
+      onEvent({ kind: "init", conversationId: "conv-1", permissionMode: "always-proceed" });
+      onEvent({ kind: "step", stepType: "agent_response", state: "DONE", index: 1, toolName: null, toolParams: null, textDelta: "All done.\n" });
+      h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+      const result = {
+        kind: "result" as const, status: "SUCCESS" as const, response: "All done.", error: null,
+        usage: null, numTurns: 1, durationSeconds: 2,
+      };
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "conv-1", killed: false };
+    }));
+
+    expect(out).toMatchObject({ picked: true, runId: "run-1", outcome: "review" });
+    const tail = String(fake.runs["run-1"].output_tail ?? "");
+    expect(tail).toContain("All done.");
+    expect(tail.split("All done.").length - 1).toBe(1);
+  });
+
   it("does nothing when no run is eligible", async () => {
     const fake = makeFakeAdmin({});
     const h = makeHarness(fake);

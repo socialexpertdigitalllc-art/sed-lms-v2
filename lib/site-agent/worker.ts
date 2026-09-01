@@ -230,10 +230,16 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
         },
         (e) => {
           const line = summarizeEventForTail(e);
-          if (line) {
-            tail += (tail ? "\n" : "") + line;
-            flush().catch(() => {});
-          }
+          if (!line) return;
+          // agy's result.response echoes the closing agent_response text_delta
+          // verbatim (both real success captures) — skip a line whose trimmed
+          // text is exactly what the tail already ends with, at a chunk
+          // boundary. Lives here so summarizeEventForTail stays pure.
+          const t = line.trim();
+          const prior = tail.trimEnd();
+          if (t && (prior === t || prior.endsWith("\n" + t))) return;
+          tail += (tail ? "\n" : "") + line;
+          flush().catch(() => {});
         },
       );
     } finally {

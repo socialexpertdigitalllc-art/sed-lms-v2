@@ -2,8 +2,10 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import type { spawn } from "node:child_process";
 import {
-  parseAgyEventLine, summarizeEventForTail, parseModelsOutput, buildAgyArgs,
+  parseAgyEventLine, summarizeEventForTail, parseModelsOutput, buildAgyArgs, listAgyModels,
 } from "@/lib/site-agent/agy";
 
 const lines = (f: string) =>
@@ -99,6 +101,16 @@ describe("parseAgyEventLine — 1.1.23 capture (tool_name / tool_info / text_del
     expect(p).not.toContain("true");
   });
 
+  it("multi-line param values are flattened to a single line", () => {
+    // The narration invariant is one line per event; a param carrying
+    // newlines/tabs (file content, scripts) must not break it.
+    const e = step({
+      step_type: "tool", state: "ACTIVE", step_index: 1, tool_name: "write_to_file",
+      tool_info: { name: "write_to_file", parameters: { Content: "line one\n  line two\t\tend" } },
+    });
+    expect(e.kind === "step" && e.toolParams).toBe("line one line two end");
+  });
+
   it("a tool step with no string params yields toolParams null", () => {
     const e = step({
       step_type: "tool", state: "ACTIVE", step_index: 1, tool_name: "wait_5_seconds",
@@ -111,7 +123,7 @@ describe("parseAgyEventLine — 1.1.23 capture (tool_name / tool_info / text_del
 });
 
 describe("summarizeEventForTail", () => {
-  it("narrates the 1.1.23 capture: tool lines with params, real agent text, no bare labels", () => {
+  it("narrates the 1.1.23 capture: tool lines with params, real agent text, and NO bracket labels of any kind", () => {
     const evs = lines("success-run-1123.ndjson").map(parseAgyEventLine);
     const tails = evs.map((e) => (e ? summarizeEventForTail(e) : null)).filter(Boolean) as string[];
     const joined = tails.join("\n");
@@ -120,6 +132,7 @@ describe("summarizeEventForTail", () => {
     expect(joined).not.toContain("[tool]");
     expect(joined).not.toContain("[agent_response]");
     expect(joined).not.toContain("[user_input]");
+    expect(joined).not.toContain("[system_message]");
   });
 
   it("narrates the 1.1.22 success capture the same way (it carries tool_name too)", () => {
@@ -163,13 +176,19 @@ describe("summarizeEventForTail", () => {
     expect(summarizeEventForTail(err)).toBeNull();
   });
 
-  it("legacy 1.1.22-shaped steps (no toolName) keep their v1 [stepType] label on DONE", () => {
+  it("legacy 1.1.22-shaped steps (no toolName) keep their v1 [stepType] label on DONE — except pure noise types", () => {
     const legacyTool = step({ step_type: "tool", state: "DONE", step_index: 1 });
     expect(summarizeEventForTail(legacyTool)).toBe("[tool]");
     const legacyCall = step({ step_type: "tool_call", state: "DONE", step_index: 1 });
     expect(summarizeEventForTail(legacyCall)).toBe("[tool_call]");
     const legacyActive = step({ step_type: "tool", state: "ACTIVE", step_index: 1 });
     expect(summarizeEventForTail(legacyActive)).toBeNull();
+    // system_message and user_input are noise in every shape ("system lines
+    // minimal" per the v2 spec) — silent even on bare DONE steps.
+    const sys = step({ step_type: "system_message", state: "DONE", step_index: 5 });
+    expect(summarizeEventForTail(sys)).toBeNull();
+    const user = step({ step_type: "user_input", state: "DONE", step_index: 0 });
+    expect(summarizeEventForTail(user)).toBeNull();
   });
 
   it("agent_response text passes through trimmed; empty/absent is silent; user_input is silent", () => {
@@ -254,5 +273,52 @@ describe("parseModelsOutput", () => {
     expect(parseModelsOutput("Fetching available models...\r\nm1\tModel One\r\n")).toEqual([
       { id: "m1", label: "Model One" },
     ]);
+  });
+});
+
+describe("listAgyModels", () => {
+  /** A stand-in child: enough surface for listAgyModels (stdout/stderr
+   *  emitters, kill, pid) driven by a per-test script. */
+  class FakeChild extends EventEmitter {
+    stdout = new EventEmitter();
+    stderr = new EventEmitter();
+    pid = 4242;
+    kill() { return true; }
+  }
+  const spawnScript = (script: (c: FakeChild) => void): typeof spawn =>
+    ((() => {
+      const c = new FakeChild();
+      setImmediate(() => script(c));
+      return c;
+    }) as unknown as typeof spawn);
+
+  it("collects chunked TSV stdout and parses it", async () => {
+    const models = await listAgyModels("agy", spawnScript((c) => {
+      c.stdout.emit("data", Buffer.from("Fetching available models...\n"));
+      c.stdout.emit("data", Buffer.from("m1\tModel One\nm2\tModel"));
+      c.stdout.emit("data", Buffer.from(" Two\n")); // a chunk boundary mid-line
+      c.emit("close", 0);
+    }));
+    expect(models).toEqual([
+      { id: "m1", label: "Model One" },
+      { id: "m2", label: "Model Two" },
+    ]);
+  });
+
+  it("a spawn error yields [] and never rejects — even when close fires afterwards", async () => {
+    const models = await listAgyModels("agy", spawnScript((c) => {
+      c.emit("error", new Error("spawn agy ENOENT"));
+      c.emit("close", null); // modern Node fires both; must not double-settle
+    }));
+    expect(models).toEqual([]);
+  });
+
+  it("a nonzero exit with garbage stdout yields []", async () => {
+    const models = await listAgyModels("agy", spawnScript((c) => {
+      c.stdout.emit("data", Buffer.from("agy: unexpected error\nstack trace here\n"));
+      c.stderr.emit("data", Buffer.from("boom\n"));
+      c.emit("close", 1);
+    }));
+    expect(models).toEqual([]);
   });
 });
