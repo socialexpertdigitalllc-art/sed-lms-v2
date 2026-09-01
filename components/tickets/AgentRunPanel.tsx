@@ -208,7 +208,11 @@ export function AgentRunPanel({
 
   const htmlPages = useMemo(() => {
     const pages = new Set<string>(["index.html"]);
-    for (const f of Object.keys(run?.files ?? {})) if (/\.html?$/i.test(f)) pages.add(f);
+    for (const [f, chg] of Object.entries(run?.files ?? {})) {
+      // A DELETED page is gone from the result zip — offering it would only
+      // 404 inside the preview iframe.
+      if (/\.html?$/i.test(f) && chg.action !== "delete") pages.add(f);
+    }
     return [...pages].sort();
   }, [run?.files]);
 
@@ -448,6 +452,16 @@ export function AgentRunPanel({
 
       {run?.status === "review" ? (
         <div className="mt-3 space-y-3">
+          {run.error ? (
+            /* A failed approve rolls the run back to review with `error` set —
+               without this card the only trace was a toast long since gone. */
+            <div
+              data-testid="sa-review-error"
+              className="rounded-md border border-dropped-bg bg-dropped-bg/40 p-2 text-xs text-dropped-fg"
+            >
+              The last deploy attempt failed: {run.error}
+            </div>
+          ) : null}
           {run.summary ? <p className="text-sm text-text">{run.summary}</p> : null}
 
           <div data-testid="sa-files" className="space-y-1">

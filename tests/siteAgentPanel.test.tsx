@@ -346,6 +346,89 @@ describe("AgentRunPanel", () => {
     }
   });
 
+  it("review: surfaces a rolled-back deploy error, and only when there is one", async () => {
+    // A failed approve rolls the run back to review with `error` set — the
+    // panel must show it, not just the (long-gone) toast.
+    const withError = runRow({ error: "override failed: extract" });
+    stubFetchRoutes((url, init) => {
+      if (url === LIST_URL && method(init) === "GET") return { body: { runs: [withError] } };
+      if (url === detailUrl("run-1") && method(init) === "GET") return { body: { run: withError, workerOnline: true } };
+      return null;
+    });
+    mount();
+
+    const card = await screen.findByTestId("sa-review-error");
+    expect(card).toHaveTextContent(/last deploy attempt failed/i);
+    expect(card).toHaveTextContent("override failed: extract");
+
+    cleanup();
+
+    // No error → no card (a plain review run stays clean).
+    const clean = runRow();
+    stubFetchRoutes((url, init) => {
+      if (url === LIST_URL && method(init) === "GET") return { body: { runs: [clean] } };
+      if (url === detailUrl("run-1") && method(init) === "GET") return { body: { run: clean, workerOnline: true } };
+      return null;
+    });
+    mount();
+    await screen.findByTestId("sa-files");
+    expect(screen.queryByTestId("sa-review-error")).not.toBeInTheDocument();
+  });
+
+  it("review: leaves deleted pages out of the preview select — previewing one only 404s", async () => {
+    const review = runRow({
+      files: {
+        "index.html": { action: "edit", bytes: 2048 },
+        "old.html": { action: "delete", bytes: 900 },
+      },
+    });
+    stubFetchRoutes((url, init) => {
+      if (url === LIST_URL && method(init) === "GET") return { body: { runs: [review] } };
+      if (url === detailUrl("run-1") && method(init) === "GET") return { body: { run: review, workerOnline: true } };
+      return null;
+    });
+    mount();
+
+    await screen.findByTestId("sa-preview-frame");
+    const select = screen.getByRole("combobox");
+    expect(within(select).getByRole("option", { name: "index.html" })).toBeInTheDocument();
+    expect(within(select).queryByRole("option", { name: "old.html" })).not.toBeInTheDocument();
+    // The deleted file still shows in the CHANGE list — it is part of the review.
+    expect(within(screen.getByTestId("sa-files")).getByText("old.html")).toBeInTheDocument();
+  });
+
+  it("deploying: offers Stop once the deploy has been wedged for over ten minutes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T10:11:00.000Z")); // updated_at + 11m
+    const deploying = runRow({ status: "deploying" });
+    stubFetchRoutes((url, init) => {
+      if (url === LIST_URL && method(init) === "GET") return { body: { runs: [deploying] } };
+      if (url === detailUrl("run-1") && method(init) === "GET") return { body: { run: deploying, workerOnline: true } };
+      return null;
+    });
+    mount();
+    await flush();
+
+    expect(screen.getByText(new RegExp(`Deploying to ${HOST}`))).toBeInTheDocument();
+    expect(screen.getByTestId("sa-discard")).toBeInTheDocument();
+  });
+
+  it("deploying: shows no Stop while the deploy is fresh — it must be left to finish", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T10:01:00.000Z")); // updated_at + 1m
+    const deploying = runRow({ status: "deploying" });
+    stubFetchRoutes((url, init) => {
+      if (url === LIST_URL && method(init) === "GET") return { body: { runs: [deploying] } };
+      if (url === detailUrl("run-1") && method(init) === "GET") return { body: { run: deploying, workerOnline: true } };
+      return null;
+    });
+    mount();
+    await flush();
+
+    expect(screen.getByText(new RegExp(`Deploying to ${HOST}`))).toBeInTheDocument();
+    expect(screen.queryByTestId("sa-discard")).not.toBeInTheDocument();
+  });
+
   it("declining the discard confirm sends nothing", async () => {
     const fetchMock = stubFetchRoutes((url, init) => {
       if (url === LIST_URL && method(init) === "GET") return { body: { runs: [runRow()] } };
