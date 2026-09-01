@@ -189,6 +189,26 @@ export const NOTIFICATION_EVENTS = [
     availableRoles: [],
     timingMode: "delay",
   },
+  {
+    key: "site_agent_run_ready",
+    label: "AI site edit ready for review",
+    description: "The AI agent finished editing a site from a ticket — review and deploy.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: ["ticket_assignee", "ticket_creator"],
+    timingMode: "delay",
+  },
+  {
+    key: "site_agent_run_failed",
+    label: "AI site edit failed",
+    description: "The AI agent could not complete a ticket's site edit.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: ["ticket_assignee"],
+    timingMode: "delay",
+  },
 ] as const;
 
 export type NotificationEventKey = (typeof NOTIFICATION_EVENTS)[number]["key"];
