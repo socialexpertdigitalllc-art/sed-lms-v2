@@ -114,7 +114,7 @@ vi.mock("@/lib/site-studio/deploy/protected", () => ({ isProtectedDomain: liveMo
 
 import { POST as processPOST } from "@/app/api/site-agent/process/route";
 import { agentRunAccess } from "@/lib/site-agent/access";
-import { POST as createRunPOST } from "@/app/api/tickets/[id]/agent-runs/route";
+import { POST as createRunPOST, GET as listRunsGET } from "@/app/api/tickets/[id]/agent-runs/route";
 import { GET as pollGET } from "@/app/api/site-agent/runs/[id]/route";
 import { NOTIFICATION_EVENTS } from "@/lib/notifications/events";
 
@@ -314,6 +314,37 @@ describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
     expect(res.status).toBe(502);
     const upd = adminState.updates.find((u) => u.table === "site_agent_runs");
     expect(upd?.values).toMatchObject({ status: "failed" });
+  });
+
+  it("403s an out-of-scope tickets.resolve caller before any fetch", async () => {
+    adminState.ticket = { ...adminState.ticket!, assigned_to: "other-dev" };
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(403);
+    expect(liveMock.fetchLiveSiteZip).not.toHaveBeenCalled();
+    expect(adminState.inserts).toHaveLength(0);
+  });
+});
+
+describe("GET /api/tickets/[id]/agent-runs (run history)", () => {
+  beforeEach(() => {
+    accessState.user = { id: "dev-1" };
+    accessState.perms = new Set(["tickets.resolve"]);
+    adminState.reset();
+    // Out of scope for dev-1: not creator, not assignee, lead not in scope.
+    adminState.ticket = { id: "t-1", created_by: "sales-1", lead_id: "lead-1", assigned_to: "other-dev" };
+    adminState.runsList = [{ id: "run-1", status: "review" }];
+  });
+
+  it("403s a tickets.resolve caller whose ticket is out of scope", async () => {
+    const res = await listRunsGET(new Request("http://x"), ticketCtx());
+    expect(res.status).toBe(403);
+  });
+
+  it("studio.manage bypasses scoping and gets the runs", async () => {
+    accessState.perms = new Set(["studio.manage"]);
+    const res = await listRunsGET(new Request("http://x"), ticketCtx());
+    expect(res.status).toBe(200);
+    expect((await res.json()).runs).toEqual([{ id: "run-1", status: "review" }]);
   });
 });
 

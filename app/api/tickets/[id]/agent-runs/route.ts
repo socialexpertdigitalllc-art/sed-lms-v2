@@ -81,7 +81,8 @@ export async function POST(_req: Request, ctx: Ctx) {
     .from(AGENT_SITES_BUCKET)
     .upload(originalZipPath(run.id as string), prepared.zip, { upsert: true, contentType: "application/zip" });
   if (upErr) {
-    await admin.from("site_agent_runs").update({ status: "failed", error: `Could not store the site copy: ${upErr.message}` }).eq("id", run.id);
+    const { error: flipErr } = await admin.from("site_agent_runs").update({ status: "failed", error: `Could not store the site copy: ${upErr.message}` }).eq("id", run.id);
+    if (flipErr) console.warn(`[site-agent] failed to mark run ${run.id} failed after upload error: ${flipErr.message}`);
     return NextResponse.json({ error: `Could not store the site copy: ${upErr.message}` }, { status: 502 });
   }
 
@@ -92,7 +93,9 @@ export async function POST(_req: Request, ctx: Ctx) {
   return NextResponse.json({ run }, { status: 201 });
 }
 
-/** GET — this ticket's runs, newest first (the panel's history list). */
+/** GET — this ticket's runs, newest first (the panel's history list). Scoped
+ *  exactly like POST: a tickets.resolve holder only sees runs on tickets they
+ *  could act on; studio.manage sees everything. */
 export async function GET(_req: Request, ctx: Ctx) {
   const { id: ticketId } = await ctx.params;
   const supabase = await createClient();
@@ -101,6 +104,18 @@ export async function GET(_req: Request, ctx: Ctx) {
   const perms = await getUserPermissions(user.id);
   if (!ALLOWED_PERMS.some((p) => perms.has(p))) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const admin = createAdminClient();
+  const { data: ticket } = await admin
+    .from("lead_tickets")
+    .select("id, created_by, lead_id, assigned_to")
+    .eq("id", ticketId)
+    .maybeSingle();
+  if (!ticket) return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
+  if (!perms.has("studio.manage")) {
+    const scope = await allowedTicketScope(admin, user.id, perms);
+    if (!canActOnTicket(ticket, user.id, scope)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
   const { data, error } = await admin
     .from("site_agent_runs")
     .select("id, status, site_host, files, summary, error, created_by, created_at, updated_at")
