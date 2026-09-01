@@ -15,6 +15,19 @@ function asTicketData(s: string): string {
   return s.replace(/-{3,}/g, "--");
 }
 
+/**
+ * The DEFAULT fenced-block content for a ticket run — title plus a numbered
+ * checklist (or the placeholder line for a title-only ticket). Exported so
+ * the panel's pre-send dialog prefills EXACTLY what the worker would compose;
+ * fence neutralization is applied by the caller, on the whole block.
+ */
+export function composeTicketTask(title: string, items: string[]): string {
+  const list = items.length
+    ? items.map((t, i) => `${i + 1}. ${t}`).join("\n")
+    : "(no checklist items — the title is the whole request)";
+  return `Title: ${title}\nChecklist:\n${list}`;
+}
+
 export function buildTaskPrompt(args: {
   businessName: string;
   ticketTitle: string;
@@ -28,13 +41,9 @@ export function buildTaskPrompt(args: {
 }): string {
   const custom = typeof args.taskText === "string" && args.taskText.trim() !== "" ? args.taskText : null;
 
-  const items = args.ticketItems.length
-    ? args.ticketItems.map((t, i) => `${i + 1}. ${asTicketData(t)}`).join("\n")
-    : "(no checklist items — the title is the whole request)";
-
   const ticketBlock = custom
     ? [asTicketData(custom)]
-    : [`Title: ${asTicketData(args.ticketTitle)}`, `Checklist:`, items];
+    : [asTicketData(composeTicketTask(args.ticketTitle, args.ticketItems))];
 
   const revise = args.instructions
     ? `\n--- FOLLOW-UP FROM THE DEVELOPER (apply on top of the ticket) ---\n${args.instructions}\n`

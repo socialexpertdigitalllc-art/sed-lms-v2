@@ -309,6 +309,8 @@ export function TicketDetail({
         {/* AI developer — ticket-driven site edits, reviewed before deploy */}
         <AgentRunPanel
           ticketId={ticket.id}
+          ticketTitle={ticket.title ?? ""}
+          items={items}
           websiteLink={lead.website_link}
           canViewAgentRuns={canViewAgentRuns}
           canResolve={canResolve}

@@ -18,12 +18,14 @@ import { btnGhostSm, btnPrimary, btnSecondarySm } from "@/components/common/butt
 import { useToast } from "@/components/common/Toast";
 import { formatDateTime } from "@/lib/leads/format";
 import { lineDiff, type DiffOp } from "@/lib/site-agent/diff";
-import { isActiveStatus, type AgentFileChange, type AgentRunStatus } from "@/lib/site-agent/types";
+import { composeTicketTask } from "@/lib/site-agent/task";
+import { isActiveStatus, type AgentFileChange, type AgentRunStatus, type AgyModel } from "@/lib/site-agent/types";
 import { encodePathSegments } from "@/lib/site-builder/preview";
 import { cn } from "@/lib/utils";
 
 /** The run as the panel sees it — the ticket list rows carry a SUBSET of the
- *  columns (no output_tail), the detail poll carries them all. */
+ *  columns (no output_tail, no v2 scope/task/model), the detail poll carries
+ *  them all. */
 interface PanelRun {
   id: string;
   status: AgentRunStatus;
@@ -34,6 +36,31 @@ interface PanelRun {
   error: string | null;
   created_at: string;
   updated_at: string;
+  /** v2: null/absent = whole ticket. */
+  item_ids?: string[] | null;
+  /** v2: the operator-edited task, sent verbatim to the worker. */
+  task_text?: string | null;
+  /** v2: agy model id; null = Antigravity default. */
+  model?: string | null;
+}
+
+/** A ticket change item as TicketDetail holds it — only what the dialog needs. */
+export interface AgentRunPanelItem {
+  id: string;
+  body: string;
+  is_done: boolean;
+}
+
+/** The pre-send dialog's state — non-null while it is open. `selected` is
+ *  kept in item order so the composed checklist and the POSTed item_ids read
+ *  the way the ticket does. `edited` is the operator's prompt lock: once they
+ *  type, selection changes stop re-composing the text. */
+interface DialogState {
+  selected: string[];
+  task: string;
+  edited: boolean;
+  /** "" = Antigravity default (no model sent). */
+  model: string;
 }
 
 type FileDiff =
@@ -62,6 +89,13 @@ const ACTION_TONE: Record<AgentFileChange["action"], PillTone> = {
  *  deploy is still live (double the approve route's maxDuration) and the run
  *  becomes stoppable again. */
 const DEPLOYING_STALE_MS = 10 * 60_000;
+
+/** The worker's own fallback for a title-less ticket (lib/site-agent/worker.ts). */
+const UNTITLED = "Untitled change request";
+
+const labelCls = "mb-1 block text-xs font-medium text-text-muted";
+const fieldCls =
+  "w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent";
 
 function kb(bytes: number): string {
   return `${Math.max(0.1, Math.round((bytes / 1024) * 10) / 10).toFixed(1)} KB`;
@@ -96,15 +130,41 @@ function Tail({ tail }: { tail: string }) {
   );
 }
 
+/** v2: what this run was asked to do — the chosen model (label when the
+ *  worker still publishes that id, else the raw id) and, for a scoped ticket
+ *  run, how many of the ticket's changes it covers. Nothing to say → nothing
+ *  rendered, so a v1 run's header looks exactly as before. */
+function RunMeta({ run, models, totalItems }: { run: PanelRun; models: AgyModel[]; totalItems: number | null }) {
+  const modelLabel = run.model ? models.find((m) => m.id === run.model)?.label ?? run.model : null;
+  const scope =
+    totalItems !== null && Array.isArray(run.item_ids)
+      ? `Scope: ${run.item_ids.length} of ${totalItems} changes`
+      : null;
+  if (!modelLabel && !scope) return null;
+  return (
+    <p data-testid="sa-run-meta" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-faint">
+      {modelLabel ? <span>Model: {modelLabel}</span> : null}
+      {scope ? <span>{scope}</span> : null}
+    </p>
+  );
+}
+
 /**
- * The ticket screen's "AI developer" panel: Send to AI creates an agent run
- * for this ticket's site, the panel then follows it live (2s poll while
+ * The "AI developer" panel — on a TICKET (Send to AI creates a run for the
+ * ticket's site) or, v2, on a LEAD ("AI edit site": a ticketless direct
+ * change). Either way the panel follows the run live (2s poll while
  * queued/running/deploying, 10s while review/failed, none once terminal) and
  * gates every change behind a human review — diff per file, sandboxed
  * preview, then Approve & Deploy / Request changes / Discard.
  *
+ * v2: Send opens a pre-send dialog first — which undone items to include,
+ * the task text (prefilled from the selection, editable), and the model from
+ * the worker's live-published list. Exactly one of `ticketId` / `leadId` is
+ * given; lead mode has no items section, requires the task text, and gates
+ * only on `canResolve` + a website link (no ticket status).
+ *
  * All routes it talks to are built and tested elsewhere; this component only
- * renders their contract. Fetch errors toast and never crash the ticket page.
+ * renders their contract. Fetch errors toast and never crash the page.
  *
  * Without `canViewAgentRuns` (tickets.resolve or studio.manage, resolved by
  * the server page) the panel renders nothing and fetches nothing — its routes
@@ -112,22 +172,42 @@ function Tail({ tail }: { tail: string }) {
  */
 export function AgentRunPanel({
   ticketId,
+  leadId,
+  ticketTitle,
+  items,
   websiteLink,
   canViewAgentRuns,
   canResolve,
   ticketStatus,
 }: {
-  ticketId: string;
+  /** Ticket mode — exactly one of ticketId / leadId. */
+  ticketId?: string;
+  /** Lead mode (ticketless runs) — exactly one of ticketId / leadId. */
+  leadId?: string;
+  /** Ticket mode: the title the default task is composed from. */
+  ticketTitle?: string;
+  /** Ticket mode: the ticket's items — the dialog offers the undone ones. */
+  items?: AgentRunPanelItem[];
   websiteLink: string | null;
   canViewAgentRuns: boolean;
   canResolve: boolean;
-  ticketStatus: string;
+  /** Ticket mode: Send is offered only while Assigned / In Progress. */
+  ticketStatus?: string;
 }) {
   const { toast } = useToast();
+  const leadMode = !ticketId;
+  const listUrl = ticketId
+    ? `/api/tickets/${ticketId}/agent-runs`
+    : leadId
+      ? `/api/leads/${leadId}/agent-runs`
+      : null;
+
   const [loaded, setLoaded] = useState(false);
   const [runs, setRuns] = useState<PanelRun[]>([]);
   const [run, setRun] = useState<PanelRun | null>(null);
   const [workerOnline, setWorkerOnline] = useState(true);
+  const [models, setModels] = useState<AgyModel[]>([]);
+  const [dialog, setDialog] = useState<DialogState | null>(null);
   const [sending, setSending] = useState(false);
   const [approving, setApproving] = useState(false);
   const [discarding, setDiscarding] = useState(false);
@@ -140,20 +220,22 @@ export function AgentRunPanel({
   const [pickedPage, setPickedPage] = useState<{ key: string; page: string } | null>(null);
   const [fileDiffs, setFileDiffs] = useState<Record<string, FileDiff>>({});
 
-  // The ticket's runs, newest first. The newest still-active run is the
-  // panel's focus; failing that, the newest overall.
+  // The owner's runs, newest first. The newest still-active run is the
+  // panel's focus; failing that, the newest overall. The list response also
+  // carries the model catalogue — the dialog opens before any run exists.
   useEffect(() => {
-    if (!websiteLink || !canViewAgentRuns) return;
+    if (!websiteLink || !canViewAgentRuns || !listUrl) return;
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/tickets/${ticketId}/agent-runs`);
+        const res = await fetch(listUrl);
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.error ?? "Could not load the AI runs");
         if (cancelled) return;
         const list = (body.runs ?? []) as PanelRun[];
         setRuns(list);
         setRun(list.find((r) => isActiveStatus(r.status)) ?? list[0] ?? null);
+        if (Array.isArray(body.models)) setModels(body.models as AgyModel[]);
       } catch (e) {
         if (!cancelled) toast({ kind: "error", title: e instanceof Error ? e.message : "Could not load the AI runs" });
       } finally {
@@ -161,7 +243,7 @@ export function AgentRunPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [ticketId, websiteLink, canViewAgentRuns, toast]);
+  }, [listUrl, websiteLink, canViewAgentRuns, toast]);
 
   /**
    * The focus poll. Cadence follows the status — 2s while the worker owes us
@@ -192,6 +274,7 @@ export function AgentRunPanel({
         if (cancelled || !body.run) return;
         setRun(body.run as PanelRun);
         setWorkerOnline(body.workerOnline !== false);
+        if (Array.isArray(body.models)) setModels(body.models as AgyModel[]);
       } catch (e) {
         if (!cancelled) toast({ kind: "error", title: e instanceof Error ? e.message : "Could not check the AI run" });
       }
@@ -227,6 +310,16 @@ export function AgentRunPanel({
     [run?.files],
   );
 
+  /** The dialog only ever offers UNDONE items — done ones are neither shown
+   *  nor accepted by the create route. */
+  const undone = useMemo(() => (items ?? []).filter((i) => !i.is_done), [items]);
+  const title = ticketTitle?.trim() || UNTITLED;
+  /** The default task for a selection — exactly what the worker composes. */
+  const compose = (selected: string[]) =>
+    composeTicketTask(title, undone.filter((i) => selected.includes(i.id)).map((i) => i.body));
+  /** A seeded model id is only preselected while the worker still publishes it. */
+  const knownModel = (id: string | null | undefined) => (id && models.some((m) => m.id === id) ? id : "");
+
   /** One review round = one result-zip version; the diff cache and both
    *  selections hang off this key, so a revise round starts clean while the
    *  stale entries are simply never read again. */
@@ -237,17 +330,74 @@ export function AgentRunPanel({
       ? pickedPage.page
       : "index.html";
 
-  /** Send to AI — also the failed run's Try again (a retry IS a new run). */
+  /**
+   * Open the pre-send dialog. Fresh: every undone item selected, the task
+   * composed from them, the default model. Seeded from a failed run (Try
+   * again): its scope narrowed to what is STILL undone, its task text (and
+   * the edited lock with it), its model if still published — a retry IS a
+   * new run, and after "quota exhausted" switching model is the whole point.
+   */
+  function openDialog(seed: PanelRun | null) {
+    if (leadMode) {
+      setDialog({ selected: [], task: seed?.task_text ?? "", edited: false, model: knownModel(seed?.model) });
+      return;
+    }
+    const seedIds = seed?.item_ids;
+    const selected =
+      Array.isArray(seedIds) && seedIds.length
+        ? undone.filter((i) => seedIds.includes(i.id)).map((i) => i.id)
+        : undone.map((i) => i.id);
+    const custom = seed?.task_text?.trim() ? seed.task_text : null;
+    setDialog({
+      selected,
+      task: custom ?? compose(selected),
+      edited: custom !== null,
+      model: knownModel(seed?.model),
+    });
+  }
+
+  function toggleItem(id: string) {
+    setDialog((d) => {
+      if (!d) return d;
+      const selected = d.selected.includes(id)
+        ? d.selected.filter((x) => x !== id)
+        : undone.filter((i) => i.id === id || d.selected.includes(i.id)).map((i) => i.id);
+      return { ...d, selected, task: d.edited ? d.task : compose(selected) };
+    });
+  }
+
+  /**
+   * The dialog's Send. Body normalization is the create routes' contract:
+   * item_ids only for a real SUBSET of the undone items (all of them = whole
+   * ticket = no key), task_text only once the operator edited it (lead mode:
+   * always — there is no ticket to compose from), model only when not the
+   * default. A failed create toasts and leaves the dialog open to fix.
+   */
   async function send() {
+    if (!dialog || !listUrl) return;
+    const body: Record<string, unknown> = {};
+    if (leadMode) {
+      body.task_text = dialog.task;
+    } else {
+      if (undone.length > 0 && dialog.selected.length === 0) return;
+      if (undone.length > 0 && dialog.selected.length !== undone.length) body.item_ids = dialog.selected;
+      if (dialog.edited) body.task_text = dialog.task;
+    }
+    if (dialog.model) body.model = dialog.model;
     setSending(true);
     try {
-      const res = await fetch(`/api/tickets/${ticketId}/agent-runs`, { method: "POST" });
-      const body = await res.json().catch(() => ({}));
+      const res = await fetch(listUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const resBody = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast({ kind: "error", title: body.error ?? "Could not start the AI run" });
+        toast({ kind: "error", title: resBody.error ?? "Could not start the AI run" });
         return;
       }
-      const created = body.run as PanelRun;
+      const created = resBody.run as PanelRun;
+      setDialog(null);
       setRuns((prev) => [created, ...prev]);
       setWorkerOnline(true); // until the first poll says otherwise
       setRun(created);
@@ -366,14 +516,14 @@ export function AgentRunPanel({
     }
   }
 
-  if (!websiteLink) return null;
+  if (!websiteLink || !listUrl) return null;
   if (!canViewAgentRuns) return null;
   if (!loaded) return null;
 
   const busy = sending || approving || discarding || revising;
-  // The create route's own gate, mirrored: tickets only take a run while
-  // someone is actually working them.
-  const canSend = canResolve && (ticketStatus === "Assigned" || ticketStatus === "In Progress");
+  // The create routes' own gates, mirrored: a ticket only takes a run while
+  // someone is actually working it; a lead needs only the permission.
+  const canSend = canResolve && (leadMode || ticketStatus === "Assigned" || ticketStatus === "In Progress");
   const showSend = canSend && (!run || run.status === "discarded");
   if (!run && !canSend) return null;
 
@@ -383,6 +533,10 @@ export function AgentRunPanel({
   const deployingStale =
     run?.status === "deploying" && now - new Date(run.updated_at).getTime() > DEPLOYING_STALE_MS;
   const openDiffState = openFile ? fileDiffs[`${versionKey}:${openFile}`] : undefined;
+  const totalItems = leadMode ? null : (items ?? []).length;
+
+  const dialogNoItems = !leadMode && undone.length > 0 && dialog?.selected.length === 0;
+  const canDialogSend = !!dialog && !busy && !!dialog.task.trim() && !dialogNoItems;
 
   const stopBtn =
     canResolve && run ? (
@@ -404,14 +558,16 @@ export function AgentRunPanel({
         type="button"
         data-testid="sa-send"
         className={btnPrimary}
-        onClick={() => void send()}
+        onClick={() => openDialog(null)}
         disabled={busy}
       >
         {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-        Send to AI
+        {leadMode ? "AI edit site" : "Send to AI"}
       </button>
       <p className="text-xs text-text-muted">
-        The AI developer edits the site from this ticket — you review every change before it goes live.
+        {leadMode
+          ? "The AI developer edits this site from your description — you review every change before it goes live."
+          : "The AI developer edits the site from this ticket — you review every change before it goes live."}
       </p>
     </div>
   ) : null;
@@ -452,6 +608,7 @@ export function AgentRunPanel({
               running for {fmtElapsed(now - new Date(run.created_at).getTime())}
             </span>
           </p>
+          <RunMeta run={run} models={models} totalItems={totalItems} />
           <Tail tail={run.output_tail ?? ""} />
           {stopBtn}
         </div>
@@ -469,6 +626,7 @@ export function AgentRunPanel({
               The last deploy attempt failed: {run.error}
             </div>
           ) : null}
+          <RunMeta run={run} models={models} totalItems={totalItems} />
           {run.summary ? <p className="text-sm text-text">{run.summary}</p> : null}
 
           <div data-testid="sa-files" className="space-y-1">
@@ -579,13 +737,13 @@ export function AgentRunPanel({
                 </button>
               </div>
               <div>
-                <label htmlFor="sa-instructions" className="mb-1 block text-xs font-medium text-text-muted">
+                <label htmlFor="sa-instructions" className={labelCls}>
                   Request changes — sent back to the same AI conversation
                 </label>
                 <textarea
                   id="sa-instructions"
                   rows={2}
-                  className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent"
+                  className={fieldCls}
                   value={instructions}
                   onChange={(e) => setInstructions(e.target.value)}
                   placeholder="e.g. keep the new phone number, but also update it on the contact page"
@@ -615,7 +773,7 @@ export function AgentRunPanel({
             <>
               <p className="text-xs text-text-faint">
                 This deploy has not moved for over ten minutes — it likely died mid-flight. Stopping it frees the
-                ticket for a new run.
+                {leadMode ? " site" : " ticket"} for a new run.
               </p>
               {stopBtn}
             </>
@@ -633,7 +791,9 @@ export function AgentRunPanel({
           </p>
           {run.summary ? <p className="mt-1 text-text-muted">{run.summary}</p> : null}
           <p className="mt-1 text-xs text-text-faint">
-            To roll back, use Website updates → snapshots on this ticket.
+            {leadMode
+              ? "To roll back, use the snapshots on the deployments board."
+              : "To roll back, use Website updates → snapshots on this ticket."}
           </p>
         </div>
       ) : null}
@@ -651,7 +811,7 @@ export function AgentRunPanel({
               type="button"
               data-testid="sa-retry"
               className={cn(btnSecondarySm, "mt-2")}
-              onClick={() => void send()}
+              onClick={() => openDialog(run)}
               disabled={busy}
             >
               {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
@@ -683,6 +843,125 @@ export function AgentRunPanel({
             ))}
           </ul>
         </details>
+      ) : null}
+
+      {/* v2 — the pre-send dialog. Same shell as the ticket screen's own
+          confirm dialog (fixed overlay, bordered surface card). Rendered only
+          while open so its textarea/select never collide with the review
+          pane's own textbox/combobox. */}
+      {dialog ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={leadMode ? "AI edit site" : "Send to AI"}
+        >
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-border bg-surface p-5 shadow-lg">
+            <h3 className="text-sm font-semibold text-text">{leadMode ? "AI edit site" : "Send to AI"}</h3>
+            <p className="mt-1 text-sm text-text-muted">
+              {leadMode
+                ? "Describe the change for this site. You review every edit before it goes live."
+                : "Choose what to send, adjust the task if needed, and pick a model."}
+            </p>
+
+            {!leadMode && undone.length > 0 ? (
+              <fieldset className="mt-4">
+                <legend className={labelCls}>Changes to include</legend>
+                <div className="space-y-0.5">
+                  {undone.map((item) => (
+                    <label
+                      key={item.id}
+                      className="flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-1.5 text-sm hover:bg-surface-2"
+                    >
+                      <input
+                        type="checkbox"
+                        data-testid={`sa-item-${item.id}`}
+                        className="accent-accent mt-0.5 h-4 w-4 shrink-0"
+                        checked={dialog.selected.includes(item.id)}
+                        onChange={() => toggleItem(item.id)}
+                      />
+                      <span className="text-text">{item.body}</span>
+                    </label>
+                  ))}
+                </div>
+                {dialogNoItems ? <p className="mt-1 text-xs text-dropped-fg">Select at least one change.</p> : null}
+              </fieldset>
+            ) : null}
+
+            <div className="mt-4">
+              <label htmlFor="sa-task" className={labelCls}>
+                Task for the AI
+              </label>
+              <textarea
+                id="sa-task"
+                data-testid="sa-task"
+                rows={leadMode ? 5 : 6}
+                className={fieldCls}
+                value={dialog.task}
+                onChange={(e) => {
+                  const task = e.target.value;
+                  setDialog((d) => (d ? { ...d, task, edited: true } : d));
+                }}
+                placeholder={leadMode ? "Describe the change you want on this site…" : undefined}
+              />
+              {!leadMode ? (
+                <p className="mt-1 text-xs text-text-faint">
+                  {dialog.edited
+                    ? "Edited — sent to the AI exactly as written."
+                    : "Composed from the selected changes — edit it freely; your text is then sent as written."}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="mt-4">
+              <label htmlFor="sa-model" className={labelCls}>
+                Model
+              </label>
+              <select
+                id="sa-model"
+                data-testid="sa-model"
+                className={fieldCls}
+                value={dialog.model}
+                onChange={(e) => {
+                  const model = e.target.value;
+                  setDialog((d) => (d ? { ...d, model } : d));
+                }}
+              >
+                <option value="">Antigravity default</option>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              {models.length === 0 ? (
+                <p className="mt-1 text-xs text-text-faint">Model list appears once the worker publishes it.</p>
+              ) : null}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                data-testid="sa-dialog-cancel"
+                onClick={() => setDialog(null)}
+                disabled={sending}
+                className="rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="sa-dialog-send"
+                onClick={() => void send()}
+                disabled={!canDialogSend}
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+              >
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

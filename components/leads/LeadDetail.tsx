@@ -19,6 +19,7 @@ import { StatusChangeModal } from "./StatusChangeModal";
 import { DeleteLeadModal } from "./DeleteLeadModal";
 import { RecentFollowUps } from "./RecentFollowUps";
 import { TicketsCard } from "@/components/tickets/TicketsCard";
+import { AgentRunPanel } from "@/components/tickets/AgentRunPanel";
 import { SectionCard } from "@/components/forms/formShell";
 import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
 import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
@@ -90,6 +91,9 @@ export function LeadDetail({
   const canDeepseek = has("ai_tools.deepseek");
   const canQueue = canWebcraft || canDeepseek;
   const canTemplateGen = has("studio.manage");
+  /** Site-file upload + the AI developer share one gate — the same perms the
+   *  agent-run routes 403 everyone else on. */
+  const canSiteAgent = has("tickets.resolve") || has("studio.manage");
   const router = useRouter();
   const { toast } = useToast();
 
@@ -257,7 +261,7 @@ export function LeadDetail({
                         className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
                         iconSize={13}
                       />
-                      {(has("tickets.resolve") || has("studio.manage")) && (
+                      {canSiteAgent && (
                         <UploadSiteFilesButton
                           site={lead.website_link}
                           className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
@@ -293,6 +297,19 @@ export function LeadDetail({
                 <FieldRow label="Design reference sites" value="" />
               )}
             </div>
+            {/* AI developer, ticketless: direct edits on this site, reviewed
+                before deploy (v2 F5). Sits right under the website link and
+                its file buttons — the same gate as the upload icon. */}
+            {lead.website_link && canSiteAgent ? (
+              <div className="mt-4">
+                <AgentRunPanel
+                  leadId={lead.id}
+                  websiteLink={lead.website_link}
+                  canViewAgentRuns={canSiteAgent}
+                  canResolve={canSiteAgent}
+                />
+              </div>
+            ) : null}
           </SectionCard>
 
           <SectionCard n={2} icon={ClipboardList} title="Lead info" subtitle="Status, pricing & rating" done={false} delay={60}>
