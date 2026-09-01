@@ -59,12 +59,16 @@ const adminState = vi.hoisted(() => {
     inserts: [] as { table: string; values: Record<string, unknown> }[],
     updates: [] as { table: string; values: Record<string, unknown> }[],
     uploads: [] as { bucket: string; path: string }[],
+    removes: [] as { bucket: string; paths: string[] }[],
+    /** Interleaved op log — pins the upload-BEFORE-insert ordering. */
+    ops: [] as string[],
     client: null as unknown,
     reset() {
       state.ticket = null; state.run = null; state.activeRun = null;
       state.insertedRun = { id: "run-9" }; state.insertError = null;
       state.runsList = []; state.settings = null; state.uploadError = null;
       state.inserts = []; state.updates = []; state.uploads = [];
+      state.removes = []; state.ops = [];
     },
   };
   function query(table: string): Chain {
@@ -76,7 +80,7 @@ const adminState = vi.hoisted(() => {
       in: () => { usedIn = true; return q; },
       order: () => q,
       limit: () => q,
-      insert: (values) => { state.inserts.push({ table, values }); return q; },
+      insert: (values) => { state.inserts.push({ table, values }); state.ops.push(`insert:${table}`); return q; },
       update: (values) => { usedUpdate = true; state.updates.push({ table, values }); return q; },
       maybeSingle: async () => {
         if (table === "lead_tickets") return { data: state.ticket, error: null };
@@ -94,7 +98,8 @@ const adminState = vi.hoisted(() => {
     from: (table: string) => query(table),
     storage: {
       from: (bucket: string) => ({
-        upload: async (path: string) => { state.uploads.push({ bucket, path }); return { error: state.uploadError }; },
+        upload: async (path: string) => { state.uploads.push({ bucket, path }); state.ops.push("upload"); return { error: state.uploadError }; },
+        remove: async (paths: string[]) => { state.removes.push({ bucket, paths }); state.ops.push("remove"); return { data: null, error: null }; },
       }),
     },
   };
@@ -260,14 +265,20 @@ describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
     liveMock.prepareSiteZip.mockReturnValue({ ok: true, zip: new Uint8Array([80, 75, 3, 4]), files: 1 });
   });
 
-  it("creates a queued run bound to the lead's site and stores the original zip", async () => {
+  it("creates a queued run bound to the lead's site, storing the original zip BEFORE the row", async () => {
     const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.run).toBeTruthy();
     const ins = adminState.inserts.find((i) => i.table === "site_agent_runs");
     expect(ins?.values).toMatchObject({ ticket_id: "t-1", lead_id: "lead-1", site_host: "acme.dmviral.com", created_by: "dev-1" });
-    expect(adminState.uploads[0]).toMatchObject({ bucket: "agent-sites", path: "run-9/original.zip" });
+    // The id is minted app-side so the zip lands under it first — the worker's
+    // 20s poll must never claim a queued row whose original.zip isn't there yet.
+    const runId = ins?.values.id as string;
+    expect(runId).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
+    expect(adminState.uploads[0]).toEqual({ bucket: "agent-sites", path: `${runId}/original.zip` });
+    expect(adminState.ops.indexOf("upload")).toBeGreaterThanOrEqual(0);
+    expect(adminState.ops.indexOf("upload")).toBeLessThan(adminState.ops.indexOf("insert:site_agent_runs"));
     const log = adminState.inserts.find((i) => i.table === "activity_log");
     expect(log?.values).toMatchObject({ action: "site_agent.run.created" });
   });
@@ -308,12 +319,26 @@ describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
     expect(adminState.inserts.find((i) => i.table === "site_agent_runs")).toBeUndefined();
   });
 
-  it("502s on a storage failure and flips the inserted run to failed", async () => {
+  it("502s on a storage failure with NO insert ever attempted — no zombie queued row", async () => {
     adminState.uploadError = { message: "disk full" };
     const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
     expect(res.status).toBe(502);
-    const upd = adminState.updates.find((u) => u.table === "site_agent_runs");
-    expect(upd?.values).toMatchObject({ status: "failed" });
+    expect((await res.json()).error).toContain("disk full");
+    expect(adminState.inserts).toHaveLength(0);
+    expect(adminState.updates).toHaveLength(0);
+  });
+
+  it("409s when the row insert fails and removes the now-orphaned zip", async () => {
+    // The one-active-run 409 race lands here: zip uploaded, insert refused.
+    adminState.insertError = { message: "duplicate active run" };
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("duplicate active run");
+    const uploadedPath = adminState.uploads[0]?.path;
+    expect(uploadedPath).toMatch(/\/original\.zip$/);
+    expect(adminState.removes).toEqual([{ bucket: "agent-sites", paths: [uploadedPath] }]);
+    // Nothing after the failed insert ran — no activity log for a run that isn't.
+    expect(adminState.inserts.filter((i) => i.table === "activity_log")).toHaveLength(0);
   });
 
   it("403s an out-of-scope tickets.resolve caller before any fetch", async () => {

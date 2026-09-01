@@ -138,6 +138,9 @@ export default async function TicketDetailPage({
 
   const canAssign = perms.has("tickets.assign");
   const techs = canAssign ? await techMembers() : [];
+  // Mirrors the agent-runs routes' permission gate — viewers without it
+  // (sales, management) must not mount a panel whose every fetch 403s.
+  const canViewAgentRuns = perms.has("tickets.resolve") || perms.has("studio.manage");
 
   return (
     <TicketDetail
@@ -148,6 +151,7 @@ export default async function TicketDetailPage({
       techMembers={techs}
       canAssign={canAssign}
       canResolve={perms.has("tickets.resolve")}
+      canViewAgentRuns={canViewAgentRuns}
       isCreator={ticket.created_by === user.id}
       siteUpdates={siteUpdates}
     />

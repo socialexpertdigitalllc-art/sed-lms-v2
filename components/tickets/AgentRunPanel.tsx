@@ -105,15 +105,21 @@ function Tail({ tail }: { tail: string }) {
  *
  * All routes it talks to are built and tested elsewhere; this component only
  * renders their contract. Fetch errors toast and never crash the ticket page.
+ *
+ * Without `canViewAgentRuns` (tickets.resolve or studio.manage, resolved by
+ * the server page) the panel renders nothing and fetches nothing — its routes
+ * 403 everyone else, and sales/management viewers must not eat that toast.
  */
 export function AgentRunPanel({
   ticketId,
   websiteLink,
+  canViewAgentRuns,
   canResolve,
   ticketStatus,
 }: {
   ticketId: string;
   websiteLink: string | null;
+  canViewAgentRuns: boolean;
   canResolve: boolean;
   ticketStatus: string;
 }) {
@@ -137,7 +143,7 @@ export function AgentRunPanel({
   // The ticket's runs, newest first. The newest still-active run is the
   // panel's focus; failing that, the newest overall.
   useEffect(() => {
-    if (!websiteLink) return;
+    if (!websiteLink || !canViewAgentRuns) return;
     let cancelled = false;
     (async () => {
       try {
@@ -155,7 +161,7 @@ export function AgentRunPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [ticketId, websiteLink, toast]);
+  }, [ticketId, websiteLink, canViewAgentRuns, toast]);
 
   /**
    * The focus poll. Cadence follows the status — 2s while the worker owes us
@@ -176,7 +182,7 @@ export function AgentRunPanel({
         ? 10_000
         : null;
   useEffect(() => {
-    if (!runId || pollMs === null) return;
+    if (!canViewAgentRuns || !runId || pollMs === null) return;
     let cancelled = false;
     const pull = async () => {
       try {
@@ -196,7 +202,7 @@ export function AgentRunPanel({
       cancelled = true;
       clearInterval(iv);
     };
-  }, [runId, pollMs, toast]);
+  }, [canViewAgentRuns, runId, pollMs, toast]);
 
   // Coarse clock for elapsed-time and the wedged-deploy check — the lint
   // (correctly) forbids Date.now() in render.
@@ -361,6 +367,7 @@ export function AgentRunPanel({
   }
 
   if (!websiteLink) return null;
+  if (!canViewAgentRuns) return null;
   if (!loaded) return null;
 
   const busy = sending || approving || discarding || revising;

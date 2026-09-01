@@ -63,6 +63,7 @@ function mount(props: Partial<Parameters<typeof AgentRunPanel>[0]> = {}) {
       <AgentRunPanel
         ticketId="tk-1"
         websiteLink={`https://${HOST}`}
+        canViewAgentRuns={true}
         canResolve={true}
         ticketStatus="In Progress"
         {...props}
@@ -94,7 +95,30 @@ describe("AgentRunPanel", () => {
   it("renders nothing at all when the lead has no website link", () => {
     const fetchMock = stubFetchRoutes(() => ({ body: {} }));
     const { container } = render(
-      <AgentRunPanel ticketId="tk-1" websiteLink={null} canResolve={true} ticketStatus="Assigned" />,
+      <AgentRunPanel
+        ticketId="tk-1"
+        websiteLink={null}
+        canViewAgentRuns={true}
+        canResolve={true}
+        ticketStatus="Assigned"
+      />,
+    );
+    expect(container.firstChild).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("renders nothing and never fetches for a viewer without run access (sales/management)", () => {
+    // GET /agent-runs 403s anyone without tickets.resolve/studio.manage — a
+    // viewer-only mount must not fire it just to collect an error toast.
+    const fetchMock = stubFetchRoutes(() => ({ body: {} }));
+    const { container } = render(
+      <AgentRunPanel
+        ticketId="tk-1"
+        websiteLink={`https://${HOST}`}
+        canViewAgentRuns={false}
+        canResolve={false}
+        ticketStatus="In Progress"
+      />,
     );
     expect(container.firstChild).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();

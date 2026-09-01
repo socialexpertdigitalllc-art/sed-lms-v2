@@ -58,6 +58,7 @@ function mount(siteUpdates: SiteUpdate[]) {
         techMembers={[]}
         canAssign={false}
         canResolve={true}
+        canViewAgentRuns={true}
         isCreator={false}
         siteUpdates={siteUpdates}
       />

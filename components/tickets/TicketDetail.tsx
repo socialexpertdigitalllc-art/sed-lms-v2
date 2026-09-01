@@ -40,6 +40,7 @@ export function TicketDetail({
   techMembers,
   canAssign,
   canResolve,
+  canViewAgentRuns,
   isCreator,
   siteUpdates = [],
 }: {
@@ -50,6 +51,8 @@ export function TicketDetail({
   techMembers: TechMember[];
   canAssign: boolean;
   canResolve: boolean;
+  /** tickets.resolve or studio.manage — the AI panel's routes 403 anyone else. */
+  canViewAgentRuns: boolean;
   isCreator: boolean;
   /** Website uploads pinned to this ticket, newest first (upload proof). */
   siteUpdates?: SiteUpdate[];
@@ -307,6 +310,7 @@ export function TicketDetail({
         <AgentRunPanel
           ticketId={ticket.id}
           websiteLink={lead.website_link}
+          canViewAgentRuns={canViewAgentRuns}
           canResolve={canResolve}
           ticketStatus={ticket.status}
         />

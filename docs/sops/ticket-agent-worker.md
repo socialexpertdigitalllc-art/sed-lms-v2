@@ -6,6 +6,9 @@ runs the agent; it only creates runs and deploys approved results.
 
 ## One-time setup (Windows box)
 
+0. Prod database: migration `0071_site_agent_runs.sql` must be applied before
+   the code deploys (it was applied to the shared DB on 2026-09-01 — this
+   line is for rebuilding environments).
 1. `agy update` — the worker needs ≥1.1.22 (`--output-format stream-json`).
 2. Sign in with the Pro-plan Google account (socialexpertdigitalllc@gmail.com):
    run `agy` interactively once; if it lands in a GCP/project mode ("quota

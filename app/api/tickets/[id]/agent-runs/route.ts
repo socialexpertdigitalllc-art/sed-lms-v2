@@ -23,6 +23,10 @@ type Ctx = { params: Promise<{ id: string }> };
  * and the live files are fetched NOW by prod — the worker box can't reach
  * custom-domain files, and a run whose site can't be fetched should fail at
  * the click, not minutes later on the worker.
+ *
+ * Ordering matters: original.zip is uploaded BEFORE the row is inserted (the
+ * id is minted app-side). The worker polls every 20s with no age grace, so a
+ * queued row must never be visible while its zip is still in flight.
  */
 export async function POST(_req: Request, ctx: Ctx) {
   const { id: ticketId } = await ctx.params;
@@ -70,20 +74,22 @@ export async function POST(_req: Request, ctx: Ctx) {
   const prepared = prepareSiteZip(fetched.zip);
   if (!prepared.ok) return NextResponse.json({ error: `The live site is not editable: ${prepared.message}` }, { status: 422 });
 
-  const { data: run, error: insErr } = await admin
-    .from("site_agent_runs")
-    .insert({ ticket_id: ticketId, lead_id: ticket.lead_id, site_host: fetched.host, created_by: user.id })
-    .select()
-    .single();
-  if (insErr || !run) return NextResponse.json({ error: insErr?.message ?? "Could not create the run" }, { status: 409 });
-
+  const runId = crypto.randomUUID();
   const { error: upErr } = await admin.storage
     .from(AGENT_SITES_BUCKET)
-    .upload(originalZipPath(run.id as string), prepared.zip, { upsert: true, contentType: "application/zip" });
-  if (upErr) {
-    const { error: flipErr } = await admin.from("site_agent_runs").update({ status: "failed", error: `Could not store the site copy: ${upErr.message}` }).eq("id", run.id);
-    if (flipErr) console.warn(`[site-agent] failed to mark run ${run.id} failed after upload error: ${flipErr.message}`);
-    return NextResponse.json({ error: `Could not store the site copy: ${upErr.message}` }, { status: 502 });
+    .upload(originalZipPath(runId), prepared.zip, { upsert: true, contentType: "application/zip" });
+  if (upErr) return NextResponse.json({ error: `Could not store the site copy: ${upErr.message}` }, { status: 502 });
+
+  const { data: run, error: insErr } = await admin
+    .from("site_agent_runs")
+    .insert({ id: runId, ticket_id: ticketId, lead_id: ticket.lead_id, site_host: fetched.host, created_by: user.id })
+    .select()
+    .single();
+  if (insErr || !run) {
+    // The zip is orphaned if we stop here — remove it best-effort (the
+    // one-active-run 409 race lands here).
+    await admin.storage.from(AGENT_SITES_BUCKET).remove([originalZipPath(runId)]).catch(() => {});
+    return NextResponse.json({ error: insErr?.message ?? "Could not create the run" }, { status: 409 });
   }
 
   await admin.from("activity_log").insert({
