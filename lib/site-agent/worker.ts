@@ -246,7 +246,13 @@ export async function processNextAgentRun(deps: WorkerDeps): Promise<WorkerOutco
     }
 
     if (outcome.killed) return await fail("The agent hit the 15-minute time cap and was stopped.");
-    if (!outcome.result) return await fail("agy produced no result event — is the CLI installed and signed in on this box?");
+    if (!outcome.result) {
+      return await fail(
+        outcome.spawnError
+          ? `agy could not be launched: ${outcome.spawnError}`
+          : "agy ran but produced no result event — check the CLI's sign-in and its log on the worker box.",
+      );
+    }
     if (outcome.result.status !== "SUCCESS") {
       return await fail(`Antigravity reported an error: ${outcome.result.error ?? "unknown"}`);
     }

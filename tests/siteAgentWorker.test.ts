@@ -347,7 +347,7 @@ describe("processNextAgentRun", () => {
     expect(fake.runs["run-1"].error).toMatch(/time cap/i);
   });
 
-  it("a driver with no result event fails with the install/sign-in hint", async () => {
+  it("a driver with no result event fails with the sign-in/log hint", async () => {
     const fake = makeFakeAdmin(seedRun());
     fake.storage["run-1/original.zip"] = zipFromMap(SITE);
     const h = makeHarness(fake);
@@ -355,7 +355,18 @@ describe("processNextAgentRun", () => {
       h.deps(async () => ({ exitCode: 1, result: null, conversationId: null, killed: false })),
     );
     expect(out).toMatchObject({ picked: true, outcome: "failed" });
-    expect(fake.runs["run-1"].error).toMatch(/signed in|installed/i);
+    expect(fake.runs["run-1"].error).toMatch(/sign-in|log on the worker box/i);
+  });
+
+  it("a spawn-level failure surfaces the real error, not the sign-in hint", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(
+      h.deps(async () => ({ exitCode: null, result: null, conversationId: null, killed: false, spawnError: "spawn agy ENOENT" })),
+    );
+    expect(out).toMatchObject({ picked: true, outcome: "failed" });
+    expect(fake.runs["run-1"].error).toMatch(/could not be launched.*ENOENT/i);
   });
 
   it("a missing original.zip fails the run before the driver ever starts", async () => {

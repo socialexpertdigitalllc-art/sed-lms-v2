@@ -80,6 +80,11 @@ export interface AgyRunOutcome {
   /** true when we killed it (timeout or cancellation), so callers don't
    *  misread the exit code as an agent failure. */
   killed: boolean;
+  /** The spawn-level failure (ENOENT: binary not found OR cwd missing), when
+   *  the child never ran at all. Without this, a launch failure is
+   *  indistinguishable from "agy ran and printed nothing" — which cost a
+   *  live debugging session on 2026-09-01. */
+  spawnError?: string;
 }
 
 export interface AgyRunOptions {
@@ -105,7 +110,7 @@ export const runAgy: AgyDriver = (opts, onEvent) =>
     ];
     if (opts.conversationId) args.push("--conversation", opts.conversationId);
 
-    const child = spawn(opts.agyBin ?? "agy", args, {
+    const child = spawn(opts.agyBin ?? process.env.AGY_BIN ?? "agy", args, {
       cwd: opts.cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -145,9 +150,9 @@ export const runAgy: AgyDriver = (opts, onEvent) =>
       if (cancelPoll) clearInterval(cancelPoll);
       resolve({ exitCode: code, result, conversationId, killed });
     });
-    child.on("error", () => {
+    child.on("error", (e) => {
       clearTimeout(timer);
       if (cancelPoll) clearInterval(cancelPoll);
-      resolve({ exitCode: null, result: null, conversationId, killed });
+      resolve({ exitCode: null, result: null, conversationId, killed, spawnError: e.message });
     });
   });
