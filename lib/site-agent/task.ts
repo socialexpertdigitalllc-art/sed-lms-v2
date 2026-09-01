@@ -30,7 +30,7 @@ export function buildTaskPrompt(args: {
     : "";
 
   return [
-    `You are editing the live website of the client "${args.businessName}" to fulfil a change-request ticket.`,
+    `You are editing the live website of the client "${asTicketData(args.businessName)}" to fulfil a change-request ticket.`,
     `The current directory contains a complete copy of the site's files. Work ONLY inside the current directory:`,
     `- edit, create, or delete site files as the ticket requires;`,
     `- never touch files outside the current directory;`,

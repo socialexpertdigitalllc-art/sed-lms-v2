@@ -29,6 +29,25 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.14.0",
+    date: "2026-09-01",
+    title: "The AI developer",
+    changes: [
+      {
+        kind: "feature",
+        text: "Send to AI on tickets — from an assigned ticket, the developer can hand the change request to an AI developer that edits a copy of the live site; progress streams into the ticket screen as it works. Nothing touches the live site while it runs.",
+      },
+      {
+        kind: "feature",
+        text: "Review before it goes live — the AI's work comes back as a change list with per-file before/after comparisons and a safe preview of the edited site inside the dashboard. One click deploys it, and a snapshot of the live site is taken first so it can be rolled back; \"Request changes\" sends the AI back to refine its work.",
+      },
+      {
+        kind: "improvement",
+        text: "The ticket screen shows when the AI worker machine is offline, why a run failed (in the AI's own words), and keeps the full history of AI runs on the ticket next to the existing website-update proof.",
+      },
+    ],
+  },
+  {
     version: "2.13.1",
     date: "2026-08-31",
     title: "Generate really is the last click",

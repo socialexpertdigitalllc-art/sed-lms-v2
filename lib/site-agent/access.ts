@@ -47,8 +47,8 @@ export async function agentRunAccess(admin: SupabaseClient, runId: string): Prom
       .eq("id", ticketId)
       .maybeSingle();
     if (!ticket) return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }), status: 403 };
-    const scope = await allowedTicketScope(admin as never, user.id, perms);
-    if (!canActOnTicket(ticket as never, user.id, scope)) {
+    const scope = await allowedTicketScope(admin, user.id, perms);
+    if (!canActOnTicket(ticket, user.id, scope)) {
       return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }), status: 403 };
     }
   }
