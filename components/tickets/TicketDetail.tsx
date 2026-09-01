@@ -11,6 +11,7 @@ import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
 import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
+import { AgentRunPanel } from "./AgentRunPanel";
 
 type LeadInfo = {
   id: string;
@@ -301,6 +302,14 @@ export function TicketDetail({
             </ul>
           </div>
         )}
+
+        {/* AI developer — ticket-driven site edits, reviewed before deploy */}
+        <AgentRunPanel
+          ticketId={ticket.id}
+          websiteLink={lead.website_link}
+          canResolve={canResolve}
+          ticketStatus={ticket.status}
+        />
 
         {/* Assignment */}
         {canAssign && (

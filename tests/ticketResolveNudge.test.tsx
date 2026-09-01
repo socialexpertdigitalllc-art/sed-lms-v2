@@ -74,6 +74,12 @@ function startResolving() {
 }
 
 describe("TicketDetail resolve nudge", () => {
+  /** TicketDetail now mounts the AI developer panel, which fetches its own
+   *  agent-runs list — the nudge's assertions are about the RESOLVE call, so
+   *  count only PATCHes to the ticket itself. */
+  const resolveCalls = (spy: ReturnType<typeof vi.fn>) =>
+    spy.mock.calls.filter(([url]) => String(url) === "/api/tickets/tk-1");
+
   it("asks before resolving when no files were uploaded, and 'Resolve anyway' proceeds", async () => {
     const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
     vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
@@ -83,17 +89,17 @@ describe("TicketDetail resolve nudge", () => {
 
     // nudge shown, nothing sent yet
     expect(screen.getByRole("dialog", { name: "No updated files were uploaded" })).toBeInTheDocument();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(resolveCalls(fetchSpy)).toHaveLength(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve anyway" }));
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    await waitFor(() => expect(resolveCalls(fetchSpy)).toHaveLength(1));
+    const [url, init] = resolveCalls(fetchSpy)[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/tickets/tk-1");
     expect(JSON.parse(String(init.body))).toMatchObject({ action: "resolve" });
   });
 
   it("'Go back' keeps the ticket unresolved", () => {
-    const fetchSpy = vi.fn();
+    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
     vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
 
     mount([]);
@@ -101,7 +107,7 @@ describe("TicketDetail resolve nudge", () => {
     fireEvent.click(screen.getByRole("button", { name: "Go back" }));
 
     expect(screen.queryByRole("dialog", { name: "No updated files were uploaded" })).not.toBeInTheDocument();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(resolveCalls(fetchSpy)).toHaveLength(0);
   });
 
   it("resolves straight through when an upload is recorded, and shows it as proof", async () => {
@@ -119,6 +125,6 @@ describe("TicketDetail resolve nudge", () => {
 
     startResolving();
     expect(screen.queryByRole("dialog", { name: "No updated files were uploaded" })).not.toBeInTheDocument();
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(resolveCalls(fetchSpy)).toHaveLength(1));
   });
 });
