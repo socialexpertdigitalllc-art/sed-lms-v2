@@ -62,7 +62,7 @@ const adminState = vi.hoisted(() => {
     settings: null as Row, // app_settings .maybeSingle()
     uploadError: null as { message: string } | null,
     inserts: [] as { table: string; values: Record<string, unknown> }[],
-    updates: [] as { table: string; values: Record<string, unknown> }[],
+    updates: [] as { table: string; values: Record<string, unknown>; filters?: [string, unknown][] }[],
     uploads: [] as { bucket: string; path: string }[],
     removes: [] as { bucket: string; paths: string[] }[],
     /** Interleaved op log — pins the upload-BEFORE-insert ordering. */
@@ -79,30 +79,39 @@ const adminState = vi.hoisted(() => {
   function query(table: string): Chain {
     let usedIn = false;
     let usedUpdate = false;
+    let updateValues: Record<string, unknown> | null = null;
+    const eqFilters: [string, unknown][] = [];
     const q: Chain = {
       select: () => q,
-      eq: () => q,
+      eq: (...a) => { eqFilters.push([a[0] as string, a[1]]); return q; },
       is: () => q,
       in: () => { usedIn = true; return q; },
       order: () => q,
       limit: () => q,
       insert: (values) => { state.inserts.push({ table, values }); state.ops.push(`insert:${table}`); return q; },
-      update: (values) => { usedUpdate = true; state.updates.push({ table, values }); return q; },
+      // filters is the LIVE array reference — .eq() calls land after .update()
+      // in the chain, so the journal entry keeps filling as they arrive.
+      update: (values) => { usedUpdate = true; updateValues = values; state.updates.push({ table, values, filters: eqFilters }); return q; },
       maybeSingle: async () => {
-        if (table === "lead_tickets") return { data: state.ticket, error: null };
+        if (table === "lead_tickets") {
+          if (usedUpdate) {
+            // CAS-honoring: the update applies only when every .eq() filter
+            // matches the ticket AS IT STANDS NOW (like the real database).
+            if (state.ticketUpdateError) return { data: null, error: state.ticketUpdateError };
+            const t = state.ticket;
+            if (!t || !eqFilters.every(([f, v]) => t[f] === v)) return { data: null, error: null };
+            Object.assign(t, updateValues);
+            return { data: { id: t.id }, error: null };
+          }
+          return { data: state.ticket, error: null };
+        }
         if (table === "leads") return { data: state.lead, error: null };
         if (table === "site_agent_runs") return { data: usedIn ? state.activeRun : state.run, error: null };
         if (table === "app_settings") return { data: state.settings, error: null };
         return { data: null, error: null };
       },
-      single: async () => {
-        if (table === "lead_tickets") {
-          return state.ticketUpdateError
-            ? { data: null, error: state.ticketUpdateError }
-            : { data: state.ticket, error: null };
-        }
-        return state.insertError ? { data: null, error: state.insertError } : { data: state.insertedRun, error: null };
-      },
+      single: async () =>
+        state.insertError ? { data: null, error: state.insertError } : { data: state.insertedRun, error: null },
       then: (resolve) => {
         if (!usedUpdate && table === "site_agent_runs") return resolve({ data: state.runsList, error: null });
         if (!usedUpdate && table === "ticket_items") return resolve({ data: state.itemsList, error: null });
@@ -524,6 +533,9 @@ describe("POST /api/tickets/[id]/agent-runs — F3 auto-start", () => {
     expect(upd?.values).toMatchObject({ status: "In Progress" });
     expect(upd?.values.updated_at).toEqual(expect.any(String));
     expect(Object.keys(upd!.values).sort()).toEqual(["status", "updated_at"]);
+    // …guarded by a status CAS: the write only lands on a still-Assigned row.
+    expect(upd?.filters).toContainEqual(["status", "Assigned"]);
+    expect(adminState.ticket?.status).toBe("In Progress");
     // …same activity row, plus the auto marker (nobody clicked Start).
     const started = adminState.inserts.find((i) => i.values.action === "ticket.started");
     expect(started?.values).toMatchObject({ user_id: "dev-1", entity_type: "ticket", entity_id: "t-1" });
@@ -550,6 +562,20 @@ describe("POST /api/tickets/[id]/agent-runs — F3 auto-start", () => {
     expect(adminState.inserts.some((i) => i.values.action === "ticket.started")).toBe(false);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it("CAS: a ticket resolved during the slow zip fetch is left alone — no stale flip, no activity", async () => {
+    // The ticket read happens at the top of the request; fetchLiveSiteZip can
+    // take a minute on a slow DA archive. A manual Resolve landing in that
+    // window must win: the status CAS matches zero rows and we stamp nothing.
+    liveMock.fetchLiveSiteZip.mockImplementation(async () => {
+      adminState.ticket = { ...adminState.ticket!, status: "Resolved" };
+      return { ok: true, zip: new Uint8Array([80, 75]), host: "acme.dmviral.com", source: "staging" };
+    });
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect(adminState.ticket?.status).toBe("Resolved");
+    expect(adminState.inserts.some((i) => i.values.action === "ticket.started")).toBe(false);
   });
 });
 

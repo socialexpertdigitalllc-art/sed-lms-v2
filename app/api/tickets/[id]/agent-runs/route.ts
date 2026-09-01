@@ -175,20 +175,26 @@ export async function POST(req: Request, ctx: Ctx) {
   if (ticket.status === "Assigned") {
     try {
       const startedAt = new Date().toISOString();
-      const { error: startErr } = await admin
+      // Status CAS: the ticket was read at the TOP of this request and the
+      // live-zip fetch can take a minute — a manual Start/Resolve landing in
+      // that window must win. Zero rows matched = leave it alone, stamp nothing.
+      const { data: started, error: startErr } = await admin
         .from("lead_tickets")
         .update({ status: "In Progress", updated_at: startedAt })
         .eq("id", ticketId)
-        .select("*")
-        .single();
+        .eq("status", "Assigned")
+        .select("id")
+        .maybeSingle();
       if (startErr) throw new Error(startErr.message);
-      await admin.from("activity_log").insert({
-        user_id: user.id,
-        action: "ticket.started",
-        entity_type: "ticket",
-        entity_id: ticketId,
-        new_value: { status: "In Progress", auto: true },
-      });
+      if (started) {
+        await admin.from("activity_log").insert({
+          user_id: user.id,
+          action: "ticket.started",
+          entity_type: "ticket",
+          entity_id: ticketId,
+          new_value: { status: "In Progress", auto: true },
+        });
+      }
     } catch (e) {
       console.warn(`[site-agent] auto-start of ticket ${ticketId} failed:`, e);
     }

@@ -36,8 +36,12 @@ export async function autoResolveTicketIfComplete(
     if (!ticket || ticket.status !== "In Progress") return false;
 
     const now = new Date().toISOString();
-    // Mirror of the manual resolve's update — same fields, same shape.
-    const { error } = await admin
+    // Mirror of the manual resolve's update — same fields, same shape — but
+    // status-CAS'd: a manual Resolve (or the sibling trigger — approve and
+    // item-toggle can race) landing between our read and this write matches
+    // zero rows, and we bail BEFORE the activity row and the bell so nothing
+    // is duplicated.
+    const { data: resolved, error } = await admin
       .from("lead_tickets")
       .update({
         status: "Resolved",
@@ -47,12 +51,14 @@ export async function autoResolveTicketIfComplete(
         updated_at: now,
       })
       .eq("id", opts.ticketId)
-      .select("*")
-      .single();
+      .eq("status", "In Progress")
+      .select("id")
+      .maybeSingle();
     if (error) {
       console.warn(`[tickets] auto-resolve of ${opts.ticketId} failed: ${error.message}`);
       return false;
     }
+    if (!resolved) return false;
 
     await admin.from("activity_log").insert({
       user_id: opts.userId,

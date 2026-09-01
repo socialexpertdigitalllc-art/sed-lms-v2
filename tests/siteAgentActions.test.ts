@@ -79,6 +79,10 @@ const adminState = vi.hoisted(() => {
     items: [] as Row[],
     ticketRow: null as Row | null,
     leadRow: null as Row | null,
+    /** Fired right after a lead_tickets READ is served — lets a test change
+     *  the row between the helper's status check and its CAS update, i.e.
+     *  the exact TOCTOU window the status filter exists for. */
+    onTicketRead: null as (() => void) | null,
     downloadBlob: null as { arrayBuffer(): Promise<ArrayBuffer> } | null,
     downloads: [] as string[],
     removes: [] as string[][],
@@ -87,7 +91,7 @@ const adminState = vi.hoisted(() => {
     client: null as unknown,
     reset() {
       state.dbRun = null;
-      state.items = []; state.ticketRow = null; state.leadRow = null;
+      state.items = []; state.ticketRow = null; state.leadRow = null; state.onTicketRead = null;
       state.downloadBlob = { arrayBuffer: async () => new Uint8Array([80, 75, 3, 4]).buffer as ArrayBuffer };
       state.downloads = []; state.removes = []; state.inserts = []; state.updates = [];
     },
@@ -129,8 +133,17 @@ const adminState = vi.hoisted(() => {
           record();
           return { ...r, error: null };
         }
+        if (table === "lead_tickets" && updateValues) {
+          // CAS-honoring like site_agent_runs above: the update applies only
+          // when EVERY filter (including the status guard) matches the row
+          // as it stands NOW.
+          const row = applyTicket();
+          record();
+          return { data: row ? { id: row.id } : null, error: null };
+        }
         if (table === "lead_tickets" && !updateValues) {
           const row = state.ticketRow && rowMatches(state.ticketRow) ? { ...state.ticketRow } : null;
+          state.onTicketRead?.();
           return { data: row, error: null };
         }
         if (table === "leads" && !updateValues) {
@@ -140,11 +153,6 @@ const adminState = vi.hoisted(() => {
         return { data: null, error: null };
       },
       single: async () => {
-        if (table === "lead_tickets" && updateValues) {
-          const row = applyTicket();
-          record();
-          return { data: row ? { ...row } : null, error: row ? null : { message: "no row" } };
-        }
         if (table === "ticket_items" && updateValues) {
           const hit = applyItems();
           record();
@@ -368,6 +376,8 @@ describe("approve — F3 ticket automation (items done + auto-resolve)", () => {
     expect(adminState.ticketRow?.resolved_at).toEqual(expect.any(String));
     const upd = adminState.updates.find((u) => u.table === "lead_tickets");
     expect(Object.keys(upd!.values).sort()).toEqual(["resolution_note", "resolved_at", "resolved_by", "status", "updated_at"]);
+    // …guarded by a status CAS: the write only lands on a still-In-Progress row.
+    expect(upd?.filters).toContainEqual(["status", "In Progress"]);
     // …its activity row with the auto marker…
     const log = adminState.inserts.find((i) => i.values.action === "ticket.resolved");
     expect(log?.values).toMatchObject({ user_id: "dev-1", entity_type: "ticket", entity_id: "t-1" });
@@ -408,6 +418,24 @@ describe("approve — F3 ticket automation (items done + auto-resolve)", () => {
     expect(res.status).toBe(200);
     expect(adminState.ticketRow?.status).toBe("Assigned");
     expect(adminState.updates.some((u) => u.table === "lead_tickets")).toBe(false);
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("CAS: a manual resolve racing the automation wins — no stale flip, no duplicate activity or bell", async () => {
+    seedItems([]);
+    seedRun("review");
+    // The human's Resolve lands in the window between the helper's status
+    // read (In Progress) and its update: the CAS matches zero rows, and the
+    // helper must bail BEFORE the activity row and the notification.
+    adminState.onTicketRead = () => {
+      adminState.ticketRow = { ...adminState.ticketRow!, status: "Resolved", resolved_by: "human-1" };
+    };
+    const res = await approvePOST(post(), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.ticketRow).toMatchObject({ status: "Resolved", resolved_by: "human-1" });
+    const upd = adminState.updates.find((u) => u.table === "lead_tickets");
+    expect(upd?.filters).toContainEqual(["status", "In Progress"]);
+    expect(adminState.inserts.some((i) => i.values.action === "ticket.resolved")).toBe(false);
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
