@@ -64,9 +64,12 @@ function makeFakeAdmin(
                         id, title: "Fix phone", assigned_to: "dev-1", created_by: "sales-1",
                         lead_id: "lead-1",
                         items: [
-                          { id: "item-1", body: "swap number", sort: 0 },
-                          { id: "item-2", body: "fix footer email", sort: 1 },
-                          { id: "item-3", body: "update hours", sort: 2 },
+                          { id: "item-1", body: "swap number", sort: 0, is_done: false },
+                          { id: "item-2", body: "fix footer email", sort: 1, is_done: false },
+                          // Done in an earlier run/toggle — a WHOLE-ticket run
+                          // must not re-request it (matches the dialog's
+                          // undone-only preview and F3's bookkeeping).
+                          { id: "item-3", body: "update hours", sort: 2, is_done: true },
                         ],
                       },
                 error: null,
@@ -451,6 +454,26 @@ describe("processNextAgentRun", () => {
       return { exitCode: 0, result, conversationId: "c", killed: false };
     };
   }
+
+  it("a whole-ticket run (null item_ids) composes from UNDONE items only", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    let prompt = "";
+    const out = await processNextAgentRun(
+      h.deps(async (opts, onEvent) => {
+        prompt = opts.prompt;
+        const result = { kind: "result" as const, status: "SUCCESS" as const, response: "done", error: null, usage: null, numTurns: 1, durationSeconds: 2 };
+        h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+        onEvent(result);
+        return { exitCode: 0, result, conversationId: "c", killed: false };
+      }),
+    );
+    expect(out).toMatchObject({ outcome: "review" });
+    expect(prompt).toContain("swap number");
+    expect(prompt).toContain("fix footer email");
+    expect(prompt).not.toContain("update hours"); // is_done: true — excluded
+  });
 
   it("item_ids scopes the prompt to the selected ticket items only", async () => {
     const fake = makeFakeAdmin(seedRun({ item_ids: ["item-2"] }));

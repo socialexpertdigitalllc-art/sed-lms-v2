@@ -206,7 +206,7 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     if (!run.ticket_id) return await fail("This run's ticket no longer exists (retention purge?) — nothing to do.");
     const { data: ticket } = await admin
       .from("lead_tickets")
-      .select("id, title, assigned_to, created_by, lead_id, items:ticket_items(id, body, sort)")
+      .select("id, title, assigned_to, created_by, lead_id, items:ticket_items(id, body, sort, is_done)")
       .eq("id", run.ticket_id)
       .maybeSingle();
     if (!ticket) return await fail("This run's ticket no longer exists — nothing to do.");
@@ -231,12 +231,15 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     // the seeded files (fsWorkspace, Task 6).
     const cwd = await deps.workspace.materialize(seedMap, wsKey);
 
-    const items = ((ticket.items as { id: string; body: string; sort: number }[] | null) ?? []);
+    const items = ((ticket.items as { id: string; body: string; sort: number; is_done: boolean }[] | null) ?? []);
     // v2 F1: a run scoped to selected items feeds ONLY those to the prompt.
     // Unknown ids simply match nothing — the create route validates upstream.
+    // A whole-ticket run (null item_ids) composes from the UNDONE items only:
+    // that's exactly what the dialog previews, and re-requesting work already
+    // marked done would undo F3's own bookkeeping.
     const scoped = Array.isArray(run.item_ids) && run.item_ids.length
       ? items.filter((i) => run.item_ids!.includes(i.id))
-      : items;
+      : items.filter((i) => !i.is_done);
     const prompt = buildTaskPrompt({
       businessName: String((lead?.business_name as string | undefined) ?? "this client"),
       ticketTitle: (ticket.title as string | null) ?? "Untitled change request",
