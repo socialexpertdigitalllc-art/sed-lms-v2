@@ -24,4 +24,21 @@ describe("lineDiff", () => {
     expect(out).toHaveLength(3000);
     expect(out.every((o) => o.type === "same")).toBe(true);
   });
+  it("treats CRLF vs LF as identical content, not a full-file rewrite", () => {
+    const out = lineDiff("a\r\nb\r\nc", "a\nb\nc");
+    expect(out).toEqual([
+      { type: "same", text: "a" }, { type: "same", text: "b" }, { type: "same", text: "c" },
+    ]);
+  });
+  it("empty-side inputs take the trivial path (created/deleted files of any size)", () => {
+    const big = Array.from({ length: 5000 }, (_, i) => `l${i}`).join("\n");
+    const del = lineDiff(big, null);
+    expect(del).toHaveLength(5000);
+    expect(del.every((o) => o.type === "del")).toBe(true);
+    expect(lineDiff(null, "x")).toEqual([{ type: "add", text: "x" }]);
+  });
+  it("empty string is one empty line, distinct from null", () => {
+    expect(lineDiff("", null)).toEqual([{ type: "del", text: "" }]);
+    expect(lineDiff("", "")).toEqual([{ type: "same", text: "" }]);
+  });
 });

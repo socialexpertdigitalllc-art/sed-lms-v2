@@ -4,8 +4,17 @@ export type DiffOp = { type: "same" | "add" | "del"; text: string };
 /** Line-level LCS diff for the review screen. Site pages are small; past the
  *  guard we degrade to replace-everything rather than burn CPU in a route. */
 export function lineDiff(before: string | null, after: string | null): DiffOp[] {
-  const a = before === null ? [] : before.split("\n");
-  const b = after === null ? [] : after.split("\n");
+  // Line-ending differences are presentation, not content — a CRLF live site
+  // vs the agent's LF output must not read as a full-file rewrite. Also note
+  // the ""-vs-null convention: "" is one empty line (a real, empty file);
+  // null is absence. Callers must not conflate the two.
+  const a = before === null ? [] : before.split(/\r\n|\r|\n/);
+  const b = after === null ? [] : after.split(/\r\n|\r|\n/);
+  // One side empty (created/deleted file): the answer is trivially all-add /
+  // all-del — skip the DP entirely (the m*n size guard below is blind here).
+  if (a.length === 0 || b.length === 0) {
+    return [...a.map((text) => ({ type: "del" as const, text })), ...b.map((text) => ({ type: "add" as const, text }))];
+  }
   if (a.length * b.length > 25_000_000) {
     return [...a.map((text) => ({ type: "del" as const, text })), ...b.map((text) => ({ type: "add" as const, text }))];
   }
