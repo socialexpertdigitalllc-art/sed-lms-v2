@@ -18,15 +18,20 @@ vi.mock("@/lib/site-agent/access", () => ({
 
 // Admin client mock: storage-only fake serving REAL zip bytes; routes go
 // through the REAL resultCache/ttlCached/unzipToMap stack.
-const zipStore = vi.hoisted(() => ({ objects: {} as Record<string, Uint8Array> }));
+const zipStore = vi.hoisted(() => ({
+  objects: {} as Record<string, Uint8Array>,
+  downloads: [] as string[], // every storage download, for cache-behavior asserts
+}));
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     storage: {
       from: () => ({
-        download: async (path: string) =>
-          zipStore.objects[path]
+        download: async (path: string) => {
+          zipStore.downloads.push(path);
+          return zipStore.objects[path]
             ? { data: new Blob([zipStore.objects[path].slice()]), error: null }
-            : { data: null, error: { message: "missing" } },
+            : { data: null, error: { message: "missing" } };
+        },
       }),
     },
   }),
@@ -189,6 +194,54 @@ describe("GET /api/site-agent/runs/[id]/files/[...path]", () => {
     accessState.run = { ...accessState.run, id: "run-queued", status: "running" };
     const res = await filesGET(new Request("http://x"), filesCtx("run-queued", ["index.html"]));
     expect(res.status).toBe(409);
+  });
+});
+
+describe("resultCache keying — one live entry per (run, side)", () => {
+  const countDownloads = (path: string) => zipStore.downloads.filter((p) => p === path).length;
+
+  it("serves repeat requests for the same run version from cache (one download)", async () => {
+    zipStore.objects["run-hit/result.zip"] = zipFromMap({
+      "index.html": enc("<html><head></head><body><h1>cached hero</h1></body></html>"),
+    });
+    accessState.run = { ...accessState.run, id: "run-hit", updated_at: "2026-09-01T13:00:00Z" };
+    for (let i = 0; i < 2; i++) {
+      const res = await previewGET(new Request("http://x/api/site-agent/runs/run-hit/preview"), previewCtx("run-hit"));
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("cached hero");
+    }
+    expect(countDownloads("run-hit/result.zip")).toBe(1);
+  });
+
+  it("a run transition (new updated_at) overwrites the entry in place, never orphans it", async () => {
+    const zipPath = "run-revise/result.zip";
+    zipStore.objects[zipPath] = zipFromMap({
+      "index.html": enc("<html><head></head><body><h1>v1 hero</h1></body></html>"),
+    });
+    accessState.run = { ...accessState.run, id: "run-revise", updated_at: "2026-09-01T14:00:00Z" };
+    const v1 = await previewGET(new Request("http://x/api/site-agent/runs/run-revise/preview"), previewCtx("run-revise"));
+    expect(await v1.text()).toContain("v1 hero");
+    expect(countDownloads(zipPath)).toBe(1);
+
+    // The worker republishes result.zip and the transition bumps updated_at —
+    // the review screen must see the NEW zip despite the 60s TTL.
+    zipStore.objects[zipPath] = zipFromMap({
+      "index.html": enc("<html><head></head><body><h1>v2 hero</h1></body></html>"),
+    });
+    accessState.run = { ...accessState.run, updated_at: "2026-09-01T14:05:00Z" };
+    const v2 = await previewGET(new Request("http://x/api/site-agent/runs/run-revise/preview"), previewCtx("run-revise"));
+    expect(await v2.text()).toContain("v2 hero");
+    expect(countDownloads(zipPath)).toBe(2);
+
+    // Asking for the OLD version again re-downloads: the v1 entry was
+    // OVERWRITTEN, not kept alongside — the whole point of keying without the
+    // version (a version-suffixed key would still hold v1 here and skip this
+    // third download, orphaning a multi-MB map per transition for the life of
+    // the process).
+    accessState.run = { ...accessState.run, updated_at: "2026-09-01T14:00:00Z" };
+    const v1Again = await previewGET(new Request("http://x/api/site-agent/runs/run-revise/preview"), previewCtx("run-revise"));
+    expect(v1Again.status).toBe(200);
+    expect(countDownloads(zipPath)).toBe(3);
   });
 });
 
