@@ -224,6 +224,15 @@ describe("POST /api/site-agent/runs/[id]/approve", () => {
     expect(adminState.inserts).toHaveLength(0);
   });
 
+  it("a ticketless run deploys without the ticket-proof row but keeps its own history row", async () => {
+    seedRun("review", { ticket_id: null });
+    const res = await approvePOST(post(), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.inserts.some((i) => i.values.action === "studio.site.files_overridden")).toBe(false);
+    const own = adminState.inserts.find((i) => i.values.action === "site_agent.run.deployed");
+    expect(own?.values).toMatchObject({ entity_id: null });
+  });
+
   it("a failed snapshot warns but never blocks the deploy", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     deployMock.snapshotSite.mockResolvedValue({ ok: false, message: "DA archive timed out" });
@@ -262,6 +271,13 @@ describe("POST /api/site-agent/runs/[id]/revise", () => {
     expect(adminState.dbRun?.status).toBe("running");
     expect(adminState.inserts).toHaveLength(0);
   });
+
+  it("keeps conversation_id on the row — follow-ups continue the SAME agy conversation", async () => {
+    seedRun("review", { conversation_id: "conv-9" });
+    const res = await revisePOST(post({ instructions: "tweak the hero" }), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.dbRun).toMatchObject({ status: "queued", conversation_id: "conv-9" });
+  });
 });
 
 describe("POST /api/site-agent/runs/[id]/discard", () => {
@@ -294,6 +310,23 @@ describe("POST /api/site-agent/runs/[id]/discard", () => {
     expect(adminState.updates).toHaveLength(0);
     expect(adminState.removes).toHaveLength(0);
     expect(adminState.inserts).toHaveLength(0);
+  });
+
+  it("409s a FRESH deploying run — a live deploy must finish, not be yanked", async () => {
+    seedRun("deploying", { updated_at: new Date().toISOString() });
+    const res = await discardPOST(post(), ctx());
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/in progress/i);
+    expect(adminState.updates).toHaveLength(0);
+  });
+
+  it("discards a STALE deploying run — the wedged-approve escape hatch", async () => {
+    seedRun("deploying", { updated_at: new Date(Date.now() - 11 * 60_000).toISOString() });
+    const res = await discardPOST(post(), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.dbRun).toMatchObject({ status: "discarded", claim_id: null });
+    const log = adminState.inserts.find((i) => i.values.action === "site_agent.run.discarded");
+    expect((log?.values.new_value as { from: string }).from).toBe("deploying");
   });
 });
 

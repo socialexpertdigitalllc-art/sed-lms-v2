@@ -13,7 +13,12 @@ type Ctx = { params: Promise<{ id: string }> };
  *  nulling claim_id breaks the worker's ownership guard (its next guarded
  *  write matches zero rows) and its keepalive miss flips shouldCancel, which
  *  kills the agy process tree. The claim_id null-out is LOAD-BEARING — see
- *  lib/site-agent/worker.ts's header contract. */
+ *  lib/site-agent/worker.ts's header contract.
+ *
+ *  `deploying` is un-discardable while live (a deploy in flight must finish),
+ *  but discardable once STALE — the wedged-approve escape hatch: an approve
+ *  request that died mid-deploy leaves the run in `deploying` forever, and the
+ *  partial unique index then blocks any new run for the ticket. */
 export async function POST(_req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
   const admin = createAdminClient();
@@ -21,8 +26,16 @@ export async function POST(_req: Request, ctx: Ctx) {
   if ("error" in access) return access.error;
 
   const from = access.run.status;
-  if (!["queued", "running", "review"].includes(from)) {
-    return NextResponse.json({ error: `Cannot discard a "${from}" run.` }, { status: 409 });
+  // Double the approve route's maxDuration (300s): past this, no deploy is live.
+  const DEPLOYING_STALE_MS = 10 * 60_000;
+  const deployingStale =
+    from === "deploying" &&
+    Date.now() - new Date(access.run.updated_at).getTime() > DEPLOYING_STALE_MS;
+  if (!["queued", "running", "review"].includes(from) && !deployingStale) {
+    return NextResponse.json(
+      { error: from === "deploying" ? "A deploy is in progress — wait for it to finish." : `Cannot discard a "${from}" run.` },
+      { status: 409 },
+    );
   }
   const { data } = await admin
     .from("site_agent_runs")
