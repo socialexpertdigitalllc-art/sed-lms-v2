@@ -83,7 +83,13 @@ A worker that cannot run `agy models` publishes nothing and the dialog shows onl
 - The run panel mounts on the lead screen in "lead mode" (new props); the access gate
   changes for null-ticket runs: any `ALLOWED_PERMS` holder may act (previously
   studio.manage-only — that rule was for orphaned ticket runs; genuine ticketless runs are
-  first-class). Runs that HAD a ticket which was purged remain operator-only.
+  first-class). **Correction (shipped behavior):** the access gate keys off `ticket_id is
+  null` alone, so it admits ALL null-ticket runs — genuine ticketless runs and purge-orphans
+  alike — to any `tickets.resolve|studio.manage` holder. This is a deliberate but accepted
+  loosening from the original design (which meant to keep purge-orphans operator-only); the
+  two cases aren't distinguished in the data today. Backlog follow-up: the maintenance purge
+  job should discard non-terminal runs belonging to a ticket it purges, so orphaned runs stop
+  existing rather than needing a separate access rule.
 - No ticket automation applies; deploy writes `site_agent.run.deployed` with
   `entity_type 'lead'` (no ticket proof card); the worker's prompt builder receives the
   task_text with a "direct change request" title.

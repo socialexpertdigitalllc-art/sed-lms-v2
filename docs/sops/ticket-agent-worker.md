@@ -40,5 +40,28 @@ Remove `AGENT_WORKER_ENABLED=1` from the box's `.env.local` and
 `pm2 restart sed-lms` — queued runs wait harmlessly; developers can still
 discard them from the ticket.
 
+## Model list
+
+The worker refreshes `agy models` at most every 10 minutes (on boot, then
+inside its poll cycle) and publishes the parsed list for the pre-send
+dialog. An empty model selector means the worker hasn't published a list
+yet — check the heartbeat before assuming agy is broken. Either way the run
+still works: with no model chosen it uses Antigravity's default.
+
+## Ticketless edits
+
+The lead screen's "AI edit site" button runs the same edit → review →
+deploy pipeline as a ticket's Send to AI, with no ticket bookkeeping — no
+status transitions, no item completion, no ticket proof card. Only one
+active ticketless run is allowed per lead at a time.
+
+## Automation
+
+Send-to-AI auto-starts an `Assigned` ticket to `In Progress`. A deploy
+marks the run's change items done. A ticket whose items are all done —
+whether the AI's deploy did it or a developer ticked the last box by
+hand — auto-resolves. If you don't want a ticket auto-resolving, leave at
+least one item unticked.
+
 Source of truth for this SOP: `instrumentation.ts`, `app/api/site-agent/process/route.ts`,
 `lib/site-agent/{worker,workspaceFs,agy}.ts`, `components/tickets/AgentRunPanel.tsx`.

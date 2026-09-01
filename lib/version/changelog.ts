@@ -29,6 +29,37 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.15.0",
+    date: "2026-09-02",
+    title: "The AI developer, refined",
+    changes: [
+      {
+        kind: "feature",
+        text: "Choose what the AI works on: send the whole ticket or tick just the changes you want done this run; the rest stay for later.",
+      },
+      {
+        kind: "feature",
+        text: "Pick the AI's model per run from Antigravity's own live model list (fetched from the worker, never hardcoded); default stays \"Antigravity default\".",
+      },
+      {
+        kind: "feature",
+        text: "Edit the task before sending: the exact request the AI receives is shown and editable in the new pre-send dialog.",
+      },
+      {
+        kind: "feature",
+        text: "Direct site edits without a ticket: an \"AI edit site\" button on the lead screen runs the same edit → review → deploy flow for one-off changes.",
+      },
+      {
+        kind: "improvement",
+        text: "Tickets keep themselves up to date: sending to the AI moves an assigned ticket to In Progress, a deployed run marks its change items done, and a ticket whose items are all done (by the AI or by hand) resolves itself.",
+      },
+      {
+        kind: "improvement",
+        text: "The live progress feed now shows what the AI is actually saying and doing (its words and each tool it runs with its target), not just step labels.",
+      },
+    ],
+  },
+  {
     version: "2.14.0",
     date: "2026-09-01",
     title: "The AI developer",
