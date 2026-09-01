@@ -5,6 +5,7 @@ import { agentRunAccess } from "@/lib/site-agent/access";
 import { snapshotSite } from "@/lib/site-studio/deploy/snapshots";
 import { overrideLiveSite, prepareSiteZip } from "@/lib/site-studio/deploy/liveFiles";
 import { AGENT_SITES_BUCKET, resultZipPath } from "@/lib/site-agent/types";
+import { autoResolveTicketIfComplete } from "@/lib/tickets/autoResolve";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -68,7 +69,8 @@ export async function POST(_req: Request, ctx: Ctx) {
   await rows.eq("status", "live");
 
   // Ticket proof (the ticket page queries exactly this action+entity pair),
-  // then our own history row.
+  // then our own history row. A ticketless run (v2 F5) has no proof card to
+  // stamp; its history row lands on the LEAD instead.
   if (run.ticket_id) {
     await admin.from("activity_log").insert({
       user_id: access.userId, action: "studio.site.files_overridden",
@@ -78,9 +80,34 @@ export async function POST(_req: Request, ctx: Ctx) {
   }
   await admin.from("activity_log").insert({
     user_id: access.userId, action: "site_agent.run.deployed",
-    entity_type: "ticket", entity_id: run.ticket_id,
+    entity_type: run.ticket_id ? "ticket" : "lead",
+    entity_id: run.ticket_id ?? run.lead_id,
     new_value: { run_id: run.id, site: run.site_host, files: prepared.files },
   });
+
+  // v2 F3 — ticket automation. The site is LIVE from here on, so nothing in
+  // this block may fail the response: the deployed change IS the run's items
+  // being done, so mark them (the run's scope when set, every undone item
+  // when null — never rewriting rows already done), then auto-resolve the
+  // ticket if that completed it (zero items counts as complete).
+  if (run.ticket_id) {
+    try {
+      let markQ = admin
+        .from("ticket_items")
+        .update({ is_done: true, done_at: nowIso, done_by: access.userId })
+        .eq("ticket_id", run.ticket_id)
+        .eq("is_done", false);
+      if (run.item_ids?.length) markQ = markQ.in("id", run.item_ids);
+      await markQ;
+      await autoResolveTicketIfComplete(admin, {
+        ticketId: run.ticket_id,
+        userId: access.userId,
+        note: "All change items completed (AI developer).",
+      });
+    } catch (e) {
+      console.warn(`[site-agent] ticket automation after deploy of ${run.id} failed:`, e);
+    }
+  }
 
   return NextResponse.json({ ok: true, url: `https://${result.host}` });
 }

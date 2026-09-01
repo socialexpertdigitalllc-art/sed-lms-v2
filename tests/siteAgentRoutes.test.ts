@@ -38,6 +38,7 @@ const adminState = vi.hoisted(() => {
   type Chain = {
     select: (...a: unknown[]) => Chain;
     eq: (...a: unknown[]) => Chain;
+    is: (...a: unknown[]) => Chain;
     in: (...a: unknown[]) => Chain;
     order: (...a: unknown[]) => Chain;
     limit: (...a: unknown[]) => Chain;
@@ -49,11 +50,15 @@ const adminState = vi.hoisted(() => {
   };
   const state = {
     ticket: null as Row, // lead_tickets .maybeSingle()
+    lead: null as Row, // leads .maybeSingle() (lead agent-runs route)
     run: null as Row, // site_agent_runs .eq().maybeSingle() (agentRunAccess path)
     activeRun: null as Row, // site_agent_runs ....in().maybeSingle() (active-run check)
     insertedRun: { id: "run-9" } as Row,
-    insertError: null as { message: string } | null,
+    insertError: null as { message: string; code?: string } | null,
+    /** lead_tickets .update().select().single() — the auto-start mirror */
+    ticketUpdateError: null as { message: string } | null,
     runsList: [] as unknown[],
+    itemsList: [] as unknown[], // ticket_items select (thenable)
     settings: null as Row, // app_settings .maybeSingle()
     uploadError: null as { message: string } | null,
     inserts: [] as { table: string; values: Record<string, unknown> }[],
@@ -64,9 +69,9 @@ const adminState = vi.hoisted(() => {
     ops: [] as string[],
     client: null as unknown,
     reset() {
-      state.ticket = null; state.run = null; state.activeRun = null;
-      state.insertedRun = { id: "run-9" }; state.insertError = null;
-      state.runsList = []; state.settings = null; state.uploadError = null;
+      state.ticket = null; state.lead = null; state.run = null; state.activeRun = null;
+      state.insertedRun = { id: "run-9" }; state.insertError = null; state.ticketUpdateError = null;
+      state.runsList = []; state.itemsList = []; state.settings = null; state.uploadError = null;
       state.inserts = []; state.updates = []; state.uploads = [];
       state.removes = []; state.ops = [];
     },
@@ -77,6 +82,7 @@ const adminState = vi.hoisted(() => {
     const q: Chain = {
       select: () => q,
       eq: () => q,
+      is: () => q,
       in: () => { usedIn = true; return q; },
       order: () => q,
       limit: () => q,
@@ -84,13 +90,24 @@ const adminState = vi.hoisted(() => {
       update: (values) => { usedUpdate = true; state.updates.push({ table, values }); return q; },
       maybeSingle: async () => {
         if (table === "lead_tickets") return { data: state.ticket, error: null };
+        if (table === "leads") return { data: state.lead, error: null };
         if (table === "site_agent_runs") return { data: usedIn ? state.activeRun : state.run, error: null };
         if (table === "app_settings") return { data: state.settings, error: null };
         return { data: null, error: null };
       },
-      single: async () => (state.insertError ? { data: null, error: state.insertError } : { data: state.insertedRun, error: null }),
-      then: (resolve) =>
-        resolve(usedUpdate || table !== "site_agent_runs" ? { data: null, error: null } : { data: state.runsList, error: null }),
+      single: async () => {
+        if (table === "lead_tickets") {
+          return state.ticketUpdateError
+            ? { data: null, error: state.ticketUpdateError }
+            : { data: state.ticket, error: null };
+        }
+        return state.insertError ? { data: null, error: state.insertError } : { data: state.insertedRun, error: null };
+      },
+      then: (resolve) => {
+        if (!usedUpdate && table === "site_agent_runs") return resolve({ data: state.runsList, error: null });
+        if (!usedUpdate && table === "ticket_items") return resolve({ data: state.itemsList, error: null });
+        return resolve({ data: null, error: null });
+      },
     };
     return q;
   }
@@ -120,6 +137,7 @@ vi.mock("@/lib/site-studio/deploy/protected", () => ({ isProtectedDomain: liveMo
 import { POST as processPOST } from "@/app/api/site-agent/process/route";
 import { agentRunAccess } from "@/lib/site-agent/access";
 import { POST as createRunPOST, GET as listRunsGET } from "@/app/api/tickets/[id]/agent-runs/route";
+import { POST as leadCreatePOST, GET as leadListGET } from "@/app/api/leads/[id]/agent-runs/route";
 import { GET as pollGET } from "@/app/api/site-agent/runs/[id]/route";
 import { NOTIFICATION_EVENTS } from "@/lib/notifications/events";
 
@@ -247,38 +265,47 @@ describe("agentRunAccess", () => {
     expect("error" in out && out.status).toBe(404);
   });
 
-  it("a run whose ticket is gone opens for studio.manage only", async () => {
-    accessState.run = { id: "run-1", ticket_id: null, lead_id: null, site_host: "h", status: "review", files: {}, created_by: null };
+  it("v2: a null-ticket run is a first-class ticketless run — admitted for ANY perms holder", async () => {
+    // v1 kept these operator-only (a null ticket meant a purged ticket).
+    // v2's ticketless lead runs share the shape, and the operator accepted
+    // the loosening for purged-ticket orphans too — resolvers now act on both.
+    accessState.run = { id: "run-1", ticket_id: null, lead_id: "lead-1", site_host: "h", status: "review", files: {}, created_by: null };
     accessState.perms = new Set(["tickets.resolve"]);
-    const denied = await agentRunAccess(accessAdmin(), "run-1");
-    expect("error" in denied && denied.status).toBe(403);
+    const asResolver = await agentRunAccess(accessAdmin(), "run-1");
+    expect("run" in asResolver).toBe(true);
     accessState.perms = new Set(["studio.manage"]);
-    const allowed = await agentRunAccess(accessAdmin(), "run-1");
-    expect("run" in allowed).toBe(true);
+    const asOperator = await agentRunAccess(accessAdmin(), "run-1");
+    expect("run" in asOperator).toBe(true);
   });
 });
 
 // — appended by Task 8 —
 const ticketCtx = (id = "t-1") => ({ params: Promise.resolve({ id }) });
+const postJson = (body: unknown) =>
+  new Request("http://x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+function seedTicketCreate() {
+  accessState.user = { id: "dev-1" };
+  accessState.perms = new Set(["tickets.resolve"]);
+  adminState.reset();
+  adminState.ticket = {
+    id: "t-1", status: "Assigned", lead_id: "lead-1", created_by: "sales-1", assigned_to: "dev-1",
+    title: "Fix hero", lead: { website_link: "https://acme.dmviral.com", business_name: "Acme" },
+  };
+  liveMock.fetchLiveSiteZip.mockReset();
+  liveMock.prepareSiteZip.mockReset();
+  liveMock.isProtectedDomain.mockReset();
+  liveMock.isProtectedDomain.mockReturnValue(false);
+  // The route's staging-precedence check runs the REAL subFromWebsiteLink,
+  // which needs the apex to recognise our client subdomains.
+  process.env.DA_DOMAIN = "dmviral.com";
+  liveMock.fetchLiveSiteZip.mockResolvedValue({ ok: true, zip: new Uint8Array([80, 75]), host: "acme.dmviral.com", source: "staging" });
+  liveMock.prepareSiteZip.mockReturnValue({ ok: true, zip: new Uint8Array([80, 75, 3, 4]), files: 1 });
+}
 
 describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
   beforeEach(() => {
-    accessState.user = { id: "dev-1" };
-    accessState.perms = new Set(["tickets.resolve"]);
-    adminState.reset();
-    adminState.ticket = {
-      id: "t-1", status: "Assigned", lead_id: "lead-1", created_by: "sales-1", assigned_to: "dev-1",
-      title: "Fix hero", lead: { website_link: "https://acme.dmviral.com", business_name: "Acme" },
-    };
-    liveMock.fetchLiveSiteZip.mockReset();
-    liveMock.prepareSiteZip.mockReset();
-    liveMock.isProtectedDomain.mockReset();
-    liveMock.isProtectedDomain.mockReturnValue(false);
-    // The route's staging-precedence check runs the REAL subFromWebsiteLink,
-    // which needs the apex to recognise our client subdomains.
-    process.env.DA_DOMAIN = "dmviral.com";
-    liveMock.fetchLiveSiteZip.mockResolvedValue({ ok: true, zip: new Uint8Array([80, 75]), host: "acme.dmviral.com", source: "staging" });
-    liveMock.prepareSiteZip.mockReturnValue({ ok: true, zip: new Uint8Array([80, 75, 3, 4]), files: 1 });
+    seedTicketCreate();
   });
 
   it("creates a queued run bound to the lead's site, storing the original zip BEFORE the row", async () => {
@@ -381,6 +408,281 @@ describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
   });
 });
 
+// — appended by v2 Task 4 —
+describe("POST /api/tickets/[id]/agent-runs — v2 scope/task/model intake", () => {
+  beforeEach(() => {
+    seedTicketCreate();
+    adminState.itemsList = [
+      { id: "i-1", is_done: false },
+      { id: "i-2", is_done: false },
+      { id: "i-3", is_done: true },
+    ];
+  });
+
+  it("a plain create stores null scope/task/model — the v1 whole-ticket shape", async () => {
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(201);
+    const ins = adminState.inserts.find((i) => i.table === "site_agent_runs");
+    expect(ins?.values).toMatchObject({ item_ids: null, task_text: null, model: null });
+  });
+
+  it("stores a proper subset of the undone items as item_ids", async () => {
+    const res = await createRunPOST(postJson({ item_ids: ["i-2"] }), ticketCtx());
+    expect(res.status).toBe(201);
+    const ins = adminState.inserts.find((i) => i.table === "site_agent_runs");
+    expect(ins?.values.item_ids).toEqual(["i-2"]);
+  });
+
+  it("normalizes ALL undone ids to null — whole-ticket has exactly one representation", async () => {
+    const res = await createRunPOST(postJson({ item_ids: ["i-1", "i-2"] }), ticketCtx());
+    expect(res.status).toBe(201);
+    const ins = adminState.inserts.find((i) => i.table === "site_agent_runs");
+    expect(ins?.values.item_ids).toBeNull();
+  });
+
+  it("422s an unknown item id, naming it, before any fetch", async () => {
+    const res = await createRunPOST(postJson({ item_ids: ["i-9"] }), ticketCtx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain("i-9");
+    expect(liveMock.fetchLiveSiteZip).not.toHaveBeenCalled();
+    expect(adminState.inserts).toHaveLength(0);
+  });
+
+  it("422s an already-done item id, naming it", async () => {
+    const res = await createRunPOST(postJson({ item_ids: ["i-3"] }), ticketCtx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/i-3.+done/i);
+  });
+
+  it("422s an explicitly EMPTY selection", async () => {
+    const res = await createRunPOST(postJson({ item_ids: [] }), ticketCtx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/at least one change/i);
+    expect(liveMock.fetchLiveSiteZip).not.toHaveBeenCalled();
+  });
+
+  it("trims task_text and stores it; whitespace-only stores null", async () => {
+    let res = await createRunPOST(postJson({ task_text: "  fix the hero  " }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect(adminState.inserts.find((i) => i.table === "site_agent_runs")?.values.task_text).toBe("fix the hero");
+    seedTicketCreate();
+    res = await createRunPOST(postJson({ task_text: "   " }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect(adminState.inserts.find((i) => i.table === "site_agent_runs")?.values.task_text).toBeNull();
+  });
+
+  it("422s task_text over 4000 characters", async () => {
+    const res = await createRunPOST(postJson({ task_text: "x".repeat(4001) }), ticketCtx());
+    expect(res.status).toBe(422);
+    expect(adminState.inserts).toHaveLength(0);
+  });
+
+  it("accepts any non-empty model ≤100ch when NO list is published — the worker is the authority", async () => {
+    const res = await createRunPOST(postJson({ model: "gemini-3.7" }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect(adminState.inserts.find((i) => i.table === "site_agent_runs")?.values.model).toBe("gemini-3.7");
+  });
+
+  it("422s a model id over 100 characters even with no list", async () => {
+    const res = await createRunPOST(postJson({ model: "m".repeat(101) }), ticketCtx());
+    expect(res.status).toBe(422);
+  });
+
+  it("validates the model against the published list when one exists", async () => {
+    adminState.settings = {
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: [{ id: "m-1", label: "One" }] },
+    };
+    let res = await createRunPOST(postJson({ model: "m-9" }), ticketCtx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain("m-9");
+    seedTicketCreate();
+    adminState.settings = {
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: [{ id: "m-1", label: "One" }] },
+    };
+    res = await createRunPOST(postJson({ model: "m-1" }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect(adminState.inserts.find((i) => i.table === "site_agent_runs")?.values.model).toBe("m-1");
+  });
+
+  it("treats an empty model string as the Antigravity default (null)", async () => {
+    const res = await createRunPOST(postJson({ model: "  " }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect(adminState.inserts.find((i) => i.table === "site_agent_runs")?.values.model).toBeNull();
+  });
+});
+
+describe("POST /api/tickets/[id]/agent-runs — F3 auto-start", () => {
+  beforeEach(() => {
+    seedTicketCreate();
+  });
+
+  it("an Assigned ticket auto-starts with the manual Start action's writes, stamped auto", async () => {
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(201);
+    // Mirror of the PATCH "start" case: same update fields on lead_tickets…
+    const upd = adminState.updates.find((u) => u.table === "lead_tickets");
+    expect(upd?.values).toMatchObject({ status: "In Progress" });
+    expect(upd?.values.updated_at).toEqual(expect.any(String));
+    expect(Object.keys(upd!.values).sort()).toEqual(["status", "updated_at"]);
+    // …same activity row, plus the auto marker (nobody clicked Start).
+    const started = adminState.inserts.find((i) => i.values.action === "ticket.started");
+    expect(started?.values).toMatchObject({ user_id: "dev-1", entity_type: "ticket", entity_id: "t-1" });
+    expect(started?.values.new_value).toEqual({ status: "In Progress", auto: true });
+    // The run's own activity row still lands first — the run caused the start.
+    const actions = adminState.inserts.filter((i) => i.table === "activity_log").map((i) => i.values.action);
+    expect(actions).toEqual(["site_agent.run.created", "ticket.started"]);
+  });
+
+  it("leaves an In Progress ticket untouched", async () => {
+    adminState.ticket = { ...adminState.ticket!, status: "In Progress" };
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect(adminState.updates.filter((u) => u.table === "lead_tickets")).toHaveLength(0);
+    expect(adminState.inserts.some((i) => i.values.action === "ticket.started")).toBe(false);
+  });
+
+  it("a failed auto-start never fails the created run (best-effort)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    adminState.ticketUpdateError = { message: "boom" };
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect((await res.json()).run).toBeTruthy();
+    expect(adminState.inserts.some((i) => i.values.action === "ticket.started")).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+const leadCtx = (id = "lead-1") => ({ params: Promise.resolve({ id }) });
+
+function seedLeadCreate() {
+  accessState.user = { id: "dev-1" };
+  accessState.perms = new Set(["tickets.resolve"]);
+  adminState.reset();
+  adminState.lead = { id: "lead-1", website_link: "https://acme.dmviral.com", business_name: "Acme" };
+  liveMock.fetchLiveSiteZip.mockReset();
+  liveMock.prepareSiteZip.mockReset();
+  liveMock.isProtectedDomain.mockReset();
+  liveMock.isProtectedDomain.mockReturnValue(false);
+  process.env.DA_DOMAIN = "dmviral.com";
+  liveMock.fetchLiveSiteZip.mockResolvedValue({ ok: true, zip: new Uint8Array([80, 75]), host: "acme.dmviral.com", source: "staging" });
+  liveMock.prepareSiteZip.mockReturnValue({ ok: true, zip: new Uint8Array([80, 75, 3, 4]), files: 1 });
+}
+
+describe("POST /api/leads/[id]/agent-runs (AI edit site — ticketless)", () => {
+  beforeEach(() => {
+    seedLeadCreate();
+  });
+
+  it("creates a ticketless run: ticket_id null, task_text stored, zip BEFORE row, activity on the LEAD", async () => {
+    const res = await leadCreatePOST(postJson({ task_text: "Change the phone number" }), leadCtx());
+    expect(res.status).toBe(201);
+    const ins = adminState.inserts.find((i) => i.table === "site_agent_runs");
+    expect(ins?.values).toMatchObject({
+      ticket_id: null, lead_id: "lead-1", site_host: "acme.dmviral.com",
+      task_text: "Change the phone number", model: null, created_by: "dev-1",
+    });
+    const runId = ins?.values.id as string;
+    expect(runId).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
+    expect(adminState.uploads[0]).toEqual({ bucket: "agent-sites", path: `${runId}/original.zip` });
+    expect(adminState.ops.indexOf("upload")).toBeLessThan(adminState.ops.indexOf("insert:site_agent_runs"));
+    const log = adminState.inserts.find((i) => i.table === "activity_log");
+    expect(log?.values).toMatchObject({ action: "site_agent.run.created", entity_type: "lead", entity_id: "lead-1" });
+  });
+
+  it("422s a missing or empty task_text before any fetch — the task IS the ticket here", async () => {
+    for (const req of [new Request("http://x", { method: "POST" }), postJson({}), postJson({ task_text: "   " })]) {
+      const res = await leadCreatePOST(req, leadCtx());
+      expect(res.status).toBe(422);
+    }
+    expect(liveMock.fetchLiveSiteZip).not.toHaveBeenCalled();
+    expect(adminState.inserts).toHaveLength(0);
+  });
+
+  it("422s task_text over 4000 characters", async () => {
+    const res = await leadCreatePOST(postJson({ task_text: "x".repeat(4001) }), leadCtx());
+    expect(res.status).toBe(422);
+  });
+
+  it("404s an unknown lead", async () => {
+    adminState.lead = null;
+    const res = await leadCreatePOST(postJson({ task_text: "t" }), leadCtx());
+    expect(res.status).toBe(404);
+  });
+
+  it("422s a lead with no website link", async () => {
+    adminState.lead = { ...adminState.lead!, website_link: null };
+    const res = await leadCreatePOST(postJson({ task_text: "t" }), leadCtx());
+    expect(res.status).toBe(422);
+  });
+
+  it("403s a protected NON-staging host but keeps staging editable (check-order copy)", async () => {
+    adminState.lead = { ...adminState.lead!, website_link: "https://lms.sedsolutions.online" };
+    liveMock.isProtectedDomain.mockReturnValue(true);
+    let res = await leadCreatePOST(postJson({ task_text: "t" }), leadCtx());
+    expect(res.status).toBe(403);
+    expect(liveMock.fetchLiveSiteZip).not.toHaveBeenCalled();
+    seedLeadCreate();
+    liveMock.isProtectedDomain.mockReturnValue(true); // the apex is ALWAYS protected
+    res = await leadCreatePOST(postJson({ task_text: "t" }), leadCtx());
+    expect(res.status).toBe(201);
+  });
+
+  it("409s the per-lead unique-index violation with a friendly message and removes the orphan zip", async () => {
+    adminState.insertError = {
+      message: 'duplicate key value violates unique constraint "site_agent_runs_one_active_per_lead"',
+      code: "23505",
+    };
+    const res = await leadCreatePOST(postJson({ task_text: "t" }), leadCtx());
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/already in flight for this lead/i);
+    const uploadedPath = adminState.uploads[0]?.path;
+    expect(adminState.removes).toEqual([{ bucket: "agent-sites", paths: [uploadedPath] }]);
+    expect(adminState.inserts.filter((i) => i.table === "activity_log")).toHaveLength(0);
+  });
+
+  it("validates the model against the published list (shared intake with the ticket route)", async () => {
+    adminState.settings = {
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: [{ id: "m-1", label: "One" }] },
+    };
+    const res = await leadCreatePOST(postJson({ task_text: "t", model: "m-9" }), leadCtx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain("m-9");
+  });
+
+  it("403s a caller without either permission", async () => {
+    accessState.perms = new Set(["leads.view"]);
+    const res = await leadCreatePOST(postJson({ task_text: "t" }), leadCtx());
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("GET /api/leads/[id]/agent-runs (ticketless run history)", () => {
+  beforeEach(() => {
+    seedLeadCreate();
+    adminState.runsList = [{ id: "run-7", status: "review" }];
+    adminState.settings = {
+      agent_worker_seen_at: new Date().toISOString(),
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: [{ id: "m-1", label: "One" }] },
+    };
+  });
+
+  it("lists the lead's ticketless runs with worker status + models (the dialog opens pre-run)", async () => {
+    const res = await leadListGET(new Request("http://x"), leadCtx());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.runs).toEqual([{ id: "run-7", status: "review" }]);
+    expect(body.workerOnline).toBe(true);
+    expect(body.models).toEqual([{ id: "m-1", label: "One" }]);
+  });
+
+  it("403s a caller without either permission", async () => {
+    accessState.perms = new Set(["leads.view"]);
+    const res = await leadListGET(new Request("http://x"), leadCtx());
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("GET /api/tickets/[id]/agent-runs (run history)", () => {
   beforeEach(() => {
     accessState.user = { id: "dev-1" };
@@ -401,6 +703,17 @@ describe("GET /api/tickets/[id]/agent-runs (run history)", () => {
     const res = await listRunsGET(new Request("http://x"), ticketCtx());
     expect(res.status).toBe(200);
     expect((await res.json()).runs).toEqual([{ id: "run-1", status: "review" }]);
+  });
+
+  it("v2: ships worker status + models alongside the runs (the dialog opens pre-run)", async () => {
+    accessState.perms = new Set(["studio.manage"]);
+    adminState.settings = {
+      agent_worker_seen_at: new Date().toISOString(),
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: [{ id: "m-1", label: "One" }] },
+    };
+    const body = await (await listRunsGET(new Request("http://x"), ticketCtx())).json();
+    expect(body.workerOnline).toBe(true);
+    expect(body.models).toEqual([{ id: "m-1", label: "One" }]);
   });
 });
 
@@ -433,6 +746,24 @@ describe("GET /api/site-agent/runs/[id] (panel poll)", () => {
     accessState.user = null;
     const res = await pollGET(new Request("http://x"), ticketCtx("run-1"));
     expect(res.status).toBe(401);
+  });
+
+  it("v2: the poll payload carries the published model list", async () => {
+    adminState.settings = {
+      agent_worker_seen_at: new Date().toISOString(),
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: [{ id: "m-1", label: "One" }, { id: "m-2", label: "Two" }] },
+    };
+    const body = await (await pollGET(new Request("http://x"), ticketCtx("run-1"))).json();
+    expect(body.models).toEqual([{ id: "m-1", label: "One" }, { id: "m-2", label: "Two" }]);
+  });
+
+  it("v2: models is [] when nothing is published or the shape is malformed", async () => {
+    adminState.settings = { agent_worker_seen_at: new Date().toISOString(), agent_worker_models: { models: "bogus" } };
+    let body = await (await pollGET(new Request("http://x"), ticketCtx("run-1"))).json();
+    expect(body.models).toEqual([]);
+    adminState.settings = { agent_worker_seen_at: new Date().toISOString() };
+    body = await (await pollGET(new Request("http://x"), ticketCtx("run-1"))).json();
+    expect(body.models).toEqual([]);
   });
 });
 

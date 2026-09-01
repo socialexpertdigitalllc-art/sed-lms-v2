@@ -6,6 +6,12 @@
  * ticket-object scope (canActOnTicket) so a tech user can only reach runs on
  * tickets they could act on anyway. studio.manage bypasses scoping (board
  * operators see everything, as on the deployments board).
+ *
+ * v2 F5: runs with `ticket_id === null` are first-class TICKETLESS runs
+ * (direct lead edits) — admitted for any ALLOWED_PERMS holder, no object
+ * scope to check. The old rule ("null ticket = purged ticket = operator
+ * territory") is gone: the operator accepted that purged-ticket orphans
+ * loosen up alongside genuine direct edits.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
@@ -31,16 +37,15 @@ export async function agentRunAccess(admin: SupabaseClient, runId: string): Prom
 
   const { data: run } = await admin
     .from("site_agent_runs")
-    .select("id, ticket_id, lead_id, site_host, status, claim_id, conversation_id, instructions, files, output_tail, summary, usage, error, created_by, created_at, updated_at")
+    .select("id, ticket_id, lead_id, site_host, status, claim_id, conversation_id, instructions, files, output_tail, summary, usage, error, created_by, created_at, updated_at, item_ids, task_text, model")
     .eq("id", runId)
     .maybeSingle();
   if (!run) return { error: NextResponse.json({ error: "Run not found" }, { status: 404 }), status: 404 };
 
-  if (!perms.has("studio.manage")) {
-    // Object-level scope rides the ticket; a run whose ticket is gone is
-    // operator territory only.
-    const ticketId = (run as AgentRunRow).ticket_id;
-    if (!ticketId) return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }), status: 403 };
+  const ticketId = (run as AgentRunRow).ticket_id;
+  // Object-level scope rides the ticket — a null-ticket run (ticketless
+  // direct edit, F5) has none, and any ALLOWED_PERMS holder may act on it.
+  if (!perms.has("studio.manage") && ticketId) {
     const { data: ticket } = await admin
       .from("lead_tickets")
       .select("id, created_by, lead_id, assigned_to")

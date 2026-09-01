@@ -38,6 +38,23 @@ vi.mock("@/lib/site-studio/deploy/liveFiles", () => ({
   prepareSiteZip: deployMock.prepareSiteZip,
 }));
 
+// — appended by v2 Task 4: the F3 automation (approve + items toggle) mirrors
+// the manual resolve's notifyTicket call, and the toggle route needs a session.
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/tickets/notify", () => ({ notifyTicket: notifyMock }));
+const authState = vi.hoisted(() => ({
+  user: { id: "dev-1" } as { id: string } | null,
+  perms: new Set<string>(["tickets.resolve"]),
+}));
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({ auth: { getUser: async () => ({ data: { user: authState.user } }) } }),
+}));
+vi.mock("@/lib/permissions/resolver", () => ({ getUserPermissions: async () => authState.perms }));
+vi.mock("@/lib/tickets/scope", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  allowedTicketScope: async () => ({ all: false, leadIds: new Set<string>() }),
+}));
+
 // CAS-honoring fake admin: an update on site_agent_runs applies against dbRun
 // only when EVERY .eq() filter matches the row as it stands NOW — so the
 // review→deploying→deployed/back-to-review transitions and their guards
@@ -48,13 +65,20 @@ const adminState = vi.hoisted(() => {
   type Chain = {
     select: (...a: unknown[]) => Chain;
     eq: (f: string, v: unknown) => Chain;
+    in: (f: string, vs: unknown[]) => Chain;
     update: (values: Row) => Chain;
     insert: (values: Row) => Chain;
     maybeSingle: () => Promise<Result>;
+    single: () => Promise<Result>;
     then: <T>(resolve: (v: Result) => T, reject?: (e: unknown) => T) => Promise<T>;
   };
   const state = {
     dbRun: null as Row | null,
+    /** v2 F3 — mutable ticket-domain rows: updates APPLY, so the all-done
+     *  check after item marking sees what the route actually wrote. */
+    items: [] as Row[],
+    ticketRow: null as Row | null,
+    leadRow: null as Row | null,
     downloadBlob: null as { arrayBuffer(): Promise<ArrayBuffer> } | null,
     downloads: [] as string[],
     removes: [] as string[][],
@@ -63,23 +87,40 @@ const adminState = vi.hoisted(() => {
     client: null as unknown,
     reset() {
       state.dbRun = null;
+      state.items = []; state.ticketRow = null; state.leadRow = null;
       state.downloadBlob = { arrayBuffer: async () => new Uint8Array([80, 75, 3, 4]).buffer as ArrayBuffer };
       state.downloads = []; state.removes = []; state.inserts = []; state.updates = [];
     },
   };
   function query(table: string): Chain {
     const filters: [string, unknown][] = [];
+    const inFilters: [string, unknown[]][] = [];
     let updateValues: Row | null = null;
+    const rowMatches = (row: Row) =>
+      filters.every(([f, v]) => row[f] === v) && inFilters.every(([f, vs]) => vs.includes(row[f]));
     const applyCas = (): { data: { id: unknown } | null } => {
       const row = state.dbRun;
       if (!row || !filters.every(([f, v]) => row[f] === v)) return { data: null };
       Object.assign(row, updateValues);
       return { data: { id: row.id } };
     };
+    const applyItems = (): Row[] => {
+      const hit = state.items.filter(rowMatches);
+      for (const r of hit) Object.assign(r, updateValues);
+      return hit;
+    };
+    const applyTicket = (): Row | null => {
+      if (state.ticketRow && rowMatches(state.ticketRow)) {
+        Object.assign(state.ticketRow, updateValues);
+        return state.ticketRow;
+      }
+      return null;
+    };
     const record = () => { if (updateValues) state.updates.push({ table, values: updateValues, filters }); };
     const q: Chain = {
       select: () => q,
       eq: (f, v) => { filters.push([f, v]); return q; },
+      in: (f, vs) => { inFilters.push([f, vs]); return q; },
       update: (values) => { updateValues = values; return q; },
       insert: (values) => { state.inserts.push({ table, values }); return q; },
       maybeSingle: async () => {
@@ -88,12 +129,43 @@ const adminState = vi.hoisted(() => {
           record();
           return { ...r, error: null };
         }
+        if (table === "lead_tickets" && !updateValues) {
+          const row = state.ticketRow && rowMatches(state.ticketRow) ? { ...state.ticketRow } : null;
+          return { data: row, error: null };
+        }
+        if (table === "leads" && !updateValues) {
+          const row = state.leadRow && rowMatches(state.leadRow) ? { ...state.leadRow } : null;
+          return { data: row, error: null };
+        }
+        return { data: null, error: null };
+      },
+      single: async () => {
+        if (table === "lead_tickets" && updateValues) {
+          const row = applyTicket();
+          record();
+          return { data: row ? { ...row } : null, error: row ? null : { message: "no row" } };
+        }
+        if (table === "ticket_items" && updateValues) {
+          const hit = applyItems();
+          record();
+          return { data: hit[0] ? { ...hit[0] } : null, error: hit[0] ? null : { message: "no row" } };
+        }
+        if (table === "lead_tickets") {
+          const row = state.ticketRow && rowMatches(state.ticketRow) ? { ...state.ticketRow } : null;
+          return { data: row, error: row ? null : { message: "no row" } };
+        }
         return { data: null, error: null };
       },
       then: (resolve, reject) => {
         if (updateValues && table === "site_agent_runs") applyCas();
+        if (updateValues && table === "ticket_items") applyItems();
+        if (updateValues && table === "lead_tickets") applyTicket();
         record();
-        return Promise.resolve({ data: null, error: null } as Result).then(resolve, reject);
+        const data =
+          !updateValues && table === "ticket_items"
+            ? state.items.filter(rowMatches).map((r) => ({ ...r }))
+            : null;
+        return Promise.resolve({ data, error: null } as Result).then(resolve, reject);
       },
     };
     return q;
@@ -117,6 +189,7 @@ vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => adminState.cli
 import { POST as approvePOST } from "@/app/api/site-agent/runs/[id]/approve/route";
 import { POST as revisePOST } from "@/app/api/site-agent/runs/[id]/revise/route";
 import { POST as discardPOST } from "@/app/api/site-agent/runs/[id]/discard/route";
+import { PATCH as toggleItemPATCH } from "@/app/api/tickets/[id]/items/[itemId]/route";
 
 const ctx = (id = "run-1") => ({ params: Promise.resolve({ id }) });
 const post = (body?: unknown) =>
@@ -141,6 +214,9 @@ function seedRun(status: string, extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   accessState.errorStatus = null;
   adminState.reset();
+  notifyMock.mockReset();
+  authState.user = { id: "dev-1" };
+  authState.perms = new Set(["tickets.resolve"]);
   deployMock.order.length = 0;
   deployMock.snapshotSite.mockReset().mockImplementation(async () => {
     deployMock.order.push("snapshot");
@@ -175,7 +251,8 @@ describe("POST /api/site-agent/runs/[id]/approve", () => {
     const proof = adminState.inserts.find((i) => i.values.action === "studio.site.files_overridden");
     expect(proof?.values).toMatchObject({ entity_type: "ticket", entity_id: "t-1" });
     expect((proof?.values.new_value as Record<string, unknown>).via).toBe("site_agent");
-    expect(adminState.inserts.some((i) => i.values.action === "site_agent.run.deployed")).toBe(true);
+    const own = adminState.inserts.find((i) => i.values.action === "site_agent.run.deployed");
+    expect(own?.values).toMatchObject({ entity_type: "ticket", entity_id: "t-1" });
 
     // board stamp mirrors the manual override tail EXACTLY: match by
     // subdomain when present, and only rows whose status is "live"
@@ -224,13 +301,16 @@ describe("POST /api/site-agent/runs/[id]/approve", () => {
     expect(adminState.inserts).toHaveLength(0);
   });
 
-  it("a ticketless run deploys without the ticket-proof row but keeps its own history row", async () => {
+  it("v2: a lead run (ticketless) skips the ticket-proof row; its history row lands on the LEAD", async () => {
     seedRun("review", { ticket_id: null });
     const res = await approvePOST(post(), ctx());
     expect(res.status).toBe(200);
     expect(adminState.inserts.some((i) => i.values.action === "studio.site.files_overridden")).toBe(false);
     const own = adminState.inserts.find((i) => i.values.action === "site_agent.run.deployed");
-    expect(own?.values).toMatchObject({ entity_id: null });
+    expect(own?.values).toMatchObject({ entity_type: "lead", entity_id: "lead-1" });
+    // …and NO ticket automation runs for it.
+    expect(adminState.updates.some((u) => u.table === "ticket_items" || u.table === "lead_tickets")).toBe(false);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("a failed snapshot warns but never blocks the deploy", async () => {
@@ -241,6 +321,157 @@ describe("POST /api/site-agent/runs/[id]/approve", () => {
     expect(adminState.dbRun?.status).toBe("deployed");
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+// — appended by v2 Task 4 —
+describe("approve — F3 ticket automation (items done + auto-resolve)", () => {
+  const seedItems = (defs: [string, boolean][]) => {
+    adminState.items = defs.map(([id, done]) => ({
+      id, ticket_id: "t-1", is_done: done,
+      done_at: done ? "2026-09-01T00:00:00Z" : null, done_by: done ? "someone" : null,
+    }));
+  };
+
+  beforeEach(() => {
+    adminState.ticketRow = { id: "t-1", status: "In Progress", lead_id: "lead-1", assigned_to: "dev-1", created_by: "sales-1" };
+    adminState.leadRow = { id: "lead-1", business_name: "Acme", agent_id: "agent-9" };
+  });
+
+  it("marks ONLY the run's item_ids done and leaves the ticket open while items remain", async () => {
+    seedItems([["i-1", false], ["i-2", false]]);
+    seedRun("review", { item_ids: ["i-1"] });
+    const res = await approvePOST(post(), ctx());
+    expect(res.status).toBe(200);
+    const [i1, i2] = adminState.items;
+    expect(i1).toMatchObject({ is_done: true, done_by: "dev-1" });
+    expect(i1.done_at).toEqual(expect.any(String));
+    expect(i2.is_done).toBe(false);
+    expect(adminState.ticketRow?.status).toBe("In Progress");
+    expect(adminState.inserts.some((i) => i.values.action === "ticket.resolved")).toBe(false);
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("a whole-ticket run (null item_ids) marks every UNDONE item done and auto-resolves, mirroring the manual resolve", async () => {
+    seedItems([["i-1", false], ["i-2", true]]);
+    seedRun("review", { item_ids: null });
+    const res = await approvePOST(post(), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.items.every((i) => i.is_done)).toBe(true);
+    // i-2 was ALREADY done — its original done_by/done_at must survive.
+    expect(adminState.items[1]).toMatchObject({ done_by: "someone", done_at: "2026-09-01T00:00:00Z" });
+    // The resolve mirror: exactly the PATCH "resolve" action's update fields…
+    expect(adminState.ticketRow).toMatchObject({
+      status: "Resolved", resolved_by: "dev-1",
+      resolution_note: "All change items completed (AI developer).",
+    });
+    expect(adminState.ticketRow?.resolved_at).toEqual(expect.any(String));
+    const upd = adminState.updates.find((u) => u.table === "lead_tickets");
+    expect(Object.keys(upd!.values).sort()).toEqual(["resolution_note", "resolved_at", "resolved_by", "status", "updated_at"]);
+    // …its activity row with the auto marker…
+    const log = adminState.inserts.find((i) => i.values.action === "ticket.resolved");
+    expect(log?.values).toMatchObject({ user_id: "dev-1", entity_type: "ticket", entity_id: "t-1" });
+    expect(log?.values.new_value).toEqual({
+      resolution_note: "All change items completed (AI developer).", auto: true,
+    });
+    // …and its notifyTicket call.
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({
+      eventKey: "ticket_resolved", ticketId: "t-1", leadId: "lead-1",
+      ticket: { assigned_to: "dev-1", created_by: "sales-1" },
+      lead: { agent_id: "agent-9", closed_by: null },
+      actorId: "dev-1", title: "Ticket resolved",
+    }));
+  });
+
+  it("a scoped run covering the LAST undone item resolves the ticket too", async () => {
+    seedItems([["i-1", true], ["i-2", false]]);
+    seedRun("review", { item_ids: ["i-2"] });
+    const res = await approvePOST(post(), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.ticketRow?.status).toBe("Resolved");
+  });
+
+  it("a ZERO-item ticket auto-resolves after deploy", async () => {
+    seedItems([]);
+    seedRun("review");
+    const res = await approvePOST(post(), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.ticketRow?.status).toBe("Resolved");
+    expect(notifyMock).toHaveBeenCalled();
+  });
+
+  it("NO resolve when the ticket is not In Progress", async () => {
+    seedItems([]);
+    adminState.ticketRow = { ...adminState.ticketRow!, status: "Assigned" };
+    seedRun("review");
+    const res = await approvePOST(post(), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.ticketRow?.status).toBe("Assigned");
+    expect(adminState.updates.some((u) => u.table === "lead_tickets")).toBe(false);
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("automation failure never fails the deploy — the site is already live", async () => {
+    seedItems([]);
+    seedRun("review");
+    notifyMock.mockRejectedValue(new Error("smtp down"));
+    const res = await approvePOST(post(), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.dbRun?.status).toBe("deployed");
+    // The resolve itself still landed; only the notification was lost.
+    expect(adminState.ticketRow?.status).toBe("Resolved");
+  });
+});
+
+describe("PATCH /api/tickets/[id]/items/[itemId] — F3 manual-completion auto-resolve", () => {
+  const tctx = (id = "t-1", itemId = "i-2") => ({ params: Promise.resolve({ id, itemId }) });
+  const patch = (body: unknown) =>
+    new Request("http://x", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  beforeEach(() => {
+    adminState.ticketRow = { id: "t-1", status: "In Progress", lead_id: "lead-1", assigned_to: "dev-1", created_by: "sales-1" };
+    adminState.leadRow = { id: "lead-1", business_name: "Acme", agent_id: null };
+    adminState.items = [
+      { id: "i-1", ticket_id: "t-1", is_done: true, done_at: "2026-09-01T00:00:00Z", done_by: "dev-1" },
+      { id: "i-2", ticket_id: "t-1", is_done: false, done_at: null, done_by: null },
+    ];
+  });
+
+  it("toggling the LAST undone item done auto-resolves the In Progress ticket", async () => {
+    const res = await toggleItemPATCH(patch({ is_done: true }), tctx());
+    expect(res.status).toBe(200);
+    expect((await res.json()).item).toMatchObject({ id: "i-2", is_done: true });
+    expect(adminState.ticketRow).toMatchObject({
+      status: "Resolved", resolved_by: "dev-1", resolution_note: "All change items completed.",
+    });
+    const log = adminState.inserts.find((i) => i.values.action === "ticket.resolved");
+    expect(log?.values.new_value).toEqual({ resolution_note: "All change items completed.", auto: true });
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ eventKey: "ticket_resolved", ticketId: "t-1" }));
+  });
+
+  it("no resolve while other items remain undone", async () => {
+    adminState.items.push({ id: "i-3", ticket_id: "t-1", is_done: false, done_at: null, done_by: null });
+    const res = await toggleItemPATCH(patch({ is_done: true }), tctx());
+    expect(res.status).toBe(200);
+    expect(adminState.ticketRow?.status).toBe("In Progress");
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("no resolve when the ticket is not In Progress", async () => {
+    adminState.ticketRow = { ...adminState.ticketRow!, status: "Assigned" };
+    const res = await toggleItemPATCH(patch({ is_done: true }), tctx());
+    expect(res.status).toBe(200);
+    expect(adminState.ticketRow?.status).toBe("Assigned");
+    expect(adminState.inserts.some((i) => i.values.action === "ticket.resolved")).toBe(false);
+  });
+
+  it("untoggling NEVER triggers anything — not even the completeness check", async () => {
+    const res = await toggleItemPATCH(patch({ is_done: false }), tctx("t-1", "i-1"));
+    expect(res.status).toBe(200);
+    expect(adminState.items[0]).toMatchObject({ is_done: false, done_at: null, done_by: null });
+    expect(adminState.ticketRow?.status).toBe("In Progress");
+    expect(adminState.updates.filter((u) => u.table === "lead_tickets")).toHaveLength(0);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 });
 

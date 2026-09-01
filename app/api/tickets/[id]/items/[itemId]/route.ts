@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { allowedTicketScope, canActOnTicket } from "@/lib/tickets/scope";
+import { autoResolveTicketIfComplete } from "@/lib/tickets/autoResolve";
 
 const toggleItemSchema = z.object({ is_done: z.boolean() });
 
@@ -59,6 +60,18 @@ export async function PATCH(
     .select("*")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  // v2 F3 — manual completion: when this toggle made the LAST item done and
+  // the ticket is In Progress, it auto-resolves (best-effort inside the
+  // helper — a failed resolve never fails the committed toggle). Untoggling
+  // deliberately triggers nothing, not even the completeness check.
+  if (is_done) {
+    await autoResolveTicketIfComplete(admin, {
+      ticketId: id,
+      userId: user.id,
+      note: "All change items completed.",
+    });
+  }
 
   return NextResponse.json({ item });
 }
