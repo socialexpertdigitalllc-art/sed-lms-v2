@@ -261,6 +261,9 @@ describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
     liveMock.prepareSiteZip.mockReset();
     liveMock.isProtectedDomain.mockReset();
     liveMock.isProtectedDomain.mockReturnValue(false);
+    // The route's staging-precedence check runs the REAL subFromWebsiteLink,
+    // which needs the apex to recognise our client subdomains.
+    process.env.DA_DOMAIN = "dmviral.com";
     liveMock.fetchLiveSiteZip.mockResolvedValue({ ok: true, zip: new Uint8Array([80, 75]), host: "acme.dmviral.com", source: "staging" });
     liveMock.prepareSiteZip.mockReturnValue({ ok: true, zip: new Uint8Array([80, 75, 3, 4]), files: 1 });
   });
@@ -297,10 +300,25 @@ describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
     expect(res.status).toBe(422);
   });
 
-  it("403s a protected host", async () => {
+  it("403s a protected NON-staging host", async () => {
+    adminState.ticket = {
+      ...adminState.ticket!,
+      lead: { website_link: "https://lms.sedsolutions.online", business_name: "Acme" },
+    };
     liveMock.isProtectedDomain.mockReturnValue(true);
     const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
     expect(res.status).toBe(403);
+    expect(liveMock.fetchLiveSiteZip).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION: a staging subdomain is editable even though the apex is always protected", async () => {
+    // The apex (DA_DOMAIN) sits permanently on the protected list, so
+    // isProtectedDomain() is TRUE for every {sub}.dmviral.com — the check
+    // order (staging first) is what makes client sites editable at all.
+    // Shipped 403ing every staging site on 2026-09-01 before this test.
+    liveMock.isProtectedDomain.mockReturnValue(true);
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(201);
   });
 
   it("409s when a run is already in flight, before any fetch", async () => {

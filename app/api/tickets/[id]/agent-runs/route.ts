@@ -6,6 +6,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { allowedTicketScope, canActOnTicket } from "@/lib/tickets/scope";
 import { fetchLiveSiteZip, prepareSiteZip, siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
 import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
+import { subFromWebsiteLink } from "@/lib/template-engine/directadmin";
 import { AGENT_SITES_BUCKET, AGENT_RUN_ACTIVE_STATUSES, originalZipPath } from "@/lib/site-agent/types";
 
 export const runtime = "nodejs";
@@ -58,7 +59,15 @@ export async function POST(_req: Request, ctx: Ctx) {
   const link = lead?.website_link ?? null;
   const host = link ? siteHostFrom(link) : null;
   if (!host) return NextResponse.json({ error: "This lead has no website link — nothing to edit." }, { status: 422 });
-  if (isProtectedDomain(host)) return NextResponse.json({ error: "That host is protected infrastructure." }, { status: 403 });
+  // CHECK ORDER IS LOAD-BEARING (same precedence as fetchLiveSiteZip): the
+  // staging apex is ALWAYS on the protected list, so a bare
+  // isProtectedDomain() would refuse every {sub}.DA_DOMAIN client site.
+  // A staging subdomain of ours is exactly what this feature edits; only
+  // NON-staging hosts go through the protected-infrastructure refusal.
+  const stagingSub = subFromWebsiteLink(link, process.env.DA_DOMAIN ?? "");
+  if (!stagingSub && isProtectedDomain(host)) {
+    return NextResponse.json({ error: "That host is protected infrastructure." }, { status: 403 });
+  }
 
   const { data: active } = await admin
     .from("site_agent_runs")
