@@ -40,7 +40,13 @@ export interface AgentRunRow {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  item_ids: string[] | null;
+  task_text: string | null;
+  model: string | null;
 }
+
+/** A single agy-published model choice (`agy models` TSV: id\tlabel). */
+export interface AgyModel { id: string; label: string }
 
 export function originalZipPath(runId: string): string { return `${runId}/original.zip`; }
 export function resultZipPath(runId: string): string { return `${runId}/result.zip`; }
@@ -51,7 +57,11 @@ export const MAX_CHANGED_FILES = 200;
 export const MAX_RESULT_BYTES = 50 * 1024 * 1024; // deploy route's own cap is 60MB
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
-export const TAIL_MAX_CHARS = 2048;
+/** v2 F6: real agent text (not just step labels) streams into the tail now,
+ *  so it needs real room — 2048 was step-label-sized. */
+export const TAIL_MAX_CHARS = 6000;
+/** v2 F2: worker's `agy models` re-fetch cadence — at most this often per poll cycle. */
+export const MODELS_REFRESH_MS = 10 * 60_000;
 /** Worker → row progress patch cadence; keep well under the 2s dashboard poll
  *  but never write per-chunk. */
 export const PROGRESS_THROTTLE_MS = 2500;
