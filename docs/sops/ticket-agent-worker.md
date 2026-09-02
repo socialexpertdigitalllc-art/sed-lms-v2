@@ -28,11 +28,25 @@ runs the agent; it only creates runs and deploys approved results.
 
 | Symptom | Cause / fix |
 |---|---|
-| Runs sit "Waiting for the agent worker", panel says worker offline | Box off, pm2 dead (`pm2 list` — known failure: empty list + missing dump → recreate + `pm2 save`), or `AGENT_WORKER_ENABLED` missing |
+| Runs sit "Waiting for the agent worker", panel says worker offline | Box off, pm2 dead or app stopped (`pm2 list`; fix: `pm2 start sed-lms` then **`pm2 save`**), or `AGENT_WORKER_ENABLED` missing |
+| Worker offline after every reboot | Stale pm2 dump: `pm2 resurrect` restores whatever state was last SAVED, and a dump saved while sed-lms was stopped resurrects it stopped (this stranded the worker for 11h on 2026-09-02). Fix: `pm2 start sed-lms && pm2 save`. Guard: the `SED-LMS-agent-worker-ensure` HKCU Run entry (script `C:\Users\pc\.pm2\ensure-sed-worker.cmd`) force-starts sed-lms ~30s after logon and re-saves the dump |
 | Runs fail with auth/sign-in errors | agy's cached sign-in expired — sign in again on the box (interactive `agy`) |
 | Runs fail with quota/rate errors | The Pro plan's 5-hour Antigravity window is exhausted — retry later, buy AI credits, or (last resort) switch the worker to API-key billing (`GEMINI_API_KEY` for agy) |
 | A run stuck "Deploying" >10 min | The approve request died mid-deploy — the panel's Stop button becomes available after 10 minutes; discard and re-approve |
 | Disk fills on the box | Scratch workspaces live under `%TEMP%\sed-agent\` — safe to delete anything there while no run is active |
+
+## Reboots and pm2 save discipline
+
+The box auto-recovers from a reboot in two logon steps (both HKCU Run
+entries): `PM2` (pm2-windows-startup) runs `pm2 resurrect`, then
+`SED-LMS-agent-worker-ensure` runs `C:\Users\pc\.pm2\ensure-sed-worker.cmd`
+30s later, which `pm2 start sed-lms` + `pm2 save` regardless of what the
+dump said. Expect the worker online ~1 minute after logon — the box must be
+LOGGED IN, not just powered on (Run entries fire at logon).
+
+Whenever you deliberately change pm2 state (stop for a rebuild, new app),
+finish with `pm2 save` while things are in the state you want restored.
+Never save while sed-lms is stopped.
 
 ## Kill switch
 
