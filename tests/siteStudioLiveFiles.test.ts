@@ -241,30 +241,40 @@ describe("overrideLiveSite", () => {
     expect(calls.some((u) => u.includes("extract-archive"))).toBe(true);
   });
 
-  it("writes a custom domain's docroot on disk, replacing stale files", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "livefiles-override-"));
-    await writeFile(join(dir, "stale.html"), "old");
-    try {
-      stubFetch([
-        {
-          match: "domain=client.com",
-          respond: () =>
-            Response.json({
-              data: [{ domain: "client.com", root_directory: dir, vhost_type: "", order_id: 1, is_enabled: true }],
-            }),
-        },
-      ]);
-      const prepared = siteZip();
-      const res = await overrideLiveSite("client.com", prepared.zip, prepared.files);
-      expect(res).toMatchObject({ ok: true, host: "client.com", source: "custom", sub: null });
-      const after = await zipDirFromDisk(dir);
-      expect(after.ok).toBe(true);
-      if (after.ok) {
-        expect(Object.keys(unzipToMap(after.zip))).toEqual(["index.html"]);
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+  it("deploys a custom domain over the Hostinger API (upload URL, TUS upload, deploy-from-archive)", async () => {
+    // Since the plan migration, custom domains can live on a DIFFERENT hosting
+    // account than the LMS — a disk write can't reach them. The override must
+    // go through the API deploy flow instead of ever touching the filesystem
+    // (the bogus root_directory would explode if it did).
+    stubFetch([
+      {
+        match: "domain=client.com",
+        respond: () =>
+          Response.json({
+            data: [
+              {
+                domain: "client.com",
+                username: "u447231526",
+                root_directory: "Z:/not-a-real-dir/public_html",
+                vhost_type: "addon",
+                order_id: 1,
+                is_enabled: true,
+              },
+            ],
+          }),
+      },
+      {
+        match: "/api/hosting/v1/files/upload-urls",
+        respond: () => Response.json({ url: "https://srv-files.hstgr.io/", auth_key: "AK", rest_auth_key: "RK" }),
+      },
+      { match: "srv-files.hstgr.io", respond: () => new Response(null, { status: 204 }) },
+      { match: "/websites/client.com/deploy", respond: () => Response.json({ message: "ok" }) },
+    ]);
+    const prepared = siteZip();
+    const res = await overrideLiveSite("client.com", prepared.zip, prepared.files);
+    expect(res).toMatchObject({ ok: true, host: "client.com", source: "custom", sub: null });
+    const urls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/accounts/u447231526/websites/client.com/deploy"))).toBe(true);
   });
 
   it("refuses protected domains and off-hosting domains", async () => {

@@ -7,8 +7,7 @@ import {
   subFromWebsiteLink,
   uploadZipAndExtract,
 } from "@/lib/template-engine/directadmin";
-import { getWebsite, hostingerConfigured } from "@/lib/hostinger/client";
-import { deployZipToDir } from "@/lib/template-engine/fsDeploy";
+import { deployZipToWebsite, getWebsite, hostingerConfigured } from "@/lib/hostinger/client";
 import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import { isProtectedDomain } from "./protected";
 
@@ -17,8 +16,10 @@ import { isProtectedDomain } from "./protected";
  * right now, not the generator artifact. Two sources, mirroring how uploads
  * land (see deployments/[id]/upload):
  *   - staging subdomains ({sub}.DA_DOMAIN): DirectAdmin's download-archive API;
- *   - custom domains: the addon docroot read straight off the shared
- *     Hostinger filesystem (the same disk deployZipToDir writes to).
+ *   - custom domains: WRITES go over the Hostinger API (deployZipToWebsite —
+ *     the sites live on a different hosting account than the LMS since the
+ *     plan migration), while READS still come off the local docroot and so
+ *     only work for the few sites left on the LMS's own account.
  * The staging check MUST come before the protected-domain check — DA_DOMAIN
  * is always in the protected list, so every staging subdomain would otherwise
  * read as protected and be refused.
@@ -128,9 +129,9 @@ export type LiveSiteOverride =
  * Replace a hosted site's live files with a (already prepareSiteZip'd) zip —
  * the write mirror of fetchLiveSiteZip, branching identically: staging
  * subdomains through DirectAdmin (clear + extract in place, same subdomain so
- * the lead's link stays valid), custom domains through the shared Hostinger
- * disk. Same ordering constraint: the staging check MUST precede the
- * protected-domain check.
+ * the lead's link stays valid), custom domains through the Hostinger API
+ * archive deploy. Same ordering constraint: the staging check MUST precede
+ * the protected-domain check.
  */
 export async function overrideLiveSite(rawSite: string, zip: Uint8Array, files: number): Promise<LiveSiteOverride> {
   const host = siteHostFrom(rawSite);
@@ -165,13 +166,14 @@ export async function overrideLiveSite(rawSite: string, zip: Uint8Array, files: 
   for (const candidate of hostCandidates(host)) {
     const site = await getWebsite(candidate);
     if (!site) continue;
-    try {
-      await deployZipToDir(zip, site.root_directory);
-    } catch (e) {
+    // Over the API, not the disk: since the plan migration the custom domains
+    // can live on a different hosting account than the LMS.
+    const deployed = await deployZipToWebsite(site, zip);
+    if (!deployed.ok) {
       return {
         ok: false,
         status: 502,
-        error: `Could not write the site to ${candidate}: ${e instanceof Error ? e.message : "write failed"}`,
+        error: `Could not write the site to ${candidate}: ${deployed.message ?? "deploy failed"}`,
       };
     }
     return { ok: true, host: candidate, source: "custom", files, sub: null };

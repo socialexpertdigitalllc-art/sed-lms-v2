@@ -7,8 +7,7 @@ import {
   clearDocroot,
   uploadZipAndExtract,
 } from "@/lib/template-engine/directadmin";
-import { hostingerConfigured, getWebsite } from "@/lib/hostinger/client";
-import { deployZipToDir } from "@/lib/template-engine/fsDeploy";
+import { hostingerConfigured, getWebsite, deployZipToWebsite } from "@/lib/hostinger/client";
 import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
 
 export const runtime = "nodejs";
@@ -22,7 +21,8 @@ type Ctx = { params: Promise<{ id: string }> };
  * POST /api/site-studio/deployments/[id]/upload (multipart { file }) —
  * override a live site's files in place with an uploaded zip. Works for both
  * staging subdomains (DirectAdmin clear + extract) and custom-domain sites
- * (fs write into the Hostinger addon docroot).
+ * (Hostinger API archive deploy — the sites live on a different hosting
+ * account than the LMS since the plan migration).
  */
 export async function POST(req: Request, ctx: Ctx) {
   const auth = await guard();
@@ -67,7 +67,7 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
   } else {
-    // custom domain — write straight into the addon docroot
+    // custom domain — push over the Hostinger API
     if (!hostingerConfigured()) return NextResponse.json({ error: "Hostinger is not configured." }, { status: 422 });
     let domain: string;
     try {
@@ -83,11 +83,10 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     const site = await getWebsite(domain);
     if (!site) return NextResponse.json({ error: `No hosting website found for ${domain}` }, { status: 502 });
-    try {
-      await deployZipToDir(bytes, site.root_directory);
-    } catch (e) {
+    const deployed = await deployZipToWebsite(site, bytes);
+    if (!deployed.ok) {
       return NextResponse.json(
-        { error: `Could not write the site to ${domain}: ${e instanceof Error ? e.message : "write failed"}` },
+        { error: `Could not write the site to ${domain}: ${deployed.message ?? "deploy failed"}` },
         { status: 502 },
       );
     }

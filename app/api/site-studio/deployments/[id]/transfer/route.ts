@@ -3,8 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { notify } from "@/lib/notifications/notify";
 import { daConfigured, subFromWebsiteLink, archiveDocroot, deleteSubdomain } from "@/lib/template-engine/directadmin";
-import { hostingerConfigured, listDomains, ensureWebsite } from "@/lib/hostinger/client";
-import { deployZipToDir } from "@/lib/template-engine/fsDeploy";
+import { hostingerConfigured, listDomains, ensureWebsite, deployZipToWebsite } from "@/lib/hostinger/client";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -22,8 +21,9 @@ type Ctx = { params: Promise<{ id: string }> };
  *   1. Pull the CURRENT files from the live subdomain (captures manual edits
  *      made directly on the docroot — not the generator zip).
  *   2. Ensure the domain is an addon website on the Hostinger plan.
- *   3. Write those files straight into the addon docroot on disk (the LMS
- *      runs on the same Hostinger account — the confirmed deploy method).
+ *   3. Push those files to the addon website over the Hostinger API (the
+ *      client sites live on a different hosting account than the LMS since
+ *      the plan migration, so disk writes can't reach them).
  *   4. Repoint the deployment row + the lead's website_link (+ any builder
  *      run that recorded the staging URL) to the custom domain.
  *   5. Delete the now-redundant staging subdomain (best-effort).
@@ -86,12 +86,15 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: `Could not set up hosting for ${domain}: ${site.message ?? "unknown"}` }, { status: 502 });
   }
 
-  // 3. write the files into the addon docroot (LMS shares the hosting account)
-  try {
-    await deployZipToDir(zip, site.website.root_directory);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "write failed";
-    return NextResponse.json({ error: `Could not write the site to ${domain}: ${msg}` }, { status: 502 });
+  // 3. push the files to the addon website over the Hostinger API — the plan
+  //    migration split the sites across hosting accounts, so the old
+  //    write-to-shared-disk path can no longer reach them.
+  const deployed = await deployZipToWebsite(site.website, zip);
+  if (!deployed.ok) {
+    return NextResponse.json(
+      { error: `Could not write the site to ${domain}: ${deployed.message ?? "deploy failed"}` },
+      { status: 502 },
+    );
   }
 
   // 4. quick, non-blocking reachability check (cert/vhost provisioning is async)
