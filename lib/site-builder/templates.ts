@@ -122,6 +122,94 @@ export async function storeTemplate(
   return row as BuilderTemplateRow;
 }
 
+export interface UpdateTemplateInput {
+  name?: string;
+  /** Replaces the cover screenshot. */
+  cover?: { bytes: Uint8Array; ext: string; contentType: string };
+  /** Replaces the source zip — the template itself, re-split into pages and assets. */
+  zip?: Uint8Array;
+}
+
+/**
+ * Edit a template in place: rename it, give it a cover, or ship updated files.
+ *
+ * All three are optional and independent, because they are three different
+ * jobs. The one that matters most in practice is the cover: covers became
+ * required for new uploads, and without this the templates uploaded before
+ * that could never get one, so they could never go in service.
+ *
+ * Replacing the zip is deliberately destructive to the OLD zip — there is one
+ * source per template, and a template with two sources is a template nobody
+ * can reason about. Runs already generated keep their stored output and are
+ * unaffected; the next run built from this template uses the new files.
+ * `page_files`/`asset_files` on the row are refreshed here for display only —
+ * `loadTemplateBundle` re-derives the split from the zip itself, so the two
+ * can never drift into disagreeing about what actually generates.
+ */
+export async function updateTemplate(
+  admin: SupabaseClient,
+  id: string,
+  input: UpdateTemplateInput,
+): Promise<BuilderTemplateRow> {
+  const { data: existing, error: fetchErr } = await admin
+    .from("builder_templates")
+    .select("storage_path, cover_image_path")
+    .eq("id", id)
+    .single();
+  if (fetchErr || !existing) throw new Error("Template not found");
+
+  const patch: Record<string, unknown> = {};
+
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) throw new Error("A template name is required");
+    patch.name = name;
+  }
+
+  if (input.zip) {
+    const map = unzipToMap(input.zip);
+    const { pageFiles, assetFiles } = splitPagesAndAssets(map);
+    if (pageFiles.length === 0) {
+      throw new Error("This zip has no .html pages — a template needs at least one page.");
+    }
+    const path = existing.storage_path as string;
+    const { error } = await admin.storage
+      .from(BUILDER_TEMPLATES_BUCKET)
+      .upload(path, input.zip, { contentType: "application/zip", upsert: true });
+    if (error) throw new Error(`Upload failed: ${error.message}`);
+    patch.page_files = pageFiles;
+    patch.asset_files = assetFiles;
+  }
+
+  if (input.cover) {
+    const nextPath = coverPath(id, input.cover.ext);
+    const { error } = await admin.storage
+      .from(BUILDER_TEMPLATES_BUCKET)
+      .upload(nextPath, input.cover.bytes, { contentType: input.cover.contentType, upsert: true });
+    if (error) throw new Error(`Cover upload failed: ${error.message}`);
+    patch.cover_image_path = nextPath;
+    // A different image TYPE means a different key, so the old object would
+    // otherwise linger in the bucket unreferenced forever.
+    const old = existing.cover_image_path as string | null;
+    if (old && old !== nextPath) {
+      await admin.storage.from(BUILDER_TEMPLATES_BUCKET).remove([old]);
+    }
+  }
+
+  if (Object.keys(patch).length === 0) {
+    throw new Error("Nothing to update");
+  }
+
+  const { data: row, error: updErr } = await admin
+    .from("builder_templates")
+    .update(patch)
+    .eq("id", id)
+    .select("*")
+    .single();
+  if (updErr || !row) throw new Error(updErr?.message ?? "Could not save the template");
+  return row as BuilderTemplateRow;
+}
+
 export async function listTemplates(
   admin: SupabaseClient,
   opts: { inServiceOnly?: boolean } = {},

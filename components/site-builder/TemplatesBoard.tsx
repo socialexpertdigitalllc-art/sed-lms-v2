@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { LayoutTemplate, Loader2, Trash2, Upload } from "lucide-react";
+import { LayoutTemplate, Loader2, Pencil, Trash2, Upload } from "lucide-react";
 import { EmptyPanel, PageHeader } from "@/components/common/Panel";
 import { btnPrimary, btnSecondary, iconBtnDanger } from "@/components/common/buttons";
 import { inputCls } from "@/components/forms/Field";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { TemplateCard } from "./TemplateCard";
+import { TemplateEditModal } from "./TemplateEditModal";
 import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +43,7 @@ export function TemplatesBoard() {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
 
+  const [editTarget, setEditTarget] = useState<BuilderTemplateRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<BuilderTemplateRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -236,6 +238,14 @@ export function TemplatesBoard() {
                       <RelativeTime iso={t.created_at} />
                     </span>
                     <button
+                      className="inline-grid h-7 w-7 place-items-center rounded-md text-text-faint transition-colors hover:bg-surface-2 hover:text-text"
+                      title="Edit name, cover or files"
+                      aria-label={`Edit ${t.name}`}
+                      onClick={() => setEditTarget(t)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
                       className={iconBtnDanger}
                       title="Delete template"
                       aria-label={`Delete ${t.name}`}
@@ -250,6 +260,17 @@ export function TemplatesBoard() {
           ))}
         </div>
       )}
+
+      {editTarget ? (
+        <TemplateEditModal
+          template={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={() => {
+            setEditTarget(null);
+            void load();
+          }}
+        />
+      ) : null}
 
       {deleteTarget ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
