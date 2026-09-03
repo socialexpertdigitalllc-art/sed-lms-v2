@@ -503,6 +503,57 @@ describe("processNextAgentRun", () => {
     expect(seen.model).toBeNull();
   });
 
+  it("a TICKETLESS run (null ticket_id + task_text) drives the agent and flips to review", async () => {
+    // v2 F5: the lead screen's "AI edit site" creates runs with no ticket at
+    // all — the task_text IS the request. The worker must not mistake it for
+    // a purge orphan.
+    const fake = makeFakeAdmin(seedRun({ ticket_id: null, task_text: "Change the hero headline to Hello." }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const seen: { prompt?: string; model?: string | null } = {};
+
+    const out = await processNextAgentRun(h.deps(capturingDriver(h, seen)));
+    expect(out).toMatchObject({ picked: true, outcome: "review" });
+    expect(fake.runs["run-1"]).toMatchObject({ status: "review" });
+    expect(seen.prompt).toContain("Change the hero headline to Hello.");
+    expect(seen.prompt).toContain("Acme");
+    // No ticket → no ticket audience; the creator watches the panel. The
+    // ticket-targeted "ready" bell must not fire (it would link /tickets/null).
+    expect(h.notify).not.toHaveBeenCalled();
+    // The audit row anchors to the LEAD, matching the lead routes' convention.
+    const done = fake.activity.find((a) => a.action === "site_agent.run.completed");
+    expect(done?.row).toMatchObject({ entity_type: "lead", entity_id: "lead-1" });
+  });
+
+  it("a null-ticket run with NO task text still fails gracefully (purge orphan)", async () => {
+    const fake = makeFakeAdmin(seedRun({ ticket_id: null, task_text: "   " }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(h.deps(neverDriver));
+    expect(out).toMatchObject({ picked: true, outcome: "failed" });
+    expect(fake.runs["run-1"].error).toMatch(/nothing to do/i);
+    const failed = fake.activity.find((a) => a.action === "site_agent.run.failed");
+    expect(failed?.row).toMatchObject({ entity_type: "lead", entity_id: "lead-1" });
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("a ticketless run that ERRORS fails without a ticket bell", async () => {
+    const fake = makeFakeAdmin(seedRun({ ticket_id: null, task_text: "Do the thing." }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(h.deps(async (_opts, onEvent) => {
+      const result = {
+        kind: "result" as const, status: "ERROR" as const, response: "", error: "quota exhausted",
+        usage: null, numTurns: 1, durationSeconds: 2,
+      };
+      onEvent(result);
+      return { exitCode: 1, result, conversationId: null, killed: false };
+    }));
+    expect(out).toMatchObject({ picked: true, outcome: "failed" });
+    expect(fake.runs["run-1"]).toMatchObject({ status: "failed", error: expect.stringContaining("quota exhausted") });
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
   it("the run's model is handed to the driver", async () => {
     const fake = makeFakeAdmin(seedRun({ model: "claude-sonnet-4-6" }));
     fake.storage["run-1/original.zip"] = zipFromMap(SITE);

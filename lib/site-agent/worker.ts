@@ -181,7 +181,8 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     try {
       await admin.from("activity_log").insert({
         user_id: run.created_by, action: "site_agent.run.failed",
-        entity_type: "ticket", entity_id: run.ticket_id, new_value: { run_id: run.id, error: message },
+        entity_type: run.ticket_id ? "ticket" : "lead", entity_id: run.ticket_id ?? run.lead_id,
+        new_value: { run_id: run.id, error: message },
       });
       if (run.ticket_id) {
         const { data: t } = await admin
@@ -202,14 +203,26 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
   };
 
   try {
-    // Ticket + lead give the prompt its content; a purged ticket = no task.
-    if (!run.ticket_id) return await fail("This run's ticket no longer exists (retention purge?) — nothing to do.");
-    const { data: ticket } = await admin
-      .from("lead_tickets")
-      .select("id, title, assigned_to, created_by, lead_id, items:ticket_items(id, body, sort, is_done)")
-      .eq("id", run.ticket_id)
-      .maybeSingle();
-    if (!ticket) return await fail("This run's ticket no longer exists — nothing to do.");
+    // Prompt content: a ticket run composes from its ticket; a TICKETLESS run
+    // (v2 F5 — "AI edit site" on the lead screen) has ticket_id null and
+    // carries its whole request in task_text. Only null-ticket AND no task
+    // text is a purge orphan with nothing to do.
+    type TicketRow = {
+      id: string; title: string | null; assigned_to: string | null; created_by: string | null;
+      lead_id: string | null; items: { id: string; body: string; sort: number; is_done: boolean }[] | null;
+    };
+    let ticket: TicketRow | null = null;
+    if (run.ticket_id) {
+      const { data } = await admin
+        .from("lead_tickets")
+        .select("id, title, assigned_to, created_by, lead_id, items:ticket_items(id, body, sort, is_done)")
+        .eq("id", run.ticket_id)
+        .maybeSingle();
+      if (!data) return await fail("This run's ticket no longer exists — nothing to do.");
+      ticket = data as unknown as TicketRow;
+    } else if (!(run.task_text ?? "").trim()) {
+      return await fail("This run has neither a ticket nor a task (retention purge?) — nothing to do.");
+    }
     const lead = run.lead_id
       ? (await admin.from("leads").select("business_name").eq("id", run.lead_id).maybeSingle()).data
       : null;
@@ -231,7 +244,7 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     // the seeded files (fsWorkspace, Task 6).
     const cwd = await deps.workspace.materialize(seedMap, wsKey);
 
-    const items = ((ticket.items as { id: string; body: string; sort: number; is_done: boolean }[] | null) ?? []);
+    const items = ticket?.items ?? [];
     // v2 F1: a run scoped to selected items feeds ONLY those to the prompt.
     // Unknown ids simply match nothing — the create route validates upstream.
     // A whole-ticket run (null item_ids) composes from the UNDONE items only:
@@ -240,9 +253,11 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     const scoped = Array.isArray(run.item_ids) && run.item_ids.length
       ? items.filter((i) => run.item_ids!.includes(i.id))
       : items.filter((i) => !i.is_done);
+    // A ticketless run always has task_text (guarded above), which replaces
+    // the composed block verbatim — the fallback title never renders for it.
     const prompt = buildTaskPrompt({
       businessName: String((lead?.business_name as string | undefined) ?? "this client"),
-      ticketTitle: (ticket.title as string | null) ?? "Untitled change request",
+      ticketTitle: ticket?.title ?? "Direct change request",
       ticketItems: [...scoped].sort((a, b) => a.sort - b.sort).map((i) => i.body),
       instructions: run.instructions,
       // v2 F4: operator-edited task text replaces the composed block verbatim.
@@ -364,21 +379,26 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     try {
       await admin.from("activity_log").insert({
         user_id: run.created_by, action: "site_agent.run.completed",
-        entity_type: "ticket", entity_id: run.ticket_id,
+        entity_type: run.ticket_id ? "ticket" : "lead", entity_id: run.ticket_id ?? run.lead_id,
         new_value: { run_id: run.id, changed_files: Object.keys(harvested.changes).length },
       });
-      await deps.notify("site_agent_run_ready",
-        {
-          leadId: run.lead_id,
-          ticket: { assigned_to: (ticket.assigned_to as string | null) ?? null, created_by: (ticket.created_by as string | null) ?? null },
-        },
-        {
-          title: "AI site edit ready for review",
-          body: `${Object.keys(harvested.changes).length} file(s) changed — review and deploy from the ticket.`,
-          // Per-cycle dedup (the :iso suffix): a revise cycle's second "ready"
-          // bell must not be swallowed by the first cycle's dedup row.
-          dedupKey: `site_agent_run_ready:${run.id}:${iso()}`, targetUrl: `/tickets/${run.ticket_id}`,
-        });
+      // The "ready" bell derives its audience from the ticket; a ticketless
+      // run has none — its creator watches the lead panel (spec: notification
+      // targeting for ticketless runs is out of scope).
+      if (run.ticket_id && ticket) {
+        await deps.notify("site_agent_run_ready",
+          {
+            leadId: run.lead_id,
+            ticket: { assigned_to: ticket.assigned_to ?? null, created_by: ticket.created_by ?? null },
+          },
+          {
+            title: "AI site edit ready for review",
+            body: `${Object.keys(harvested.changes).length} file(s) changed — review and deploy from the ticket.`,
+            // Per-cycle dedup (the :iso suffix): a revise cycle's second "ready"
+            // bell must not be swallowed by the first cycle's dedup row.
+            dedupKey: `site_agent_run_ready:${run.id}:${iso()}`, targetUrl: `/tickets/${run.ticket_id}`,
+          });
+      }
     } catch { /* the review row is the source of truth */ }
 
     await deps.workspace.cleanup(wsKey).catch(() => {});
