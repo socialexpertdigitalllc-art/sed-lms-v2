@@ -7,11 +7,13 @@ import type { Lead } from "@/lib/leads/types";
 import { SITE_TYPES } from "@/lib/leads/types";
 import { formatDateTime, initials } from "@/lib/leads/format";
 import { StatusPill } from "./StatusPill";
-import { FuStatusChip } from "./FuStatusChip";
+import { FuStatusHoverChip } from "./FuStatusHoverChip";
+import { FollowUpQuickActions } from "./FollowUpQuickActions";
 import { FollowUpModal } from "./FollowUpModal";
 import { RegionFilter } from "./RegionFilter";
 import MultiSelect from "@/components/common/MultiSelect";
-import { bucketOf, groupByBucket, FOLLOWUP_STATUSES } from "@/lib/leads/followups";
+import { CopyButton } from "@/components/common/CopyButton";
+import { bucketOf, groupByBucket, isSpecificActive, FOLLOWUP_STATUSES } from "@/lib/leads/followups";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -65,7 +67,15 @@ export function FollowUpQueue({
   const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
 
   const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
+  // Set by the Tick quick-action so the modal opens already on Pickup. Part of
+  // the modal's key, so re-opening the SAME lead by the plain button resets it.
+  const [followUpIntent, setFollowUpIntent] = useState<"" | "Pickup">("");
   const [urlState, setUrlState] = useViewState(FOLLOWUPS_DEFAULTS);
+
+  function openFollowUp(lead: Lead, intent: "" | "Pickup" = "") {
+    setFollowUpIntent(intent);
+    setFollowUpLead(lead);
+  }
 
   async function quickStatus(lead: Lead, status: "Long Term" | "Dropped") {
     setStatusBusyId(lead.id);
@@ -113,7 +123,9 @@ export function FollowUpQueue({
     () => new Set<string>([currentUserId, ...teamAgentIds].filter(Boolean)),
     [currentUserId, teamAgentIds],
   );
-  const specificCount = useMemo(() => eligible.filter((l) => l.follow_up_is_specific).length, [eligible]);
+  // A specific-time claim ages out after 24h with no new follow-up, so both the
+  // count and the filter ask isSpecificActive rather than reading the raw flag.
+  const specificCount = useMemo(() => eligible.filter((l) => isSpecificActive(l)).length, [eligible]);
   const filtered = useMemo(() => {
     return eligible.filter((l) => {
       if (statusSel.length && !statusSel.includes(l.status)) return false;
@@ -122,7 +134,7 @@ export function FollowUpQueue({
       if (regionSel.length && !regionSel.includes(leadRegion(l) ?? "")) return false;
       // "Specific" = the client asked for this exact time. Agents work those
       // first, so the page has to be able to show only them.
-      if (specificOnly && !l.follow_up_is_specific) return false;
+      if (specificOnly && !isSpecificActive(l)) return false;
       // Same rule as the leads table: a closer sees their OWN follow-ups
       // until they ask for the team.
       if (isCloser) {
@@ -163,6 +175,19 @@ export function FollowUpQueue({
         <div className="flex min-w-0 items-center gap-3">
           <span className="font-medium text-text truncate">{lead.business_name}</span>
           <StatusPill status={lead.status} />
+          {/* The number being called — this page IS the calling queue, and
+              bouncing to the lead detail for it was the whole friction. */}
+          {lead.business_phone && (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <a
+                href={`tel:${lead.business_phone}`}
+                className="font-mono text-xs text-text-muted hover:text-accent-ink hover:underline"
+              >
+                {lead.business_phone}
+              </a>
+              <CopyButton value={lead.business_phone} title="Copy phone" />
+            </span>
+          )}
           <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-text-muted text-xs">
             <span className="w-5 h-5 rounded-full bg-accent-soft text-accent-ink grid place-items-center text-[9px] font-semibold">
               {initials(agent)}
@@ -179,10 +204,10 @@ export function FollowUpQueue({
           >
             {formatDateTime(lead.follow_up_time)}
           </span>
-          {lead.follow_up_is_specific && (
+          {isSpecificActive(lead) && (
             <span
               className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-semibold text-accent-ink"
-              title="The client asked for this exact time"
+              title="The client asked for this exact time — expires 24h after it was logged"
             >
               Specific
             </span>
@@ -198,9 +223,22 @@ export function FollowUpQueue({
               {lateDays}d overdue
             </span>
           )}
-          {lead.last_followup_status && <FuStatusChip status={lead.last_followup_status} />}
+          {lead.last_followup_status && (
+            <FuStatusHoverChip
+              leadId={lead.id}
+              status={lead.last_followup_status}
+              version={lead.updated_at}
+            />
+          )}
           {lead.no_pickup_streak > 1 && (
             <span className="text-xs font-medium text-dropped-fg">×{lead.no_pickup_streak}</span>
+          )}
+          {canFollowUp && (
+            <FollowUpQuickActions
+              leadId={lead.id}
+              businessName={lead.business_name}
+              onPickup={() => openFollowUp(lead, "Pickup")}
+            />
           )}
         </div>
 
@@ -227,7 +265,7 @@ export function FollowUpQueue({
           )}
           {canFollowUp && (
             <button
-              onClick={() => setFollowUpLead(lead)}
+              onClick={() => openFollowUp(lead)}
               className="bg-accent text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-accent-ink"
             >
               Follow Up
@@ -376,11 +414,12 @@ export function FollowUpQueue({
       )}
 
       <FollowUpModal
-        key={followUpLead?.id}
+        key={`${followUpLead?.id}:${followUpIntent}`}
         leadId={followUpLead?.id ?? ""}
         businessName={followUpLead?.business_name ?? ""}
         open={!!followUpLead}
         onClose={() => setFollowUpLead(null)}
+        initialStatus={followUpIntent}
       />
     </div>
   );

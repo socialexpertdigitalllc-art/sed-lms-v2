@@ -8,6 +8,7 @@ import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { endsFollowUps, isFollowUpEligible, nextStreak } from "@/lib/leads/followups";
 import { logFollowUpSchema } from "@/lib/leads/followupSchema";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
+import { blamesLateColumn } from "@/lib/leads/lateColumns";
 
 export async function GET(
   _req: Request,
@@ -150,12 +151,22 @@ export async function POST(
   };
   // The Follow-ups page filters LEADS, so the flag has to travel with the
   // schedule it describes — and be cleared by any later follow-up that
-  // reschedules loosely, which this unconditional write does.
+  // reschedules loosely, which this unconditional write does. `follow_up_set_at`
+  // stamps WHEN it was recorded, which is what the Specific badge ages out on
+  // (isSpecificActive); leads.updated_at cannot serve, since any edit bumps it.
+  const scheduleFlags = {
+    follow_up_is_specific: isSpecificTime,
+    follow_up_set_at: fu.created_at,
+  };
   let { error: leadUpdateError } = await admin
     .from("leads")
-    .update({ ...leadPatch, follow_up_is_specific: isSpecificTime })
+    .update({ ...leadPatch, ...scheduleFlags })
     .eq("id", id);
-  if (leadUpdateError && /follow_up_is_specific/i.test(leadUpdateError.message)) {
+  // Migrations 0068 / 0073 not applied yet — same tolerance as the insert above.
+  if (
+    leadUpdateError &&
+    (/follow_up_is_specific/i.test(leadUpdateError.message) || blamesLateColumn(leadUpdateError.message))
+  ) {
     ({ error: leadUpdateError } = await admin.from("leads").update(leadPatch).eq("id", id));
   }
 

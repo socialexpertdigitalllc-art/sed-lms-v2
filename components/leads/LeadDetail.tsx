@@ -177,6 +177,7 @@ export function LeadDetail({
     ...agents.map((a) => ({ value: a.id, label: a.display_name ?? a.id })),
   ];
   const designRefs = lead.design_reference_links ?? [];
+  const socialProfiles = lead.social_profiles ?? [];
   const addOns = lead.add_ons ?? [];
 
   const btn = "rounded-lg border border-border bg-surface/70 px-3 py-2 text-sm text-text hover:bg-surface-2";
@@ -227,6 +228,7 @@ export function LeadDetail({
           <SectionCard n={1} icon={Building2} title="Business info" subtitle="Contact & links" done={false} delay={0}>
             <div className={grid}>
               <FieldRow label="Business name" value={lead.business_name ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_name: v.trim() })} />
+              <FieldRow label="Owner name" value={lead.owner_name ?? ""} canEdit={canEdit} onSave={(v) => patch({ owner_name: nz(v) })} />
               <FieldRow label="Phone" value={lead.business_phone ?? ""} canEdit={canEdit} onSave={(v) => patch({ business_phone: nz(v) })} />
               {/* A lead submitted with "no email" must still accept one later —
                   the address often arrives after the first call, so this row
@@ -295,6 +297,20 @@ export function LeadDetail({
                 ))
               ) : (
                 <FieldRow label="Design reference sites" value="" />
+              )}
+              {/* Read-only here: profiles are a structured list, and the
+                  submission form is where they are composed. */}
+              {socialProfiles.length > 0 ? (
+                socialProfiles.map((p, i) => (
+                  <FieldRow
+                    key={i}
+                    label={p.platform === "Other" ? p.label || "Other" : p.platform}
+                    value={p.url}
+                    type="url"
+                  />
+                ))
+              ) : (
+                <FieldRow label="Social profiles" value="" />
               )}
             </div>
             {/* AI developer, ticketless: direct edits on this site, reviewed
@@ -398,6 +414,7 @@ export function LeadDetail({
               <FieldRow className="sm:col-span-2" label="Comments" value={lead.comments ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ comments: nz(v) })} />
               {/* Free-text background the website generator reads as supplied fact. */}
               <FieldRow className="sm:col-span-2" label="About business" value={lead.about_business ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ about_business: nz(v) })} />
+              <FieldRow className="sm:col-span-2" label="Instructions for developer" value={lead.developer_instructions ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ developer_instructions: nz(v) })} />
             </div>
           </SectionCard>
 

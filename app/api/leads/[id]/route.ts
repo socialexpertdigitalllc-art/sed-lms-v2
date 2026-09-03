@@ -9,6 +9,7 @@ import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
 import { isAdminMember } from "@/lib/permissions/isAdminMember";
 import { actingAs, canActForAgent } from "@/lib/teams/closers";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
+import { blamesLateColumn, withoutLateColumns } from "@/lib/leads/lateColumns";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
 
@@ -148,7 +149,12 @@ export async function PATCH(
     return NextResponse.json({ error: CLOSED_BY_MESSAGE }, { status: 422 });
   }
 
-  const { error } = await admin.from("leads").update(parsed.data).eq("id", id);
+  let { error } = await admin.from("leads").update(parsed.data).eq("id", id);
+  // Migration 0073 not applied yet — save what the schema can take rather than
+  // failing the whole edit. See lib/leads/lateColumns.ts.
+  if (error && blamesLateColumn(error.message)) {
+    ({ error } = await admin.from("leads").update(withoutLateColumns(parsed.data)).eq("id", id));
+  }
   if (error) {
     if (isReadyGuardError(error)) {
       return NextResponse.json({ error: READY_GUARD_MESSAGE }, { status: 422 });

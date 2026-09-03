@@ -26,6 +26,7 @@ import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
 import { FollowUpModal } from "./FollowUpModal";
 import { FuStatusHoverChip } from "./FuStatusHoverChip";
+import { FollowUpQuickActions } from "./FollowUpQuickActions";
 import { BulkActionBar } from "./BulkActionBar";
 import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -118,6 +119,14 @@ export function LeadsTable({
 
   const [modalLead, setModalLead] = useState<Lead | null>(null);
   const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
+  // Set by the Tick quick-action so the modal opens already on Pickup. Part of
+  // the modal's key, so re-opening the SAME lead by the plain button resets it.
+  const [followUpIntent, setFollowUpIntent] = useState<"" | "Pickup">("");
+
+  function openFollowUp(lead: Lead, intent: "" | "Pickup" = "") {
+    setFollowUpIntent(intent);
+    setFollowUpLead(lead);
+  }
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const router = useRouter();
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -342,6 +351,7 @@ export function LeadsTable({
           const lead = c.row.original;
           const streak = lead.no_pickup_streak;
           const lastStatus = lead.last_followup_status;
+          const quickable = canFollowUp && isFollowUpEligible(lead.status);
           return (
             <div className="flex flex-col gap-0.5">
               <span
@@ -351,7 +361,7 @@ export function LeadsTable({
               >
                 {formatDateTime(value)}
               </span>
-              {(lastStatus || streak > 1) && (
+              {(lastStatus || streak > 1 || quickable) && (
                 <span className="inline-flex items-center gap-1">
                   {lastStatus && (
                     <FuStatusHoverChip
@@ -362,6 +372,13 @@ export function LeadsTable({
                   )}
                   {streak > 1 && (
                     <span className="text-xs font-medium text-dropped-fg">×{streak}</span>
+                  )}
+                  {quickable && (
+                    <FollowUpQuickActions
+                      leadId={lead.id}
+                      businessName={lead.business_name}
+                      onPickup={() => openFollowUp(lead, "Pickup")}
+                    />
                   )}
                 </span>
               )}
@@ -406,7 +423,7 @@ export function LeadsTable({
             )}
             {canFollowUp && isFollowUpEligible(c.row.original.status) && (
               <button
-                onClick={() => setFollowUpLead(c.row.original)}
+                onClick={() => openFollowUp(c.row.original)}
                 className="text-xs font-medium text-text-muted px-2 py-1 rounded border border-border hover:bg-surface-2"
               >
                 Follow Up
@@ -697,11 +714,12 @@ export function LeadsTable({
       )}
 
       <FollowUpModal
-        key={followUpLead?.id}
+        key={`${followUpLead?.id}:${followUpIntent}`}
         leadId={followUpLead?.id ?? ""}
         businessName={followUpLead?.business_name ?? ""}
         open={!!followUpLead}
         onClose={() => setFollowUpLead(null)}
+        initialStatus={followUpIntent}
       />
 
       {canBulk && selectedIds.length > 0 && (

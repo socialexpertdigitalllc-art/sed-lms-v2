@@ -16,15 +16,22 @@ export function FollowUpModal({
   businessName,
   open,
   onClose,
+  initialStatus = "",
 }: {
   leadId: string;
   businessName: string;
   open: boolean;
   onClose: () => void;
+  /**
+   * Preselects the status pill. The Tick quick-action opens straight into
+   * Pickup — callers key this modal by lead id, so the initial value applies
+   * on every open rather than sticking from a previous lead.
+   */
+  initialStatus?: "" | "Pickup" | "No Pickup";
 }) {
   const router = useRouter();
   const { all } = usePermissions();
-  const [fu_status, setFuStatus] = useState<"" | "Pickup" | "No Pickup">("");
+  const [fu_status, setFuStatus] = useState<"" | "Pickup" | "No Pickup">(initialStatus);
   const [comments, setComments] = useState("");
   const [next_follow_up_time, setNextFollowUpTime] = useState("");
   // "In X days/hours/minutes" quick-set; cleared when the datetime is edited by hand (one-way).

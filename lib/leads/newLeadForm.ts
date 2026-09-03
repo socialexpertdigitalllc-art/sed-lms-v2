@@ -1,5 +1,5 @@
 import { PHONE_RE } from "@/lib/forms/phone";
-import type { AddOn } from "@/lib/leads/types";
+import type { AddOn, SocialProfile } from "@/lib/leads/types";
 
 export const PAGE_OPTIONS = [
   "Home",
@@ -23,6 +23,8 @@ export interface NewLeadFormState {
   agent_id: string;
   site_type: string;
   business_name: string;
+  /** The owner's own name. Optional — agents often only get the business. */
+  owner_name: string;
   business_phone: string;
   business_email: string;
   platform: string;
@@ -50,6 +52,10 @@ export interface NewLeadFormState {
   reference_link: string;
   /** Optional free-text background on the business (feeds the website generator). */
   about_business: string;
+  /** Optional instructions the build has to honour. */
+  developer_instructions: string;
+  /** As many of the business's social profiles as it has. */
+  social_profiles: SocialProfile[];
   comments: string;
   rating: number;
   fresh_or_followup: string;
@@ -64,6 +70,7 @@ export function emptyNewLead(status: string): NewLeadFormState {
     agent_id: "",
     site_type: "",
     business_name: "",
+    owner_name: "",
     business_phone: "",
     business_email: "",
     platform: "",
@@ -90,6 +97,8 @@ export function emptyNewLead(status: string): NewLeadFormState {
     direct_line_saved: "",
     reference_link: "",
     about_business: "",
+    developer_instructions: "",
+    social_profiles: [],
     comments: "",
     rating: 0,
     fresh_or_followup: "",
@@ -100,6 +109,22 @@ export function emptyNewLead(status: string): NewLeadFormState {
 
 export function nonEmpty(list: string[]): string[] {
   return list.map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Drop the half-filled rows a repeater always leaves behind — a profile with
+ * no URL is nothing, and an "Other" with no name is unidentifiable. The name
+ * lands in `label` only for Other, so the canonical five keep matching the
+ * select when the lead is edited later.
+ */
+export function cleanSocialProfiles(list: SocialProfile[]): SocialProfile[] {
+  return list
+    .map((p) => ({
+      platform: p.platform.trim(),
+      url: p.url.trim(),
+      label: p.platform.trim() === "Other" ? (p.label ?? "").trim() || null : null,
+    }))
+    .filter((p) => p.platform && p.url && (p.platform !== "Other" || p.label));
 }
 
 /**
@@ -195,8 +220,11 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
   const images = nonEmpty(f.image_links);
   const designRefs = nonEmpty(f.design_reference_links);
 
+  const socials = cleanSocialProfiles(f.social_profiles);
+
   return {
     business_name: f.business_name.trim(),
+    owner_name: f.owner_name.trim() || null,
     status: f.status,
     agent_id: f.agent_id || null,
     site_type: f.site_type || null,
@@ -238,6 +266,8 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     rating: f.rating || null,
     fresh_or_followup: f.fresh_or_followup || null,
     about_business: f.about_business.trim() || null,
+    developer_instructions: f.developer_instructions.trim() || null,
+    social_profiles: socials.length ? socials : null,
     comments: f.comments.trim() || null,
     closed_by: f.closed_by === "self" ? (opts?.userId ?? null) : f.closed_by || null,
   };

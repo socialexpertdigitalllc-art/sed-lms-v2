@@ -10,6 +10,7 @@ import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { enqueueLeadIfReady } from "@/lib/ai-tools/queue";
 import { findCollisions, type DupRow } from "@/lib/leads/duplicate";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
+import { blamesLateColumn, withoutLateColumns } from "@/lib/leads/lateColumns";
 
 /** The schema's optional-string fields type-check as `unknown` (zod preprocess quirk); narrow defensively. */
 const asStr = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -116,11 +117,20 @@ export async function POST(req: Request) {
     }
   }
 
-  const { data, error } = await admin
+  let { data, error } = await admin
     .from("leads")
     .insert(payload)
     .select("id, business_name, agent_id")
     .single();
+  // Migration 0073 not applied yet — take the lead rather than losing it, just
+  // without the fields that column does not exist for. See lateColumns.ts.
+  if (error && blamesLateColumn(error.message)) {
+    ({ data, error } = await admin
+      .from("leads")
+      .insert(withoutLateColumns(payload))
+      .select("id, business_name, agent_id")
+      .single());
+  }
   if (error || !data) {
     if (isReadyGuardError(error)) {
       return NextResponse.json({ error: READY_GUARD_MESSAGE }, { status: 422 });

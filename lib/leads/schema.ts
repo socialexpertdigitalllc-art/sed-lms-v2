@@ -14,6 +14,7 @@ export const leadFieldsSchema = z.object({
   status: z.enum(LEAD_STATUSES),
   agent_id: optional(z.string().uuid().nullable()),
 
+  owner_name: optStr,
   business_phone: optStr,
   business_email: optStr,
   business_profile_link: optStr,
@@ -41,6 +42,17 @@ export const leadFieldsSchema = z.object({
   rating: optional(z.coerce.number().int().min(1).max(10).nullable()),
   comments: optStr,
   about_business: optional(z.string().max(4000).nullable()),
+  developer_instructions: optional(z.string().max(8000).nullable()),
+  social_profiles: z
+    .array(
+      z.object({
+        platform: z.string().trim().min(1),
+        url: z.string().trim().min(1),
+        label: z.string().trim().nullable().optional(),
+      })
+    )
+    .nullable()
+    .optional(),
 
   design_reference_links: z.array(z.string().url()).max(3).nullable().optional(),
   add_ons: z

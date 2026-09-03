@@ -41,6 +41,7 @@ import { Field, inputCls } from "@/components/forms/Field";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { ChipGroup } from "@/components/forms/ChipGroup";
 import { DynamicList } from "@/components/forms/DynamicList";
+import { SocialProfilesField } from "@/components/forms/SocialProfilesField";
 import { ConditionalBlock } from "@/components/forms/ConditionalBlock";
 import { RatingGroup } from "@/components/forms/RatingGroup";
 import { SectionCard, FieldBlock as F, FieldError, SummaryRow } from "@/components/forms/formShell";
@@ -460,6 +461,9 @@ export function NewLeadForm({
                   </p>
                 )}
               </F>
+              <F error={errors.owner_name} label="Owner Name (optional)">
+                <input value={f.owner_name} onChange={(e) => set("owner_name", e.target.value)} placeholder="Who you spoke to, e.g. Maria Alvarez" className={inputCls} />
+              </F>
               <F error={errors.business_phone} label="Phone Number" required hint="Format: (252) 401-2775">
                 <input type="tel" value={f.business_phone} onChange={(e) => set("business_phone", formatPhone(e.target.value))} placeholder="(252) 401-2775" maxLength={14} className={inputCls} />
                 {dupBy("phone") && (
@@ -521,6 +525,9 @@ export function NewLeadForm({
                   <FieldError error={errors.other_platform} />
                 </div>
               </ConditionalBlock>
+            </F>
+            <F error={errors.social_profiles} label="Social Profiles (optional)" hint="Add as many as the business has.">
+              <SocialProfilesField values={f.social_profiles} onChange={(v) => set("social_profiles", v)} />
             </F>
           </SectionCard>
 
@@ -617,6 +624,13 @@ export function NewLeadForm({
             </F>
             <F error={errors.image_links} label="Image Links">
               <DynamicList values={f.image_links} onChange={(v) => set("image_links", v)} placeholder="https://example.com/image.jpg" addLabel="Add Image Link" inputType="url" />
+            </F>
+            <F
+              error={errors.developer_instructions}
+              label="Instructions for Developer (optional)"
+              hint="Anything you promised the client that the build has to honour."
+            >
+              <textarea value={f.developer_instructions} onChange={(e) => set("developer_instructions", e.target.value)} placeholder="e.g., Keep the booking button in the header on mobile; the owner wants the team photo on the About page, not the hero..." rows={5} maxLength={8000} className={inputCls} />
             </F>
           </SectionCard>
 

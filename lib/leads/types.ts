@@ -22,6 +22,17 @@ export const STATUS_PILL: Record<string, string> = {
 
 export type AddOn = { id: string; label: string; price: number | null };
 
+/** The social networks a business is asked about, in the order they are offered. */
+export const SOCIAL_PLATFORMS = ["Facebook", "Instagram", "TikTok", "X", "Other"] as const;
+export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
+
+/**
+ * One social profile of the business. `label` names the network only when
+ * `platform` is "Other", so the canonical five always round-trip back into the
+ * select rather than becoming free text the form can no longer match.
+ */
+export type SocialProfile = { platform: string; url: string; label?: string | null };
+
 /** A custom lead tag from the `lead_tags` catalog. Owned by a single user. */
 export type LeadTag = { id: string; name: string; color: string; owner_id: string };
 
@@ -30,6 +41,12 @@ export interface Lead {
   status: string;
   agent_id: string | null;
   business_name: string;
+  /**
+   * The owner's own name, when the agent got it. Optional on every form, and
+   * optional on the TYPE as well: a row read before migration 0073 is applied
+   * carries no such key at all. Same for the two 0073 fields below.
+   */
+  owner_name?: string | null;
   business_phone: string | null;
   business_email: string | null;
   no_email: boolean | null;
@@ -54,6 +71,8 @@ export interface Lead {
   follow_up_time: string | null;
   /** The scheduled follow_up_time is an exact time the client asked for. */
   follow_up_is_specific?: boolean | null;
+  /** When that schedule was recorded — the clock the Specific badge decays on. */
+  follow_up_set_at?: string | null;
   last_followup_status: string | null;
   no_pickup_streak: number;
   /** Set when the lead enters Closed; cleared if it leaves. Ledger: lead_status_events. */
@@ -71,6 +90,9 @@ export interface Lead {
   comments: string | null;
   /** Free-text background on the business, fed to the website generator's brief. */
   about_business: string | null;
+  /** Anything the agent promised the client that the build has to honour. */
+  developer_instructions?: string | null;
+  social_profiles?: SocialProfile[] | null;
   created_by: string | null;
   closed_by: string | null;
   created_at: string;

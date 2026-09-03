@@ -50,6 +50,39 @@ export function nextStreak(prev: number, fu_status: string): number {
   return fu_status === "No Pickup" ? prev + 1 : 0;
 }
 
+/** How long a "specific time" claim stays true after it was recorded. */
+export const SPECIFIC_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** The next follow-up a Cross (quick No Pickup) schedules: one day out. */
+export const QUICK_NO_PICKUP_MS = 24 * 60 * 60 * 1000;
+
+type SpecificScope = {
+  follow_up_is_specific?: boolean | null;
+  /** When the current schedule was recorded — leads.follow_up_set_at. */
+  follow_up_set_at?: string | null;
+};
+
+/**
+ * Is this lead STILL a specific-time follow-up?
+ *
+ * "The client asked for 3:15pm Tuesday" is only true for as long as nobody has
+ * had to reschedule around it. Once a day passes with no new follow-up logged,
+ * the exact time the client named is stale and the lead rejoins the ordinary
+ * queue — otherwise the Specific filter silently fills up with appointments
+ * that were never kept, which is the opposite of what an agent works it for.
+ *
+ * A missing `follow_up_set_at` never expires: rows written before migration
+ * 0073 (and any environment where it has not been applied) have no recorded
+ * time to measure from, and dropping their badge would read as data loss.
+ */
+export function isSpecificActive(lead: SpecificScope, now: Date = new Date()): boolean {
+  if (!lead.follow_up_is_specific) return false;
+  if (!lead.follow_up_set_at) return true;
+  const t = new Date(lead.follow_up_set_at).getTime();
+  if (Number.isNaN(t)) return true;
+  return now.getTime() - t < SPECIFIC_TTL_MS;
+}
+
 /** Statuses that END the pipeline — nothing is scheduled after them. */
 const TERMINAL_STATUS_CHANGES = ["Dropped"] as const;
 
