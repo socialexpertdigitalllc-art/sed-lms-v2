@@ -25,7 +25,7 @@ import { formatCurrency, formatDateTime, initials } from "@/lib/leads/format";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
 import { FollowUpModal } from "./FollowUpModal";
-import { FuStatusChip } from "./FuStatusChip";
+import { FuStatusHoverChip } from "./FuStatusHoverChip";
 import { BulkActionBar } from "./BulkActionBar";
 import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -339,8 +339,9 @@ export function LeadsTable({
         cell: (c) => {
           const value = c.getValue<string | null>();
           const overdue = bucketOf(value) === "overdue";
-          const streak = c.row.original.no_pickup_streak;
-          const lastStatus = c.row.original.last_followup_status;
+          const lead = c.row.original;
+          const streak = lead.no_pickup_streak;
+          const lastStatus = lead.last_followup_status;
           return (
             <div className="flex flex-col gap-0.5">
               <span
@@ -352,7 +353,13 @@ export function LeadsTable({
               </span>
               {(lastStatus || streak > 1) && (
                 <span className="inline-flex items-center gap-1">
-                  {lastStatus && <FuStatusChip status={lastStatus} />}
+                  {lastStatus && (
+                    <FuStatusHoverChip
+                      leadId={lead.id}
+                      status={lastStatus}
+                      version={lead.updated_at}
+                    />
+                  )}
                   {streak > 1 && (
                     <span className="text-xs font-medium text-dropped-fg">×{streak}</span>
                   )}
