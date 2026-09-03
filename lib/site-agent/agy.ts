@@ -40,17 +40,49 @@ export type AgyEvent =
 const PARAM_VALUE_MAX = 60;
 const PARAMS_MAX = 120;
 
-/** tool_info.parameters → "value1, value2" (string values only, whitespace
- *  flattened so the narration stays one line per event, truncated). */
+/** A param value that is an absolute path into the run's scratch workspace
+ *  (…\sed-agent\{runId}-{claim8}\…) means nothing to the person watching the
+ *  tail — reduce it to the site-relative part, and drop it entirely when it
+ *  IS the workspace root. Non-workspace values pass through untouched. */
+function cleanParamValue(v: string): string | null {
+  const m = /sed-agent[\\/][^\\/]+[\\/]?(.*)$/i.exec(v);
+  if (!m) return v;
+  const rel = m[1].replace(/\\/g, "/").trim();
+  return rel.length > 0 ? rel : null;
+}
+
+/** tool_info.parameters → "value1, value2" (string values only, workspace
+ *  paths reduced to site-relative, whitespace flattened so the narration
+ *  stays one line per event, truncated). */
 function formatToolParams(params: unknown): string | null {
   if (!params || typeof params !== "object") return null;
   const vals = Object.values(params as Record<string, unknown>)
     .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
-    .map((v) => v.replace(/\s+/g, " ").trim())
+    .map((v) => cleanParamValue(v.replace(/\s+/g, " ").trim()))
+    .filter((v): v is string => v !== null)
     .map((v) => (v.length > PARAM_VALUE_MAX ? `${v.slice(0, PARAM_VALUE_MAX)}…` : v));
   if (vals.length === 0) return null;
   const joined = vals.join(", ");
   return joined.length > PARAMS_MAX ? `${joined.slice(0, PARAMS_MAX)}…` : joined;
+}
+
+/** Plain-language narration for agy's known tools — the tail is read by
+ *  sales/ops people, not developers, so "Reading index.html" beats
+ *  "view_file (index.html)". Unknown tools keep the raw name (params and
+ *  all) rather than guessing at a verb. */
+function narrateTool(name: string, params: string | null): string {
+  switch (name) {
+    case "grep_search": return params ? `Searching the site for “${params}”` : "Searching the site";
+    case "find_by_name": return params ? `Finding files: ${params}` : "Finding files";
+    case "list_dir": return "Looking through the site files";
+    case "view_file": return params ? `Reading ${params}` : "Reading a file";
+    case "view_code_item": return params ? `Reading ${params}` : "Reading code";
+    case "replace_file_content": return params ? `Editing ${params}` : "Editing a file";
+    case "write_to_file": return params ? `Creating ${params}` : "Creating a file";
+    case "run_command": return params ? `Running: ${params}` : "Running a command";
+    case "manage_task": return "Planning the work";
+    default: return `${name}${params ? ` (${params})` : ""}`;
+  }
 }
 
 /** Kill a child and — on Windows — its whole process tree: agy can have its
@@ -128,7 +160,7 @@ export function summarizeEventForTail(e: AgyEvent): string | null {
       }
       if (e.stepType === "user_input" || e.stepType === "system_message") return null;
       if (e.toolName) {
-        return e.state === "ACTIVE" ? `▸ ${e.toolName}${e.toolParams ? ` (${e.toolParams})` : ""}` : null;
+        return e.state === "ACTIVE" ? `▸ ${narrateTool(e.toolName, e.toolParams)}` : null;
       }
       return e.state === "DONE" ? `[${e.stepType}]` : null; // legacy bare shape
     }

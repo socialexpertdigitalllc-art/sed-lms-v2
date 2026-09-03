@@ -127,7 +127,7 @@ describe("summarizeEventForTail", () => {
     const evs = lines("success-run-1123.ndjson").map(parseAgyEventLine);
     const tails = evs.map((e) => (e ? summarizeEventForTail(e) : null)).filter(Boolean) as string[];
     const joined = tails.join("\n");
-    expect(joined).toContain("▸ find_by_name (*index.html*, C:\\Users\\pc)");
+    expect(joined).toContain("▸ Finding files: *index.html*, C:\\Users\\pc");
     expect(joined).toContain('I have changed the word "hi" to "hello"');
     expect(joined).not.toContain("[tool]");
     expect(joined).not.toContain("[agent_response]");
@@ -142,7 +142,7 @@ describe("summarizeEventForTail", () => {
     const evs = lines("success-run.ndjson").map(parseAgyEventLine);
     const tails = evs.map((e) => (e ? summarizeEventForTail(e) : null)).filter(Boolean) as string[];
     const joined = tails.join("\n");
-    expect(joined).toContain("▸ run_command (Get-Location)");
+    expect(joined).toContain("▸ Running: Get-Location");
     expect(joined).toMatch(/987-6543/);
     expect(joined).not.toContain("[tool]");
     expect(joined).not.toContain("[agent_response]");
@@ -159,14 +159,45 @@ describe("summarizeEventForTail", () => {
     ]);
   });
 
-  it("tool ACTIVE with toolName renders ▸ name (params); without params just ▸ name", () => {
+  it("tool ACTIVE narrates known tools in plain language; unknown tools keep ▸ name (params)", () => {
     const withParams = step({
       step_type: "tool", state: "ACTIVE", step_index: 2, tool_name: "view_file",
       tool_info: { name: "view_file", parameters: { AbsolutePath: "C:\\site\\index.html" } },
     });
-    expect(summarizeEventForTail(withParams)).toBe("▸ view_file (C:\\site\\index.html)");
+    expect(summarizeEventForTail(withParams)).toBe("▸ Reading C:\\site\\index.html");
     const bare = step({ step_type: "tool", state: "ACTIVE", step_index: 2, tool_name: "finish" });
     expect(summarizeEventForTail(bare)).toBe("▸ finish");
+    const unknown = step({
+      step_type: "tool", state: "ACTIVE", step_index: 3, tool_name: "browser_preview",
+      tool_info: { name: "browser_preview", parameters: { Url: "http://x" } },
+    });
+    expect(summarizeEventForTail(unknown)).toBe("▸ browser_preview (http://x)");
+  });
+
+  it("workspace scratch paths are reduced to site-relative names in the narration", () => {
+    // The person watching the tail is sales/ops — an absolute
+    // %TEMP%\sed-agent\{run}-{claim} path means nothing to them.
+    const read = step({
+      step_type: "tool", state: "ACTIVE", step_index: 4, tool_name: "view_file",
+      tool_info: { name: "view_file", parameters: { AbsolutePath: "C:\\Users\\pc\\AppData\\Local\\Temp\\sed-agent\\b67e-abcd1234\\pages\\about.html" } },
+    });
+    expect(summarizeEventForTail(read)).toBe("▸ Reading pages/about.html");
+    // The workspace ROOT (list_dir's favourite) says nothing — drop it.
+    const grep = step({
+      step_type: "tool", state: "ACTIVE", step_index: 5, tool_name: "grep_search",
+      tool_info: { name: "grep_search", parameters: { Query: "13 years", SearchPath: "C:\\Users\\pc\\AppData\\Local\\Temp\\sed-agent\\b67e-abcd1234" } },
+    });
+    expect(summarizeEventForTail(grep)).toBe("▸ Searching the site for “13 years”");
+    const listing = step({
+      step_type: "tool", state: "ACTIVE", step_index: 6, tool_name: "list_dir",
+      tool_info: { name: "list_dir", parameters: { DirectoryPath: "C:\\Users\\pc\\AppData\\Local\\Temp\\sed-agent\\b67e-abcd1234\\" } },
+    });
+    expect(summarizeEventForTail(listing)).toBe("▸ Looking through the site files");
+    const edit = step({
+      step_type: "tool", state: "ACTIVE", step_index: 7, tool_name: "replace_file_content",
+      tool_info: { name: "replace_file_content", parameters: { TargetFile: "C:\\Users\\pc\\AppData\\Local\\Temp\\sed-agent\\b67e-abcd1234\\index.html" } },
+    });
+    expect(summarizeEventForTail(edit)).toBe("▸ Editing index.html");
   });
 
   it("tool DONE (or ERROR) with toolName is silent — the ACTIVE line already showed it", () => {

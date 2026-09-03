@@ -422,7 +422,7 @@ describe("AgentRunPanel", () => {
     expect(await screen.findByText(/waiting for the agent worker/i)).toBeInTheDocument();
   });
 
-  it("deployed: shows the live link and the rollback note, with no action buttons", async () => {
+  it("deployed: shows the live link, the rollback note, and a fresh Send — never a dead end", async () => {
     const deployed = runRow({ status: "deployed" });
     stubFetchRoutes((url, init) => {
       if (url === LIST_URL && method(init) === "GET") return { body: { runs: [deployed] } };
@@ -435,9 +435,13 @@ describe("AgentRunPanel", () => {
     expect(link).toHaveAttribute("target", "_blank");
     expect(screen.getByText(/roll back/i)).toBeInTheDocument();
     expect(screen.getByText(deployed.summary as string)).toBeInTheDocument();
-    for (const id of ["sa-deploy", "sa-revise", "sa-discard", "sa-retry", "sa-send"]) {
+    for (const id of ["sa-deploy", "sa-revise", "sa-discard", "sa-retry"]) {
       expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
+    // Clients ask for changes again and again: a deployed run offers the
+    // next one (a FRESH dialog, not a retry seeded from the old run).
+    fireEvent.click(screen.getByTestId("sa-send"));
+    expect(await screen.findByTestId("sa-dialog-send")).toBeInTheDocument();
   });
 
   it("review: surfaces a rolled-back deploy error, and only when there is one", async () => {
@@ -733,6 +737,8 @@ describe("AgentRunPanel — pre-send dialog (v2)", () => {
     expect(await screen.findByRole("link", { name: HOST })).toBeInTheDocument();
     expect(screen.getByText(/snapshots on the deployments board/i)).toBeInTheDocument();
     expect(screen.queryByText(/website updates/i)).not.toBeInTheDocument();
+    // Deployed lead runs offer the next edit right away.
+    expect(screen.getByTestId("sa-send")).toBeInTheDocument();
 
     cleanup();
     vi.unstubAllGlobals();

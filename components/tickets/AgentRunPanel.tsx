@@ -524,7 +524,9 @@ export function AgentRunPanel({
   // The create routes' own gates, mirrored: a ticket only takes a run while
   // someone is actually working it; a lead needs only the permission.
   const canSend = canResolve && (leadMode || ticketStatus === "Assigned" || ticketStatus === "In Progress");
-  const showSend = canSend && (!run || run.status === "discarded");
+  // Terminal states offer a fresh send: clients ask for changes again and
+  // again, so a deployed run must never dead-end the panel.
+  const showSend = canSend && (!run || run.status === "discarded" || run.status === "deployed");
   if (!run && !canSend) return null;
 
   const past = runs.filter((r) => r.id !== run?.id);
@@ -797,6 +799,7 @@ export function AgentRunPanel({
           </p>
         </div>
       ) : null}
+      {run?.status === "deployed" ? sendBlock : null}
 
       {run?.status === "failed" ? (
         <div className="mt-3 rounded-lg border border-dropped-bg bg-dropped-bg/40 p-3 text-sm">
