@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ImageOff, Loader2, Rocket, Search } from "lucide-react";
+import { Check, ImageOff, Loader2, Rocket, Search, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/common/Panel";
 import { btnPrimary, btnSecondarySm } from "@/components/common/buttons";
 import { inputCls } from "@/components/forms/Field";
@@ -28,6 +28,8 @@ interface LeadOption {
   specify_pages: string[] | null;
   about_business: string | null;
   image_links: string[] | null;
+  /** The template the agent picked with the client on the submission form. */
+  recommended_template_id: string | null;
 }
 
 /** One thumbnail on the image screen. `kind: "manual"` is a candidate added
@@ -191,8 +193,41 @@ export function NewSiteFlow() {
   }, [eligibleLeads, leadQuery]);
   const selectedLead = useMemo(() => eligibleLeads.find((l) => l.id === selectedLeadId) ?? null, [eligibleLeads, selectedLeadId]);
 
+  /**
+   * What to say about the sales recommendation, if anything.
+   *
+   * Three cases worth distinguishing, because they need different actions
+   * from the operator: it was applied, it was overridden (so they know they
+   * are departing from what the client was shown), or the recommended
+   * template is gone and somebody has to choose deliberately.
+   */
+  const recommendedNote = useMemo((): { text: string; tone: "info" | "warn" } | null => {
+    const recId = selectedLead?.recommended_template_id;
+    if (!recId || templates === null) return null;
+    const rec = templates.find((t) => t.id === recId);
+    if (!rec) {
+      return {
+        text: "The template sales recommended for this lead no longer exists — pick one deliberately.",
+        tone: "warn",
+      };
+    }
+    if (templateId === rec.id) {
+      return { text: `Auto-selected "${rec.name}" — the template sales chose with the client.`, tone: "info" };
+    }
+    return {
+      text: `Sales recommended "${rec.name}" for this lead. You are building with a different template.`,
+      tone: "warn",
+    };
+  }, [selectedLead, templates, templateId]);
+
   function selectLead(lead: LeadOption) {
     setSelectedLeadId(lead.id);
+    // The template sales agreed WITH the client becomes the selection, rather
+    // than the operator re-deciding it from the brief alone. Still a plain
+    // select afterwards: this is a default, not a lock. A lead with no
+    // recommendation clears back to "choose", so the previous lead's pick can
+    // never quietly carry over onto this one.
+    setTemplateId(lead.recommended_template_id ?? "");
   }
 
   // Sourcing fires the instant a lead is selected — no search box, no manual
@@ -534,6 +569,17 @@ export function NewSiteFlow() {
       {/* 2. Template */}
       <section className="rounded-lg border border-border bg-surface p-4">
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-faint">2. Template</h3>
+        {recommendedNote && (
+          <p
+            className={
+              "mb-2 flex items-start gap-1.5 text-[11px] leading-relaxed " +
+              (recommendedNote.tone === "warn" ? "text-notready-fg" : "text-text-muted")
+            }
+          >
+            <Sparkles className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>{recommendedNote.text}</span>
+          </p>
+        )}
         {templates === null ? (
           <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading templates…</p>
         ) : templates.length === 0 ? (

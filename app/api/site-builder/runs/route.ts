@@ -47,9 +47,9 @@ export async function POST(req: Request) {
     | { lead_id?: string; template_id?: string; options?: Record<string, unknown>; images?: unknown }
     | null;
   const leadId = typeof body?.lead_id === "string" ? body.lead_id : "";
-  const templateId = typeof body?.template_id === "string" ? body.template_id : "";
-  if (!leadId || !templateId) {
-    return NextResponse.json({ error: "lead_id and template_id are required" }, { status: 422 });
+  const requestedTemplateId = typeof body?.template_id === "string" ? body.template_id : "";
+  if (!leadId) {
+    return NextResponse.json({ error: "lead_id is required" }, { status: 422 });
   }
   const images = sanitizeImages(body?.images);
   const rawOptions = body?.options && typeof body.options === "object" && !Array.isArray(body.options) ? body.options : {};
@@ -63,6 +63,20 @@ export async function POST(req: Request) {
 
   const { data: lead } = await admin.from("leads").select("*").eq("id", leadId).is("deleted_at", null).single();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  // The template the agent chose WITH the client is the default for this
+  // lead's build. An explicit template_id still wins — the operator can
+  // override a recommendation — but omitting it no longer means "no
+  // template", it means "use the one sales agreed". Applied here rather than
+  // only in the new-site screen so every caller of this route inherits it.
+  const templateId =
+    requestedTemplateId || (typeof lead.recommended_template_id === "string" ? lead.recommended_template_id : "");
+  if (!templateId) {
+    return NextResponse.json(
+      { error: "template_id is required — this lead has no recommended template to fall back on." },
+      { status: 422 },
+    );
+  }
 
   const { data: template } = await admin.from("builder_templates").select("id").eq("id", templateId).single();
   if (!template) return NextResponse.json({ error: "Template not found" }, { status: 404 });
