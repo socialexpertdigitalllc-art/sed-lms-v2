@@ -43,6 +43,7 @@ export const leadFieldsSchema = z.object({
   comments: optStr,
   about_business: optional(z.string().max(4000).nullable()),
   developer_instructions: optional(z.string().max(8000).nullable()),
+  recommended_template_id: optional(z.string().uuid().nullable()),
   social_profiles: z
     .array(
       z.object({

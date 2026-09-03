@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FileText, LayoutTemplate, Loader2, Trash2, Upload } from "lucide-react";
+import { LayoutTemplate, Loader2, Trash2, Upload } from "lucide-react";
 import { EmptyPanel, PageHeader } from "@/components/common/Panel";
 import { btnPrimary, btnSecondary, iconBtnDanger } from "@/components/common/buttons";
 import { inputCls } from "@/components/forms/Field";
 import { RelativeTime } from "@/components/common/RelativeTime";
+import { TemplateCard } from "./TemplateCard";
 import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +16,8 @@ export interface BuilderTemplateRow {
   storage_path: string;
   page_files: string[];
   asset_files: string[];
+  cover_image_path: string | null;
+  in_service: boolean;
   created_by: string | null;
   created_at: string;
 }
@@ -33,7 +36,9 @@ export function TemplatesBoard() {
 
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [cover, setCover] = useState<File | null>(null);
   const [fileKey, setFileKey] = useState(0);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -62,8 +67,8 @@ export function TemplatesBoard() {
   }
 
   async function upload() {
-    if (!file || !name.trim()) {
-      toast({ kind: "error", title: "A name and a .zip file are required" });
+    if (!file || !name.trim() || !cover) {
+      toast({ kind: "error", title: "A name, a .zip file and a cover image are all required" });
       return;
     }
     setUploading(true);
@@ -71,11 +76,13 @@ export function TemplatesBoard() {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("name", name.trim());
+      fd.append("cover", cover);
       const res = await fetch("/api/site-builder/templates", { method: "POST", body: fd });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error ?? "Upload failed");
       setName("");
       setFile(null);
+      setCover(null);
       setFileKey((k) => k + 1);
       toast({ kind: "success", title: "Template uploaded" });
       await load();
@@ -99,6 +106,29 @@ export function TemplatesBoard() {
       toast({ kind: "error", title: e instanceof Error ? e.message : "Delete failed" });
     } finally {
       setDeleting(false);
+    }
+  }
+
+  /** Flip a template in or out of the picker on the lead submission form. */
+  async function toggleService(t: BuilderTemplateRow) {
+    setBusyId(t.id);
+    try {
+      const res = await fetch(`/api/site-builder/templates/${t.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ in_service: !t.in_service }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error ?? "Could not update the template");
+      setRows((prev) => prev.map((r) => (r.id === t.id ? { ...r, in_service: !t.in_service } : r)));
+      toast({
+        kind: "success",
+        title: !t.in_service ? `"${t.name}" is now in service` : `"${t.name}" is out of service`,
+      });
+    } catch (e) {
+      toast({ kind: "error", title: e instanceof Error ? e.message : "Could not update the template" });
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -149,12 +179,29 @@ export function TemplatesBoard() {
               disabled={uploading}
             />
           </div>
-          <button className={btnPrimary} onClick={() => void upload()} disabled={uploading || !file || !name.trim()}>
+          <div className="min-w-[220px] flex-1">
+            <label className="mb-1 block text-xs font-medium text-text-muted" htmlFor="builder-template-cover">
+              Cover image <span className="text-dropped-fg">*</span>
+            </label>
+            <input
+              id="builder-template-cover"
+              key={`cover-${fileKey}`}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/avif"
+              className={inputCls}
+              onChange={(e) => setCover(e.target.files?.[0] ?? null)}
+              disabled={uploading}
+            />
+          </div>
+          <button className={btnPrimary} onClick={() => void upload()} disabled={uploading || !file || !name.trim() || !cover}>
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
             Upload
           </button>
         </div>
-        <p className="mt-2 text-xs text-text-faint">Drop a zip anywhere in this box. Max 25MB.</p>
+        <p className="mt-2 text-xs text-text-faint">
+          Drop a zip anywhere in this box. Max 25MB. The cover is what sales sees when picking a
+          template for a lead, so use a screenshot of the built site. Max 5MB.
+        </p>
       </div>
 
       {loading ? (
@@ -166,26 +213,40 @@ export function TemplatesBoard() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {rows.map((t) => (
-            <div key={t.id} className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
-              <div className="min-w-0 flex-1">
-                <h3 className="truncate font-medium text-text">{t.name}</h3>
-                <div className="mt-1 flex items-center gap-1 text-xs text-text-muted">
-                  <FileText className="h-3.5 w-3.5 text-text-faint" />
-                  {t.page_files.length} page{t.page_files.length === 1 ? "" : "s"} · {t.asset_files.length} asset{t.asset_files.length === 1 ? "" : "s"}
-                </div>
-                <p className="mt-1 text-xs text-text-faint"><RelativeTime iso={t.created_at} /></p>
-              </div>
-              <div className="flex items-center justify-end">
-                <button
-                  className={iconBtnDanger}
-                  title="Delete template"
-                  aria-label={`Delete ${t.name}`}
-                  onClick={() => setDeleteTarget(t)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
+            <TemplateCard
+              key={t.id}
+              template={t}
+              footer={
+                <>
+                  <label
+                    className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-text-muted"
+                    title="In service = offered to sales in the lead submission form"
+                  >
+                    <input
+                      type="checkbox"
+                      className="accent-accent h-3.5 w-3.5"
+                      checked={t.in_service}
+                      disabled={busyId === t.id}
+                      onChange={() => void toggleService(t)}
+                    />
+                    {t.in_service ? <span className="text-ready-fg">In service</span> : <span>Out of service</span>}
+                  </label>
+                  <span className="ml-auto inline-flex items-center gap-2">
+                    <span className="text-[11px] text-text-faint">
+                      <RelativeTime iso={t.created_at} />
+                    </span>
+                    <button
+                      className={iconBtnDanger}
+                      title="Delete template"
+                      aria-label={`Delete ${t.name}`}
+                      onClick={() => setDeleteTarget(t)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </span>
+                </>
+              }
+            />
           ))}
         </div>
       )}

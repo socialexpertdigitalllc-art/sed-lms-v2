@@ -28,6 +28,8 @@ function validState(): NewLeadFormState {
     comments: "Solid lead",
     rating: 8,
     fresh_or_followup: "Fresh",
+    // Required since 0074: the template is chosen WITH the client, on the call.
+    recommended_template_id: "3f1e5a1e-0000-4000-8000-000000000000",
   };
 }
 
@@ -293,6 +295,8 @@ describe("form audit: worst-case submission (every optional skipped)", () => {
       comments: "ok",
       rating: 5,
       fresh_or_followup: "Fresh",
+      // A template is not optional, even in the worst-case submission.
+      recommended_template_id: "3f1e5a1e-0000-4000-8000-000000000000",
     };
   }
 

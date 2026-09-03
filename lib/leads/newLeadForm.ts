@@ -57,6 +57,8 @@ export interface NewLeadFormState {
   developer_instructions: string;
   /** As many of the business's social profiles as it has. */
   social_profiles: SocialProfile[];
+  /** builder_templates.id the agent picked with the client. Required. */
+  recommended_template_id: string;
   comments: string;
   rating: number;
   fresh_or_followup: string;
@@ -100,6 +102,7 @@ export function emptyNewLead(status: string): NewLeadFormState {
     about_business: "",
     developer_instructions: "",
     social_profiles: [],
+    recommended_template_id: "",
     comments: "",
     rating: 0,
     fresh_or_followup: "",
@@ -212,6 +215,10 @@ export function validateNewLead(
   const ref = f.reference_link.trim();
   if (f.site_type === "Redesign" && ref && !/^https?:\/\/.+/.test(ref))
     e.reference_link = "Enter a valid reference site URL.";
+  // A template is chosen WITH the client, on the call. Leaving it to the
+  // build means someone who never spoke to them picks it from the brief.
+  if (!f.recommended_template_id)
+    e.recommended_template_id = "Select a template for this lead.";
   if (!f.comments.trim()) e.comments = "Please enter comments about the client.";
   if (f.rating === 0) e.rating = "Please rate the lead.";
   if (!f.fresh_or_followup) e.fresh_or_followup = "Please select Fresh or Follow Up.";
@@ -276,6 +283,7 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     fresh_or_followup: f.fresh_or_followup || null,
     about_business: f.about_business.trim() || null,
     developer_instructions: f.developer_instructions.trim() || null,
+    recommended_template_id: f.recommended_template_id || null,
     social_profiles: socials.length ? socials : null,
     comments: f.comments.trim() || null,
     closed_by: f.closed_by === "self" ? (opts?.userId ?? null) : f.closed_by || null,

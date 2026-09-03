@@ -9,6 +9,7 @@ import {
   Globe,
   DollarSign,
   ClipboardCheck,
+  LayoutTemplate,
   UserCog,
   Star,
   ArrowLeft,
@@ -42,6 +43,7 @@ import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { ChipGroup } from "@/components/forms/ChipGroup";
 import { DynamicList } from "@/components/forms/DynamicList";
 import { SocialProfilesField } from "@/components/forms/SocialProfilesField";
+import { TemplateRecommendation } from "@/components/leads/TemplateRecommendation";
 import { ConditionalBlock } from "@/components/forms/ConditionalBlock";
 import { RatingGroup } from "@/components/forms/RatingGroup";
 import { SectionCard, FieldBlock as F, FieldError, SummaryRow } from "@/components/forms/formShell";
@@ -194,6 +196,7 @@ export function NewLeadForm({
     ],
     location: ["has_service_areas", "areas", "services"],
     website: ["client_experience", "specify_pages", "color_scheme", "design_reference_links"],
+    template: ["recommended_template_id"],
     pricing: ["follow_up_time", "price_quoted", "price_custom", "reference_link"],
     assessment: ["comments", "rating", "fresh_or_followup", "closed_by"],
   };
@@ -635,7 +638,16 @@ export function NewLeadForm({
             </F>
           </SectionCard>
 
-          <SectionCard n={4} icon={DollarSign} title="Pricing & Follow Up" subtitle="Commercials & next touch" done={sectionDone("pricing")} delay={showAssignment ? 240 : 180}>
+          <SectionCard n={4} icon={LayoutTemplate} title="Template Recommendation" subtitle="The look you agreed with the client" done={sectionDone("template")} delay={showAssignment ? 240 : 180}>
+            <F error={errors.recommended_template_id} label="Choose a template" required>
+              <TemplateRecommendation
+                value={f.recommended_template_id}
+                onChange={(id) => set("recommended_template_id", id)}
+              />
+            </F>
+          </SectionCard>
+
+          <SectionCard n={5} icon={DollarSign} title="Pricing & Follow Up" subtitle="Commercials & next touch" done={sectionDone("pricing")} delay={showAssignment ? 300 : 240}>
             <F error={errors.follow_up_time} label="Follow Up Time" required>
               <input type="datetime-local" value={f.follow_up_time} onChange={(e) => set("follow_up_time", e.target.value)} className={inputCls} />
             </F>
@@ -736,7 +748,7 @@ export function NewLeadForm({
             </ConditionalBlock>
           </SectionCard>
 
-          <SectionCard n={5} icon={ClipboardCheck} title="Final Assessment" subtitle="Your read on the lead" done={sectionDone("assessment")} delay={showAssignment ? 300 : 240}>
+          <SectionCard n={6} icon={ClipboardCheck} title="Final Assessment" subtitle="Your read on the lead" done={sectionDone("assessment")} delay={showAssignment ? 360 : 300}>
             <F error={errors.comments} label="Specific Comments on Client" required>
               <textarea value={f.comments} onChange={(e) => set("comments", e.target.value)} placeholder="Enter detailed comments about the client..." rows={4} className={inputCls} />
             </F>
