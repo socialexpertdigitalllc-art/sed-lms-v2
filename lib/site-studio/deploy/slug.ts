@@ -82,6 +82,20 @@ function normalizeLink(link: string | null | undefined): string | null {
 }
 
 /**
+ * The subdomain this lead is ALREADY live on, or null for a first deploy.
+ *
+ * Split out of `resolveSubdomain` so a caller can ask the cheap question
+ * first: naming a first deploy now costs a round-trip to the hosting (to find
+ * a free name), and a redeploy must not pay it — it keeps the name it has.
+ */
+export function reusableSubdomain(
+  leadWebsiteLink: string | null | undefined,
+  daDomain: string,
+): string | null {
+  return subFromWebsiteLink(normalizeLink(leadWebsiteLink), daDomain);
+}
+
+/**
  * One live site per lead (spec's hard rule, Phase 4a Task 8): a lead whose
  * `website_link` already resolves — via the kept `subFromWebsiteLink` — to a
  * subdomain of `daDomain` redeploys onto THAT EXACT subdomain, in place. A
@@ -90,7 +104,7 @@ function normalizeLink(link: string | null | undefined): string | null {
  * then a first deploy for this lead.
  */
 export function resolveSubdomain({ leadWebsiteLink, siteSlug, daDomain }: ResolveSubdomainInput): ResolvedSubdomain {
-  const linkSub = subFromWebsiteLink(normalizeLink(leadWebsiteLink), daDomain);
+  const linkSub = reusableSubdomain(leadWebsiteLink, daDomain);
   if (linkSub) {
     return { sub: linkSub, reused: true };
   }

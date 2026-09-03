@@ -285,7 +285,9 @@ describe("form audit: worst-case submission (every optional skipped)", () => {
       services: ["Plumbing"],
       client_experience: "3",
       specify_pages: ["Home"],
-      color_scheme: "blue",
+      // Two colours is the FLOOR, not an optional extra: a single colour
+      // leaves every button and accent to the generator's guess.
+      color_scheme: "blue, white",
       follow_up_time: "2027-01-01T10:00",
       price_quoted: "250",
       comments: "ok",

@@ -1,7 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SITES_BUCKET } from "../run/finalize";
 import type { StudioRunRow } from "../run/types";
-import { resolveSubdomain, InvalidSlugError } from "./slug";
+import { resolveSubdomain, reusableSubdomain, InvalidSlugError } from "./slug";
+import { baseSubdomain, firstFreeVersion } from "./naming";
+import { claimedByAnotherLead } from "./claimed";
 import { ensureSubdomain } from "./ensureSubdomain";
 
 /**
@@ -93,9 +95,22 @@ export async function deployRun(
 
     let resolved: { sub: string; reused: boolean };
     try {
+      const websiteLink = typeof lead.website_link === "string" ? lead.website_link : null;
+      // A FIRST deploy names the site after the business and nothing else —
+      // the link goes to the client, and a random tail reads as phishing.
+      // `run.site_slug` carries the engine's internal unique id, which is not
+      // a name anyone should have to read; it stays the fallback for a lead
+      // whose business name slugifies to nothing. A REDEPLOY keeps the name it
+      // already has, so it never pays for the free-name lookup.
+      const siteSlug = reusableSubdomain(websiteLink, deps.daDomain)
+        ? run.site_slug
+        : (await firstFreeVersion(
+            baseSubdomain(String(lead.business_name ?? "")),
+            (s) => claimedByAnotherLead(admin, s, run.lead_id),
+          )) || run.site_slug;
       resolved = resolveSubdomain({
-        leadWebsiteLink: typeof lead.website_link === "string" ? lead.website_link : null,
-        siteSlug: run.site_slug,
+        leadWebsiteLink: websiteLink,
+        siteSlug,
         daDomain: deps.daDomain,
       });
     } catch (e) {

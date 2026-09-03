@@ -20,13 +20,14 @@ export function FollowUpQuickActions({
   leadId,
   businessName,
   onPickup,
-  size = "sm",
+  className = "",
 }: {
   leadId: string;
   businessName: string;
   /** Opens the follow-up modal preset to Pickup. */
   onPickup: () => void;
-  size?: "sm" | "md";
+  /** Spacing/reveal rules from the surface embedding these. */
+  className?: string;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -60,25 +61,25 @@ export function FollowUpQuickActions({
     }
   }
 
-  const box =
-    size === "md"
-      ? "h-7 w-7"
-      : "h-5 w-5";
-  const icon = size === "md" ? "h-4 w-4" : "h-3 w-3";
+  // Borderless at rest. These sit beside a pill and a streak count, and a
+  // bordered box around each one turned that cluster into four competing
+  // chips; the colour arrives on hover, where the intent is.
   const base =
-    "inline-flex items-center justify-center rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
+    "inline-grid h-6 w-6 place-items-center rounded-md text-text-faint transition-colors " +
+    "disabled:cursor-not-allowed disabled:opacity-40 " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
 
   return (
-    <span className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+    <span className={`inline-flex shrink-0 items-center gap-0.5 ${className}`} onClick={(e) => e.stopPropagation()}>
       <button
         type="button"
         onClick={onPickup}
         disabled={busy}
         title="Picked up — log the follow-up"
         aria-label="Log a Pickup follow-up"
-        className={`${base} ${box} border-ready-fg/30 text-ready-fg hover:bg-ready-bg`}
+        className={`${base} hover:bg-ready-bg hover:text-ready-fg`}
       >
-        <Check className={icon} />
+        <Check className="h-3.5 w-3.5" />
       </button>
       <button
         type="button"
@@ -86,9 +87,9 @@ export function FollowUpQuickActions({
         disabled={busy}
         title="No pickup — log it and retry in 24 hours"
         aria-label="Log a No Pickup follow-up and retry in 24 hours"
-        className={`${base} ${box} border-dropped-fg/30 text-dropped-fg hover:bg-dropped-bg`}
+        className={`${base} hover:bg-dropped-bg hover:text-dropped-fg`}
       >
-        <X className={icon} />
+        <X className="h-3.5 w-3.5" />
       </button>
     </span>
   );

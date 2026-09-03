@@ -373,11 +373,16 @@ export function LeadsTable({
                   {streak > 1 && (
                     <span className="text-xs font-medium text-dropped-fg">×{streak}</span>
                   )}
+                  {/* This column is the narrowest on the table. The quick
+                      actions stay out of the resting layout entirely and
+                      arrive on row hover, the same way the Detail/Status
+                      buttons in the actions column already do. */}
                   {quickable && (
                     <FollowUpQuickActions
                       leadId={lead.id}
                       businessName={lead.business_name}
                       onPickup={() => openFollowUp(lead, "Pickup")}
+                      className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
                     />
                   )}
                 </span>

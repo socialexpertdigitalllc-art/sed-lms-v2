@@ -11,6 +11,12 @@
 /** Hard cap on how many colours a scheme may carry. */
 export const MAX_COLORS = 3;
 
+/**
+ * A palette needs a brand colour and something to pair with it. One colour
+ * alone leaves every button, heading and accent to the generator's guess.
+ */
+export const MIN_COLORS = 2;
+
 /** Wire shape of POST /api/leads/color-scheme/check. */
 export interface ColorSchemeCheck {
   /** true = usable, false = definitely not, null = we could not tell (AI down). */

@@ -48,7 +48,7 @@ import { SectionCard, FieldBlock as F, FieldError, SummaryRow } from "@/componen
 import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 import { ColorSchemeField } from "@/components/leads/ColorSchemeField";
 import { useColorSchemeCheck } from "@/hooks/useColorSchemeCheck";
-import { MAX_COLORS } from "@/lib/leads/colorScheme";
+import { MAX_COLORS, MIN_COLORS } from "@/lib/leads/colorScheme";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -115,14 +115,14 @@ export function NewLeadForm({
   const isapDisabled = f.has_service_areas !== "Yes" || areaCount === 0;
   // Advisory AI review of the colour scheme. Debounced inside the hook, and
   // deliberately incapable of blocking anything unless it returns a definite
-  // rejection — see `colorBlocked` at the submit gate.
-  const colorCheck = useColorSchemeCheck(f.color_scheme, {
-    context: {
-      business_name: f.business_name,
-      services: nonEmpty(f.services),
-      site_type: f.site_type,
-    },
-  });
+  // rejection — see `colorBlocked` at the submit gate. The context is shared
+  // with the complement suggestion so both judge against the same business.
+  const colorContext = {
+    business_name: f.business_name,
+    services: nonEmpty(f.services),
+    site_type: f.site_type,
+  };
+  const colorCheck = useColorSchemeCheck(f.color_scheme, { context: colorContext });
   const colorBlocked = colorCheck.rejected;
 
   function togglePage(p: string) {
@@ -581,11 +581,12 @@ export function NewLeadForm({
               </ConditionalBlock>
             </F>
             <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
-              <F error={errors.color_scheme} label="Color Scheme" required hint={`Up to ${MAX_COLORS} colours. Pick swatches or type names/hex.`}>
+              <F error={errors.color_scheme} label="Color Scheme" required hint={`${MIN_COLORS}–${MAX_COLORS} colours. Enter the client's main colour and we'll recommend the match.`}>
                 <ColorSchemeField
                   value={f.color_scheme}
                   onChange={(v) => set("color_scheme", v)}
                   check={colorCheck}
+                  context={colorContext}
                 />
               </F>
               <F error={errors.logo_link} label="Logo Link">

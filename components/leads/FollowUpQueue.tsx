@@ -170,9 +170,9 @@ export function FollowUpQueue({
     return (
       <div
         key={lead.id}
-        className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface px-4 py-3"
+        className="group flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-border bg-surface px-4 py-3"
       >
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-medium text-text truncate">{lead.business_name}</span>
           <StatusPill status={lead.status} />
           {/* The number being called — this page IS the calling queue, and
@@ -196,7 +196,7 @@ export function FollowUpQueue({
           </span>
         </div>
 
-        <div className="flex items-center gap-2 whitespace-nowrap">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 whitespace-nowrap">
           <span
             className={
               "text-sm " + (overdue ? "text-dropped-fg font-medium" : "text-text-muted")
@@ -238,6 +238,7 @@ export function FollowUpQueue({
               leadId={lead.id}
               businessName={lead.business_name}
               onPickup={() => openFollowUp(lead, "Pickup")}
+              className="ml-1 border-l border-border-subtle pl-2"
             />
           )}
         </div>

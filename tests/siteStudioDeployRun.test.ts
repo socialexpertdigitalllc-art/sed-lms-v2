@@ -121,11 +121,11 @@ describe("deployRun", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.reused).toBe(false);
-    expect(outcome.sub).toBe("acme-plumbing-ab12cd");
+    expect(outcome.sub).toBe("acme-plumbing");
     expect(calls).toEqual([
-      "subdomainExists:acme-plumbing-ab12cd",
-      "createSubdomain:acme-plumbing-ab12cd",
-      "upload:acme-plumbing-ab12cd",
+      "subdomainExists:acme-plumbing",
+      "createSubdomain:acme-plumbing",
+      "upload:acme-plumbing",
     ]);
   });
 
@@ -187,9 +187,9 @@ describe("deployRun", () => {
     expect(outcome.reused).toBe(false);
     expect(deps.createSubdomain).not.toHaveBeenCalled();
     expect(calls).toEqual([
-      "subdomainExists:acme-plumbing-ab12cd",
-      "clearDocroot:acme-plumbing-ab12cd",
-      "upload:acme-plumbing-ab12cd",
+      "subdomainExists:acme-plumbing",
+      "clearDocroot:acme-plumbing",
+      "upload:acme-plumbing",
     ]);
   });
 
@@ -205,9 +205,9 @@ describe("deployRun", () => {
     expect(rows[0]).toMatchObject({
       origin: "studio",
       status: "live",
-      subdomain: "acme-plumbing-ab12cd",
-      docroot: "/domains/acme-plumbing-ab12cd.da900.is.cc/public_html",
-      url: "https://acme-plumbing-ab12cd.da900.is.cc",
+      subdomain: "acme-plumbing",
+      docroot: "/domains/acme-plumbing.da900.is.cc/public_html",
+      url: "https://acme-plumbing.da900.is.cc",
       run_id: "run-1",
       lead_id: "lead-1",
     });
@@ -230,18 +230,58 @@ describe("deployRun", () => {
     expect(rows[0].status).toBe("live");
   });
 
-  it("cross-lead guard: refuses when the subdomain's studio_deployments row is LIVE under a different lead", async () => {
+  // Two businesses really can share a name, and now that the subdomain IS the
+  // business name that collision is ordinary rather than exceptional. Naming
+  // steps aside to the next counter instead of refusing the deploy — the
+  // second business still gets a link it can send a client.
+  it("cross-lead collision: takes the next counter when another lead holds the clean name", async () => {
     const { state, admin } = setup();
     state.runs["run-1"] = baseRun({ lead_id: "lead-2" });
-    state.leads["lead-2"] = baseLead({ id: "lead-2", business_name: "Acme Plumbing Two" });
+    state.leads["lead-2"] = baseLead({ id: "lead-2", business_name: "Acme Plumbing" });
     // A DIFFERENT lead already owns this exact subdomain, live.
     state.studio_deployments["dep-1"] = {
       id: "dep-1",
       lead_id: "lead-1",
       run_id: "run-0",
-      subdomain: "acme-plumbing-ab12cd",
-      docroot: "/domains/acme-plumbing-ab12cd.da900.is.cc/public_html",
-      url: "https://acme-plumbing-ab12cd.da900.is.cc",
+      subdomain: "acme-plumbing",
+      docroot: "/domains/acme-plumbing.da900.is.cc/public_html",
+      url: "https://acme-plumbing.da900.is.cc",
+      status: "live",
+      origin: "studio",
+    };
+    const { deps } = makeDeps();
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.sub).toBe("acme-plumbing-2");
+    // lead-1's live site is untouched — never cleared, never uploaded over.
+    expect(deps.clearDocroot).not.toHaveBeenCalledWith("acme-plumbing");
+    expect(deps.uploadZipAndExtract).not.toHaveBeenCalledWith(
+      "acme-plumbing",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(state.studio_deployments["dep-1"].status).toBe("live");
+  });
+
+  // The guard still exists, and this is the case it is actually for: the lead's
+  // OWN website_link points at a subdomain another lead is live on, so naming
+  // never gets a say. Refusing is the only safe move.
+  it("cross-lead guard: refuses when a REUSED subdomain is live under a different lead", async () => {
+    const { state, admin } = setup();
+    state.runs["run-1"] = baseRun({ lead_id: "lead-2" });
+    state.leads["lead-2"] = baseLead({
+      id: "lead-2",
+      business_name: "Acme Plumbing Two",
+      website_link: `https://acme-plumbing.${DA_DOMAIN}/`,
+    });
+    state.studio_deployments["dep-1"] = {
+      id: "dep-1",
+      lead_id: "lead-1",
+      run_id: "run-0",
+      subdomain: "acme-plumbing",
+      docroot: "/domains/acme-plumbing.da900.is.cc/public_html",
+      url: "https://acme-plumbing.da900.is.cc",
       status: "live",
       origin: "studio",
     };
@@ -250,7 +290,7 @@ describe("deployRun", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.error).toMatch(/lead-1/); // names the conflicting owner
-    expect(outcome.error).toMatch(/acme-plumbing-ab12cd/);
+    expect(outcome.error).toMatch(/acme-plumbing/);
     // must refuse BEFORE touching DirectAdmin at all
     expect(calls).toEqual([]);
     expect(deps.createSubdomain).not.toHaveBeenCalled();
@@ -265,7 +305,7 @@ describe("deployRun", () => {
       id: "dep-1",
       lead_id: "lead-1",
       run_id: "run-0",
-      subdomain: "acme-plumbing-ab12cd",
+      subdomain: "acme-plumbing",
       docroot: "x",
       url: "y",
       status: "taken_down",
@@ -284,7 +324,7 @@ describe("deployRun", () => {
       id: "dep-1",
       lead_id: "lead-1",
       run_id: "run-0",
-      subdomain: "acme-plumbing-ab12cd",
+      subdomain: "acme-plumbing",
       docroot: "x",
       url: "y",
       status: "live",
@@ -406,15 +446,45 @@ describe("deployRun", () => {
   // ALSO block — it's an orphaned or unlinked (v2_import) row, not "nobody's
   // site", and the safe default is to refuse rather than risk clobbering a
   // possibly-live client site.
-  it("FIX 3: refuses when the existing live row for this subdomain has a NULL lead_id (orphaned/unlinked)", async () => {
+  // FIX 3: a NULL lead_id is not "nobody's site", it is "we do not know whose
+  // site this is" — a possibly-live v2 client site. Naming treats it as taken
+  // and steps around it, and the guard still refuses if resolution lands there
+  // anyway (a reused website_link).
+  it("FIX 3: never takes a subdomain whose live row has a NULL lead_id (orphaned/unlinked)", async () => {
     const { state, admin } = setup();
     state.runs["run-1"] = baseRun({ lead_id: "lead-2" });
-    state.leads["lead-2"] = baseLead({ id: "lead-2", business_name: "Acme Plumbing Two" });
+    state.leads["lead-2"] = baseLead({ id: "lead-2", business_name: "Acme Plumbing" });
     state.studio_deployments["dep-1"] = {
       id: "dep-1",
       lead_id: null,
       run_id: null,
-      subdomain: "acme-plumbing-ab12cd",
+      subdomain: "acme-plumbing",
+      docroot: "x",
+      url: "y",
+      status: "live",
+      origin: "v2_import",
+    };
+    const { deps } = makeDeps();
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.sub).toBe("acme-plumbing-2");
+    expect(state.studio_deployments["dep-1"].status).toBe("live"); // untouched
+  });
+
+  it("FIX 3: refuses when a REUSED subdomain's live row has a NULL lead_id", async () => {
+    const { state, admin } = setup();
+    state.runs["run-1"] = baseRun({ lead_id: "lead-2" });
+    state.leads["lead-2"] = baseLead({
+      id: "lead-2",
+      business_name: "Acme Plumbing Two",
+      website_link: `https://acme-plumbing.${DA_DOMAIN}/`,
+    });
+    state.studio_deployments["dep-1"] = {
+      id: "dep-1",
+      lead_id: null,
+      run_id: null,
+      subdomain: "acme-plumbing",
       docroot: "x",
       url: "y",
       status: "live",
@@ -436,8 +506,11 @@ describe("deployRun", () => {
   it("FIX 2: a drifted website_link (redeploy resolves to a NEW subdomain) closes out the lead's old live row — exactly one live row remains", async () => {
     const { state, admin } = setup();
     // The lead's true live site is sub-A, but website_link now points
-    // somewhere unrelated (drifted) — so resolution falls through to the
-    // run's OWN site_slug, landing on a DIFFERENT subdomain (sub-B).
+    // somewhere unrelated (drifted) — nothing to reuse, so this resolves as a
+    // FIRST deploy and is named from the business name, landing on a
+    // DIFFERENT subdomain than sub-A. The run's own site_slug is deliberately
+    // set to something else entirely: it is an internal id, and no longer
+    // what names a site.
     state.runs["run-1"] = baseRun({ site_slug: "acme-plumbing-sub-b" });
     state.leads["lead-1"] = baseLead({ website_link: "https://www.acmeplumbing-their-own-domain.com/" });
     state.studio_deployments["dep-a"] = {
@@ -454,12 +527,12 @@ describe("deployRun", () => {
     const outcome = await deployRun(admin, "run-1", deps, "user-1");
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.sub).toBe("acme-plumbing-sub-b");
+    expect(outcome.sub).toBe("acme-plumbing");
 
     const rows = Object.values(state.studio_deployments);
     const live = rows.filter((r) => r.status === "live");
     expect(live).toHaveLength(1); // the invariant: exactly one live row for this lead
-    expect(live[0].subdomain).toBe("acme-plumbing-sub-b");
+    expect(live[0].subdomain).toBe("acme-plumbing");
 
     const closedOut = rows.find((r) => r.subdomain === "acme-plumbing-sub-a")!;
     expect(closedOut.status).toBe("taken_down");

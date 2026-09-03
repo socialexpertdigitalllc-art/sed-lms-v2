@@ -1,4 +1,5 @@
 import { PHONE_RE } from "@/lib/forms/phone";
+import { MAX_COLORS, MIN_COLORS, parseColorScheme } from "@/lib/leads/colorScheme";
 import type { AddOn, SocialProfile } from "@/lib/leads/types";
 
 export const PAGE_OPTIONS = [
@@ -182,7 +183,15 @@ export function validateNewLead(
   // "Same as Logo" is no longer offered: a website needs an explicit palette,
   // and a logo we may never receive is not one. The column still exists for
   // historical leads (see buildLeadPayload / brief.ts) — we just stop writing it.
+  //
+  // A palette needs at least a brand colour and something to pair with it: one
+  // colour alone leaves every button, heading and accent on the site to the
+  // generator's guess, which is how leads arrived with a single hex and a site
+  // came back looking nothing like the client's brand.
+  const colorCount = parseColorScheme(f.color_scheme).length;
   if (!f.color_scheme.trim()) e.color_scheme = "Color scheme is required.";
+  else if (colorCount < MIN_COLORS) e.color_scheme = `Enter at least ${MIN_COLORS} colours.`;
+  else if (colorCount > MAX_COLORS) e.color_scheme = `Enter at most ${MAX_COLORS} colours.`;
 
   for (const u of f.design_reference_links) {
     const t = u.trim();

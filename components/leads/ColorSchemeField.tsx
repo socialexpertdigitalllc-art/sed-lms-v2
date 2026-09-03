@@ -14,6 +14,7 @@ import {
   type ColorSchemeContext,
   type ColorSchemeCheckState,
 } from "@/hooks/useColorSchemeCheck";
+import { useColorComplement } from "@/hooks/useColorComplement";
 
 /** Starting swatch when "Add colour" is pressed — mid-grey, obviously a placeholder. */
 const NEW_SWATCH = "#808080";
@@ -171,6 +172,58 @@ export function ColorCheckFeedback({
 }
 
 /**
+ * The partner colour offered once the client's FIRST colour is in.
+ *
+ * One click adds it, which is the point: agents were entering two or three
+ * colours that did not go together, because picking a second colour is a
+ * design judgement they were never asked to have.
+ */
+export function ComplementSuggestion({
+  value,
+  onChange,
+  context,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  context?: ColorSchemeContext;
+}) {
+  const { hex, note, loading, fromAi } = useColorComplement(value, { context });
+  if (!hex) return null;
+
+  return (
+    <div className="mt-1.5 rounded-md border border-accent/40 bg-accent-soft/40 p-2" aria-live="polite">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent-ink">
+          {loading ? (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+          ) : (
+            <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          )}
+          Recommended match
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-4 w-4 rounded-full border border-border" style={{ backgroundColor: hex }} />
+          <span className="font-mono text-[10px] text-text-muted">{hex}</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => onChange(formatColorScheme([...parseColorScheme(value), hex]))}
+          className="ml-auto inline-flex items-center gap-1 rounded-md border border-accent bg-surface px-2 py-1 text-[11px] font-medium text-accent-ink transition-colors hover:bg-accent-soft"
+        >
+          <Plus size={11} /> Add this colour
+        </button>
+      </div>
+      {note && (
+        <p className="mt-1.5 text-[11px] leading-relaxed text-text-faint">
+          {note}
+          {!fromAi && loading ? " Checking for a better match…" : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * The whole field for the new-lead form: swatches, free-text input, AI feedback.
  * The caller owns `value` and the submit gate; this only edits and advises.
  */
@@ -178,10 +231,12 @@ export function ColorSchemeField({
   value,
   onChange,
   check,
+  context,
 }: {
   value: string;
   onChange: (next: string) => void;
   check: ColorSchemeCheckState;
+  context?: ColorSchemeContext;
 }) {
   return (
     <div>
@@ -193,6 +248,7 @@ export function ColorSchemeField({
         placeholder="e.g., #1A73E8, #FFFFFF, navy"
         className={inputCls}
       />
+      <ComplementSuggestion value={value} onChange={onChange} context={context} />
       <ColorCheckFeedback check={check} onApply={onChange} />
     </div>
   );
@@ -215,6 +271,7 @@ export function ColorSchemeAdvice({
   return (
     <>
       <ColorSwatchRow value={draft} onChange={onApply} />
+      <ComplementSuggestion value={draft} onChange={onApply} context={context} />
       <ColorCheckFeedback check={check} onApply={onApply} />
     </>
   );

@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { resolveSubdomain, InvalidSlugError } from "@/lib/site-studio/deploy/slug";
+import { resolveSubdomain, reusableSubdomain, InvalidSlugError } from "@/lib/site-studio/deploy/slug";
+import { baseSubdomain, firstFreeVersion } from "@/lib/site-studio/deploy/naming";
+import { claimedByAnotherLead } from "@/lib/site-studio/deploy/claimed";
 import { ensureSubdomain } from "@/lib/site-studio/deploy/ensureSubdomain";
 import { BUILDER_SITES_BUCKET } from "./run";
 
@@ -13,11 +15,9 @@ import { BUILDER_SITES_BUCKET } from "./run";
  *
  * Two real differences from `deployRun.ts`, both forced by the schema:
  *  - `builder_runs` has no `site_slug` column (nothing in Site Builder needs
- *    one until deploy time) — a slug is derived here, once, from the lead's
- *    business name, exactly the same shape Site Studio's engine derives one
- *    (`slugify(business_name) + "-" + 6 random base36 chars`), duplicated in
- *    this file rather than imported from `lib/site-studio/run/engine.ts`
- *    (mid-flux, uncommitted, and not a dependency Site Builder should take).
+ *    one until deploy time) — the subdomain is derived here, once, from the
+ *    lead's business name via the shared `naming.ts` scheme: the clean name,
+ *    counting up only when the hosting says it is taken.
  *  - `builder_runs.status` HAS a `deployed` value (unlike `studio_runs`,
  *    which never leaves deployment as a bare "ready" run) — a successful
  *    deploy here moves the run to `deployed`; a later redeploy for the same
@@ -48,19 +48,23 @@ export type DeployBuilderRunOutcome =
 
 const fail = (status: number, error: string): DeployBuilderRunOutcome => ({ ok: false, status, error });
 
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60)
-    .replace(/-+$/g, "");
-}
-
-function randomBase36(len: number): string {
-  let out = "";
-  while (out.length < len) out += Math.random().toString(36).slice(2);
-  return out.slice(0, len);
+/**
+ * The subdomain a first deploy gets: the business name, clean, and nothing
+ * else. It used to carry six random base36 characters to guarantee
+ * uniqueness, which made every link we send a client look like a phishing
+ * URL. Uniqueness now comes from asking who OWNS the name (see claimed.ts) and
+ * counting up only when another lead's live site holds it.
+ *
+ * Redeploys never reach this: `resolveSubdomain` reuses the subdomain already
+ * in the lead's `website_link` (written back at the end of a successful
+ * deploy), so an existing site keeps its name.
+ */
+async function freeSubdomainFor(
+  admin: SupabaseClient,
+  businessName: string,
+  leadId: string | null,
+): Promise<string> {
+  return firstFreeVersion(baseSubdomain(businessName), (s) => claimedByAnotherLead(admin, s, leadId));
 }
 
 async function upsertDeployment(
@@ -136,9 +140,14 @@ export async function deployBuilderRun(
 
     let resolved: { sub: string; reused: boolean };
     try {
-      const siteSlug = `${slugify(String(lead.business_name ?? "")) || "site"}-${randomBase36(6)}`;
+      const websiteLink = typeof lead.website_link === "string" ? lead.website_link : null;
+      // A redeploy keeps the subdomain it is already live on, so only a FIRST
+      // deploy pays for the free-name lookup against the hosting.
+      const siteSlug = reusableSubdomain(websiteLink, deps.daDomain)
+        ? ""
+        : await freeSubdomainFor(admin, String(lead.business_name ?? ""), leadId);
       resolved = resolveSubdomain({
-        leadWebsiteLink: typeof lead.website_link === "string" ? lead.website_link : null,
+        leadWebsiteLink: websiteLink,
         siteSlug,
         daDomain: deps.daDomain,
       });
