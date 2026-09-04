@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
 import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
+import { ShuffleSiteButton } from "@/components/common/ShuffleSiteButton";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
 import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime } from "@/lib/leads/format";
@@ -220,6 +221,12 @@ export function TicketDetail({
                       className="grid h-6 w-6 place-items-center rounded text-text-muted hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
                       iconSize={14}
                       onUploaded={() => router.refresh()}
+                    />
+                    <ShuffleSiteButton
+                      site={lead.website_link}
+                      className="grid h-6 w-6 place-items-center rounded text-text-muted hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
+                      iconSize={14}
+                      onShuffled={() => router.refresh()}
                     />
                   </>
                 )}

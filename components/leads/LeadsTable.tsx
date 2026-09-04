@@ -27,6 +27,9 @@ import { StatusChangeModal } from "./StatusChangeModal";
 import { FollowUpModal } from "./FollowUpModal";
 import { FuStatusHoverChip } from "./FuStatusHoverChip";
 import { FollowUpQuickActions } from "./FollowUpQuickActions";
+import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
+import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
+import { ShuffleSiteButton } from "@/components/common/ShuffleSiteButton";
 import { BulkActionBar } from "./BulkActionBar";
 import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -98,6 +101,10 @@ export function LeadsTable({
   const canCreate = has("leads.create");
   const canChangeStatus = has("leads.status_change");
   const canFollowUp = has("leads.followup");
+  // Upload/shuffle beside a website link are the ticket-tech and board
+  // operator tools (same gate as the lead screen); download is for anyone
+  // who can see the row.
+  const canSiteAgent = has("tickets.resolve") || has("studio.manage");
   const canExport = has("leads.export");
   const canAssign = has("leads.assign");
   const canDelete = has("leads.delete");
@@ -233,11 +240,20 @@ export function LeadsTable({
             <span className="inline-flex items-center gap-1.5">
               <StatusPill status={c.getValue<string>()} />
               {link && link.trim() && (
-                <a href={link} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
-                  title="Open website" aria-label="Open website"
-                  className="inline-flex items-center text-accent-ink hover:text-accent">
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
+                <span className="inline-flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                  <a href={link} target="_blank" rel="noopener noreferrer"
+                    title="Open website" aria-label="Open website"
+                    className="inline-flex items-center text-accent-ink hover:text-accent">
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                  <DownloadSiteFilesButton site={link} className="inline-flex h-5 w-5 items-center justify-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45" iconSize={12} />
+                  {canSiteAgent && (
+                    <>
+                      <UploadSiteFilesButton site={link} className="inline-flex h-5 w-5 items-center justify-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45" iconSize={12} onUploaded={() => router.refresh()} />
+                      <ShuffleSiteButton site={link} className="inline-flex h-5 w-5 items-center justify-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45" iconSize={12} onShuffled={() => router.refresh()} />
+                    </>
+                  )}
+                </span>
               )}
             </span>
           );
@@ -438,7 +454,7 @@ export function LeadsTable({
         ),
       },
     ],
-    [agentNameById, canChangeStatus, canFollowUp, canBulk, canViewTags, tagById, sentContractSet]
+    [agentNameById, canChangeStatus, canFollowUp, canSiteAgent, canBulk, canViewTags, tagById, sentContractSet, router]
   );
 
   const table = useReactTable({

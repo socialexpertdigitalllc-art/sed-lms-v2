@@ -23,6 +23,7 @@ import { AgentRunPanel } from "@/components/tickets/AgentRunPanel";
 import { SectionCard } from "@/components/forms/formShell";
 import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
 import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
+import { ShuffleSiteButton } from "@/components/common/ShuffleSiteButton";
 import { FieldRow, type SelectOption } from "@/components/detail/FieldRow";
 import { RatingStars } from "@/components/common/RatingStars";
 import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
@@ -264,11 +265,19 @@ export function LeadDetail({
                         iconSize={13}
                       />
                       {canSiteAgent && (
-                        <UploadSiteFilesButton
-                          site={lead.website_link}
-                          className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
-                          iconSize={13}
-                        />
+                        <>
+                          <UploadSiteFilesButton
+                            site={lead.website_link}
+                            className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
+                            iconSize={13}
+                          />
+                          <ShuffleSiteButton
+                            site={lead.website_link}
+                            className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
+                            iconSize={13}
+                            onShuffled={() => router.refresh()}
+                          />
+                        </>
                       )}
                     </span>
                   ) : undefined

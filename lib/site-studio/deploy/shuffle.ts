@@ -1,0 +1,176 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { notify } from "@/lib/notifications/notify";
+import {
+  daConfigured,
+  subFromWebsiteLink,
+  archiveDocroot,
+  createSubdomain,
+  deleteSubdomain,
+  subdomainExists,
+  uploadZipAndExtract,
+  clearDocroot,
+  docrootFor,
+} from "@/lib/template-engine/directadmin";
+import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
+import { baseSubdomain, parseVersion, firstFreeVersion } from "@/lib/site-studio/deploy/naming";
+import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
+
+export type ShuffleResult =
+  | { ok: true; url: string; subdomain: string; oldDeleted: boolean }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Move a live staging site to a FRESH subdomain: the current files are pulled
+ * from the hosting (manual edits included), uploaded to the next free
+ * versioned name ({first-2-words}vN), and only then is the old subdomain
+ * deleted. The lead's website_link is repointed and the lead's agent notified.
+ *
+ * One implementation behind two doors: the deployments board calls it by
+ * deployment id, while the lead screen, the ticket screen and the lead table
+ * call it by the SITE the button is bound to (see `findLiveDeploymentBySite`)
+ * — the same rule as the upload icon, so a tech never picks a target off the
+ * board and a shuffle can never land on the wrong lead's site.
+ */
+export async function shuffleDeployment(
+  admin: SupabaseClient,
+  args: { id: string; actorId: string },
+): Promise<ShuffleResult> {
+  if (!daConfigured()) return { ok: false, status: 422, error: "DirectAdmin is not configured." };
+
+  const { data: row } = await admin
+    .from("studio_deployments")
+    .select("id, lead_id, subdomain, url, status, leads(business_name, agent_id, closed_by)")
+    .eq("id", args.id)
+    .maybeSingle();
+  if (!row) return { ok: false, status: 404, error: "Deployment not found" };
+  if (row.status !== "live") return { ok: false, status: 409, error: "Only a live site can be shuffled" };
+
+  const daDomain = process.env.DA_DOMAIN ?? "";
+  const oldSub = subFromWebsiteLink(row.url, daDomain) ?? (row.subdomain as string);
+  if (!oldSub || !row.url.includes(`.${daDomain}`)) {
+    return { ok: false, status: 409, error: "Only staging subdomains can be shuffled" };
+  }
+
+  const lead = (Array.isArray(row.leads) ? row.leads[0] : row.leads) as
+    | { business_name: string; agent_id: string | null; closed_by: string | null }
+    | null;
+
+  // Next free versioned name. Base comes from the lead's business name when
+  // linked, else from the current label; the old name itself is never reused.
+  const base = lead?.business_name ? baseSubdomain(lead.business_name) : parseVersion(oldSub).base;
+  let newSub: string;
+  try {
+    newSub = await firstFreeVersion(base, subdomainExists, {
+      skip: oldSub,
+      start: parseVersion(oldSub).base === base ? parseVersion(oldSub).version + 1 : 1,
+    });
+  } catch (e) {
+    return { ok: false, status: 502, error: e instanceof Error ? e.message : "No free subdomain" };
+  }
+
+  // 1. current live files. DirectAdmin's archive nests everything under the
+  // docroot folder name (e.g. "public_html/…"); re-pack it through
+  // unzipToMap (strips the shared root, guards zip-slip) so extraction lands
+  // the files at the new docroot's ROOT — the transfer flow's own trick.
+  const rawZip = await archiveDocroot(oldSub);
+  if (!rawZip) return { ok: false, status: 502, error: "Could not read the current site files" };
+  let zip: Uint8Array;
+  try {
+    const map = unzipToMap(rawZip);
+    if (!Object.keys(map).length) throw new Error("archive is empty");
+    zip = zipFromMap(map);
+  } catch (e) {
+    return {
+      ok: false,
+      status: 502,
+      error: `Could not repack the site files: ${e instanceof Error ? e.message : "bad archive"}`,
+    };
+  }
+
+  // 2. create + upload to the new subdomain; roll it back on failure
+  const created = await createSubdomain(newSub);
+  if (created.error) {
+    return { ok: false, status: 502, error: `Could not create ${newSub}: ${created.text || created.details}` };
+  }
+  // Drop DirectAdmin's auto-created placeholder so nothing stale shadows the
+  // real site (warning-only, same as the deploy flows).
+  const cleared = await clearDocroot(newSub);
+  if (!cleared.ok) console.warn(`[shuffle] clearDocroot(${newSub}) failed: ${cleared.message}`);
+  const uploaded = await uploadZipAndExtract(newSub, zip, "site.zip");
+  if (!uploaded.ok && uploaded.failedStep !== "delete") {
+    await deleteSubdomain(newSub); // rollback — the old site is untouched
+    return {
+      ok: false,
+      status: 502,
+      error: `Upload to ${newSub} failed at ${uploaded.failedStep}: ${uploaded.message ?? "error"} — the old site is untouched.`,
+    };
+  }
+
+  // 3. the new site is live — repoint records, then drop the old subdomain
+  const newUrl = `https://${newSub}.${daDomain}`;
+  const now = new Date().toISOString();
+  const { error: updErr } = await admin
+    .from("studio_deployments")
+    .update({ subdomain: newSub, docroot: docrootFor(newSub), url: newUrl, updated_at: now })
+    .eq("id", args.id);
+  if (updErr) {
+    return {
+      ok: false,
+      status: 500,
+      error: `New site is live at ${newUrl}, but recording it failed: ${updErr.message}. Old subdomain kept.`,
+    };
+  }
+  if (row.lead_id) {
+    await admin.from("leads").update({ website_link: newUrl }).eq("id", row.lead_id);
+  }
+  await admin.from("builder_runs").update({ deployed_url: newUrl, updated_at: now }).eq("deployed_url", row.url);
+
+  const removed = await deleteSubdomain(oldSub);
+
+  await admin.from("activity_log").insert({
+    user_id: args.actorId,
+    action: "studio.deployment.shuffled",
+    entity_type: "studio_deployment",
+    entity_id: args.id,
+    new_value: { from: oldSub, to: newSub, old_deleted: !removed.error, lead_id: row.lead_id },
+  });
+
+  if (row.lead_id && lead) {
+    try {
+      await notify(
+        "website_link_added",
+        { leadId: row.lead_id, lead: { agent_id: lead.agent_id, closed_by: lead.closed_by }, actorId: args.actorId },
+        {
+          title: "Website moved to a new link",
+          body: `${lead.business_name}'s website has a new address: ${newUrl}`,
+          dedupKey: `website_shuffled:${row.lead_id}:${newSub}`,
+          targetUrl: `/leads/${row.lead_id}`,
+          websiteUrl: newUrl,
+        },
+      );
+    } catch {}
+  }
+
+  return { ok: true, url: newUrl, subdomain: newSub, oldDeleted: !removed.error };
+}
+
+/**
+ * The LIVE deployment row behind a site address (a lead's website_link or a
+ * deployment url), or null. Matched on the tracked url's host, so
+ * "https://x.dmviral.com/", "x.dmviral.com" and "HTTPS://X.DMVIRAL.COM" all
+ * find the same row.
+ */
+export async function findLiveDeploymentBySite(
+  admin: SupabaseClient,
+  site: string,
+): Promise<{ id: string; url: string } | null> {
+  const host = siteHostFrom(site);
+  if (!host) return null;
+  const { data } = await admin
+    .from("studio_deployments")
+    .select("id, url")
+    .eq("status", "live")
+    .eq("url", `https://${host}`)
+    .maybeSingle();
+  return data ? { id: data.id as string, url: data.url as string } : null;
+}
