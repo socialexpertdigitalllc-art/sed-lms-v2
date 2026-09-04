@@ -44,7 +44,7 @@ import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { useViewState } from "@/hooks/useViewState";
 import { buildQuery } from "@/lib/url/buildQuery";
 import { MonthFilter } from "@/components/common/MonthFilter";
-import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
+import { monthOptions, inMonth, inRange } from "@/lib/analytics/dateScope";
 import { serialColumn } from "@/components/common/tableSerial";
 import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { CopyButton } from "@/components/common/CopyButton";
@@ -60,7 +60,7 @@ import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", fu: "", region: "", tags: "", month: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", fu: "", region: "", tags: "", month: "", from: "", to: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
 
 export function LeadsTable({
@@ -142,6 +142,9 @@ export function LeadsTable({
   const { q, status, agent, type, sort, page, size } = urlState;
   const canScopeMonth = has("analytics.view_all_agents");
   const month = canScopeMonth ? urlState.month : "";
+  // Custom created-at range, same gate as the month it is an alternative to.
+  const from = canScopeMonth ? urlState.from : "";
+  const to = canScopeMonth ? urlState.to : "";
   const regionSel = useMemo(() => (urlState.region ? urlState.region.split(",") : []), [urlState.region]);
   const tagSel = useMemo(() => (urlState.tags ? urlState.tags.split(",") : []), [urlState.tags]);
   const agentSel = useMemo(() => (agent ? agent.split(",") : []), [agent]);
@@ -161,9 +164,9 @@ export function LeadsTable({
   // Any non-default filter — drives a visible "Clear filters" escape so a
   // persisted filter can never silently hide leads.
   const filtersActive =
-    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "" || teamScope;
+    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "" || urlState.from !== "" || urlState.to !== "" || teamScope;
   const clearFilters = () =>
-    setUrlState({ q: "", status: "All", agent: "", type: "", fu: "", region: "", tags: "", month: "", scope: "", page: "0" });
+    setUrlState({ q: "", status: "All", agent: "", type: "", fu: "", region: "", tags: "", month: "", from: "", to: "", scope: "", page: "0" });
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
@@ -185,10 +188,11 @@ export function LeadsTable({
     () =>
       leads.filter((l) => {
         if (!inMonth(l.created_at, month)) return false;
+        if (!inRange(l.created_at, from, to)) return false;
         if (!isCloser) return true;
         return teamScope ? Boolean(l.agent_id && teamIds.has(l.agent_id)) : l.agent_id === currentUserId;
       }),
-    [leads, month, isCloser, teamScope, teamIds, currentUserId],
+    [leads, month, from, to, isCloser, teamScope, teamIds, currentUserId],
   );
 
   const statusCounts = useMemo(() => {
@@ -623,7 +627,15 @@ export function LeadsTable({
             onChange={(next) => setUrlState({ tags: next.join(","), page: "0" })}
           />
         )}
-        {canScopeMonth && <MonthFilter options={monthOptions(leads)} value={month} onChange={(v) => setUrlState({ month: v, page: "0" })} />}
+        {canScopeMonth && (
+          <MonthFilter
+            options={monthOptions(leads)}
+            value={month}
+            onChange={(v) => setUrlState({ month: v, page: "0" })}
+            range={{ from, to }}
+            onRangeChange={(r) => setUrlState({ from: r.from, to: r.to, page: "0" })}
+          />
+        )}
         <Select
           value={sort}
           onChange={(e) => setUrlState({ sort: e.target.value, page: "0" })}

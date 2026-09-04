@@ -29,3 +29,36 @@ export function inMonth(iso: string | null | undefined, month: string): boolean 
   if (!month) return true;
   return monthKey(iso) === month;
 }
+
+/**
+ * A range bound from the date-time picker (`YYYY-MM-DDTHH:MM`, local) as
+ * epoch ms; NaN when unusable. A bare `YYYY-MM-DD` is read as local midnight
+ * — `new Date("2026-09-04")` alone would be UTC midnight, which is the wrong
+ * day for half the planet.
+ */
+export function localBoundMs(v: string): number {
+  const s = v.trim();
+  if (!s) return NaN;
+  return new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00` : s).getTime();
+}
+
+/** The picker stops at the minute; "to 5:00 PM" means through 5:00:59. */
+const MINUTE_END_MS = 59_999;
+
+/**
+ * True if `iso` falls inside [from, to], both ends inclusive. Either bound
+ * may be "" (open-ended); both "" matches everything, the same way MONTH_ALL
+ * does. An unparseable bound is treated as open rather than as "match
+ * nothing" — a half-typed date must not blank the table.
+ */
+export function inRange(iso: string | null | undefined, from: string, to: string): boolean {
+  if (!from && !to) return true;
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return false;
+  const lo = localBoundMs(from);
+  const hi = localBoundMs(to);
+  if (!Number.isNaN(lo) && t < lo) return false;
+  if (!Number.isNaN(hi) && t > hi + MINUTE_END_MS) return false;
+  return true;
+}
