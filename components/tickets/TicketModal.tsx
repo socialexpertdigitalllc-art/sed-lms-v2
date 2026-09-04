@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
+import { DateTimeField } from "@/components/common/DateTimeField";
 import {
   TICKET_CATEGORIES,
   TICKET_SIGNATURES,
@@ -198,13 +199,13 @@ export function TicketModal({
 
           <div>
             <label className={labelCls}>Due date (optional)</label>
-            <input
-              type="datetime-local"
+            <DateTimeField
+              aria-label="Due"
               className={inputCls}
               value={dueDate}
-              onChange={(e) => {
+              onChange={(v) => {
                 setDueTouched(true);
-                setDueDate(e.target.value);
+                setDueDate(v);
               }}
             />
           </div>

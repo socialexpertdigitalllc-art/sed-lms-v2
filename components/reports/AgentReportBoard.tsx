@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { DatePicker } from "@/components/common/DateTimeField";
 import type { AgentPeriodicReport } from "@/lib/reports/agentPeriodic";
 import type { WindowMetrics } from "@/lib/reports/agentPeriodicMath";
 import { formatCompactCurrency } from "@/lib/leads/format";
@@ -138,13 +139,13 @@ export function AgentReportBoard({
         </label>
         <label className="text-sm">
           <span className="block text-[10px] uppercase tracking-wide text-text-faint mb-1">From</span>
-          <input type="date" className="bg-surface-2 border border-border rounded-md px-2 py-1.5 text-sm"
-            value={from} onChange={(e) => setFrom(e.target.value)} />
+          <DatePicker aria-label="From" className="bg-surface-2 px-2 py-1.5 min-w-[150px]"
+            value={from} onChange={setFrom} />
         </label>
         <label className="text-sm">
           <span className="block text-[10px] uppercase tracking-wide text-text-faint mb-1">To</span>
-          <input type="date" className="bg-surface-2 border border-border rounded-md px-2 py-1.5 text-sm"
-            value={to} onChange={(e) => setTo(e.target.value)} />
+          <DatePicker aria-label="To" className="bg-surface-2 px-2 py-1.5 min-w-[150px]"
+            value={to} onChange={setTo} />
         </label>
         <div className="flex gap-1.5">
           {presets.map((p) => (

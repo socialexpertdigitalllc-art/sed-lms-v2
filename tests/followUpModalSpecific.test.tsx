@@ -34,10 +34,7 @@ describe("FollowUpModal", () => {
   it("sends is_specific_time when the box is ticked", async () => {
     mount();
     fireEvent.click(screen.getByText("Pickup"));
-    const when = new Date(Date.now() + 86_400_000).toISOString().slice(0, 16);
-    fireEvent.change(document.querySelector('input[type="datetime-local"]') as HTMLInputElement, {
-      target: { value: when },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "60" })); // the "in 60 minutes" preset
     fireEvent.click(screen.getByRole("checkbox", { name: /specific time/i }));
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
 
@@ -48,10 +45,7 @@ describe("FollowUpModal", () => {
   it("defaults the flag to false", async () => {
     mount();
     fireEvent.click(screen.getByText("Pickup"));
-    const when = new Date(Date.now() + 86_400_000).toISOString().slice(0, 16);
-    fireEvent.change(document.querySelector('input[type="datetime-local"]') as HTMLInputElement, {
-      target: { value: when },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "60" })); // the "in 60 minutes" preset
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
 
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));

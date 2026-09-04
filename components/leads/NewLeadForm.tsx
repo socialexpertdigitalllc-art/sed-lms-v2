@@ -44,6 +44,7 @@ import { ChipGroup } from "@/components/forms/ChipGroup";
 import { DynamicList } from "@/components/forms/DynamicList";
 import { SocialProfilesField } from "@/components/forms/SocialProfilesField";
 import { TemplateRecommendation } from "@/components/leads/TemplateRecommendation";
+import { DateTimeField } from "@/components/common/DateTimeField";
 import { ConditionalBlock } from "@/components/forms/ConditionalBlock";
 import { RatingGroup } from "@/components/forms/RatingGroup";
 import { SectionCard, FieldBlock as F, FieldError, SummaryRow } from "@/components/forms/formShell";
@@ -649,7 +650,7 @@ export function NewLeadForm({
 
           <SectionCard n={5} icon={DollarSign} title="Pricing & Follow Up" subtitle="Commercials & next touch" done={sectionDone("pricing")} delay={showAssignment ? 300 : 240}>
             <F error={errors.follow_up_time} label="Follow Up Time" required>
-              <input type="datetime-local" value={f.follow_up_time} onChange={(e) => set("follow_up_time", e.target.value)} className={inputCls} />
+              <DateTimeField aria-label="Follow up" value={f.follow_up_time} onChange={(v) => set("follow_up_time", v)} className={inputCls} />
             </F>
             <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
               <F error={errors.price_quoted} label="Price Quoted" required>

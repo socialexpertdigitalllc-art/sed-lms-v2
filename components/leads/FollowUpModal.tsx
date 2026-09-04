@@ -6,6 +6,7 @@ import { endsFollowUps, validateFollowUp } from "@/lib/leads/followups";
 import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
 import { inOffset } from "@/lib/dates/datetimeLocal";
+import { DateTimeField } from "@/components/common/DateTimeField";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { inputCls } from "@/components/forms/Field";
 
@@ -209,12 +210,12 @@ export function FollowUpModal({
                   </button>
                 ))}
               </div>
-              <input
-                type="datetime-local"
+              <DateTimeField
+                aria-label="Next follow-up"
                 className={inputCls}
                 value={next_follow_up_time}
-                onChange={(e) => {
-                  setNextFollowUpTime(e.target.value);
+                onChange={(v) => {
+                  setNextFollowUpTime(v);
                   setQuickDays("");
                   setQuickHours("");
                   setQuickMins("");

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { AppSettings } from "@/lib/settings/appSettings";
 import { BrandMark } from "@/components/branding/BrandMark";
 import { useToast } from "@/components/common/Toast";
+import { TimeField } from "@/components/common/DateTimeField";
 
 const inputCls =
   "w-full px-3 py-2 rounded-md border border-border bg-surface text-sm text-text outline-none focus:ring-2 focus:ring-accent";
@@ -12,8 +13,8 @@ const inputCls =
 const ALLOWED_LOGO_TYPES = ["image/png", "image/jpeg", "image/svg+xml", "image/webp"];
 const MAX_LOGO_SIZE = 2 * 1024 * 1024;
 
-// Postgres `time` columns serialize as "HH:MM:SS"; <input type="time"> and
-// our PUT validator both want plain "HH:MM".
+// Postgres `time` columns serialize as "HH:MM:SS"; the TimeField and our PUT
+// validator both want plain "HH:MM".
 const hhmm = (t: string) => t.slice(0, 5);
 
 // Common IANA zones for the picker. The stored value is always ensured present
@@ -209,11 +210,10 @@ export function AppSettingsCard({
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <label className="block text-xs font-medium text-text-muted mb-1">Work start time</label>
-          <input
-            type="time"
+          <TimeField
+            aria-label="Work start time"
             value={workStartTime}
-            onChange={(e) => setWorkStartTime(e.target.value)}
-            className={inputCls}
+            onChange={setWorkStartTime}
           />
         </div>
         <div>
