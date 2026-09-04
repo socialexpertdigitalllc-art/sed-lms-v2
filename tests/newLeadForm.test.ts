@@ -28,7 +28,7 @@ function validState(): NewLeadFormState {
     comments: "Solid lead",
     rating: 8,
     fresh_or_followup: "Fresh",
-    // Required since 0074: the template is chosen WITH the client, on the call.
+    // Optional; set here so payload tests can assert it round-trips.
     recommended_template_id: "3f1e5a1e-0000-4000-8000-000000000000",
   };
 }

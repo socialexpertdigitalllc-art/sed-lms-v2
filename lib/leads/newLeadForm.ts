@@ -57,7 +57,7 @@ export interface NewLeadFormState {
   developer_instructions: string;
   /** As many of the business's social profiles as it has. */
   social_profiles: SocialProfile[];
-  /** builder_templates.id the agent picked with the client. Required. */
+  /** builder_templates.id the agent picked with the client. Optional. */
   recommended_template_id: string;
   comments: string;
   rating: number;
@@ -215,10 +215,8 @@ export function validateNewLead(
   const ref = f.reference_link.trim();
   if (f.site_type === "Redesign" && ref && !/^https?:\/\/.+/.test(ref))
     e.reference_link = "Enter a valid reference site URL.";
-  // A template is chosen WITH the client, on the call. Leaving it to the
-  // build means someone who never spoke to them picks it from the brief.
-  if (!f.recommended_template_id)
-    e.recommended_template_id = "Select a template for this lead.";
+  // The template is optional: when the agent leaves it blank, the build
+  // picks one from the brief.
   if (!f.comments.trim()) e.comments = "Please enter comments about the client.";
   if (f.rating === 0) e.rating = "Please rate the lead.";
   if (!f.fresh_or_followup) e.fresh_or_followup = "Please select Fresh or Follow Up.";

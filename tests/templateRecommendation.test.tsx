@@ -91,7 +91,7 @@ describe("TemplateRecommendation", () => {
   });
 });
 
-describe("template selection is required on the lead form", () => {
+describe("template selection is optional on the lead form", () => {
   function filled() {
     return {
       ...emptyNewLead("Ready"),
@@ -112,8 +112,8 @@ describe("template selection is required on the lead form", () => {
     };
   }
 
-  it("blocks submission until a template is chosen", () => {
-    expect(validateNewLead(filled()).recommended_template_id).toMatch(/select a template/i);
+  it("does not block submission when no template is chosen", () => {
+    expect(validateNewLead(filled()).recommended_template_id).toBeUndefined();
   });
 
   it("passes once one is chosen", () => {

@@ -638,8 +638,8 @@ export function NewLeadForm({
             </F>
           </SectionCard>
 
-          <SectionCard n={4} icon={LayoutTemplate} title="Template Recommendation" subtitle="The look you agreed with the client" done={sectionDone("template")} delay={showAssignment ? 240 : 180}>
-            <F error={errors.recommended_template_id} label="Choose a template" required>
+          <SectionCard n={4} icon={LayoutTemplate} title="Template Recommendation" subtitle="The look you agreed with the client — optional" done={sectionDone("template")} delay={showAssignment ? 240 : 180}>
+            <F error={errors.recommended_template_id} label="Choose a template (optional)">
               <TemplateRecommendation
                 value={f.recommended_template_id}
                 onChange={(id) => set("recommended_template_id", id)}
