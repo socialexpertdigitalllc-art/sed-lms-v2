@@ -31,7 +31,7 @@ import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesBu
 import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
 import { ShuffleSiteButton } from "@/components/common/ShuffleSiteButton";
 import { BulkActionBar } from "./BulkActionBar";
-import { bucketOf, isFollowUpEligible } from "@/lib/leads/followups";
+import { bucketOf, isFollowUpEligible, FU_STATUSES } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
@@ -60,7 +60,7 @@ import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", region: "", tags: "", month: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", fu: "", region: "", tags: "", month: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
 
 export function LeadsTable({
@@ -146,6 +146,8 @@ export function LeadsTable({
   const tagSel = useMemo(() => (urlState.tags ? urlState.tags.split(",") : []), [urlState.tags]);
   const agentSel = useMemo(() => (agent ? agent.split(",") : []), [agent]);
   const typeSel = useMemo(() => (type ? type.split(",") : []), [type]);
+  // The follow-up status pill (Pickup / No Pickup) as a filter.
+  const fuSel = useMemo(() => (urlState.fu ? urlState.fu.split(",") : []), [urlState.fu]);
   // A closer's table defaults to THEIR OWN leads; the team is opt-in behind
   // the "My team" chip, which then adds their agents' leads to their own.
   // Applied BEFORE every other filter and count, so the status tabs, the
@@ -159,24 +161,25 @@ export function LeadsTable({
   // Any non-default filter — drives a visible "Clear filters" escape so a
   // persisted filter can never silently hide leads.
   const filtersActive =
-    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "" || teamScope;
+    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "" || teamScope;
   const clearFilters = () =>
-    setUrlState({ q: "", status: "All", agent: "", type: "", region: "", tags: "", month: "", scope: "", page: "0" });
+    setUrlState({ q: "", status: "All", agent: "", type: "", fu: "", region: "", tags: "", month: "", scope: "", page: "0" });
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
   }, [sort]);
   const pagination = useMemo(() => ({ pageIndex: Math.max(0, Number(page) || 0), pageSize: Math.max(1, Number(size) || 15) }), [page, size]);
-  const columnVisibility = useMemo<VisibilityState>(() => ({ ...(columnPrefs.leads ?? {}), region: false, tags: false }), [columnPrefs]);
+  const columnVisibility = useMemo<VisibilityState>(() => ({ ...(columnPrefs.leads ?? {}), region: false, tags: false, fu_status: false }), [columnPrefs]);
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const f: ColumnFiltersState = [];
     if (status !== "All") f.push({ id: "status", value: status });
     if (agentSel.length) f.push({ id: "agent", value: agentSel });
     if (typeSel.length) f.push({ id: "site_type", value: typeSel });
+    if (fuSel.length) f.push({ id: "fu_status", value: fuSel });
     if (regionSel.length) f.push({ id: "region", value: regionSel });
     if (tagSel.length) f.push({ id: "tags", value: tagSel });
     return f;
-  }, [status, agentSel, typeSel, regionSel, tagSel]);
+  }, [status, agentSel, typeSel, fuSel, regionSel, tagSel]);
 
   const scopedLeads = useMemo(
     () =>
@@ -202,6 +205,14 @@ export function LeadsTable({
   }, [scopedLeads, agentNameById]);
 
   const regionFacets = useMemo(() => buildRegionFacets(scopedLeads), [scopedLeads]);
+  const fuCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const l of scopedLeads) {
+      const k = l.last_followup_status;
+      if (k) c[k] = (c[k] ?? 0) + 1;
+    }
+    return c;
+  }, [scopedLeads]);
 
   const columns = useMemo<ColumnDef<Lead>[]>(
     () => [
@@ -279,6 +290,16 @@ export function LeadsTable({
         filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
         meta: { responsiveClass: "hidden lg:table-cell" },
         cell: (c) => <span className="text-text-muted">{c.getValue<string>() ?? "—"}</span>,
+      },
+      {
+        // Filter carrier only — the pill itself renders in the Follow-up
+        // column. Kept as its own column so the filter does not couple to
+        // that column's accessor (follow_up_time) or its visibility.
+        id: "fu_status",
+        accessorFn: (row) => row.last_followup_status ?? "",
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
+        enableSorting: false,
+        enableHiding: false,
       },
       {
         id: "region",
@@ -584,6 +605,12 @@ export function LeadsTable({
           options={SITE_TYPES.map((t) => ({ value: t }))}
           selected={typeSel}
           onChange={(next) => setUrlState({ type: next.join(","), page: "0" })}
+        />
+        <MultiSelect
+          label="Follow-up"
+          options={FU_STATUSES.map((s) => ({ value: s, count: fuCounts[s] ?? 0 }))}
+          selected={fuSel}
+          onChange={(next) => setUrlState({ fu: next.join(","), page: "0" })}
         />
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(","), page: "0" })} />
         {canViewTags && (
