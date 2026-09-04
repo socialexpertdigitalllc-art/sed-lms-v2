@@ -19,7 +19,15 @@ export interface BusinessBrief {
   profile_link?: string;
   /** Google Maps EMBED url — goes in an iframe src. */
   map_embed?: string;
-  /** Logo image URL. When present it replaces the template's wordmark. */
+  /**
+   * Logo image URL. When present it OVERRIDES the template's wordmark: the
+   * header and footer show the logo and the wordmark text is hidden — hidden
+   * and not deleted, because template scripts look those elements up by id
+   * (Northpoint's script.js does `getElementById('np-logo-txt').style` with no
+   * guard, and one null there kills its whole controller). Must be a DIRECT
+   * image URL: an `https://ibb.co/<id>` share page is an HTML page, not an
+   * image, and renders as a broken <img> — the direct form is `i.ibb.co/...`.
+   */
   logo?: string;
   services: string[];
   service_areas: string[];
@@ -70,7 +78,15 @@ WHAT TO CHANGE
 
 6. Identity details go where the template shows its own: phone numbers in tel: links, email in mailto: links, the map embed as the src of the map iframe, the Google profile link where the template links to its own profile. If the brief has no value for something the template shows, remove that element cleanly rather than leaving the template's value or an empty link.
 
-7. The logo, when one is supplied, replaces the template's wordmark in the header and footer as an <img> with the business name as its alt text. When none is supplied, put the business name there as text, styled the same way the wordmark was.
+7. THE LOGO OVERRIDES THE WORDMARK. When the brief supplies a logo URL, the header and footer show that logo as an <img> with the business name as its alt text, and the template's wordmark TEXT must not be visible beside it. The logo IS the brand mark — not a badge added next to the name. A brand area is usually a lockup of two things, a mark or coloured shape plus a text span; replacing only the shape and leaving the text there is the common mistake, and it is wrong.
+
+HIDE THAT TEXT, NEVER DELETE IT. Keep the wordmark element exactly where it is, with its tag, its id, its classes and its other attributes untouched, and add display:none to its style attribute alongside whatever style it already had. The template's own scripts and stylesheets look these elements up by id and class; one that has been removed rather than hidden makes them throw at runtime, and a single throw during setup kills every piece of behaviour on the page.
+
+SIZE THE LOGO. A logo file is usually a large image, and an <img> with no size renders at its natural size — a header logo that covers the whole screen. Every logo <img> you place gets the template's own logo-image class when it has one, AND an explicit inline size regardless: style="height:44px;width:auto;max-width:220px;object-fit:contain;display:block" in the header (use the header's existing logo height if the template's CSS defines one) and the same or slightly smaller in the footer. Never a bare <img src> for a logo.
+
+When no logo is supplied, put the business name there as text, styled the same way the wordmark was, and hide nothing.
+
+NEVER INVENT CONTACT DETAILS. The brief lists the phone and email the business has; anything not listed, the business does not have. If the brief has no email, there is no email on the site: remove the mailto: links, the email lines in the top bar, footer and contact page, the email column in contact cards, and any "email us" copy — do not keep the template's address, do not write a plausible one, do not leave "email@example.com". The same for a missing phone, address, map or profile link. A missing detail leaves a cleanly removed element, never an invented one.
 
 KEEPING THE DESIGN
 
@@ -102,7 +118,7 @@ function briefText(b: BusinessBrief): string {
   if (b.email) lines.push(`Email: ${b.email}`);
   if (b.profile_link) lines.push(`Google Business Profile: ${b.profile_link}`);
   if (b.map_embed) lines.push(`Google Maps embed URL (use as an iframe src): ${b.map_embed}`);
-  if (b.logo) lines.push(`Logo image URL: ${b.logo}`);
+  if (b.logo) lines.push(`Logo image URL (the header and footer show THIS, not the business name as text): ${b.logo}`);
   if (b.services.length) lines.push(`Services: ${b.services.join(", ")}`);
   if (b.service_areas.length) lines.push(`Service areas: ${b.service_areas.join(", ")}`);
   if (b.color_scheme) lines.push(`Colour scheme: ${b.color_scheme}`);
@@ -169,13 +185,17 @@ You are given the file's complete source, a brief about the business, the list o
 
 WHAT TO CHANGE
 1. Every trace of the template's demo business: its name, phone numbers, email addresses, street addresses, city and area names, wordmark text, social links, review/testimonial names, copyright line — wherever they appear in string literals or markup inside this file.
-2. Business identity goes where the template shows its own: phone in tel: links, email in mailto: links, the business name (or the supplied logo as an <img> with the name as alt text) where the wordmark was.
+2. Business identity goes where the template shows its own: phone in tel: links, email in mailto: links. The wordmark is the case to get right: when the brief supplies a logo URL, the header and footer show that logo as an <img> with the business name as its alt text, and the wordmark TEXT must not be visible beside it. A brand area here is usually a mark or coloured shape plus a text span — replacing only the mark and leaving the text is the common mistake, and it is wrong. HIDE that text element, never delete it: keep its tag, id, classes and attributes exactly as they are and add display:none to its style, because the template's other scripts look these ids up and a missing one throws and kills the page's behaviour. When no logo is supplied, the business name goes there as text, styled the way the wordmark was, and nothing is hidden.
 3. Navigation must link ONLY to the pages listed for this site, with sensible labels. Remove nav items for pages this site does not have; add items for pages it has that the template's nav lacks, styled the same way.
 4. Services, service areas and colours follow the brief exactly, same as any page: never pad with invented services, and apply the colour scheme where this file hard-codes the template's own colours.
 5. Booking/contact forms keep working exactly as before — same field structure, same submit behaviour, same classes — with only their visible text, labels and destination details (phone/email) rewritten for this business.
+6. Every logo <img> you place carries an explicit size — the template's logo-image class when it has one, AND style="height:44px;width:auto;max-width:220px;object-fit:contain;display:block" (a little smaller in the footer). A logo file is large, and an unsized <img> renders at its natural size and covers the screen.
+7. Never invent a contact detail. If the brief has no email, remove every email element this file renders — the mailto: links, the top-bar and footer email lines, any data-mailto attribute value — rather than keeping the template's address or writing a plausible one. The same for a missing phone, address or profile link.
 
 WHAT MUST NOT CHANGE
 The code must still run. Keep the file's structure, its custom element names, its exported/global symbols, its event wiring and its DOM APIs intact. You are rewriting the CONTENT the code renders, not refactoring the code. Do not rename, remove or reorder functions or elements that pages depend on.
+
+The ids and classes on the markup this file renders are its contract with the template's OTHER scripts and stylesheets, which you cannot see and which are shipped unchanged. Every id that is here now must still be here, on the same element, when you are done — including on elements you have hidden. Those files call getElementById on them without checking, so an id you drop becomes a TypeError during setup, and one such error stops every animation, menu and form handler on the site.
 
 NEVER INVENT FACTS
 No licence, certification, award, rating, review count, price or years-in-business claim unless the brief states it. Testimonials in this file must become plainly generic, never attributed to invented named customers.

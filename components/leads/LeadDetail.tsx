@@ -31,6 +31,7 @@ import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 import { ColorSchemeAdvice } from "@/components/leads/ColorSchemeField";
 import { RecommendedTemplateField } from "@/components/leads/RecommendedTemplateField";
+import { ColorSchemeSwatches } from "@/components/leads/ColorSchemeSwatches";
 import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
 import type { ContractRow } from "@/lib/contracts/types";
 
@@ -395,7 +396,9 @@ export function LeadDetail({
                 display={
                   lead.color_same_as_logo && !lead.color_scheme
                     ? muted("Was: same as logo — set explicit colours")
-                    : undefined
+                    : lead.color_scheme
+                      ? <ColorSchemeSwatches value={lead.color_scheme} />
+                      : undefined
                 }
                 canEdit={canEdit}
                 onSave={(v) => patch({ color_scheme: nz(v) })}
