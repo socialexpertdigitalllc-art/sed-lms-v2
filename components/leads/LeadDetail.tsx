@@ -30,6 +30,7 @@ import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
 import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 import { ColorSchemeAdvice } from "@/components/leads/ColorSchemeField";
+import { RecommendedTemplateField } from "@/components/leads/RecommendedTemplateField";
 import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
 import type { ContractRow } from "@/lib/contracts/types";
 
@@ -412,6 +413,23 @@ export function LeadDetail({
               />
 
               <FieldRow label="Client experience (years)" value={lead.client_experience?.toString() ?? ""} type="number" canEdit={canEdit} onSave={(v) => patch({ client_experience: num(v) })} />
+            </div>
+            {/* The template sales agreed with the client on the call. It was
+                only ever visible on the submission form until now, so the
+                builder's "recommended" pick had no place to be checked. */}
+            <div className="mt-4">
+              <RecommendedTemplateField
+                templateId={lead.recommended_template_id}
+                canEdit={canEdit}
+                onChange={async (id) => {
+                  try {
+                    await patch({ recommended_template_id: id || null });
+                  } catch (e) {
+                    toast({ kind: "error", title: "Could not save the template", body: e instanceof Error ? e.message : "Save failed" });
+                    throw e;
+                  }
+                }}
+              />
             </div>
           </SectionCard>
 

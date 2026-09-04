@@ -45,6 +45,7 @@ vi.mock("@/lib/supabase/admin", () => ({
 import { guard, guardAny } from "@/lib/site-studio/service/guard";
 import { GET as listTemplates } from "@/app/api/site-builder/templates/route";
 import { GET as getCover } from "@/app/api/site-builder/templates/[id]/cover/route";
+import { GET as getOne } from "@/app/api/site-builder/templates/[id]/route";
 
 const sales = () => (holder.perms = new Set(["leads.view", "leads.create"]));
 const studio = () => (holder.perms = new Set(["studio.manage"]));
@@ -113,5 +114,25 @@ describe("GET /api/site-builder/templates/[id]/cover", () => {
     holder.perms = new Set(["leads.view"]);
     const res = await getCover(new Request("http://x"), ctx("t-live"));
     expect(res.status).toBe(403);
+  });
+});
+
+describe("GET /api/site-builder/templates/[id]", () => {
+  it("a salesperson can read one template by id — the lead screen names the recommendation", async () => {
+    sales();
+    const res = await getOne(new Request("http://x"), ctx("t-live"));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { template: { name: string } }).template.name).toBe("Roof Smart");
+  });
+  it("an out-of-service template is still readable by id (the lead may still point at it)", async () => {
+    sales();
+    const res = await getOne(new Request("http://x"), ctx("t-off"));
+    expect(res.status).toBe(200);
+  });
+  it("404s an unknown id and 403s someone who cannot create leads", async () => {
+    sales();
+    expect((await getOne(new Request("http://x"), ctx("nope"))).status).toBe(404);
+    holder.perms = new Set(["leads.view"]);
+    expect((await getOne(new Request("http://x"), ctx("t-live"))).status).toBe(403);
   });
 });

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { deleteTemplate, updateTemplate, COVER_TYPES } from "@/lib/site-builder/templates";
+import { guard, guardAny, guardError } from "@/lib/site-studio/service/guard";
+import { deleteTemplate, updateTemplate, COVER_TYPES, TEMPLATE_CATALOGUE_PERMS } from "@/lib/site-builder/templates";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -10,6 +10,26 @@ const MAX_ZIP_BYTES = 25 * 1024 * 1024;
 const MAX_COVER_BYTES = 5 * 1024 * 1024;
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/**
+ * GET — one template by id, whatever its in-service state.
+ *
+ * The lead screen shows the template sales recommended for a lead; that
+ * template may since have gone out of service, so the in-service list is
+ * not enough to name it. Read-only and gated like the catalogue reads
+ * (studio.manage or leads.create).
+ */
+export async function GET(_req: Request, ctx: Ctx) {
+  const auth = await guardAny(TEMPLATE_CATALOGUE_PERMS);
+  if ("error" in auth) return guardError(auth.error);
+  const { id } = await ctx.params;
+
+  const admin = createAdminClient();
+  const { data, error } = await admin.from("builder_templates").select("*").eq("id", id).maybeSingle();
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (!data) return NextResponse.json({ error: "Template not found" }, { status: 404 });
+  return NextResponse.json({ template: data });
+}
 
 export async function DELETE(_req: Request, ctx: Ctx) {
   const auth = await guard();
