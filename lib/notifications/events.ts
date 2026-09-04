@@ -209,6 +209,16 @@ export const NOTIFICATION_EVENTS = [
     availableRoles: ["ticket_assignee"],
     timingMode: "delay",
   },
+  {
+    key: "form_submission_received",
+    label: "Website form submission received",
+    description: "A visitor submitted a form on a lead's website (Form Relay).",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: ["lead_agent", "lead_closer"],
+    timingMode: "delay",
+  },
 ] as const;
 
 export type NotificationEventKey = (typeof NOTIFICATION_EVENTS)[number]["key"];
