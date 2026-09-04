@@ -47,7 +47,7 @@ Units and their single purpose:
 - `lib/forms/access.ts` — which endpoints/submissions a user may see (mirrors the leads visibility rule).
 - `lib/forms/snippet.ts` — pure: HTML-form and fetch-JS integration snippets for an endpoint.
 
-## Data model — `supabase/migrations/0073_form_relay.sql`
+## Data model — `supabase/migrations/0075_form_relay.sql`
 
 Additive only. RLS enabled, **no policies**: all access is via `createAdminClient()` behind
 an explicit permission check (same posture as `studio_*` / `builder_*`).
@@ -110,7 +110,7 @@ Indexes: `form_submissions_endpoint_idx (endpoint_id, created_at desc)`,
 - `notification_rules` seeded with `form_submission_received` (target: the lead's agent; falls
   back to nobody when the endpoint has no lead).
 
-Controller applies 0073 via the Supabase MCP after review, **before** the code deploy
+Controller applies 0075 via the Supabase MCP after review, **before** the code deploy
 (the submit route reads the new tables on its first request).
 
 ## Public ingest — `POST /api/forms/submit`
@@ -246,7 +246,7 @@ for any date filter (no native date inputs), hand-rolled `components/common` wid
 
 ## Rollout
 
-1. Apply `0073_form_relay.sql` via MCP.
+1. Apply `0075_form_relay.sql` via MCP.
 2. Deploy code (push to `main`; Hostinger auto-build; restart from hPanel if the restart hangs, as documented).
 3. Operator creates the forms mailbox on Hostinger (e.g. `forms@sedsolutions.online`), links it in Admin > Mail, verifies it, and selects it in Admin > Settings.
 4. Create one endpoint for a test lead; `curl -X POST` from outside; confirm the row, the email, and the bell.

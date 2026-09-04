@@ -23,7 +23,7 @@
 ## File structure
 
 **Create**
-- `supabase/migrations/0073_form_relay.sql` — tables, indexes, RLS, settings column, permission + rule seeds.
+- `supabase/migrations/0075_form_relay.sql` — tables, indexes, RLS, settings column, permission + rule seeds.
 - `lib/forms/types.ts` — row types + shared constants.
 - `lib/forms/parse.ts` — request body → `{reserved, payload}`; submitter extraction.
 - `lib/forms/gate.ts` — origin/honeypot/rate decisions; client IP; per-IP bucket.
@@ -59,7 +59,7 @@
 ### Task 1: Migration, permission keys, notification event
 
 **Files:**
-- Create: `supabase/migrations/0073_form_relay.sql`
+- Create: `supabase/migrations/0075_form_relay.sql`
 - Modify: `lib/permissions/constants.ts` (the `PERMISSIONS` array end, ~line 90; `PERMISSION_CATEGORIES` line 94)
 - Modify: `lib/notifications/events.ts` (append one entry before `] as const;`)
 - Modify: `.env.example`
@@ -67,7 +67,7 @@
 - [ ] **Step 1: Write the migration**
 
 ```sql
--- 0073_form_relay.sql — self-hosted form submission service (web3forms replacement).
+-- 0075_form_relay.sql — self-hosted form submission service (web3forms replacement).
 -- ADDITIVE ONLY. Shared prod DB (ikuvbxjkoojtgekapbul): new tables, one new
 -- app_settings column, permission + notification-rule rows. No drops, no
 -- type changes. The controller applies this via the Supabase MCP after
@@ -196,8 +196,8 @@ Run: `npx tsc --noEmit -p tsconfig.json`
 Expected: no errors.
 
 ```bash
-git add supabase/migrations/0073_form_relay.sql lib/permissions/constants.ts lib/notifications/events.ts .env.example
-git commit -m "feat(forms): migration 0073, permission keys and notification event for Form Relay"
+git add supabase/migrations/0075_form_relay.sql lib/permissions/constants.ts lib/notifications/events.ts .env.example
+git commit -m "feat(forms): migration 0075, permission keys and notification event for Form Relay"
 ```
 
 ---
@@ -3477,7 +3477,7 @@ git commit -m "docs(forms): changelog v2.16.0 — Form Relay"
 
 No code. These steps are checked off in order after Task 17 is merged to `main`.
 
-- [ ] **Step 1: Apply migration 0073 to prod** — the operator applies `supabase/migrations/0073_form_relay.sql` via the Supabase MCP `apply_migration`. Confirm with `list_tables` that `form_endpoints` and `form_submissions` exist and that `app_settings.form_default_mailbox_id` is present.
+- [ ] **Step 1: Apply migration 0075 to prod** — the operator applies `supabase/migrations/0075_form_relay.sql` via the Supabase MCP `apply_migration`. Confirm with `list_tables` that `form_endpoints` and `form_submissions` exist and that `app_settings.form_default_mailbox_id` is present.
 
 - [ ] **Step 2: Deploy** — push `main`; Hostinger auto-builds. If the restart step hangs after "build complete", restart the app from hPanel (documented in the Site Builder prod-deploy memory). Confirm the build id changed by loading the dashboard.
 
