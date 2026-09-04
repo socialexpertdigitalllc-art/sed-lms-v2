@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { storeTemplate, listTemplates, COVER_TYPES } from "@/lib/site-builder/templates";
+import { guard, guardAny, guardError } from "@/lib/site-studio/service/guard";
+import { storeTemplate, listTemplates, COVER_TYPES, TEMPLATE_CATALOGUE_PERMS } from "@/lib/site-builder/templates";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -11,11 +11,13 @@ const MAX_ZIP_BYTES = 25 * 1024 * 1024;
 const MAX_COVER_BYTES = 5 * 1024 * 1024;
 
 export async function GET(req: Request) {
-  const auth = await guard();
+  // `?in_service=1` is what the LEAD FORM asks for — never the whole catalogue.
+  // That one read is open to anyone who can create a lead; the whole
+  // catalogue (out-of-service templates included) stays studio-only.
+  const inServiceOnly = new URL(req.url).searchParams.get("in_service") === "1";
+  const auth = inServiceOnly ? await guardAny(TEMPLATE_CATALOGUE_PERMS) : await guard();
   if ("error" in auth) return guardError(auth.error);
 
-  // `?in_service=1` is what the LEAD FORM asks for — never the whole catalogue.
-  const inServiceOnly = new URL(req.url).searchParams.get("in_service") === "1";
   const admin = createAdminClient();
   try {
     const templates = await listTemplates(admin, { inServiceOnly });

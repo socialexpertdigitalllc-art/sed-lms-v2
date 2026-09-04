@@ -2,14 +2,29 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 
-/** Auth + permission gate for every Site Studio route. */
-export async function guard(): Promise<{ error: 401 | 403 } | { userId: string }> {
+export type GuardResult = { error: 401 | 403 } | { userId: string };
+
+/**
+ * Auth gate that passes a user holding ANY of the given permissions.
+ *
+ * Exists for the handful of READS the lead form shows to people who will
+ * never manage the studio: a salesperson picking a template with a client
+ * on the phone needs the in-service catalogue, its covers and its previews,
+ * and holds `leads.create`, not `studio.manage`. Every route that changes
+ * anything keeps using `guard()` below.
+ */
+export async function guardAny(permissions: readonly string[]): Promise<GuardResult> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: 401 };
   const perms = await getUserPermissions(user.id);
-  if (!perms.has("studio.manage")) return { error: 403 };
+  if (!permissions.some((p) => perms.has(p))) return { error: 403 };
   return { userId: user.id };
+}
+
+/** Auth + permission gate for every Site Studio route. */
+export async function guard(): Promise<GuardResult> {
+  return guardAny(["studio.manage"]);
 }
 
 export function guardError(status: 401 | 403) {

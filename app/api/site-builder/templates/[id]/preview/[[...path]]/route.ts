@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { guard, guardError } from "@/lib/site-studio/service/guard";
+import { guardAny, guardError } from "@/lib/site-studio/service/guard";
 import { contentTypeFor } from "@/lib/site-studio/service/contentType";
 import { isSafeAssetPath } from "@/lib/site-studio/preview/assetPath";
-import { loadTemplateBundle } from "@/lib/site-builder/templates";
+import { loadTemplateBundle, TEMPLATE_CATALOGUE_PERMS } from "@/lib/site-builder/templates";
 import { rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
 
 export const runtime = "nodejs";
@@ -50,7 +50,8 @@ function previewHeaders(contentType: string): HeadersInit {
  * the whole template is navigable rather than one flat page.
  */
 export async function GET(_req: Request, ctx: Ctx) {
-  const auth = await guard();
+  // A read the lead form's picker needs — open to sales, see TEMPLATE_CATALOGUE_PERMS.
+  const auth = await guardAny(TEMPLATE_CATALOGUE_PERMS);
   if ("error" in auth) return guardError(auth.error);
   const { id, path } = await ctx.params;
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { guard, guardError } from "@/lib/site-studio/service/guard";
-import { BUILDER_TEMPLATES_BUCKET } from "@/lib/site-builder/templates";
+import { guardAny, guardError } from "@/lib/site-studio/service/guard";
+import { BUILDER_TEMPLATES_BUCKET, TEMPLATE_CATALOGUE_PERMS } from "@/lib/site-builder/templates";
 import { contentTypeFor } from "@/lib/site-studio/service/contentType";
 
 export const runtime = "nodejs";
@@ -18,7 +18,8 @@ type Ctx = { params: Promise<{ id: string }> };
  * template (a replacement writes a new row value), so it caches hard.
  */
 export async function GET(_req: Request, ctx: Ctx) {
-  const auth = await guard();
+  // A read the lead form's picker needs — open to sales, see TEMPLATE_CATALOGUE_PERMS.
+  const auth = await guardAny(TEMPLATE_CATALOGUE_PERMS);
   if ("error" in auth) return guardError(auth.error);
   const { id } = await ctx.params;
 

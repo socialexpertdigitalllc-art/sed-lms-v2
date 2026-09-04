@@ -13,6 +13,19 @@ import { unzipToMap } from "@/lib/site-studio/zip";
 
 export const BUILDER_TEMPLATES_BUCKET = "builder-templates";
 
+/**
+ * Who may READ the in-service catalogue — the list, a cover, a preview.
+ *
+ * The lead form offers templates to whoever is creating the lead, and that
+ * is a salesperson with `leads.create` and nothing studio-related. Gating
+ * those reads on `studio.manage` alone (as every other Site Builder route
+ * is) left the picker permanently empty for the whole sales department —
+ * "Could not load the templates" on every new lead. Writes, the full
+ * catalogue (out-of-service templates included) and everything else stay
+ * `studio.manage`-only.
+ */
+export const TEMPLATE_CATALOGUE_PERMS = ["studio.manage", "leads.create"] as const;
+
 export const sourcePath = (id: string) => `${id}/source.zip`;
 
 /** Cover screenshots live beside the source zip, keyed by extension so the
