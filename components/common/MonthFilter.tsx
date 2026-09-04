@@ -65,8 +65,10 @@ export function MonthFilter({ options, value, onChange, range, onRangeChange }: 
           className="bg-transparent outline-none text-sm text-text-muted"
         >
           <option value="">All time</option>
-          {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          {/* First, not last: buried under the months it was invisible —
+              opening the dropdown showed "a list of months" and nothing else. */}
           {rangeSupported && <option value={CUSTOM}>Custom range…</option>}
+          {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </Select>
       </label>
       {showRange && range && onRangeChange && (
