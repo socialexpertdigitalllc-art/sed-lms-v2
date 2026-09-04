@@ -262,6 +262,8 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
       instructions: run.instructions,
       // v2 F4: operator-edited task text replaces the composed block verbatim.
       taskText: run.task_text ?? null,
+      // agy ≥1.1.26 doesn't anchor the model to the launch cwd — name it.
+      workspaceDir: cwd,
     });
 
     // Progress: throttled tail patches; a patch matching zero rows means we

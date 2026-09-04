@@ -38,8 +38,15 @@ export function buildTaskPrompt(args: {
    *  fenced data and still fence-neutralized: editing the task never unlocks
    *  the contract. Empty/blank falls back to composition. */
   taskText?: string | null;
+  /** The run's scratch workspace, ABSOLUTE. Since agy 1.1.26 the model is no
+   *  longer reliably anchored to the launch cwd — left to guess, it sometimes
+   *  searches the whole home dir and edits a stray site copy it finds there
+   *  (two runs failed exactly this way on 2026-09-04). Naming the exact
+   *  folder in the prompt removes the guess. */
+  workspaceDir?: string | null;
 }): string {
   const custom = typeof args.taskText === "string" && args.taskText.trim() !== "" ? args.taskText : null;
+  const where = args.workspaceDir?.trim() ? `this exact folder: ${args.workspaceDir.trim()}` : "the current directory";
 
   const ticketBlock = custom
     ? [asTicketData(custom)]
@@ -51,9 +58,10 @@ export function buildTaskPrompt(args: {
 
   return [
     `You are editing the live website of the client "${asTicketData(args.businessName)}" to fulfil a change-request ticket.`,
-    `The current directory contains a complete copy of the site's files. Work ONLY inside the current directory:`,
+    `The complete copy of the site's files is in ${where} — it is also your current working directory. Work ONLY inside that folder:`,
+    `- FIRST list that folder to see the site's files, and address them by that folder's path;`,
     `- edit, create, or delete site files as the ticket requires;`,
-    `- never touch files outside the current directory;`,
+    `- never touch files outside that folder — if you find what looks like another copy of a website anywhere else on this machine, it is NOT this site; ignore it;`,
     `- keep index.html present at the root — the site must remain deployable;`,
     `- do not access the internet, run package managers, or add build tooling — this is a static site, edit its files directly;`,
     `- make the smallest change that fulfils the ticket; do not redesign, reformat, or "improve" anything not asked for.`,
