@@ -10,6 +10,7 @@ import type { Ticket, TicketItem } from "@/lib/tickets/types";
 import { getAppSettings } from "@/lib/settings/appSettings";
 import { notFound } from "next/navigation";
 import { getActiveUsers } from "@/lib/users/directory";
+import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 
 export default async function LeadDetailPage({
   params,
@@ -169,6 +170,21 @@ export default async function LeadDetailPage({
     .eq("status", "verified")
     .order("email_address");
 
+  // Form Relay: this lead's endpoints + last 10 submissions (admin client;
+  // the lead itself was already RLS-visible to this user).
+  const canManageForms = perms.has("forms.manage");
+  const canViewForms = canManageForms || perms.has("forms.view");
+  let formEndpoints: FormEndpointRow[] = [];
+  let formSubmissions: FormSubmissionRow[] = [];
+  if (canViewForms) {
+    const [{ data: eps }, { data: subs }] = await Promise.all([
+      admin.from("form_endpoints").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
+      admin.from("form_submissions").select("*").eq("lead_id", id).eq("is_spam", false).order("created_at", { ascending: false }).limit(10),
+    ]);
+    formEndpoints = (eps ?? []) as FormEndpointRow[];
+    formSubmissions = (subs ?? []) as FormSubmissionRow[];
+  }
+
   return (
     <LeadDetail
       lead={lead}
@@ -190,6 +206,10 @@ export default async function LeadDetailPage({
       contracts={leadContracts}
       hasContractSent={hasContractSent}
       verifiedMailboxes={verifiedMailboxes ?? []}
+      canViewForms={canViewForms}
+      canManageForms={canManageForms}
+      formEndpoints={formEndpoints}
+      formSubmissions={formSubmissions}
     />
   );
 }

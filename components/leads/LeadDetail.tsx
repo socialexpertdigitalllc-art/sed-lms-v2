@@ -33,7 +33,9 @@ import { ColorSchemeAdvice } from "@/components/leads/ColorSchemeField";
 import { RecommendedTemplateField } from "@/components/leads/RecommendedTemplateField";
 import { ColorSchemeSwatches } from "@/components/leads/ColorSchemeSwatches";
 import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
+import { LeadFormsCard } from "@/components/form-relay/LeadFormsCard";
 import type { ContractRow } from "@/lib/contracts/types";
+import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -63,6 +65,10 @@ export function LeadDetail({
   contracts,
   hasContractSent,
   verifiedMailboxes,
+  canViewForms,
+  canManageForms,
+  formEndpoints,
+  formSubmissions,
 }: {
   lead: Lead;
   agents: Agent[];
@@ -84,6 +90,10 @@ export function LeadDetail({
   contracts: ContractRow[];
   hasContractSent: boolean;
   verifiedMailboxes: { id: string; email_address: string; display_name: string }[];
+  canViewForms: boolean;
+  canManageForms: boolean;
+  formEndpoints: FormEndpointRow[];
+  formSubmissions: FormSubmissionRow[];
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
@@ -550,6 +560,9 @@ export function LeadDetail({
                 leadOneTimePrice={lead.price_quoted}
                 leadYearlyPrice={lead.yearly_price}
               />
+            )}
+            {canViewForms && (
+              <LeadFormsCard leadId={lead.id} endpoints={formEndpoints} submissions={formSubmissions} canManage={canManageForms} />
             )}
             <RecentFollowUps leadId={lead.id} businessName={lead.business_name} leadStatus={lead.status} followUps={followUps} />
             <TicketsCard leadId={lead.id} leadStatus={lead.status} tickets={tickets} sla={sla} />
