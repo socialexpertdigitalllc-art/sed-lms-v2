@@ -62,6 +62,12 @@ describe("gateSubmission", () => {
   it("flags the daily limit", () => {
     expect(gateSubmission({ originHost: "foo.com", endpoint, honeypot: "", ip: "9.9.9.9", todayCount: 2 })).toEqual({ ok: false, reason: "rate_daily", status: 429 });
   });
+  it("rate-limits a honeypot flood instead of replying fake-200 forever", () => {
+    for (let i = 0; i < IP_LIMIT_PER_MINUTE; i++) {
+      expect(gateSubmission({ originHost: "foo.com", endpoint, honeypot: "bot", ip: "8.8.8.8", todayCount: 0 })).toEqual({ ok: false, reason: "honeypot", status: 200 });
+    }
+    expect(gateSubmission({ originHost: "foo.com", endpoint, honeypot: "bot", ip: "8.8.8.8", todayCount: 0 })).toEqual({ ok: false, reason: "rate_ip", status: 429 });
+  });
   it("flags per-IP bursts", () => {
     for (let i = 0; i < IP_LIMIT_PER_MINUTE; i++) gateSubmission({ originHost: "foo.com", endpoint, honeypot: "", ip: "7.7.7.7", todayCount: 0 });
     expect(gateSubmission({ originHost: "foo.com", endpoint, honeypot: "", ip: "7.7.7.7", todayCount: 0 })).toEqual({ ok: false, reason: "rate_ip", status: 429 });

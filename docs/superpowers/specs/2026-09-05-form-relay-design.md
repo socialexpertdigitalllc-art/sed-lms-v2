@@ -137,8 +137,8 @@ Controller applies 0075 via the Supabase MCP after review, **before** the code d
 
 1. Endpoint by `access_key`. Missing → 404. `paused` → 410.
 2. Origin: when `allowed_origins` is non-empty, the request's origin hostname must match one entry exactly or via a `*.` wildcard. Mismatch → stored as spam (`origin`), reply 403.
-3. Honeypot: a non-empty `botcheck` → stored as spam (`honeypot`), reply **200 success** (bots learn nothing).
-4. Per-IP: `ttlGateOpen`-style bucket, 10 per minute per IP per process. Over → stored as spam (`rate_ip`), reply 429. Per-process is acceptable: prod is one pm2 process.
+3. Per-IP: sliding window, 10 per minute per IP per process. Over → stored as spam (`rate_ip`), reply 429. Per-process is acceptable: prod is one pm2 process. Runs BEFORE the honeypot so a honeypot-flooding bot gets rate-limited instead of unlimited fake-200 DB inserts.
+4. Honeypot: a non-empty `botcheck` → stored as spam (`honeypot`), reply **200 success** (bots learn nothing).
 5. Daily: `count(*)` of non-spam rows for the endpoint since UTC midnight ≥ `daily_limit` → stored as spam (`rate_daily`), reply 429. This one is durable across restarts.
 
 Spam rows are inserted with `delivery_status = 'skipped'` and never emailed; they are

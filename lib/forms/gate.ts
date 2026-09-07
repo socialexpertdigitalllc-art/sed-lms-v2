@@ -34,6 +34,7 @@ export function clientIp(headers: Headers): string {
 // Per-process sliding window. Prod is one pm2 process, so this is the real
 // limit there; the daily limit below is the durable, cross-restart one.
 const hits = new Map<string, number[]>();
+let lastSweep = 0;
 
 export function ipRateAllowed(ip: string, now: () => number = Date.now): boolean {
   const t = now();
@@ -41,16 +42,29 @@ export function ipRateAllowed(ip: string, now: () => number = Date.now): boolean
   if (list.length >= IP_LIMIT_PER_MINUTE) { hits.set(ip, list); return false; }
   list.push(t);
   hits.set(ip, list);
-  if (hits.size > 10_000) for (const [k, v] of hits) if (v.every((ts) => t - ts >= WINDOW_MS)) hits.delete(k);
+  // Sweep at most once per window: an unthrottled full-map scan above the
+  // threshold would make every request pay O(map) exactly when a
+  // distinct-IP flood is inflating the map. If a flood outruns the sweep,
+  // drop the state entirely — losing 60s of rate memory under attack is
+  // cheaper than unbounded growth, and the durable daily limit still holds.
+  if (hits.size > 10_000 && t - lastSweep >= WINDOW_MS) {
+    lastSweep = t;
+    for (const [k, v] of hits) if (v.every((ts) => t - ts >= WINDOW_MS)) hits.delete(k);
+    if (hits.size > 50_000) hits.clear();
+  }
   return true;
 }
 
 /** Test hook. */
-export function resetIpRate(): void { hits.clear(); }
+export function resetIpRate(): void { hits.clear(); lastSweep = 0; }
 
 export type GateVerdict = { ok: true } | { ok: false; reason: FormSpamReason; status: 200 | 403 | 429 };
 
-/** Spec gate order: origin → honeypot → per-IP → daily. */
+/** Gate order: origin → per-IP → honeypot → daily. The per-IP check runs
+ *  BEFORE the honeypot so a honeypot-flooding bot burns rate slots and gets
+ *  429'd after the limit, instead of unlimited fake-200s (each of which
+ *  costs a DB insert). The first hits per window still get the fake 200,
+ *  so the honeypot stays invisible to a casual bot. */
 export function gateSubmission(input: {
   originHost: string | null;
   endpoint: { allowed_origins: string[]; daily_limit: number };
@@ -60,8 +74,8 @@ export function gateSubmission(input: {
   now?: () => number;
 }): GateVerdict {
   if (!originAllowed(input.originHost, input.endpoint.allowed_origins)) return { ok: false, reason: "origin", status: 403 };
-  if (input.honeypot.trim()) return { ok: false, reason: "honeypot", status: 200 };
   if (!ipRateAllowed(input.ip, input.now)) return { ok: false, reason: "rate_ip", status: 429 };
+  if (input.honeypot.trim()) return { ok: false, reason: "honeypot", status: 200 };
   if (input.todayCount >= input.endpoint.daily_limit) return { ok: false, reason: "rate_daily", status: 429 };
   return { ok: true };
 }

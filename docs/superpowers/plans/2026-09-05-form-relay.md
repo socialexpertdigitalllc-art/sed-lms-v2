@@ -657,7 +657,7 @@ export function resetIpRate(): void { hits.clear(); }
 
 export type GateVerdict = { ok: true } | { ok: false; reason: FormSpamReason; status: 200 | 403 | 429 };
 
-/** Spec gate order: origin → honeypot → per-IP → daily. */
+/** Spec gate order: origin → per-IP → honeypot → daily. */
 export function gateSubmission(input: {
   originHost: string | null;
   endpoint: { allowed_origins: string[]; daily_limit: number };
