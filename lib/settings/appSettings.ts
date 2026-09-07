@@ -13,6 +13,8 @@ export type AppSettings = {
   contract_templates_folder_id: string | null;
   /** Where generated contract copies are created; null = alongside the template. */
   generated_contracts_folder_id: string | null;
+  /** Form Relay fallback sender when an endpoint has no mailbox of its own. */
+  form_default_mailbox_id: string | null;
 };
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -25,6 +27,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   logo_path: null,
   contract_templates_folder_id: null,
   generated_contracts_folder_id: null,
+  form_default_mailbox_id: null,
 };
 
 // Read the singleton company settings row; lazily materialise the default
@@ -41,7 +44,7 @@ export const getAppSettings = cache(
       const admin = createAdminClient();
       const { data } = await admin
         .from("app_settings")
-        .select("work_start_time, work_timezone, idle_timeout_minutes, ticket_sla, ticket_retention_days, company_name, logo_path, contract_templates_folder_id, generated_contracts_folder_id")
+        .select("work_start_time, work_timezone, idle_timeout_minutes, ticket_sla, ticket_retention_days, company_name, logo_path, contract_templates_folder_id, generated_contracts_folder_id, form_default_mailbox_id")
         .eq("singleton", true)
         .maybeSingle();
 

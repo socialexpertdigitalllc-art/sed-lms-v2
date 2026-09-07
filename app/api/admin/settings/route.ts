@@ -40,6 +40,7 @@ const settingsSchema = z.object({
   }),
   ticket_retention_days: z.number().int().min(0),
   company_name: z.string().trim().min(1).max(80),
+  form_default_mailbox_id: z.string().uuid().nullable().optional(),
 });
 
 export async function PUT(req: Request) {
@@ -61,6 +62,7 @@ export async function PUT(req: Request) {
     ticket_sla,
     ticket_retention_days,
     company_name,
+    form_default_mailbox_id,
   } = parsed.data;
   const admin = createAdminClient();
   const { error } = await admin.from("app_settings").upsert(
@@ -72,6 +74,7 @@ export async function PUT(req: Request) {
       ticket_sla,
       ticket_retention_days,
       company_name,
+      form_default_mailbox_id: form_default_mailbox_id ?? null,
       updated_at: new Date().toISOString(),
       updated_by: auth.userId,
     },
@@ -93,5 +96,6 @@ export async function PUT(req: Request) {
     ticket_sla,
     ticket_retention_days,
     company_name,
+    form_default_mailbox_id: form_default_mailbox_id ?? null,
   });
 }

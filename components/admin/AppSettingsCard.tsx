@@ -6,6 +6,7 @@ import type { AppSettings } from "@/lib/settings/appSettings";
 import { BrandMark } from "@/components/branding/BrandMark";
 import { useToast } from "@/components/common/Toast";
 import { TimeField } from "@/components/common/DateTimeField";
+import { Select } from "@/components/common/Select";
 
 const inputCls =
   "w-full px-3 py-2 rounded-md border border-border bg-surface text-sm text-text outline-none focus:ring-2 focus:ring-accent";
@@ -39,9 +40,11 @@ const COMMON_TIMEZONES = [
 export function AppSettingsCard({
   initial,
   initialLogoUrl,
+  mailboxes,
 }: {
   initial: AppSettings;
   initialLogoUrl: string | null;
+  mailboxes: { id: string; email_address: string; display_name: string }[];
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -53,6 +56,7 @@ export function AppSettingsCard({
   const [slaNormal, setSlaNormal] = useState(initial.ticket_sla.Normal);
   const [slaHigh, setSlaHigh] = useState(initial.ticket_sla.High);
   const [ticketRetentionDays, setTicketRetentionDays] = useState(initial.ticket_retention_days);
+  const [formMailboxId, setFormMailboxId] = useState<string>(initial.form_default_mailbox_id ?? "");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [logoBusy, setLogoBusy] = useState(false);
@@ -75,6 +79,7 @@ export function AppSettingsCard({
         },
         ticket_retention_days: Math.max(0, Math.round(Number(ticketRetentionDays)) || 0),
         company_name: companyName.trim(),
+        form_default_mailbox_id: formMailboxId || null,
       }),
     });
     setSaving(false);
@@ -298,6 +303,19 @@ export function AppSettingsCard({
             <p className="text-xs text-text-faint mt-1">0 = never auto-delete</p>
           </div>
         </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium text-text-muted mb-1">Form Relay default sender</label>
+        <Select value={formMailboxId} onChange={(e) => setFormMailboxId(e.target.value)} className={inputCls}>
+          <option value="">— none (deliveries will fail until set) —</option>
+          {mailboxes.map((m) => (
+            <option key={m.id} value={m.id}>{m.display_name ? `${m.display_name} <${m.email_address}>` : m.email_address}</option>
+          ))}
+        </Select>
+        <p className="text-[11px] text-text-faint mt-1">
+          Used for website form notifications when an endpoint has no sender of its own. Link and verify a mailbox under Company Mail first.
+        </p>
       </div>
 
       <div className="mt-4">
