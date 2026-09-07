@@ -92,7 +92,12 @@ export async function updateSession(request: NextRequest) {
     path === "/api/site-builder/process" ||
     // Ticket Agent processor: x-wge-secret auth, enabled only where
     // AGENT_WORKER_ENABLED=1 (the operator's worker box).
-    path === "/api/site-agent/process";
+    path === "/api/site-agent/process" ||
+    // Form Relay: the PUBLIC ingest for client websites (access_key auth +
+    // CORS, see app/api/forms/submit/route.ts) and its secret-header retry
+    // sweep called by the instrumentation poller. Neither has a session.
+    path === "/api/forms/submit" ||
+    path === "/api/forms/deliver";
 
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));
