@@ -45,6 +45,20 @@ export async function deliverSubmission(id: string, deps: { send?: SendFn } = {}
   const submission = sub as FormSubmissionRow;
   if (submission.is_spam || submission.delivery_status === "sent") return { status: "skipped" };
 
+  // CLAIM before sending: after() and the sweep can race on a fresh row, and
+  // a duplicate email cannot be undone after send(). Optimistic-concurrency
+  // update — only the caller whose read still matches wins; the loser sees
+  // zero rows and backs off. (Same reason the contract send guards its
+  // status flip with .eq("status","draft").)
+  const { data: claimed } = await admin
+    .from("form_submissions")
+    .update({ delivery_attempts: submission.delivery_attempts + 1 })
+    .eq("id", submission.id)
+    .eq("delivery_status", submission.delivery_status)
+    .eq("delivery_attempts", submission.delivery_attempts)
+    .select("id");
+  if (!claimed || claimed.length === 0) return { status: "skipped" };
+
   const { data: ep } = await admin.from("form_endpoints").select("*").eq("id", submission.endpoint_id).maybeSingle();
   if (!ep) return fail(admin, submission, "Endpoint no longer exists");
   const endpoint = ep as FormEndpointRow;
@@ -60,7 +74,7 @@ export async function deliverSubmission(id: string, deps: { send?: SendFn } = {}
     origin: submission.origin,
     createdAt: submission.created_at,
   });
-  const fromName = `${(submission.submitter_name || endpoint.name).replace(/["\r\n]/g, "")} via SED LMS`;
+  const fromName = `${(submission.submitter_name || endpoint.name).replace(/["\\\r\n]/g, "")} via SED LMS`;
   const msg: nodemailer.SendMailOptions = {
     from: `"${fromName}" <${mailbox.address}>`,
     to: endpoint.to_emails,

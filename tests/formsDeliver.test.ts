@@ -10,6 +10,8 @@ const holder = vi.hoisted(() => ({
   mailboxes: {} as Record<string, { id: string; address: string; displayName: string }>,
   updates: [] as Record<string, unknown>[],
   notified: [] as { key: string; opts: Record<string, unknown> }[],
+  /** When true, the optimistic claim update matches zero rows (another worker won). */
+  claimLost: false,
 }));
 
 vi.mock("@/lib/supabase/admin", () => ({
@@ -22,7 +24,17 @@ vi.mock("@/lib/supabase/admin", () => ({
           }),
         }),
       }),
-      update: (patch: Record<string, unknown>) => ({ eq: async () => { holder.updates.push({ table, ...patch }); return { error: null }; } }),
+      // Chainable update supporting both `await ...update().eq()` and the
+      // claim's `...update().eq().eq().eq().select()`.
+      update: (patch: Record<string, unknown>) => {
+        holder.updates.push({ table, ...patch });
+        const chain = {
+          eq: () => chain,
+          select: async () => ({ data: holder.claimLost ? [] : [{ id: "s1" }], error: null }),
+          then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+        };
+        return chain;
+      },
     }),
   }),
 }));
@@ -42,6 +54,7 @@ beforeEach(() => {
   holder.mailboxes = { "mb-default": { id: "mb-default", address: "forms@sed.co", displayName: "SED Forms" }, "mb-x": { id: "mb-x", address: "x@sed.co", displayName: "X" } };
   holder.updates = [];
   holder.notified = [];
+  holder.claimLost = false;
 });
 
 describe("deliverSubmission", () => {
@@ -82,6 +95,14 @@ describe("deliverSubmission", () => {
     const r = await deliverSubmission("s1", { send });
     expect(r).toEqual({ status: "failed", error: "SMTP 535" });
     expect(holder.updates.at(-1)).toMatchObject({ delivery_status: "failed", delivery_attempts: 3, last_error: "SMTP 535" });
+  });
+
+  it("backs off without sending when another worker claimed the row first", async () => {
+    holder.claimLost = true;
+    const send = vi.fn(async () => {});
+    expect(await deliverSubmission("s1", { send })).toEqual({ status: "skipped" });
+    expect(send).not.toHaveBeenCalled();
+    expect(holder.notified).toEqual([]);
   });
 
   it("skips spam and already-sent rows", async () => {
