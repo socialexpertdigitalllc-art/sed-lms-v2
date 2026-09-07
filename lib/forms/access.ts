@@ -24,3 +24,11 @@ export function endpointInScope(e: { lead_id: string | null }, scope: FormScope)
 
 /** Submissions carry a denormalised lead_id, so the same rule applies. */
 export const submissionInScope = endpointInScope;
+
+/** May the caller ATTACH work to this lead? Null (no lead) is always fine —
+ *  lead-less endpoints are a manager concern and the caller already holds
+ *  forms.manage on every path that gets here. */
+export function leadInScope(leadId: string | null, scope: FormScope): boolean {
+  if (leadId === null || scope.all) return true;
+  return scope.leadIds.has(leadId);
+}

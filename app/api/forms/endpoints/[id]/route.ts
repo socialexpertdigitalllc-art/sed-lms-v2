@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireForms, formsAuthError } from "@/lib/forms/guard";
 import { loadVisibleEndpoint } from "@/lib/forms/load";
+import { leadInScope } from "@/lib/forms/access";
 import { endpointPatchSchema } from "@/lib/forms/schema";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -23,6 +24,11 @@ export async function PATCH(req: Request, { params }: Ctx) {
 
   const parsed = endpointPatchSchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return NextResponse.json({ error: "Invalid endpoint", issues: parsed.error.flatten() }, { status: 422 });
+  // Re-pointing an endpoint at a lead outside the caller's scope is the same
+  // hole as creating one there — the patch schema accepts any uuid.
+  if (parsed.data.lead_id !== undefined && !leadInScope(parsed.data.lead_id, auth.scope)) {
+    return NextResponse.json({ error: "Lead is outside your scope" }, { status: 403 });
+  }
 
   const { data, error } = await auth.admin
     .from("form_endpoints")

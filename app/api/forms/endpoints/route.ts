@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireForms, formsAuthError } from "@/lib/forms/guard";
-import { endpointInScope } from "@/lib/forms/access";
+import { endpointInScope, leadInScope } from "@/lib/forms/access";
 import { endpointInputSchema, generateAccessKey } from "@/lib/forms/schema";
 import { utcDayStart } from "@/lib/forms/gate";
 import type { EndpointListItem, FormEndpointRow } from "@/lib/forms/types";
@@ -28,6 +28,11 @@ export async function POST(req: Request) {
 
   const parsed = endpointInputSchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return NextResponse.json({ error: "Invalid endpoint", issues: parsed.error.flatten() }, { status: 422 });
+  // A scoped manager (forms.manage without leads.view_all) may only attach
+  // endpoints to their OWN leads — the schema accepts any uuid.
+  if (!leadInScope(parsed.data.lead_id, auth.scope)) {
+    return NextResponse.json({ error: "Lead is outside your scope" }, { status: 403 });
+  }
 
   const { data, error } = await auth.admin
     .from("form_endpoints")

@@ -80,6 +80,22 @@ describe("POST /api/forms/endpoints", () => {
   });
 });
 
+describe("lead scope on create/patch", () => {
+  const foreignLead = "9b2e6a1c-3f4d-4e5a-8b6c-7d8e9f0a1b2c"; // valid v4, not in the mocked scope
+  it("403s creating an endpoint for a lead outside the caller's scope", async () => {
+    holder.perms = new Set(["forms.manage"]);
+    const res = await POST(json({ name: "Sneaky", to_emails: ["a@b.co"], lead_id: foreignLead }));
+    expect(res.status).toBe(403);
+    expect(holder.inserted).toEqual([]);
+  });
+  it("403s re-pointing an endpoint at a foreign lead", async () => {
+    holder.perms = new Set(["forms.manage"]);
+    const res = await PATCH(json({ lead_id: foreignLead }, "PATCH"), ctx);
+    expect(res.status).toBe(403);
+    expect(holder.updated).toEqual([]);
+  });
+});
+
 describe("PATCH/DELETE /api/forms/endpoints/[id]", () => {
   it("patches and deletes with forms.manage", async () => {
     holder.perms = new Set(["forms.manage", "leads.view_all"]);
