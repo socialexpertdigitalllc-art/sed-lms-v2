@@ -121,6 +121,21 @@ describe("POST /api/forms/submit", () => {
     expect(res.headers.get("location")).toBe("https://acme.com/thanks");
   });
 
+  it("refuses a redirect outside the endpoint's allowed origins", async () => {
+    holder.endpoint!.allowed_origins = ["acme.com"];
+    const res = await post("access_key=KEY&name=Ann&redirect=https%3A%2F%2Fevil.com%2Fphish", { "content-type": "application/x-www-form-urlencoded", accept: "text/html,application/xhtml+xml" });
+    expect(res.status).toBe(200); // falls back to the built-in thanks page, no 303 off-site
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("503s on any endpoint-lookup error, not just a missing table", async () => {
+    holder.endpoint = null;
+    holder.endpointError = { message: "connection timeout" };
+    const res = await post({ access_key: "KEY" });
+    expect(res.status).toBe(503);
+    expect((await res.json()).message).toBe("Form relay unavailable");
+  });
+
   it("503s when the tables are missing", async () => {
     holder.endpoint = null;
     holder.endpointError = { message: 'relation "public.form_endpoints" does not exist' };

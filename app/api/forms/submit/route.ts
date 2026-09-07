@@ -2,7 +2,7 @@
 import { NextResponse, after } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { parseSubmissionRequest, extractSubmitter } from "@/lib/forms/parse";
-import { originHost, clientIp, gateSubmission, utcDayStart } from "@/lib/forms/gate";
+import { originHost, originAllowed, clientIp, gateSubmission, utcDayStart } from "@/lib/forms/gate";
 import { resolveSubject } from "@/lib/forms/email";
 import { deliverSubmission } from "@/lib/forms/deliver";
 import type { FormEndpointRow, FormSpamReason, PayloadField } from "@/lib/forms/types";
@@ -46,6 +46,17 @@ function safeRedirect(url: string | null | undefined): string | null {
   try { const u = new URL(url); return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null; } catch { return null; }
 }
 
+/** The REQUEST-supplied redirect is honoured only when its host passes the
+ *  endpoint's origin allowlist — otherwise anyone with the (public) access
+ *  key can mint 303s from a trusted domain to anywhere. An empty allowlist
+ *  keeps the web3forms drop-in behaviour (any redirect). */
+function requestRedirect(url: string, endpoint: FormEndpointRow): string | null {
+  const safe = safeRedirect(url);
+  if (!safe) return null;
+  const host = new URL(safe).hostname.toLowerCase();
+  return originAllowed(host, endpoint.allowed_origins) ? safe : null;
+}
+
 const THANKS_HTML = `<!doctype html><meta charset="utf-8"><title>Thank you</title><body style="font-family:system-ui;padding:48px;text-align:center"><h1>Thank you!</h1><p>Your message has been sent. We'll be in touch shortly.</p><p><a href="javascript:history.back()">Go back</a></p></body>`;
 
 export async function POST(req: Request) {
@@ -55,7 +66,10 @@ export async function POST(req: Request) {
 
   const admin = createAdminClient();
   const { data: ep, error: epError } = await admin.from("form_endpoints").select("*").eq("access_key", reserved.access_key).maybeSingle();
-  if (epError && /form_endpoints/.test(epError.message)) return fail(req, 503, "Form relay not ready");
+  // Any lookup error is a 503, not a 404: reporting a DB outage as "unknown
+  // access key" would send an integrator hunting the wrong bug. The
+  // relation-missing case (migration not applied) gets its own message.
+  if (epError) return fail(req, 503, /form_endpoints/.test(epError.message) ? "Form relay not ready" : "Form relay unavailable");
   if (!ep) return fail(req, 404, "Unknown access key");
   const endpoint = ep as FormEndpointRow;
   if (endpoint.status === "paused") return fail(req, 410, "This form is paused");
@@ -106,7 +120,7 @@ export async function POST(req: Request) {
 
 function successResponse(req: Request, redirect: string, endpoint: FormEndpointRow, payload: PayloadField[]): NextResponse {
   if (wantsHtml(req)) {
-    const target = safeRedirect(redirect) ?? safeRedirect(endpoint.success_redirect_url);
+    const target = requestRedirect(redirect, endpoint) ?? safeRedirect(endpoint.success_redirect_url);
     if (target) return cors(req, NextResponse.redirect(target, 303));
     return cors(req, new NextResponse(THANKS_HTML, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }));
   }
