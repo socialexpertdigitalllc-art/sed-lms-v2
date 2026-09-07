@@ -35,6 +35,9 @@ export function previewLine(payload: PayloadField[], max = 140): string {
 
 function stamp(iso: string): { karachi: string; utc: string } {
   const d = new Date(iso);
+  // Intl.format THROWS on an Invalid Date; this runs on the delivery path,
+  // where a throw would mark the whole delivery failed over a timestamp.
+  if (Number.isNaN(d.getTime())) return { karachi: "unknown time", utc: "unknown time" };
   const fmt = (tz: string) => new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: tz }).format(d);
   return { karachi: fmt("Asia/Karachi"), utc: fmt("UTC") };
 }
@@ -49,7 +52,10 @@ export function buildFormEmail(input: {
   createdAt: string;
 }): BuiltEmail {
   const { karachi, utc } = stamp(input.createdAt);
-  const site = input.origin ?? "unknown site";
+  const site = input.origin?.trim() || "unknown site";
+  // Header-injection defense lives HERE, not only in resolveSubject: no
+  // caller contract forces the subject through resolveSubject first.
+  const subject = input.subject.replace(/[\r\n]+/g, " ").trim().slice(0, 200) || `New form submission from ${site}`;
 
   const text = [
     `New form submission — ${input.endpointName}`,
@@ -72,5 +78,5 @@ export function buildFormEmail(input: {
 <table style="border-collapse:collapse;width:100%">${rows || `<tr><td style="padding:6px 10px">No fields were submitted.</td></tr>`}</table>
 <p style="color:#6b7280;font-size:12px;margin-top:16px">Site: ${escapeHtml(site)}<br>Time: ${escapeHtml(karachi)} (Asia/Karachi) · ${escapeHtml(utc)} (UTC)<br>Sent by SED LMS Form Relay</p>
 </div>`;
-  return { subject: input.subject, text, html };
+  return { subject, text, html };
 }

@@ -43,6 +43,23 @@ describe("buildFormEmail", () => {
   });
 });
 
+describe("buildFormEmail hardening", () => {
+  it("does not throw on a malformed createdAt", () => {
+    const msg = buildFormEmail({ endpointName: "A", subject: "s", payload: [], origin: "x.com", createdAt: "garbage" });
+    expect(msg.text).toContain("unknown time");
+  });
+  it("strips CRLF from the subject (header injection)", () => {
+    const msg = buildFormEmail({ endpointName: "A", subject: "Hi\r\nBcc: evil@x.co", payload: [], origin: "x.com", createdAt: "2026-09-05T10:00:00Z" });
+    expect(msg.subject).toBe("Hi Bcc: evil@x.co");
+  });
+  it("renders the empty-payload branch and escapes a hostile origin", () => {
+    const msg = buildFormEmail({ endpointName: "A", subject: "s", payload: [], origin: "<script>x</script>", createdAt: "2026-09-05T10:00:00Z" });
+    expect(msg.html).toContain("No fields were submitted.");
+    expect(msg.html).not.toContain("<script>");
+    expect(msg.html).toContain("&lt;script&gt;");
+  });
+});
+
 describe("previewLine", () => {
   it("prefers message-like fields and truncates", () => {
     expect(previewLine([{ key: "name", value: "Ann" }, { key: "message", value: "x".repeat(200) }])).toBe("x".repeat(140) + "…");
