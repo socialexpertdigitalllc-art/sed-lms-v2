@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ttlCached } from "@/lib/cache/ttl";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
+import { allowedFormScope } from "@/lib/forms/access";
 
 /**
  * Sidebar badge counts. Returns ONLY the keys the caller's permissions allow —
@@ -128,6 +129,24 @@ async function computeCounts(userId: string): Promise<Record<string, number>> {
           .from("payment_links")
           .select("*", { count: "exact", head: true })
           .eq("is_active", true);
+        if (error) throw error;
+        return count ?? 0;
+      })
+    );
+  }
+
+  if (perms.has("forms.view") || perms.has("forms.manage")) {
+    // Unread, non-spam website form submissions in the user's scope.
+    tasks.push(
+      run("forms", async () => {
+        const scope = await allowedFormScope(admin, userId, perms);
+        let q = admin.from("form_submissions").select("*", { count: "exact", head: true }).is("read_at", null).eq("is_spam", false);
+        if (!scope.all) {
+          const ids = [...scope.leadIds];
+          if (!ids.length) return 0;
+          q = q.in("lead_id", ids);
+        }
+        const { count, error } = await q;
         if (error) throw error;
         return count ?? 0;
       })

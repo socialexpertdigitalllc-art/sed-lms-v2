@@ -12,6 +12,7 @@ export const NAV_COUNT_BY_HREF: Record<string, string> = {
   "/tickets": "tickets",
   "/feedback": "feedback",
   "/payments": "payments",
+  "/forms": "forms",
   "/pre-leads/all": "preleads",
   "/admin/users": "users",
   "/admin/departments": "departments",
@@ -19,7 +20,7 @@ export const NAV_COUNT_BY_HREF: Record<string, string> = {
 };
 
 /** Counts that signal actionable/overdue work — rendered in the alert palette. */
-const ALERT_KEYS = new Set(["followups", "tickets", "feedback"]);
+const ALERT_KEYS = new Set(["followups", "tickets", "feedback", "forms"]);
 
 export type NavCountTone = "default" | "alert";
 
