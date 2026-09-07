@@ -38,11 +38,16 @@ export function SubmissionsInbox({ endpoints, canManage }: { endpoints: Endpoint
     if (status) p.set("status", status);
     if (q.trim()) p.set("q", q.trim());
     if (before) p.set("before", before);
-    const res = await fetch(`/api/forms/submissions?${p}`);
-    const body = res.ok ? await res.json() : { submissions: [], next_before: null };
-    setRows((prev) => (before ? [...prev, ...body.submissions] : body.submissions));
-    setNextBefore(body.next_before);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/forms/submissions?${p}`);
+      const body = res.ok ? await res.json() : { submissions: [], next_before: null };
+      setRows((prev) => (before ? [...prev, ...body.submissions] : body.submissions));
+      setNextBefore(body.next_before);
+    } catch {
+      /* offline etc. — keep whatever is shown; finally re-enables Load more */
+    } finally {
+      setLoading(false);
+    }
   }, [endpoint, spam, status, q]);
 
   useEffect(() => {

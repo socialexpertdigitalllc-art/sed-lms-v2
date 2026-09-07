@@ -26,11 +26,17 @@ export function SubmissionDrawer({
 
   async function act(label: string, fn: () => Promise<Response>) {
     setBusy(label);
-    const res = await fn();
-    setBusy(null);
-    if (!res.ok) { toast({ kind: "error", title: `${label} failed`, body: (await res.json().catch(() => ({}))).error }); return; }
-    toast({ kind: "success", title: `${label} done` });
-    onChanged();
+    try {
+      const res = await fn();
+      if (!res.ok) { toast({ kind: "error", title: `${label} failed`, body: (await res.json().catch(() => ({}))).error }); return; }
+      toast({ kind: "success", title: `${label} done` });
+      onChanged();
+    } catch {
+      toast({ kind: "error", title: `${label} failed`, body: "Network error — try again." });
+    } finally {
+      // Always re-enable the buttons: a thrown fetch must not brick the drawer.
+      setBusy(null);
+    }
   }
   const patch = (body: Record<string, unknown>) =>
     fetch(`/api/forms/submissions/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
