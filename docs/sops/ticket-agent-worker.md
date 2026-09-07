@@ -42,10 +42,18 @@ pm2 can show sed-lms "online" with `pid N/A` while the node process is dead
 ensure-script couldn't catch). Guard: Scheduled Task
 `SED-LMS-agent-worker-watchdog` runs
 `C:\Users\pc\.pm2\watchdog-sed-worker.ps1` every 3 minutes (as `pc`, only
-while logged in). If nothing is listening on port 3000 it runs
+while logged in; tracked copy: `scripts/watchdog-sed-worker.ps1` — edit
+there, then copy to `.pm2`). If nothing is listening on port 3000 it runs
 `pm2 restart sed-lms` (falling back to `pm2 resurrect` + restart), waits for
 the port, then `pm2 save`. Log: `C:\Users\pc\.pm2\watchdog-sed-worker.log`
-(healthy probes are silent).
+(healthy probes are silent). Live-tested 2026-09-07 with a staged
+`pm2 stop`: detected and fully recovered (restart + save) in ~2.5 min,
+under the 5-min heartbeat threshold.
+
+Do NOT `tail -f` the watchdog log: Unix-style tail on Windows locks the
+file against writers and the watchdog's log writes fail — read it with
+`Get-Content` or an editor. If a lock does happen, lines spill to
+`watchdog-sed-worker.log.2` instead of being lost.
 
 Safety valves:
 - **Pause during maintenance** (stop → build → start): create the file
