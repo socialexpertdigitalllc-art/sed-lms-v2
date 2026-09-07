@@ -16,15 +16,17 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     .insert({
       endpoint_id: endpoint.id,
       lead_id: endpoint.lead_id,
+      // No fake reply-to and no example.com anywhere: a Reply-To at a
+      // reserved domain is a real spam-filter trigger, and this email's whole
+      // job is proving deliverability to the client's inbox.
       payload: [
         { key: "_test", value: "true" },
-        { key: "name", value: "Test Visitor" },
-        { key: "email", value: "test@example.com" },
-        { key: "message", value: "This is a test submission sent from the SED LMS dashboard." },
+        { key: "name", value: "Website Visitor" },
+        { key: "message", value: `Delivery check for the "${endpoint.name}" contact form. If you can read this, form submissions from the website will reach this inbox.` },
       ],
-      subject: `Test submission — ${endpoint.name}`,
-      submitter_name: "Test Visitor",
-      submitter_email: "test@example.com",
+      subject: `${endpoint.name} — contact form delivery check`,
+      submitter_name: "Website Visitor",
+      submitter_email: null,
       origin: "dashboard",
       delivery_status: "pending",
     })
