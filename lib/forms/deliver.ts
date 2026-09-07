@@ -14,7 +14,15 @@ import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 export type SendFn = (msg: nodemailer.SendMailOptions, mailbox: ResolvedMailbox) => Promise<void>;
 
 export const smtpSend: SendFn = async (msg, mailbox) => {
-  const transport = nodemailer.createTransport(buildSmtpConfig(mailbox));
+  // Explicit timeouts: nodemailer's defaults (2min connect, 10min socket)
+  // would let ONE stalled SMTP connection eat the sweep route's whole
+  // maxDuration budget.
+  const transport = nodemailer.createTransport({
+    ...buildSmtpConfig(mailbox),
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 30_000,
+  });
   await transport.sendMail(msg);
 };
 

@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     .in("delivery_status", ["pending", "failed"])
     .lt("delivery_attempts", MAX_DELIVERY_ATTEMPTS)
     .order("created_at", { ascending: true })
-    .limit(20);
+    .limit(8); // sized so a tick of worst-case sends fits maxDuration
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   let sent = 0, failed = 0;
