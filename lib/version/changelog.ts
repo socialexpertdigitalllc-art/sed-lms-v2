@@ -29,6 +29,25 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.16.0",
+    date: "2026-09-08",
+    title: "Form Relay — our own form submission service",
+    changes: [
+      {
+        kind: "feature",
+        text: "Client websites now post their contact and booking forms to the LMS instead of web3forms. No more accounts or verification codes per client — create an endpoint, paste the key, done.",
+      },
+      {
+        kind: "feature",
+        text: "Every submission is stored and shown in the new Forms section and on the lead's page, emailed to the client from a linked company mailbox, and pinged to the lead's agent.",
+      },
+      {
+        kind: "improvement",
+        text: "Spam protection built in: honeypot field, per-IP and per-day limits, and an optional allowed-domains list per endpoint. Failed emails retry automatically and can be resent by hand.",
+      },
+    ],
+  },
+  {
     version: "2.15.0",
     date: "2026-09-02",
     title: "The AI developer, refined",
