@@ -10,7 +10,8 @@ const holder = vi.hoisted(() => ({
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: () => ({
-      select: () => ({ in: () => ({ lt: () => ({ order: () => ({ limit: async () => ({ data: holder.rows, error: null }) }) }) }) }),
+      select: () => ({ or: () => ({ lt: () => ({ order: () => ({ limit: async () => ({ data: holder.rows, error: null }) }) }) }) }),
+      delete: () => ({ eq: () => ({ lt: async () => ({ error: null }) }) }),
     }),
   }),
 }));

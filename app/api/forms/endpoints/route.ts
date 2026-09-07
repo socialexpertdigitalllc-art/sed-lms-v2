@@ -15,7 +15,7 @@ export async function GET() {
   const visible = ((data ?? []) as FormEndpointRow[]).filter((e) => endpointInScope(e, scope));
 
   const counts = new Map<string, number>();
-  const { data: today } = await admin.from("form_submissions").select("endpoint_id").eq("is_spam", false).gte("created_at", utcDayStart());
+  const { data: today } = visible.length === 0 ? { data: [] } : await admin.from("form_submissions").select("endpoint_id").in("endpoint_id", visible.map((e) => e.id)).eq("is_spam", false).gte("created_at", utcDayStart());
   for (const r of today ?? []) counts.set(r.endpoint_id as string, (counts.get(r.endpoint_id as string) ?? 0) + 1);
 
   const endpoints: EndpointListItem[] = visible.map((e) => ({ ...e, today_count: counts.get(e.id) ?? 0 }));

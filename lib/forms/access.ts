@@ -12,7 +12,13 @@ export type FormScope = { all: true; manage: boolean } | { all: false; leadIds: 
 export async function allowedFormScope(admin: Admin, userId: string, perms: Set<string>): Promise<FormScope> {
   const manage = perms.has("forms.manage");
   if (perms.has("leads.view_all")) return { all: true, manage };
-  const { data } = await admin.from("leads").select("id").eq("agent_id", userId).is("deleted_at", null);
+  // Agent OR closer: the form_submission_received rule can target lead_closer,
+  // so a closer's bell must land on a page that shows them the submission.
+  const { data } = await admin
+    .from("leads")
+    .select("id")
+    .or(`agent_id.eq.${userId},closed_by.eq.${userId}`)
+    .is("deleted_at", null);
   return { all: false, leadIds: new Set((data ?? []).map((l) => l.id as string)), manage };
 }
 

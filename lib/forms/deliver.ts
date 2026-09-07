@@ -8,6 +8,7 @@ import type { ResolvedMailbox } from "@/lib/mail/types";
 import { notify } from "@/lib/notifications/notify";
 import { buildFormEmail, previewLine } from "@/lib/forms/email";
 import { isEmailAddress } from "@/lib/forms/parse";
+import { CLAIM_STALE_MS } from "@/lib/forms/types";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 
 /** Seam so tests never touch SMTP. */
@@ -52,15 +53,24 @@ export async function deliverSubmission(id: string, deps: { send?: SendFn } = {}
   if (!sub) return { status: "failed", error: "Submission not found" };
   const submission = sub as FormSubmissionRow;
   if (submission.is_spam || submission.delivery_status === "sent") return { status: "skipped" };
+  // A row another worker is sending RIGHT NOW is off-limits until its claim
+  // goes stale (worker died mid-send). Without the status flip below, a
+  // sweep tick during an in-flight send would re-claim and double-email.
+  if (
+    submission.delivery_status === "sending" &&
+    submission.claimed_at &&
+    Date.now() - new Date(submission.claimed_at).getTime() < CLAIM_STALE_MS
+  ) {
+    return { status: "skipped" };
+  }
 
-  // CLAIM before sending: after() and the sweep can race on a fresh row, and
-  // a duplicate email cannot be undone after send(). Optimistic-concurrency
-  // update — only the caller whose read still matches wins; the loser sees
-  // zero rows and backs off. (Same reason the contract send guards its
-  // status flip with .eq("status","draft").)
+  // CLAIM before sending: after() and the sweep can race, and a duplicate
+  // email cannot be undone after send(). Optimistic-concurrency update —
+  // only the caller whose read still matches wins, and the status flips to
+  // 'sending' so later readers back off instead of re-claiming.
   const { data: claimed } = await admin
     .from("form_submissions")
-    .update({ delivery_attempts: submission.delivery_attempts + 1 })
+    .update({ delivery_status: "sending", claimed_at: new Date().toISOString(), delivery_attempts: submission.delivery_attempts + 1 })
     .eq("id", submission.id)
     .eq("delivery_status", submission.delivery_status)
     .eq("delivery_attempts", submission.delivery_attempts)
@@ -91,6 +101,7 @@ export async function deliverSubmission(id: string, deps: { send?: SendFn } = {}
     html: built.html,
   };
   if (submission.submitter_email && isEmailAddress(submission.submitter_email)) msg.replyTo = submission.submitter_email;
+  if (submission.cc_email && isEmailAddress(submission.cc_email)) msg.cc = submission.cc_email;
 
   try {
     await send(msg, mailbox);

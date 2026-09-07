@@ -143,8 +143,15 @@ async function computeCounts(userId: string): Promise<Record<string, number>> {
         let q = admin.from("form_submissions").select("*", { count: "exact", head: true }).is("read_at", null).eq("is_spam", false);
         if (!scope.all) {
           const ids = [...scope.leadIds];
-          if (!ids.length) return 0;
-          q = q.in("lead_id", ids);
+          if (scope.manage) {
+            // Scoped managers also see lead-less endpoints' submissions —
+            // the badge must count what the inbox shows (same branch as
+            // app/api/forms/submissions/route.ts).
+            q = ids.length ? q.or(`lead_id.in.(${ids.join(",")}),lead_id.is.null`) : q.is("lead_id", null);
+          } else {
+            if (!ids.length) return 0;
+            q = q.in("lead_id", ids);
+          }
         }
         const { count, error } = await q;
         if (error) throw error;

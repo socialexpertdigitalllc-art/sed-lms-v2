@@ -42,13 +42,19 @@ export const getAppSettings = cache(
   async (): Promise<AppSettings> =>
     ttlCached("app-settings", "singleton", 60_000, async () => {
       const admin = createAdminClient();
-      const { data } = await admin
+      const { data, error } = await admin
         .from("app_settings")
         .select("work_start_time, work_timezone, idle_timeout_minutes, ticket_sla, ticket_retention_days, company_name, logo_path, contract_templates_folder_id, generated_contracts_folder_id, form_default_mailbox_id")
         .eq("singleton", true)
         .maybeSingle();
 
       if (data) return data as AppSettings;
+
+      // A select ERROR is not "no row": if a not-yet-applied migration makes
+      // a column unknown (42703), seeding here would UPSERT defaults over the
+      // real singleton row — wiping branding, work hours and SLAs app-wide.
+      // Serve defaults for this TTL window and touch nothing.
+      if (error) return DEFAULT_APP_SETTINGS;
 
       // seed default row (service role; RLS blocks client writes)
       await admin

@@ -48,6 +48,7 @@ beforeEach(() => {
   holder.submission = {
     id: "s1", endpoint_id: "e1", lead_id: "l1", is_spam: false, delivery_status: "pending", delivery_attempts: 0,
     payload: [{ key: "message", value: "Need a roof" }], subject: "New lead", submitter_email: "ann@x.co", origin: "acme.com", created_at: "2026-09-05T10:00:00Z",
+    claimed_at: null, cc_email: null,
   };
   holder.endpoint = { id: "e1", name: "Acme", to_emails: ["owner@acme.com"], mailbox_id: null, lead_id: "l1" };
   holder.settings = { form_default_mailbox_id: "mb-default" };
@@ -95,6 +96,24 @@ describe("deliverSubmission", () => {
     const r = await deliverSubmission("s1", { send });
     expect(r).toEqual({ status: "failed", error: "SMTP 535" });
     expect(holder.updates.at(-1)).toMatchObject({ delivery_status: "failed", delivery_attempts: 3, last_error: "SMTP 535" });
+  });
+
+  it("skips a row another worker is sending right now, retakes a stale claim", async () => {
+    holder.submission!.delivery_status = "sending";
+    holder.submission!.claimed_at = new Date(Date.now() - 30_000).toISOString();
+    const send = vi.fn(async () => {});
+    expect(await deliverSubmission("s1", { send })).toEqual({ status: "skipped" });
+    expect(send).not.toHaveBeenCalled();
+    holder.submission!.claimed_at = new Date(Date.now() - 11 * 60_000).toISOString();
+    expect(await deliverSubmission("s1", { send })).toEqual({ status: "sent" });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("CCs the reserved ccemail when valid", async () => {
+    holder.submission!.cc_email = "office@acme.com";
+    const send = vi.fn(async () => {});
+    await deliverSubmission("s1", { send });
+    expect((send.mock.calls[0] as unknown as [Record<string, unknown>])[0].cc).toBe("office@acme.com");
   });
 
   it("backs off without sending when another worker claimed the row first", async () => {

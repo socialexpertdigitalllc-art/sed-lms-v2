@@ -24,15 +24,17 @@ export function SubmissionDrawer({
   const [busy, setBusy] = useState<string | null>(null);
   const s = submission;
 
-  async function act(label: string, fn: () => Promise<Response>) {
+  async function act(label: string, fn: () => Promise<Response>): Promise<boolean> {
     setBusy(label);
     try {
       const res = await fn();
-      if (!res.ok) { toast({ kind: "error", title: `${label} failed`, body: (await res.json().catch(() => ({}))).error }); return; }
+      if (!res.ok) { toast({ kind: "error", title: `${label} failed`, body: (await res.json().catch(() => ({}))).error }); return false; }
       toast({ kind: "success", title: `${label} done` });
       onChanged();
+      return true;
     } catch {
       toast({ kind: "error", title: `${label} failed`, body: "Network error — try again." });
+      return false;
     } finally {
       // Always re-enable the buttons: a thrown fetch must not brick the drawer.
       setBusy(null);
@@ -105,7 +107,7 @@ export function SubmissionDrawer({
               type="button"
               className={btnGhostSm}
               disabled={busy !== null}
-              onClick={() => { if (confirm("Delete this submission permanently?")) act("Delete", () => fetch(`/api/forms/submissions/${s.id}`, { method: "DELETE" })).then(onClose); }}
+              onClick={async () => { if (confirm("Delete this submission permanently?") && (await act("Delete", () => fetch(`/api/forms/submissions/${s.id}`, { method: "DELETE" })))) onClose(); }}
             >
               <Trash2 className="h-3.5 w-3.5" /> Delete
             </button>

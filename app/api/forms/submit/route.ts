@@ -1,7 +1,7 @@
 // app/api/forms/submit/route.ts
 import { NextResponse, after } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { parseSubmissionRequest, extractSubmitter } from "@/lib/forms/parse";
+import { parseSubmissionRequest, extractSubmitter, isEmailAddress } from "@/lib/forms/parse";
 import { originHost, originAllowed, clientIp, gateSubmission, utcDayStart } from "@/lib/forms/gate";
 import { resolveSubject } from "@/lib/forms/email";
 import { deliverSubmission } from "@/lib/forms/deliver";
@@ -46,15 +46,23 @@ function safeRedirect(url: string | null | undefined): string | null {
   try { const u = new URL(url); return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null; } catch { return null; }
 }
 
-/** The REQUEST-supplied redirect is honoured only when its host passes the
- *  endpoint's origin allowlist — otherwise anyone with the (public) access
- *  key can mint 303s from a trusted domain to anywhere. An empty allowlist
- *  keeps the web3forms drop-in behaviour (any redirect). */
-function requestRedirect(url: string, endpoint: FormEndpointRow): string | null {
+/** The REQUEST-supplied redirect is honoured only when its host is one the
+ *  endpoint already trusts — otherwise anyone with the (public) access key
+ *  can mint 303s from a trusted domain to anywhere. With an allowlist, the
+ *  redirect host must pass it. With a BLANK allowlist (web3forms default),
+ *  the redirect must go back to the submitting page's own host or to the
+ *  endpoint's configured success URL host — a real client form redirecting
+ *  to its own thank-you page always passes. */
+function requestRedirect(url: string, endpoint: FormEndpointRow, submissionHost: string | null): string | null {
   const safe = safeRedirect(url);
   if (!safe) return null;
   const host = new URL(safe).hostname.toLowerCase();
-  return originAllowed(host, endpoint.allowed_origins) ? safe : null;
+  if (endpoint.allowed_origins.length > 0) return originAllowed(host, endpoint.allowed_origins) ? safe : null;
+  const trusted = new Set<string>();
+  if (submissionHost) trusted.add(submissionHost);
+  const configured = safeRedirect(endpoint.success_redirect_url);
+  if (configured) trusted.add(new URL(configured).hostname.toLowerCase());
+  return trusted.has(host) ? safe : null;
 }
 
 const THANKS_HTML = `<!doctype html><meta charset="utf-8"><title>Thank you</title><body style="font-family:system-ui;padding:48px;text-align:center"><h1>Thank you!</h1><p>Your message has been sent. We'll be in touch shortly.</p><p><a href="javascript:history.back()">Go back</a></p></body>`;
@@ -102,6 +110,7 @@ export async function POST(req: Request) {
     user_agent: (req.headers.get("user-agent") ?? "").slice(0, 500) || null,
     origin: host,
     referer: (req.headers.get("referer") ?? "").slice(0, 1000) || null,
+    cc_email: isEmailAddress(reserved.ccemail) ? reserved.ccemail.trim() : null,
     is_spam: !verdict.ok,
     spam_reason: verdict.ok ? null : (verdict.reason as FormSpamReason),
     delivery_status: verdict.ok ? "pending" : "skipped",
@@ -110,17 +119,17 @@ export async function POST(req: Request) {
   if (insError || !inserted) return fail(req, 500, "Could not store submission");
 
   if (!verdict.ok) {
-    if (verdict.status === 200) return successResponse(req, reserved.redirect, endpoint, payload); // honeypot: bots learn nothing
+    if (verdict.status === 200) return successResponse(req, reserved.redirect, endpoint, payload, host); // honeypot: bots learn nothing
     return fail(req, verdict.status, verdict.reason === "origin" ? "Origin not allowed" : "Too many submissions, try again later");
   }
 
   after(() => deliverSubmission(inserted.id as string));
-  return successResponse(req, reserved.redirect, endpoint, payload);
+  return successResponse(req, reserved.redirect, endpoint, payload, host);
 }
 
-function successResponse(req: Request, redirect: string, endpoint: FormEndpointRow, payload: PayloadField[]): NextResponse {
+function successResponse(req: Request, redirect: string, endpoint: FormEndpointRow, payload: PayloadField[], submissionHost: string | null): NextResponse {
   if (wantsHtml(req)) {
-    const target = requestRedirect(redirect, endpoint) ?? safeRedirect(endpoint.success_redirect_url);
+    const target = requestRedirect(redirect, endpoint, submissionHost) ?? safeRedirect(endpoint.success_redirect_url);
     if (target) return cors(req, NextResponse.redirect(target, 303));
     return cors(req, new NextResponse(THANKS_HTML, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }));
   }

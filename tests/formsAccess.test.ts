@@ -4,7 +4,7 @@ import { allowedFormScope, endpointInScope, type FormScope } from "@/lib/forms/a
 
 function fakeAdmin(leadIds: string[]) {
   return {
-    from: () => ({ select: () => ({ eq: () => ({ is: async () => ({ data: leadIds.map((id) => ({ id })) }) }) }) }),
+    from: () => ({ select: () => ({ or: () => ({ is: async () => ({ data: leadIds.map((id) => ({ id })) }) }) }) }),
   } as unknown as Parameters<typeof allowedFormScope>[0];
 }
 

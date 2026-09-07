@@ -89,8 +89,10 @@ Indexes: `form_endpoints_lead_idx (lead_id)`, unique on `access_key`.
 | referer | text null | |
 | is_spam | boolean not null default false | |
 | spam_reason | text null | 'honeypot', 'origin', 'rate_ip', 'rate_daily', 'manual' |
-| delivery_status | text not null check in ('pending','sent','failed','skipped') default 'pending' | spam rows are `skipped` |
+| delivery_status | text not null check in ('pending','sending','sent','failed','skipped') default 'pending' | spam rows are `skipped`; 'sending' = claimed by a worker mid-send |
 | delivery_attempts | int not null default 0 | |
+| claimed_at | timestamptz null | when the current 'sending' claim was taken; stale after 10 min |
+| cc_email | text null | validated `ccemail` reserved field, CC'd on the notification |
 | last_error | text null | |
 | delivered_at | timestamptz null | |
 | mailbox_id | uuid null → company_mailboxes(id) on delete set null | sender actually used |
@@ -125,7 +127,7 @@ Controller applies 0075 via the Supabase MCP after review, **before** the code d
 - Caps: body 64 KB, 50 fields, each value 10 000 chars. Over cap → `400 {"success":false,"message":"Payload too large"}`.
 - Success reply: `200 {"success":true,"message":"Form submitted successfully","data":{...payload}}` — the shape existing templates already branch on.
 - Failure replies use the same `{success:false, message}` envelope: 400 bad key/body, 403 origin not allowed, 404 unknown key, 410 paused, 429 rate limited.
-- Plain HTML (non-fetch) posts, detected by an `Accept` header that prefers `text/html`: on success respond 303 to `redirect` → `endpoint.success_redirect_url` → a minimal built-in thank-you page. `redirect` must be an absolute http(s) URL, else it is ignored.
+- Plain HTML (non-fetch) posts, detected by an `Accept` header that prefers `text/html`: on success respond 303 to `redirect` → `endpoint.success_redirect_url` → a minimal built-in thank-you page. `redirect` must be an absolute http(s) URL AND its host must be trusted: it must pass the endpoint's `allowed_origins` when that list is set, else (blank list) match the submitting page's own host or the configured success URL's host — anything else falls back, so the public access key cannot mint open redirects off the LMS domain.
 
 ### CORS
 

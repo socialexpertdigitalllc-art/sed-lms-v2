@@ -121,6 +121,23 @@ describe("POST /api/forms/submit", () => {
     expect(res.headers.get("location")).toBe("https://acme.com/thanks");
   });
 
+  it("with a BLANK allowlist, only redirects back to the submitting site's own host", async () => {
+    const evil = await post("access_key=KEY&redirect=https%3A%2F%2Fevil.com%2Fphish", { "content-type": "application/x-www-form-urlencoded", accept: "text/html" });
+    expect(evil.status).toBe(200); // thanks page, no off-site 303
+    expect(evil.headers.get("location")).toBeNull();
+    const own = await post("access_key=KEY&redirect=https%3A%2F%2Facme.com%2Fthanks", { "content-type": "application/x-www-form-urlencoded", accept: "text/html" });
+    expect(own.status).toBe(303);
+    expect(own.headers.get("location")).toBe("https://acme.com/thanks");
+  });
+
+  it("persists a valid ccemail on the stored row", async () => {
+    await post({ access_key: "KEY", ccemail: "office@acme.com", name: "Ann" });
+    expect(holder.inserted[0]).toMatchObject({ cc_email: "office@acme.com" });
+    holder.inserted = [];
+    await post({ access_key: "KEY", ccemail: "junk", name: "Ann" });
+    expect(holder.inserted[0]).toMatchObject({ cc_email: null });
+  });
+
   it("refuses a redirect outside the endpoint's allowed origins", async () => {
     holder.endpoint!.allowed_origins = ["acme.com"];
     const res = await post("access_key=KEY&name=Ann&redirect=https%3A%2F%2Fevil.com%2Fphish", { "content-type": "application/x-www-form-urlencoded", accept: "text/html,application/xhtml+xml" });

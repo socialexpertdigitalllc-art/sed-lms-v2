@@ -1,6 +1,6 @@
 // lib/forms/types.ts
 export type FormEndpointStatus = "active" | "paused";
-export type FormDeliveryStatus = "pending" | "sent" | "failed" | "skipped";
+export type FormDeliveryStatus = "pending" | "sending" | "sent" | "failed" | "skipped";
 export type FormSpamReason = "honeypot" | "origin" | "rate_ip" | "rate_daily" | "manual";
 
 /** Row of public.form_endpoints. */
@@ -41,6 +41,8 @@ export interface FormSubmissionRow {
   spam_reason: FormSpamReason | null;
   delivery_status: FormDeliveryStatus;
   delivery_attempts: number;
+  claimed_at: string | null;
+  cc_email: string | null;
   last_error: string | null;
   delivered_at: string | null;
   mailbox_id: string | null;
@@ -49,6 +51,9 @@ export interface FormSubmissionRow {
 }
 
 export const MAX_DELIVERY_ATTEMPTS = 5;
+
+/** A 'sending' claim older than this is stale (worker died mid-send) and may be retaken. */
+export const CLAIM_STALE_MS = 10 * 60_000;
 
 /** Endpoint row + today's non-spam count (GET /api/forms/endpoints and the Endpoints page). */
 export type EndpointListItem = FormEndpointRow & { today_count: number };

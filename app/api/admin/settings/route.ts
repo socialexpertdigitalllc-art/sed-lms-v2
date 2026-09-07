@@ -74,7 +74,7 @@ export async function PUT(req: Request) {
       ticket_sla,
       ticket_retention_days,
       company_name,
-      form_default_mailbox_id: form_default_mailbox_id ?? null,
+      ...(form_default_mailbox_id !== undefined ? { form_default_mailbox_id } : {}),
       updated_at: new Date().toISOString(),
       updated_by: auth.userId,
     },

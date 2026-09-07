@@ -18,7 +18,7 @@ vi.mock("@/lib/forms/deliver", () => ({ deliverSubmission: async (id: string) =>
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => {
-      if (table === "leads") return { select: () => ({ eq: () => ({ is: async () => ({ data: [{ id: "l1" }] }) }), in: async () => ({ data: [{ id: "l1", business_name: "Acme" }] }) }) };
+      if (table === "leads") return { select: () => ({ or: () => ({ is: async () => ({ data: [{ id: "l1" }] }) }), in: async () => ({ data: [{ id: "l1", business_name: "Acme" }] }) }) };
       if (table === "form_endpoints") return { select: () => ({ in: async () => ({ data: [{ id: "e1", name: "Acme contact" }] }) }) };
       const chain: Record<string, unknown> = {};
       const q = (name: string) => (col: string, val: unknown) => { holder.filters.push([name + ":" + col, val]); return chain; };

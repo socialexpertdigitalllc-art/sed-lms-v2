@@ -15,8 +15,8 @@ vi.mock("@/lib/permissions/resolver", () => ({ getUserPermissions: async () => h
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => {
-      if (table === "leads") return { select: () => ({ eq: () => ({ is: async () => ({ data: [{ id: "l1" }] }) }) }) };
-      if (table === "form_submissions") return { select: () => ({ eq: () => ({ gte: async () => ({ data: [{ endpoint_id: "e1" }, { endpoint_id: "e1" }] }) }) }) };
+      if (table === "leads") return { select: () => ({ or: () => ({ is: async () => ({ data: [{ id: "l1" }] }) }) }) };
+      if (table === "form_submissions") return { select: () => ({ in: () => ({ eq: () => ({ gte: async () => ({ data: [{ endpoint_id: "e1" }, { endpoint_id: "e1" }] }) }) }) }) };
       return {
         select: () => ({
           order: async () => ({ data: holder.endpoints, error: null }),

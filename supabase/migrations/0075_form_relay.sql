@@ -41,8 +41,10 @@ create table if not exists public.form_submissions (
   referer text,
   is_spam boolean not null default false,
   spam_reason text check (spam_reason is null or spam_reason in ('honeypot','origin','rate_ip','rate_daily','manual')),
-  delivery_status text not null default 'pending' check (delivery_status in ('pending','sent','failed','skipped')),
+  delivery_status text not null default 'pending' check (delivery_status in ('pending','sending','sent','failed','skipped')),
   delivery_attempts int not null default 0,
+  claimed_at timestamptz,
+  cc_email text,
   last_error text,
   delivered_at timestamptz,
   mailbox_id uuid references public.company_mailboxes(id) on delete set null,
@@ -53,6 +55,10 @@ create index if not exists form_submissions_endpoint_idx on public.form_submissi
 create index if not exists form_submissions_lead_idx on public.form_submissions (lead_id, created_at desc);
 create index if not exists form_submissions_pending_idx on public.form_submissions (created_at)
   where delivery_status in ('pending','failed');
+-- Stale in-flight claims: a worker that died mid-send leaves 'sending'; the
+-- sweep reclaims them once claimed_at is old enough.
+create index if not exists form_submissions_sending_idx on public.form_submissions (claimed_at)
+  where delivery_status = 'sending';
 -- Unread badge: the nav-counts poller counts unread, non-spam rows (optionally
 -- per lead). Partial index keeps that count off the heap — this table grows
 -- with every visitor submission, and badge counts poll on a short cadence
