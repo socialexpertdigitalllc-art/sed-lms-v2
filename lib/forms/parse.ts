@@ -62,7 +62,10 @@ export async function parseSubmissionRequest(req: Request): Promise<ParseResult>
 
   let text: string;
   try { text = await req.text(); } catch { return invalid; }
-  if (text.length > LIMITS.bodyBytes) return tooLarge;
+  // Byte length, not string length: a UTF-16 measure under-counts non-ASCII
+  // payloads (CJK text is ~3 bytes per char), and content-length is absent on
+  // some clients, so this fallback is the cap that actually holds.
+  if (Buffer.byteLength(text, "utf8") > LIMITS.bodyBytes) return tooLarge;
 
   const wantsJson = ct.includes("application/json") || (!ct.includes("x-www-form-urlencoded") && text.trim().startsWith("{"));
   if (wantsJson) {

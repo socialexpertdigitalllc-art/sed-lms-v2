@@ -73,6 +73,16 @@ describe("parseSubmissionRequest", () => {
     expect(r).toEqual({ ok: false, status: 400, message: "Invalid request body" });
   });
 
+  it("rejects a multi-byte body whose BYTE size exceeds the cap", async () => {
+    // ~30k CJK chars is under the cap in UTF-16 code units but ~90KB in UTF-8.
+    const req = new Request("http://t/x", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ access_key: "k", message: "你".repeat(30_000) }),
+    });
+    const r = await parseSubmissionRequest(req);
+    expect(r).toEqual({ ok: false, status: 400, message: "Payload too large" });
+  });
+
   it("rejects a body over the byte cap", async () => {
     const req = new Request("http://t/x", {
       method: "POST", headers: { "content-type": "application/json" },
