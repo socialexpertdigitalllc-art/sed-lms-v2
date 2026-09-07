@@ -70,4 +70,11 @@ export async function register() {
   setInterval(() => {
     fetch(`${origin}/api/site-builder/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 180_000);
+
+  // Form Relay retry sweep: re-attempts pending/failed email deliveries.
+  // Primary delivery is the submit route's after(); this only catches
+  // SMTP outages and restarts mid-delivery.
+  setInterval(() => {
+    fetch(`${origin}/api/forms/deliver`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 120_000);
 }
