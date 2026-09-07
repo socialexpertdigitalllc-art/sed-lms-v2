@@ -53,7 +53,13 @@ create index if not exists form_submissions_endpoint_idx on public.form_submissi
 create index if not exists form_submissions_lead_idx on public.form_submissions (lead_id, created_at desc);
 create index if not exists form_submissions_pending_idx on public.form_submissions (created_at)
   where delivery_status in ('pending','failed');
-create index if not exists form_submissions_daily_idx on public.form_submissions (endpoint_id, created_at);
+-- Unread badge: the nav-counts poller counts unread, non-spam rows (optionally
+-- per lead). Partial index keeps that count off the heap — this table grows
+-- with every visitor submission, and badge counts poll on a short cadence
+-- (disk-IO budget incident, 2026-08-17). The daily-limit count reuses
+-- form_submissions_endpoint_idx (endpoint_id + created_at range, no ordering).
+create index if not exists form_submissions_unread_idx on public.form_submissions (lead_id)
+  where read_at is null and is_spam = false;
 
 alter table public.form_endpoints enable row level security;
 alter table public.form_submissions enable row level security;

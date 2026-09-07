@@ -100,7 +100,8 @@ Indexes: `form_endpoints_lead_idx (lead_id)`, unique on `access_key`.
 Indexes: `form_submissions_endpoint_idx (endpoint_id, created_at desc)`,
 `form_submissions_lead_idx (lead_id, created_at desc)`,
 `form_submissions_pending_idx (created_at) where delivery_status in ('pending','failed')`,
-`form_submissions_daily_idx (endpoint_id, created_at)` (daily-limit count).
+`form_submissions_unread_idx (lead_id) where read_at is null and is_spam = false` (nav badge;
+the daily-limit count reuses `form_submissions_endpoint_idx`).
 
 ### Other
 
