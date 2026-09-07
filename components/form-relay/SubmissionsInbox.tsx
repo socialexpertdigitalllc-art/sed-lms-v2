@@ -28,8 +28,10 @@ export function SubmissionsInbox({ endpoints, canManage }: { endpoints: Endpoint
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState<string | null>(params.get("submission"));
 
+  // No synchronous setLoading here: load() runs from an effect, and a sync
+  // setState there cascades renders (react-hooks/set-state-in-effect).
+  // `loading` starts true and event handlers set it before calling load.
   const load = useCallback(async (before?: string) => {
-    setLoading(true);
     const p = new URLSearchParams();
     if (endpoint) p.set("endpoint", endpoint);
     if (spam) p.set("spam", spam);
@@ -43,7 +45,11 @@ export function SubmissionsInbox({ endpoints, canManage }: { endpoints: Endpoint
     setLoading(false);
   }, [endpoint, spam, status, q]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    // IIFE so every setState happens in the async continuation, never in the
+    // synchronous effect body (repo pattern — see hooks/useNavCounts.ts).
+    void (async () => { await load(); })();
+  }, [load]);
 
   // The bell links to /forms?submission=<id>; that row may be outside the
   // current filters, so it is fetched on its own when not in the list.
@@ -122,7 +128,7 @@ export function SubmissionsInbox({ endpoints, canManage }: { endpoints: Endpoint
         )}
         {nextBefore ? (
           <div className="border-t border-border p-3 text-center">
-            <button type="button" className={btnSecondarySm} disabled={loading} onClick={() => load(nextBefore)}>Load more</button>
+            <button type="button" className={btnSecondarySm} disabled={loading} onClick={() => { setLoading(true); void load(nextBefore); }}>Load more</button>
           </div>
         ) : null}
       </Panel>
