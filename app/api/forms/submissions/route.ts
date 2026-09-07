@@ -7,8 +7,10 @@ const PAGE = 50;
 
 /**
  * Inbox listing. Filters: endpoint, lead, spam (1|0), status, q (subject /
- * submitter), before (created_at cursor). Scope is applied in JS after the
- * query (same as tickets) — the table is per-operator sized.
+ * submitter), before (created_at cursor). Scope is applied IN THE QUERY:
+ * filtering in JS after a limit would silently drop a scoped user's older
+ * rows whenever other tenants' submissions fill the fetched window, and
+ * next_before would lie about the end of the list.
  */
 export async function GET(req: Request) {
   const auth = await requireForms("view");
@@ -16,7 +18,17 @@ export async function GET(req: Request) {
   const { admin, scope } = auth;
   const p = new URL(req.url).searchParams;
 
-  let query = admin.from("form_submissions").select("*").order("created_at", { ascending: false }).limit(PAGE * 2);
+  let query = admin.from("form_submissions").select("*").order("created_at", { ascending: false }).limit(PAGE);
+  if (!scope.all) {
+    const ids = [...scope.leadIds];
+    if (scope.manage) {
+      // Scoped managers also see lead-less endpoints' submissions.
+      query = ids.length ? query.or(`lead_id.in.(${ids.join(",")}),lead_id.is.null`) : query.is("lead_id", null);
+    } else {
+      if (!ids.length) return NextResponse.json({ submissions: [], next_before: null });
+      query = query.in("lead_id", ids);
+    }
+  }
   const endpoint = p.get("endpoint"); if (endpoint) query = query.eq("endpoint_id", endpoint);
   const lead = p.get("lead"); if (lead) query = query.eq("lead_id", lead);
   const spam = p.get("spam"); if (spam === "1" || spam === "0") query = query.eq("is_spam", spam === "1");
@@ -29,7 +41,8 @@ export async function GET(req: Request) {
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  const rows = ((data ?? []) as FormSubmissionRow[]).filter((s) => submissionInScope(s, scope)).slice(0, PAGE);
+  // Scope already applied in the query; this filter is belt-and-braces.
+  const rows = ((data ?? []) as FormSubmissionRow[]).filter((s) => submissionInScope(s, scope));
 
   const endpointIds = [...new Set(rows.map((r) => r.endpoint_id))];
   const leadIds = [...new Set(rows.map((r) => r.lead_id).filter((v): v is string => Boolean(v)))];
@@ -49,6 +62,9 @@ export async function GET(req: Request) {
     endpoint_name: endpointNames.get(r.endpoint_id) ?? null,
     lead_name: r.lead_id ? leadNames.get(r.lead_id) ?? null : null,
   }));
-  const next_before = rows.length === PAGE ? rows[rows.length - 1].created_at : null;
+  // Cursor from the RAW page, not the filtered rows — a full raw page means
+  // there may be more, regardless of what the defensive filter kept.
+  const raw = (data ?? []) as FormSubmissionRow[];
+  const next_before = raw.length === PAGE ? raw[raw.length - 1].created_at : null;
   return NextResponse.json({ submissions, next_before });
 }
