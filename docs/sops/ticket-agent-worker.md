@@ -28,12 +28,33 @@ runs the agent; it only creates runs and deploys approved results.
 
 | Symptom | Cause / fix |
 |---|---|
-| Runs sit "Waiting for the agent worker", panel says worker offline | Box off, pm2 dead or app stopped (`pm2 list`; fix: `pm2 start sed-lms` then **`pm2 save`**), or `AGENT_WORKER_ENABLED` missing |
+| Runs sit "Waiting for the agent worker", panel says worker offline | Box off, pm2 dead or app stopped (`pm2 list`; fix: `pm2 start sed-lms` then **`pm2 save`**), or `AGENT_WORKER_ENABLED` missing. NOTE: pm2 "online" with `pid N/A` is a ZOMBIE — the process is dead; restart anyway (the port-3000 watchdog below now auto-fixes this within ~3 min) |
 | Worker offline after every reboot | Stale pm2 dump: `pm2 resurrect` restores whatever state was last SAVED, and a dump saved while sed-lms was stopped resurrects it stopped (this stranded the worker for 11h on 2026-09-02). Fix: `pm2 start sed-lms && pm2 save`. Guard: the `SED-LMS-agent-worker-ensure` HKCU Run entry (script `C:\Users\pc\.pm2\ensure-sed-worker.cmd`) force-starts sed-lms ~30s after logon and re-saves the dump |
 | Runs fail with auth/sign-in errors | agy's cached sign-in expired — sign in again on the box (interactive `agy`) |
 | Runs fail with quota/rate errors | The Pro plan's 5-hour Antigravity window is exhausted — retry later, buy AI credits, or (last resort) switch the worker to API-key billing (`GEMINI_API_KEY` for agy) |
 | A run stuck "Deploying" >10 min | The approve request died mid-deploy — the panel's Stop button becomes available after 10 minutes; discard and re-approve |
 | Disk fills on the box | Scratch workspaces live under `%TEMP%\sed-agent\` — safe to delete anything there while no run is active |
+
+## Port-3000 watchdog (added 2026-09-07)
+
+pm2 can show sed-lms "online" with `pid N/A` while the node process is dead
+(zombie entry — this caused a 3.5h outage on 2026-09-07 that the logon
+ensure-script couldn't catch). Guard: Scheduled Task
+`SED-LMS-agent-worker-watchdog` runs
+`C:\Users\pc\.pm2\watchdog-sed-worker.ps1` every 3 minutes (as `pc`, only
+while logged in). If nothing is listening on port 3000 it runs
+`pm2 restart sed-lms` (falling back to `pm2 resurrect` + restart), waits for
+the port, then `pm2 save`. Log: `C:\Users\pc\.pm2\watchdog-sed-worker.log`
+(healthy probes are silent).
+
+Safety valves:
+- **Pause during maintenance** (stop → build → start): create the file
+  `C:\Users\pc\.pm2\watchdog-disabled`; delete it when done. Otherwise the
+  watchdog will restart sed-lms out from under you mid-build.
+- It refuses to restart while `.next\BUILD_ID` is missing (wiped/in-progress
+  build would crash-loop) — it logs instead.
+- 10-minute cooldown between restart attempts (state file
+  `watchdog-sed-worker.state`), so a slow cold start isn't double-restarted.
 
 ## Reboots and pm2 save discipline
 
