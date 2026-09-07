@@ -77,6 +77,21 @@ export async function deliverSubmission(id: string, deps: { send?: SendFn } = {}
     .select("id");
   if (!claimed || claimed.length === 0) return { status: "skipped" };
 
+  // From here the row is claimed ('sending'): every exit MUST resolve it to
+  // sent or failed, or it strands as 'sending' until the stale-claim sweep —
+  // and forever, once attempts hit the max. Hence the catch-all below.
+  try {
+    return await deliverClaimed(admin, submission, send);
+  } catch (e) {
+    return fail(admin, submission, (e as Error).message || "Delivery crashed");
+  }
+}
+
+async function deliverClaimed(
+  admin: ReturnType<typeof createAdminClient>,
+  submission: FormSubmissionRow,
+  send: SendFn,
+): Promise<DeliveryResult> {
   const { data: ep } = await admin.from("form_endpoints").select("*").eq("id", submission.endpoint_id).maybeSingle();
   if (!ep) return fail(admin, submission, "Endpoint no longer exists");
   const endpoint = ep as FormEndpointRow;
