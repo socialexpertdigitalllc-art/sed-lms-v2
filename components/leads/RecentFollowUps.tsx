@@ -9,6 +9,8 @@ import { FuStatusChip } from "./FuStatusChip";
 import { FollowUpModal } from "./FollowUpModal";
 import { FollowUpDetailModal } from "./FollowUpDetailModal";
 import { FollowUpLogModal } from "./FollowUpLogModal";
+import { PhoneCall } from "lucide-react";
+import { CollapsibleCard } from "@/components/common/CollapsibleCard";
 
 export function RecentFollowUps({
   leadId,
@@ -26,21 +28,25 @@ export function RecentFollowUps({
   const [selected, setSelected] = useState<LeadFollowUp | null>(null);
   const [logOpen, setLogOpen] = useState(false);
 
+  const last = followUps[0] ?? null;
   return (
-    <div className="rounded-2xl border border-border bg-surface shadow-sm p-5">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-text">Recent follow-ups</h2>
-        {has("leads.followup") && isFollowUpEligible(leadStatus) && (
-          <button
-            onClick={() => setEntryOpen(true)}
-            className="bg-accent text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-accent-ink"
-          >
-            Follow Up
-          </button>
-        )}
-      </div>
-
-      <div className="mt-4">
+    <>
+      <CollapsibleCard
+        icon={PhoneCall}
+        title="Recent follow-ups"
+        count={followUps.length}
+        summary={last ? `Last: ${last.fu_status} · ${formatDateTime(last.created_at)}` : "No follow-ups yet"}
+        action={
+          has("leads.followup") && isFollowUpEligible(leadStatus) ? (
+            <button
+              onClick={() => setEntryOpen(true)}
+              className="bg-accent text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-accent-ink"
+            >
+              Follow Up
+            </button>
+          ) : null
+        }
+      >
         {followUps.length === 0 ? (
           <p className="text-sm text-text-muted">No follow-ups yet.</p>
         ) : (
@@ -50,16 +56,15 @@ export function RecentFollowUps({
             ))}
           </div>
         )}
-      </div>
-
-      {followUps.length > 0 && (
-        <button
-          onClick={() => setLogOpen(true)}
-          className="mt-4 w-full text-xs text-text-muted hover:text-text rounded-md border border-border px-3 py-2 hover:bg-surface-2 transition-colors"
-        >
-          See all follow-ups ({followUps.length})
-        </button>
-      )}
+        {followUps.length > 0 && (
+          <button
+            onClick={() => setLogOpen(true)}
+            className="mt-4 w-full text-xs text-text-muted hover:text-text rounded-md border border-border px-3 py-2 hover:bg-surface-2 transition-colors"
+          >
+            See all follow-ups ({followUps.length})
+          </button>
+        )}
+      </CollapsibleCard>
 
       <FollowUpModal
         leadId={leadId}
@@ -81,7 +86,7 @@ export function RecentFollowUps({
           setSelected(fu);
         }}
       />
-    </div>
+    </>
   );
 }
 

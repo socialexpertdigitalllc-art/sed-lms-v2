@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Inbox, Plus, KeyRound } from "lucide-react";
-import { Panel, EmptyPanel } from "@/components/common/Panel";
+import { EmptyPanel } from "@/components/common/Panel";
+import { CollapsibleCard } from "@/components/common/CollapsibleCard";
 import { btnSecondarySm } from "@/components/common/buttons";
 import { formatRelative } from "@/lib/leads/format";
 import { previewLine } from "@/lib/forms/email";
@@ -13,11 +14,18 @@ export function LeadFormsCard({ leadId, endpoints, submissions, canManage }: {
   submissions: FormSubmissionRow[];
   canManage: boolean;
 }) {
+  const latest = submissions[0] ?? null;
+  const summary = latest
+    ? `Last: ${formatRelative(latest.created_at)} — ${latest.submitter_name ?? latest.subject}`
+    : endpoints.length > 0
+      ? "No submissions yet"
+      : "No form endpoint";
   return (
-    <Panel
+    <CollapsibleCard
       icon={Inbox}
       title="Website forms"
       count={submissions.length}
+      summary={summary}
       action={canManage ? <Link href={`/forms/endpoints/new?lead=${leadId}`} className={btnSecondarySm}><Plus className="h-3.5 w-3.5" /> Endpoint</Link> : null}
       flush
     >
@@ -54,6 +62,6 @@ export function LeadFormsCard({ leadId, endpoints, submissions, canManage }: {
           )}
         </>
       )}
-    </Panel>
+    </CollapsibleCard>
   );
 }

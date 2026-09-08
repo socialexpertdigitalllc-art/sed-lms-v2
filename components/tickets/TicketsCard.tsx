@@ -7,6 +7,8 @@ import { itemProgress, isTicketEligible, isOverdue } from "@/lib/tickets/logic";
 import { usePermissions } from "@/hooks/usePermissions";
 import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
 import { TicketModal } from "./TicketModal";
+import { Ticket as TicketIcon } from "lucide-react";
+import { CollapsibleCard } from "@/components/common/CollapsibleCard";
 
 export function TicketsCard({
   leadId,
@@ -22,21 +24,25 @@ export function TicketsCard({
   const { has } = usePermissions();
   const [open, setOpen] = useState(false);
 
+  const openCount = tickets.filter((t) => t.status !== "Resolved").length;
   return (
-    <div className="rounded-2xl border border-border bg-surface shadow-sm p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-text">Tickets</h2>
-        {has("tickets.create") && isTicketEligible(leadStatus) && (
-          <button
-            onClick={() => setOpen(true)}
-            className="bg-accent text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-accent-ink"
-          >
-            New Ticket
-          </button>
-        )}
-      </div>
-
-      <div className="mt-4">
+    <>
+      <CollapsibleCard
+        icon={TicketIcon}
+        title="Tickets"
+        count={tickets.length}
+        summary={tickets.length === 0 ? "No tickets yet" : openCount > 0 ? `${openCount} open` : "All resolved"}
+        action={
+          has("tickets.create") && isTicketEligible(leadStatus) ? (
+            <button
+              onClick={() => setOpen(true)}
+              className="bg-accent text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-accent-ink"
+            >
+              New Ticket
+            </button>
+          ) : null
+        }
+      >
         {tickets.length === 0 ? (
           <p className="text-sm text-text-muted">No tickets yet.</p>
         ) : (
@@ -46,19 +52,18 @@ export function TicketsCard({
             ))}
           </div>
         )}
-      </div>
-
-      {tickets.length > 0 && (
-        <Link
-          href={`/leads/${leadId}/tickets`}
-          className="mt-4 block w-full text-center text-xs text-text-muted hover:text-text rounded-md border border-border px-3 py-2 hover:bg-surface-2 transition-colors"
-        >
-          View all tickets ({tickets.length})
-        </Link>
-      )}
+        {tickets.length > 0 && (
+          <Link
+            href={`/leads/${leadId}/tickets`}
+            className="mt-4 block w-full text-center text-xs text-text-muted hover:text-text rounded-md border border-border px-3 py-2 hover:bg-surface-2 transition-colors"
+          >
+            View all tickets ({tickets.length})
+          </Link>
+        )}
+      </CollapsibleCard>
 
       {open && <TicketModal leadId={leadId} sla={sla} onClose={() => setOpen(false)} />}
-    </div>
+    </>
   );
 }
 

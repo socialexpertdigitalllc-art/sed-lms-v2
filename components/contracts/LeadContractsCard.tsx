@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { FileText, Download, Plus, Send, FilePlus2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Panel, EmptyPanel, Pill } from "@/components/common/Panel";
+import { EmptyPanel, Pill } from "@/components/common/Panel";
+import { CollapsibleCard } from "@/components/common/CollapsibleCard";
 import { btnSecondarySm, btnGhostSm } from "@/components/common/buttons";
 import { ContractComposer } from "@/components/contracts/ContractComposer";
 import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
@@ -33,13 +34,15 @@ export function LeadContractsCard({
 }) {
   const [composing, setComposing] = useState(false);
   const anySent = contracts.some((c) => c.status === "sent");
+  const latest = contracts[0] ?? null;
 
   return (
     <>
-      <Panel
+      <CollapsibleCard
         icon={FileText}
         title="Contracts"
         count={contracts.length}
+        summary={latest ? `Last: ${latest.status} · ${formatDate(latest.contract_date)}` : "No contracts yet"}
         action={
           <div className="flex items-center gap-2">
             {anySent && <ContractSentBadge />}
@@ -109,7 +112,7 @@ export function LeadContractsCard({
             })}
           </ul>
         )}
-      </Panel>
+      </CollapsibleCard>
 
       {composing && (
         <ContractComposer
