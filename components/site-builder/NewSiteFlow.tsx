@@ -148,6 +148,7 @@ export function NewSiteFlow() {
   // site must be eyeballed before it reaches a public URL — and is never
   // remembered between runs.
   const [autoDeploy, setAutoDeploy] = useState(true);
+  const [instructions, setInstructions] = useState("");
 
   const [needsLoading, setNeedsLoading] = useState(false);
   const [heroCandidates, setHeroCandidates] = useState<DisplayCandidate[]>([]);
@@ -489,7 +490,7 @@ export function NewSiteFlow() {
           lead_id: selectedLead.id,
           template_id: templateId,
           images: picks,
-          options: { auto_deploy: autoDeploy },
+          options: { auto_deploy: autoDeploy, ...(instructions.trim() ? { instructions: instructions.trim().slice(0, 2000) } : {}) },
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -756,6 +757,27 @@ export function NewSiteFlow() {
             </div>
           </div>
         )}
+      </section>
+
+      <section className="rounded-lg border border-border bg-surface p-4">
+        <label className="block text-sm font-semibold text-text" htmlFor="builder-instructions">
+          Additional instructions <span className="font-normal text-text-muted">(optional)</span>
+        </label>
+        <p className="mt-0.5 text-xs text-text-muted">
+          Anything special the client wants that the lead&apos;s data doesn&apos;t say — e.g. &quot;make the site
+          bilingual English/Spanish with a language switcher&quot;, &quot;emphasise emergency call-outs on every
+          page&quot;, &quot;formal tone, no exclamation marks&quot;. Sent to the AI with the rest of the brief and
+          applied to every page of this run.
+        </p>
+        <textarea
+          id="builder-instructions"
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          maxLength={2000}
+          rows={3}
+          placeholder="e.g. Multilanguage site: English and Spanish, with a toggle in the header"
+          className="mt-2 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent"
+        />
       </section>
 
       <div className="flex flex-wrap items-center justify-end gap-4">

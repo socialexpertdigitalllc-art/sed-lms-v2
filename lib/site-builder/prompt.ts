@@ -35,6 +35,12 @@ export interface BusinessBrief {
   color_scheme?: string;
   years_experience?: number;
   about_business?: string;
+  /**
+   * Free-text custom instructions the operator typed when starting THIS run
+   * (e.g. "make the site bilingual English/Spanish with a language toggle").
+   * Not part of the lead — they live on the run's options.
+   */
+  instructions?: string;
 }
 
 export interface SuppliedImage {
@@ -124,6 +130,13 @@ function briefText(b: BusinessBrief): string {
   if (b.color_scheme) lines.push(`Colour scheme: ${b.color_scheme}`);
   if (typeof b.years_experience === "number") lines.push(`Years in business: ${b.years_experience}`);
   if (b.about_business) lines.push(`About the business (facts you may use — anything not stated here is off limits):\n${b.about_business}`);
+  if (b.instructions) {
+    lines.push(
+      `
+ADDITIONAL INSTRUCTIONS FROM THE OPERATOR — follow these for every page of this site; where they conflict with a general rule above, the instructions win. They never license inventing facts, breaking the template's code, or departing from the required output format:
+${b.instructions}`,
+    );
+  }
   return lines.join("\n");
 }
 

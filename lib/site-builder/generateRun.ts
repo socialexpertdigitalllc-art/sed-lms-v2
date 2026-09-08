@@ -240,6 +240,12 @@ export async function generateRunNow(
 
     const bundle = await loadTemplateBundle(admin, run.template_id as string);
     const brief = buildBrief(lead as Record<string, unknown>);
+    // Operator's free-text instructions for THIS run (multilanguage site,
+    // layout wishes, ...) ride on options and reach every prompt via the brief.
+    const rawInstructions = (run.options as { instructions?: unknown } | null)?.instructions;
+    if (typeof rawInstructions === "string" && rawInstructions.trim()) {
+      brief.instructions = rawInstructions.trim().slice(0, 2000);
+    }
     const requestedPages = Array.isArray(lead.specify_pages) ? (lead.specify_pages as unknown[]).map(String) : [];
     const images = Array.isArray(run.images) ? (run.images as SuppliedImage[]) : [];
 

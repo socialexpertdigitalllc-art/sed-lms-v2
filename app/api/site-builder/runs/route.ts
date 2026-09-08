@@ -57,7 +57,12 @@ export async function POST(req: Request) {
   // normalised to a STRICT boolean here rather than stored verbatim: a
   // truthy-but-not-true value ("false", 1, {}) must never read as consent
   // downstream (lib/site-builder/generateRun.ts tests it with ===).
-  const options = { ...rawOptions, auto_deploy: rawOptions.auto_deploy === true };
+  // Operator's custom instructions for the generation: free text, trimmed and
+  // capped — it lands verbatim in the AI prompts, so an empty one is omitted.
+  const instructions = typeof rawOptions.instructions === "string" ? rawOptions.instructions.trim().slice(0, 2000) : "";
+  const options: Record<string, unknown> = { ...rawOptions, auto_deploy: rawOptions.auto_deploy === true };
+  if (instructions) options.instructions = instructions;
+  else delete options.instructions;
 
   const admin = createAdminClient();
 
