@@ -1,18 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, type LucideIcon } from "lucide-react";
+import { ChevronRight, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
- * Panel-look card whose body is COLLAPSED by default — the lead page's
- * right-column action sections use it so the page stays short: the header
- * always shows the name, count, a one-line status summary and the primary
- * action button; history only renders once the user expands.
+ * Compact, collapsed-by-default card for the lead page's right-column action
+ * sections. ONE header line: disclosure chevron, icon, title (never
+ * truncated — titles are short by contract), count, a truncating one-line
+ * summary filling the middle, and the primary action button pinned right.
+ * Expanding reveals the history below.
  *
- * The whole header row toggles except the `action` area (buttons there must
- * stay one-click). Deliberately no persistence: sections start closed on
- * every visit, per the operator's request.
+ * Deliberately no persistence: sections start closed on every visit, per the
+ * operator's request.
  */
 export function CollapsibleCard({
   icon: Icon,
@@ -28,9 +28,9 @@ export function CollapsibleCard({
   icon?: LucideIcon;
   title: string;
   count?: number;
-  /** One-line "last activity" line shown under the title while collapsed (and kept when open). */
+  /** One-line status, e.g. "sent · 12 Aug", "2 open". Truncates first when space is tight. */
   summary?: React.ReactNode;
-  /** Right-aligned controls (e.g. the New … button). Clicks here never toggle. */
+  /** Right-pinned control (the New … button). Clicks here never toggle. */
   action?: React.ReactNode;
   defaultOpen?: boolean;
   /** Drop body padding so the child can be an edge-to-edge list (Panel's flush). */
@@ -41,35 +41,31 @@ export function CollapsibleCard({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <section className={cn("flex flex-col overflow-hidden rounded-lg border border-border bg-surface", className)}>
-      <header className={cn("flex items-start justify-between gap-3 px-4 py-3", open && "border-b border-border-subtle")}>
+    <section className={cn("overflow-hidden rounded-lg border border-border bg-surface", className)}>
+      <div className="flex min-h-10 items-center gap-2 py-1.5 pl-2.5 pr-2">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
-          {Icon ? (
-            <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md bg-accent-soft text-accent-ink">
-              <Icon className="h-4 w-4" />
+          <ChevronRight
+            className={cn("h-3.5 w-3.5 shrink-0 text-text-faint transition-transform", open && "rotate-90")}
+          />
+          {Icon ? <Icon className="h-4 w-4 shrink-0 text-accent-ink" /> : null}
+          <span className="shrink-0 whitespace-nowrap text-[13px] font-semibold text-text">{title}</span>
+          {typeof count === "number" ? (
+            <span className="tabular shrink-0 font-mono text-[11px] leading-none text-text-muted">{count}</span>
+          ) : null}
+          {summary ? (
+            <span className="min-w-0 truncate text-[11px] text-text-faint">
+              <span className="mx-0.5">·</span> {summary}
             </span>
           ) : null}
-          <div className="min-w-0">
-            <h2 className="flex items-center gap-2 font-display text-sm font-semibold leading-tight text-text">
-              <span className="truncate">{title}</span>
-              {typeof count === "number" ? (
-                <span className="tabular shrink-0 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] font-normal text-text-muted">
-                  {count}
-                </span>
-              ) : null}
-              <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-text-faint transition-transform", open ? "" : "-rotate-90")} />
-            </h2>
-            {summary ? <p className="mt-0.5 truncate text-xs leading-relaxed text-text-muted">{summary}</p> : null}
-          </div>
         </button>
-        {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}
-      </header>
-      {open ? <div className={cn(flush ? "" : "p-4")}>{children}</div> : null}
+        {action ? <div className="flex shrink-0 items-center gap-1.5">{action}</div> : null}
+      </div>
+      {open ? <div className={cn("border-t border-border-subtle", flush ? "" : "p-3")}>{children}</div> : null}
     </section>
   );
 }

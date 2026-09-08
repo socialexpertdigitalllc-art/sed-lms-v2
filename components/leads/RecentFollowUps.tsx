@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { LeadFollowUp } from "@/lib/leads/followups";
 import { isFollowUpEligible } from "@/lib/leads/followups";
-import { formatDateTime } from "@/lib/leads/format";
+import { formatDateTime, formatRelative } from "@/lib/leads/format";
 import { usePermissions } from "@/hooks/usePermissions";
 import { FuStatusChip } from "./FuStatusChip";
 import { FollowUpModal } from "./FollowUpModal";
@@ -33,14 +33,14 @@ export function RecentFollowUps({
     <>
       <CollapsibleCard
         icon={PhoneCall}
-        title="Recent follow-ups"
+        title="Follow-ups"
         count={followUps.length}
-        summary={last ? `Last: ${last.fu_status} · ${formatDateTime(last.created_at)}` : "No follow-ups yet"}
+        summary={last ? `${last.fu_status} · ${formatRelative(last.created_at)}` : "none yet"}
         action={
           has("leads.followup") && isFollowUpEligible(leadStatus) ? (
             <button
               onClick={() => setEntryOpen(true)}
-              className="bg-accent text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-accent-ink"
+              className="bg-accent text-white text-[11px] font-semibold rounded-md px-2.5 py-1 hover:bg-accent-ink"
             >
               Follow Up
             </button>

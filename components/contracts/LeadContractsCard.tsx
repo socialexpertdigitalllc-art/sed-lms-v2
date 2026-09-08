@@ -7,7 +7,6 @@ import { EmptyPanel, Pill } from "@/components/common/Panel";
 import { CollapsibleCard } from "@/components/common/CollapsibleCard";
 import { btnSecondarySm, btnGhostSm } from "@/components/common/buttons";
 import { ContractComposer } from "@/components/contracts/ContractComposer";
-import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { formatDate, formatDateTime } from "@/lib/leads/format";
 import type { ContractRow } from "@/lib/contracts/types";
 
@@ -33,7 +32,6 @@ export function LeadContractsCard({
   leadYearlyPrice?: number | string | null;
 }) {
   const [composing, setComposing] = useState(false);
-  const anySent = contracts.some((c) => c.status === "sent");
   const latest = contracts[0] ?? null;
 
   return (
@@ -42,16 +40,13 @@ export function LeadContractsCard({
         icon={FileText}
         title="Contracts"
         count={contracts.length}
-        summary={latest ? `Last: ${latest.status} · ${formatDate(latest.contract_date)}` : "No contracts yet"}
+        summary={latest ? `${latest.status} · ${formatDate(latest.contract_date)}` : "none yet"}
         action={
-          <div className="flex items-center gap-2">
-            {anySent && <ContractSentBadge />}
-            {canSend && (
-              <button type="button" onClick={() => setComposing(true)} className={btnSecondarySm}>
-                <Plus className="h-3.5 w-3.5" /> New contract
-              </button>
-            )}
-          </div>
+          canSend ? (
+            <button type="button" onClick={() => setComposing(true)} className={btnSecondarySm}>
+              <Plus className="h-3.5 w-3.5" /> New
+            </button>
+          ) : null
         }
         flush
       >

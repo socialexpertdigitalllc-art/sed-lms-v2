@@ -16,10 +16,10 @@ export function LeadFormsCard({ leadId, endpoints, submissions, canManage }: {
 }) {
   const latest = submissions[0] ?? null;
   const summary = latest
-    ? `Last: ${formatRelative(latest.created_at)} — ${latest.submitter_name ?? latest.subject}`
+    ? `${formatRelative(latest.created_at)} — ${latest.submitter_name ?? latest.subject}`
     : endpoints.length > 0
-      ? "No submissions yet"
-      : "No form endpoint";
+      ? "no submissions yet"
+      : "no endpoint";
   return (
     <CollapsibleCard
       icon={Inbox}

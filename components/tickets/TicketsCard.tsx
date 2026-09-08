@@ -31,12 +31,12 @@ export function TicketsCard({
         icon={TicketIcon}
         title="Tickets"
         count={tickets.length}
-        summary={tickets.length === 0 ? "No tickets yet" : openCount > 0 ? `${openCount} open` : "All resolved"}
+        summary={tickets.length === 0 ? "none yet" : openCount > 0 ? `${openCount} open` : "all resolved"}
         action={
           has("tickets.create") && isTicketEligible(leadStatus) ? (
             <button
               onClick={() => setOpen(true)}
-              className="bg-accent text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-accent-ink"
+              className="bg-accent text-white text-[11px] font-semibold rounded-md px-2.5 py-1 hover:bg-accent-ink"
             >
               New Ticket
             </button>
