@@ -29,6 +29,81 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.17.0",
+    date: "2026-09-11",
+    title: "The template sales picked, and a faster calling queue",
+    changes: [
+      {
+        kind: "feature",
+        text: "Sales pick the template with the client. The new-lead form now ends with a Template Recommendation section — cards with a cover screenshot and a Preview link — and the pick follows the lead: it shows on the lead screen under Services & scope, and the New site screen starts from it instead of asking whoever builds the site to re-decide from the brief. A line above the picker says whether the recommendation was applied, overridden, or the template is gone. Optional, and changeable at any time.",
+      },
+      {
+        kind: "feature",
+        text: "The template board is a catalogue, not a list. Every template is a card led by its cover, with page and asset counts, Preview in a new tab (the whole template, navigable, not one flat page) and an In service switch. In service is the only thing sales see — an off template is simply absent from the lead form — and a template cannot go in service without a cover, because sales pick by picture.",
+      },
+      {
+        kind: "feature",
+        text: "Edit a template instead of re-uploading it: rename it, add or replace its cover, or ship updated files, each independently. Sites already built keep what they were built with; the next run uses the new files.",
+      },
+      {
+        kind: "improvement",
+        text: "Website addresses are now the business name and nothing else — \"A M Handyman\" deploys to a-m-handyman.dmviral.com. The old random tail was on the very link we send the client, where it read as phishing and made them hesitate to open the site we just built them. A number is added only when another lead genuinely holds the name.",
+      },
+      {
+        kind: "feature",
+        text: "Colour matching that answers instantly: enter the client's first colour and a recommended partner appears with a one-line reason for it. Agents were entering colours that did not go together, because choosing a second colour is a design judgement nobody asked them to have. A scheme now takes 2-3 colours — one alone leaves every button and accent to the generator's guess — and the lead screen draws each one as a dot beside its code.",
+      },
+      {
+        kind: "feature",
+        text: "The Follow-ups page works as the calling queue it is: the number being dialled sits on the row (tap to dial, one click to copy) instead of a trip into the lead, and a tick and a cross beside the pill log the call on the spot — the tick opens the follow-up already set to Pickup, the cross posts No Pickup and books the retry 24 hours out with nothing to type.",
+      },
+      {
+        kind: "improvement",
+        text: "\"Specific time\" now expires. A client who asked for 3:15pm stops being a specific appointment once a day passes with nobody logging a follow-up, so the Specific filter no longer fills up with slots that were never kept. Logging a newer follow-up restarts the clock.",
+      },
+      {
+        kind: "improvement",
+        text: "Hover a follow-up pill — on the leads table or the queue — and it shows the comment behind it. A No Pickup pill reaches back to the last pickup and shows that note with its date, so a stale one is obvious at a glance.",
+      },
+      {
+        kind: "feature",
+        text: "Three more things the lead form captures: the owner's name, the business's social profiles (as many as it has), and instructions for the developer. All three show on the lead screen.",
+      },
+      {
+        kind: "feature",
+        text: "Two new filters on the leads table: Follow-up (Pickup / No Pickup, with a count of each) and a Custom range for the created date, for every ask the month presets do not cover. Both survive a refresh, land in saved views, and clear with Clear filters.",
+      },
+      {
+        kind: "feature",
+        text: "Move a site to a fresh address from wherever you are looking at it — the lead screen, the ticket screen and the leads table, beside the download and upload icons (which the leads table gained too). The confirmation names the address before anything moves, because the old one is deleted.",
+      },
+      {
+        kind: "improvement",
+        text: "One calendar and one time control throughout the dashboard. Every browser's native date and time box looked and behaved differently; new lead, both follow-up modals, the ticket due date, the work-start setting and the agent report range now share the same picker.",
+      },
+      {
+        kind: "improvement",
+        text: "The lead screen opens on what you came to do. Contracts, Website forms, Recent follow-ups and Tickets now load closed, each showing its count, a one-line last-activity summary and its own create button — so raising a ticket or logging a follow-up no longer means scrolling past the history. Open a section to read that history.",
+      },
+      {
+        kind: "feature",
+        text: "Tell the generator what this build needs: an Additional instructions box on the New site screen (a bilingual site, a tone to hold, something to lead with) that reaches every page it writes.",
+      },
+      {
+        kind: "improvement",
+        text: "Three faults the generated sites kept coming back with are now forbidden as it builds: a control that does nothing (a language, search or dark-mode toggle with nothing behind it), a palette applied so that text disappears into its background, and a page that breaks on a phone. Header logos are sized properly rather than favicon-small, and a detail the brief does not have — an email above all — is removed instead of invented or left over from the template.",
+      },
+      {
+        kind: "fix",
+        text: "Custom-domain deploys work again. Splitting the LMS and the client sites onto separate hosting accounts quietly broke every custom-domain transfer and every override upload, which had been writing straight to a disk the LMS could no longer reach; they now go over the hosting's own API.",
+      },
+      {
+        kind: "fix",
+        text: "Form Relay follow-ups: the CC address on an endpoint was accepted and then dropped — it is now stored and copied in; a submission can no longer be emailed twice by the retry sweep, nor sit forever as \"sending\" if the send dies mid-flight; and test sends no longer carry the wording and reply-to address that made them look like spam.",
+      },
+    ],
+  },
+  {
     version: "2.16.0",
     date: "2026-09-08",
     title: "Form Relay — our own form submission service",
