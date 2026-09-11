@@ -30,6 +30,7 @@ import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
 import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 import { ColorSchemeAdvice } from "@/components/leads/ColorSchemeField";
+import { SocialProfilesRow } from "@/components/leads/SocialProfilesRow";
 import { RecommendedTemplateField } from "@/components/leads/RecommendedTemplateField";
 import { ColorSchemeSwatches } from "@/components/leads/ColorSchemeSwatches";
 import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
@@ -319,20 +320,15 @@ export function LeadDetail({
               ) : (
                 <FieldRow label="Design reference sites" value="" />
               )}
-              {/* Read-only here: profiles are a structured list, and the
-                  submission form is where they are composed. */}
-              {socialProfiles.length > 0 ? (
-                socialProfiles.map((p, i) => (
-                  <FieldRow
-                    key={i}
-                    label={p.platform === "Other" ? p.label || "Other" : p.platform}
-                    value={p.url}
-                    type="url"
-                  />
-                ))
-              ) : (
-                <FieldRow label="Social profiles" value="" />
-              )}
+              {/* Editable in place: a lead submitted with this empty — the
+                  common case on a first call — must be able to gain profiles
+                  once the agent actually has them. */}
+              <SocialProfilesRow
+                className="sm:col-span-2"
+                profiles={socialProfiles}
+                canEdit={canEdit}
+                onSave={(next) => patch({ social_profiles: next })}
+              />
             </div>
             {/* AI developer, ticketless: direct edits on this site, reviewed
                 before deploy (v2 F5). Sits right under the website link and
