@@ -13,7 +13,7 @@ import { FollowUpModal } from "./FollowUpModal";
 import { RegionFilter } from "./RegionFilter";
 import MultiSelect from "@/components/common/MultiSelect";
 import { CopyButton } from "@/components/common/CopyButton";
-import { bucketOf, groupByBucket, isSpecificActive, FOLLOWUP_STATUSES } from "@/lib/leads/followups";
+import { bucketOf, groupByBucket, isSpecificActive } from "@/lib/leads/followups";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -35,9 +35,10 @@ function daysOverdue(followUpTime: string | null, now = Date.now()): number {
 // usually the honest move — surface those as one-click actions on the row.
 const STALE_DAYS = 30;
 
-// Ready by default — the statuses agents actually work; the status filter can
-// widen back to every follow-up-eligible status.
-const FOLLOWUPS_DEFAULTS = { q: "", status: "Ready", agent: "", type: "", region: "", bucket: "all", specific: "", scope: "" };
+// Ready ONLY — this queue is the calling list, and only Ready leads belong on
+// it (operator decision, 2026-09-11). Parked/other statuses are reached from
+// the main Leads table; moving a lead to Long Term or Dropped removes it here.
+const FOLLOWUPS_DEFAULTS = { q: "", agent: "", type: "", region: "", bucket: "all", specific: "", scope: "" };
 
 const BUCKETS = [
   { id: "all", label: "All" },
@@ -95,16 +96,12 @@ export function FollowUpQueue({
     }
   }
 
-  const statusSel = useMemo(() => (urlState.status ? urlState.status.split(",") : []), [urlState.status]);
   const agentSel = useMemo(() => (urlState.agent ? urlState.agent.split(",") : []), [urlState.agent]);
   const typeSel = useMemo(() => (urlState.type ? urlState.type.split(",") : []), [urlState.type]);
   const regionSel = useMemo(() => (urlState.region ? urlState.region.split(",") : []), [urlState.region]);
   const q = urlState.q.trim().toLowerCase();
 
-  const eligible = useMemo(
-    () => leads.filter((l) => (FOLLOWUP_STATUSES as readonly string[]).includes(l.status)),
-    [leads],
-  );
+  const eligible = useMemo(() => leads.filter((l) => l.status === "Ready"), [leads]);
 
   const agentOptions = useMemo(() => {
     const ids = new Set(eligible.map((l) => l.agent_id).filter(Boolean) as string[]);
@@ -128,7 +125,6 @@ export function FollowUpQueue({
   const specificCount = useMemo(() => eligible.filter((l) => isSpecificActive(l)).length, [eligible]);
   const filtered = useMemo(() => {
     return eligible.filter((l) => {
-      if (statusSel.length && !statusSel.includes(l.status)) return false;
       if (agentSel.length && !agentSel.includes(l.agent_id ?? "")) return false;
       if (typeSel.length && !typeSel.includes(l.site_type ?? "")) return false;
       if (regionSel.length && !regionSel.includes(leadRegion(l) ?? "")) return false;
@@ -147,13 +143,13 @@ export function FollowUpQueue({
       }
       return true;
     });
-  }, [eligible, statusSel, agentSel, typeSel, regionSel, specificOnly, isCloser, teamScope, teamIds, currentUserId, q, agentNameById]);
+  }, [eligible, agentSel, typeSel, regionSel, specificOnly, isCloser, teamScope, teamIds, currentUserId, q, agentNameById]);
 
   const groups = useMemo(() => groupByBucket(filtered, new Date()), [filtered]);
 
   const bucket = urlState.bucket || "all";
   const filtersActive =
-    q !== "" || urlState.status !== FOLLOWUPS_DEFAULTS.status || urlState.agent !== "" ||
+    q !== "" || urlState.agent !== "" ||
     urlState.type !== "" || urlState.region !== "" || bucket !== "all" || specificOnly || teamScope;
 
   const isEmpty =
@@ -330,12 +326,6 @@ export function FollowUpQueue({
             onChange={(e) => setUrlState({ q: e.target.value })}
           />
         </div>
-        <MultiSelect
-          label="Status"
-          options={FOLLOWUP_STATUSES.map((s) => ({ value: s, count: eligible.filter((l) => l.status === s).length }))}
-          selected={statusSel}
-          onChange={(next) => setUrlState({ status: next.join(",") })}
-        />
         <MultiSelect
           label="Agent"
           options={agentOptions}
