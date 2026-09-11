@@ -1,5 +1,6 @@
 import { zipFromMap } from "@/lib/site-studio/zip";
 import { buildDossier } from "@/lib/site-studio/run/dossier";
+import { rewriteFormTargets, isSweepableFile } from "./formRelay";
 import { generatePage, generateNewPage, generateComponents, type AiCall } from "./generate";
 import type { TemplateBundle } from "./templates";
 import type { BusinessBrief, SuppliedImage, SharedComponents } from "./prompt";
@@ -68,6 +69,7 @@ export function buildBrief(lead: Record<string, unknown>): BusinessBrief {
     color_scheme: d.color_scheme,
     years_experience: d.years_experience,
     about_business: d.about_business,
+    ...(d.social_profiles?.length ? { social_profiles: d.social_profiles } : {}),
   };
 }
 
@@ -400,6 +402,17 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
    *  caller wants no live output, so the calls stay non-streaming. */
   const chunkSink = (file: string) => (onOutput ? (delta: string) => onOutput(file, delta) : undefined);
 
+  /**
+   * Form Relay safety net (the deterministic half — the prompt carries the
+   * instruction half): with an endpoint on the brief, every generated text
+   * file is swept so a stale web3forms URL or the template's own access_key
+   * cannot survive into the zip, whatever the model did. Idempotent, so
+   * carried pages from a previous attempt sweep harmlessly again.
+   */
+  const relay = brief.form_relay;
+  const sweep = (file: string, source: string): string =>
+    relay && isSweepableFile(file) ? rewriteFormTargets(source, relay) : source;
+
   const components = findComponentsFile(template);
   // A components.html is a page FILE but never a page of the site — it must
   // not be selectable, and must not count toward "did any page succeed".
@@ -428,7 +441,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
    */
   const withCarried = (file: string, planned: PageState): PageState => {
     const prev = resume?.[file];
-    return prev?.status === "ok" && prev.html ? { ...planned, status: "ok", html: prev.html } : planned;
+    return prev?.status === "ok" && prev.html ? { ...planned, status: "ok", html: sweep(file, prev.html) } : planned;
   };
 
   const pages: Record<string, PageState> = {};
@@ -463,10 +476,11 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
         { aiCall },
         { brief, images, file: components.file, source: components.source, siteFiles, onChunk: chunkSink(components.file) },
       );
+      const sweptComponents = outcome.ok ? sweep(components.file, outcome.html) : "";
       pages[components.file] = outcome.ok
-        ? { status: "ok", kind: "component", name: "Shared components", html: outcome.html }
+        ? { status: "ok", kind: "component", name: "Shared components", html: sweptComponents }
         : { status: "failed", kind: "component", name: "Shared components", ...failureFields(outcome) };
-      if (outcome.ok) shared = { file: components.file, source: outcome.html };
+      if (outcome.ok) shared = { file: components.file, source: sweptComponents };
       await emit();
     }
   }
@@ -495,7 +509,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
       onChunk: chunkSink(file),
     });
     pages[file] = outcome.ok
-      ? { status: "ok", kind: "existing", html: outcome.html }
+      ? { status: "ok", kind: "existing", html: sweep(file, outcome.html) }
       : { status: "failed", kind: "existing", ...failureFields(outcome) };
     await emit();
   };
@@ -516,7 +530,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
       onChunk: chunkSink(file),
     });
     pages[file] = outcome.ok
-      ? { status: "ok", kind: "new", name, html: outcome.html }
+      ? { status: "ok", kind: "new", name, html: sweep(file, outcome.html) }
       : { status: "failed", kind: "new", name, ...failureFields(outcome) };
     await emit();
   };
@@ -535,6 +549,18 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
   const baseAssets = { ...template.assets };
   if (components && template.pages[components.file] !== undefined && pages[components.file]?.status !== "ok") {
     baseAssets[components.file] = new TextEncoder().encode(components.source);
+  }
+
+  // Template assets ship verbatim — including scripts that may post forms
+  // (a template script.js calling web3forms) — so they get the same
+  // deterministic sweep the generated pages did.
+  if (relay) {
+    const dec = new TextDecoder();
+    const enc = new TextEncoder();
+    for (const f of Object.keys(baseAssets)) {
+      if (!isSweepableFile(f)) continue;
+      baseAssets[f] = enc.encode(rewriteFormTargets(dec.decode(baseAssets[f]), relay));
+    }
   }
 
   return { ok: true, pages, zipBytes: assembleZip(baseAssets, pages) };
@@ -572,12 +598,20 @@ export interface RegeneratePageArgs {
 export async function regeneratePage(args: RegeneratePageArgs) {
   const { aiCall, brief, images, template, siteFiles, file, kind, name, components, instruction, onChunk } = args;
 
+  // Same Form Relay safety net as a full run's pages — a regenerated page
+  // must not be the one place a stale form destination can slip back in.
+  const relay = brief.form_relay;
+  const sweepOutcome = <T extends { ok: boolean; html?: string }>(o: T): T =>
+    o.ok && typeof o.html === "string" && relay && isSweepableFile(file)
+      ? { ...o, html: rewriteFormTargets(o.html, relay) }
+      : o;
+
   if (kind === "component") {
     const original = findComponentsFile(template);
     if (!original || original.file !== file) {
       return { ok: false as const, error: `${file}: not this template's components file.` };
     }
-    return generateComponents({ aiCall }, {
+    return sweepOutcome(await generateComponents({ aiCall }, {
       brief,
       images,
       file,
@@ -585,7 +619,7 @@ export async function regeneratePage(args: RegeneratePageArgs) {
       siteFiles,
       instruction,
       onChunk,
-    });
+    }));
   }
 
   if (kind === "existing") {
@@ -593,7 +627,7 @@ export async function regeneratePage(args: RegeneratePageArgs) {
     if (pageHtml === undefined) {
       return { ok: false as const, error: `${file}: not found in this template.` };
     }
-    return generatePage({ aiCall }, { brief, images, pageFile: file, pageHtml, siteFiles, components, instruction, onChunk });
+    return sweepOutcome(await generatePage({ aiCall }, { brief, images, pageFile: file, pageHtml, siteFiles, components, instruction, onChunk }));
   }
 
   const componentsFile = findComponentsFile(template)?.file;
@@ -604,7 +638,7 @@ export async function regeneratePage(args: RegeneratePageArgs) {
     file: f,
     html: template.pages[f],
   }));
-  return generateNewPage({ aiCall }, {
+  return sweepOutcome(await generateNewPage({ aiCall }, {
     brief,
     images,
     pageName: name ?? file,
@@ -614,5 +648,5 @@ export async function regeneratePage(args: RegeneratePageArgs) {
     components,
     instruction,
     onChunk,
-  });
+  }));
 }

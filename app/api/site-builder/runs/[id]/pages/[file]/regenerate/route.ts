@@ -81,6 +81,11 @@ export async function POST(req: Request, ctx: Ctx) {
   }
 
   const brief = buildBrief(lead as Record<string, unknown>);
+  // Same Form Relay endpoint the full run's brief carried — a regenerated
+  // page keeps posting its forms to the lead's own endpoint. Fail-soft.
+  const { ensureFormEndpoint } = await import("@/lib/site-builder/formRelay");
+  const relay = await ensureFormEndpoint(admin, lead as Record<string, unknown>, (run.created_by as string | null) ?? null);
+  if (relay) brief.form_relay = relay;
   const images = Array.isArray(run.images) ? (run.images as SuppliedImage[]) : [];
   // The site's PAGES — the components entry is not a page and must not
   // appear in "link only to these".

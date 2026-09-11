@@ -41,6 +41,11 @@ export interface Dossier {
   design_references: string[];
   add_ons: string[];
   client_photos: string[];
+  /** The business's own social profiles, for the site's social links/icons.
+   *  `platform` is already resolved — an "Other" entry carries its label.
+   *  Optional in the TYPE (older fixtures/casts predate it) but always set
+   *  by buildDossier. */
+  social_profiles?: { platform: string; url: string }[];
 }
 
 const arr = (v: unknown): string[] =>
@@ -102,6 +107,26 @@ export function normalisePhone(raw: unknown): { display: string; href: string | 
   return { display, href: isDialable(digits) ? `tel:${digits}` : null };
 }
 
+/** leads.social_profiles ([{platform, url, label?}]) → the dossier's resolved
+ *  list. Entries without a usable http(s) URL are dropped — a half-filled row
+ *  must never become a dead social icon on a live site. */
+function socialProfiles(v: unknown): { platform: string; url: string }[] {
+  if (!Array.isArray(v)) return [];
+  const out: { platform: string; url: string }[] = [];
+  for (const item of v) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const url = typeof row.url === "string" ? row.url.trim() : "";
+    if (!/^https?:\/\//i.test(url)) continue;
+    const raw = typeof row.platform === "string" ? row.platform.trim() : "";
+    const label = typeof row.label === "string" ? row.label.trim() : "";
+    const platform = raw === "Other" ? label || "Other" : raw;
+    if (!platform) continue;
+    out.push({ platform, url });
+  }
+  return out;
+}
+
 /** Shape-loose on purpose: the caller passes a raw lead row. */
 export function buildDossier(lead: Record<string, unknown>): Dossier {
   const phone = normalisePhone(lead.business_phone);
@@ -131,5 +156,6 @@ export function buildDossier(lead: Record<string, unknown>): Dossier {
     design_references: arr(lead.design_reference_links),
     add_ons: addOns,
     client_photos: arr(lead.image_links),
+    social_profiles: socialProfiles(lead.social_profiles),
   };
 }

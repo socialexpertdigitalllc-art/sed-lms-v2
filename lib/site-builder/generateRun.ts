@@ -240,6 +240,13 @@ export async function generateRunNow(
 
     const bundle = await loadTemplateBundle(admin, run.template_id as string);
     const brief = buildBrief(lead as Record<string, unknown>);
+    // Form Relay: every generation carries the lead's own endpoint (created
+    // here on first use), so the site's forms are live the moment it deploys.
+    // Fail-soft by construction — ensureFormEndpoint never throws, and a null
+    // just means this run's prompt carries no endpoint (the sweep is skipped).
+    const { ensureFormEndpoint } = await import("./formRelay");
+    const relay = await ensureFormEndpoint(admin, lead as Record<string, unknown>, (run.created_by as string | null) ?? null);
+    if (relay) brief.form_relay = relay;
     // Operator's free-text instructions for THIS run (multilanguage site,
     // layout wishes, ...) ride on options and reach every prompt via the brief.
     const rawInstructions = (run.options as { instructions?: unknown } | null)?.instructions;
