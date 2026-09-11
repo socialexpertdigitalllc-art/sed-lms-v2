@@ -29,6 +29,37 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.18.0",
+    date: "2026-09-11",
+    title: "Forms wired in at generation, and a live inbox",
+    changes: [
+      {
+        kind: "feature",
+        text: "Every website generation now sets its forms up by itself. Starting a build creates (or reuses) the lead's Form Relay endpoint and hands the submit URL and key to the generator, and a deterministic sweep over the finished files guarantees no template key or web3forms address survives — so the contact form works the moment the site deploys, with no per-client setup.",
+      },
+      {
+        kind: "feature",
+        text: "The lead's social profiles reach the website. Profiles captured on the lead — including ones added after submission — go into the generation brief: the site's social icons link to the business's real accounts, and icons for networks it doesn't have are removed instead of left pointing at the template's.",
+      },
+      {
+        kind: "improvement",
+        text: "The Forms inbox is live: a submission arriving while the tab is open appears in the table by itself, no refresh — and the sidebar badge moves with it.",
+      },
+      {
+        kind: "feature",
+        text: "Filter leads by platform. A Platform filter on the leads table lists whatever platforms the leads actually carry (Google, Yelp, and so on — newly submitted ones appear on their own), with a count for each and a \"No platform\" entry.",
+      },
+      {
+        kind: "improvement",
+        text: "The Follow-ups page shows Ready leads only — it is the calling queue, and parked or closed statuses no longer dilute it. The sidebar badge counts the same population.",
+      },
+      {
+        kind: "improvement",
+        text: "One style for the lead screen's side-card buttons: Contracts, Website forms, Follow-ups and Tickets now share the same compact create button instead of four different looks.",
+      },
+    ],
+  },
+  {
     version: "2.17.0",
     date: "2026-09-11",
     title: "The template sales picked, and a faster calling queue",
