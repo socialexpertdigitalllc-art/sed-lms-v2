@@ -7,8 +7,9 @@ import { itemProgress, isTicketEligible, isOverdue } from "@/lib/tickets/logic";
 import { usePermissions } from "@/hooks/usePermissions";
 import { TicketStatusChip, TicketPriorityBadge, OverdueBadge } from "./TicketStatusChip";
 import { TicketModal } from "./TicketModal";
-import { Ticket as TicketIcon } from "lucide-react";
+import { Ticket as TicketIcon, Plus } from "lucide-react";
 import { CollapsibleCard } from "@/components/common/CollapsibleCard";
+import { btnSecondarySm } from "@/components/common/buttons";
 
 export function TicketsCard({
   leadId,
@@ -34,11 +35,10 @@ export function TicketsCard({
         summary={tickets.length === 0 ? "none yet" : openCount > 0 ? `${openCount} open` : "all resolved"}
         action={
           has("tickets.create") && isTicketEligible(leadStatus) ? (
-            <button
-              onClick={() => setOpen(true)}
-              className="bg-accent text-white text-[11px] font-semibold rounded-md px-2.5 py-1 hover:bg-accent-ink"
-            >
-              New Ticket
+            // Same style as every other side-card create button (one visual
+            // language for the right rail — see LeadContractsCard).
+            <button type="button" onClick={() => setOpen(true)} className={btnSecondarySm}>
+              <Plus className="h-3.5 w-3.5" /> Ticket
             </button>
           ) : null
         }
