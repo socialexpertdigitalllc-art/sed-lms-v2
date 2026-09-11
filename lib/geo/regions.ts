@@ -1,8 +1,10 @@
-import { areaCodeOf, stateOfPhone } from "@/lib/geo/areaCodes";
+import { areaCodeOf, stateOfPhone, codeOfState } from "@/lib/geo/areaCodes";
 
 export const UNKNOWN_REGION = "Unknown";
 
-export interface HasPhone { business_phone: string | null }
+/** `custom_area` is the manual override for the customer whose phone's area
+ *  code is not where they actually are — when set, it wins everywhere. */
+export interface HasPhone { business_phone: string | null; custom_area?: string | null }
 export interface RegionFacet {
   region: string;
   stateCode: string | null;
@@ -12,13 +14,21 @@ export interface RegionFacet {
 }
 
 export function leadRegion(lead: HasPhone): string {
-  return stateOfPhone(lead.business_phone)?.state ?? UNKNOWN_REGION;
+  return stateOf(lead)?.state ?? UNKNOWN_REGION;
+}
+
+/** The state a lead counts under, override-aware — one resolver shared by
+ *  leadRegion and the facet builder so the filter and the counts agree. */
+function stateOf(lead: HasPhone): { state: string; stateCode: string | null } | null {
+  const manual = lead.custom_area?.trim();
+  if (manual) return { state: manual, stateCode: codeOfState(manual) };
+  return stateOfPhone(lead.business_phone);
 }
 
 export function buildRegionFacets(leads: HasPhone[]): RegionFacet[] {
   const byRegion = new Map<string, { stateCode: string | null; count: number; codeCounts: Map<string, number> }>();
   for (const lead of leads) {
-    const st = stateOfPhone(lead.business_phone);
+    const st = stateOf(lead);
     const region = st?.state ?? UNKNOWN_REGION;
     const ac = areaCodeOf(lead.business_phone);
     let entry = byRegion.get(region);

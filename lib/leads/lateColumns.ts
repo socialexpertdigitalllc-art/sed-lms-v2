@@ -1,5 +1,5 @@
 /**
- * Columns added by migrations 0073 and 0074, tolerated as absent.
+ * Columns added by migrations 0073, 0074 and 0077, tolerated as absent.
  *
  * Code reaches production by a git push; migrations are applied by hand. The
  * window between the two is real, and an unapplied migration must not turn
@@ -15,6 +15,8 @@ export const LATE_LEAD_COLUMNS = [
   "social_profiles",
   "follow_up_set_at",
   "recommended_template_id",
+  "custom_area",
+  "category",
 ] as const;
 
 /**

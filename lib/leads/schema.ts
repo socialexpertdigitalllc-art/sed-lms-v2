@@ -24,6 +24,8 @@ export const leadFieldsSchema = z.object({
 
   site_type: optional(z.enum(SITE_TYPES).nullable()),
   platform: optStr,
+  custom_area: optStr,
+  category: optStr,
   services: z.array(z.string()).nullable().optional(),
   service_areas: z.array(z.string()).nullable().optional(),
   has_service_areas: z.boolean().nullable().optional(),

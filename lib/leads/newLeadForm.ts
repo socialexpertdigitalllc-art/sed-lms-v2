@@ -30,6 +30,11 @@ export interface NewLeadFormState {
   business_email: string;
   platform: string;
   other_platform: string;
+  /** Manual area (US state) override — the customer whose phone's area code
+   *  is not where they actually are. Optional; empty = derive from phone. */
+  custom_area: string;
+  /** Business category from the shared catalog (or newly added to it). */
+  category: string;
   business_profile_link: string;
   map_embed_link: string;
   has_service_areas: "" | "Yes" | "No";
@@ -78,6 +83,8 @@ export function emptyNewLead(status: string): NewLeadFormState {
     business_email: "",
     platform: "",
     other_platform: "",
+    custom_area: "",
+    category: "",
     business_profile_link: "",
     map_embed_link: "",
     has_service_areas: "",
@@ -247,6 +254,8 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     business_email: f.no_email ? null : f.business_email.trim() || null,
     business_profile_link: f.business_profile_link.trim() || null,
     platform: f.platform === "Other" ? f.other_platform.trim() || null : f.platform || null,
+    custom_area: f.custom_area.trim() || null,
+    category: f.category.trim() || null,
     map_embed_link: f.map_embed_link.trim() || null,
     has_service_areas: f.has_service_areas === "" ? null : f.has_service_areas === "Yes",
     service_areas: areas.length ? areas : null,

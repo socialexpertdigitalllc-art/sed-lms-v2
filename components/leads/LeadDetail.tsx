@@ -31,6 +31,8 @@ import { ContractSentBadge } from "@/components/contracts/ContractSentBadge";
 import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 import { ColorSchemeAdvice } from "@/components/leads/ColorSchemeField";
 import { SocialProfilesRow } from "@/components/leads/SocialProfilesRow";
+import { AreaChip, CategoryChip } from "@/components/leads/HeaderChips";
+import { stateOfPhone } from "@/lib/geo/areaCodes";
 import { RecommendedTemplateField } from "@/components/leads/RecommendedTemplateField";
 import { ColorSchemeSwatches } from "@/components/leads/ColorSchemeSwatches";
 import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
@@ -210,9 +212,22 @@ export function LeadDetail({
             </Link>
             <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-accent-ink">Lead</p>
             <h1 className="font-display text-2xl font-semibold leading-tight text-text">{lead.business_name}</h1>
-            <div className="mt-1.5 flex items-center gap-2">
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill status={lead.status} />
               {hasContractSent && <ContractSentBadge />}
+              {/* The lead's area (manual override wins; else derived from the
+                  phone's area code) and category, editable in place. */}
+              <AreaChip
+                value={lead.custom_area ?? null}
+                derived={stateOfPhone(lead.business_phone)?.state ?? null}
+                readOnly={!canEdit}
+                onSelect={(v) => patch({ custom_area: v })}
+              />
+              <CategoryChip
+                value={lead.category ?? null}
+                readOnly={!canEdit}
+                onSelect={(v) => patch({ category: v })}
+              />
               <span className="font-mono text-xs text-text-faint">#{lead.id.slice(0, 8)}</span>
             </div>
           </div>

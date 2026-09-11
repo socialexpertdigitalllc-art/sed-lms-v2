@@ -80,3 +80,11 @@ export function stateOfPhone(phone: string | null | undefined): { state: string;
   const ac = areaCodeOf(phone);
   return ac ? AREA_CODE_STATE[ac] ?? null : null;
 }
+
+/** Every selectable area (US states + DC), alphabetical - the option list for
+ *  the manual area override (leads.custom_area). */
+export const US_STATES: string[] = Object.keys(STATE_CODE).sort();
+
+export function codeOfState(state: string | null | undefined): string | null {
+  return state ? STATE_CODE[state] ?? null : null;
+}

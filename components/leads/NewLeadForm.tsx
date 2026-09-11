@@ -44,6 +44,8 @@ import { ChipGroup } from "@/components/forms/ChipGroup";
 import { DynamicList } from "@/components/forms/DynamicList";
 import { SocialProfilesField } from "@/components/forms/SocialProfilesField";
 import { TemplateRecommendation } from "@/components/leads/TemplateRecommendation";
+import { AreaChip, CategoryChip } from "@/components/leads/HeaderChips";
+import { stateOfPhone } from "@/lib/geo/areaCodes";
 import { DateTimeField } from "@/components/common/DateTimeField";
 import { ConditionalBlock } from "@/components/forms/ConditionalBlock";
 import { RatingGroup } from "@/components/forms/RatingGroup";
@@ -449,7 +451,27 @@ export function NewLeadForm({
             </SectionCard>
           )}
 
-          <SectionCard n={1} icon={Building2} title="Client Identity" subtitle="Who the business is" done={sectionDone("identity")} delay={showAssignment ? 60 : 0}>
+          <SectionCard
+            n={1}
+            icon={Building2}
+            title="Client Identity"
+            subtitle="Who the business is"
+            done={sectionDone("identity")}
+            delay={showAssignment ? 60 : 0}
+            // Dedicated header chips, not ordinary fields: the customer's real
+            // area when it differs from the phone's area code, and the business
+            // category (picked from — or added to — the shared catalog).
+            headerExtra={
+              <>
+                <AreaChip
+                  value={f.custom_area || null}
+                  derived={stateOfPhone(f.business_phone)?.state ?? null}
+                  onSelect={(v) => set("custom_area", v ?? "")}
+                />
+                <CategoryChip value={f.category || null} onSelect={(v) => set("category", v ?? "")} />
+              </>
+            }
+          >
             <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
               <F error={errors.site_type} label="Site Type" required>
                 <RadioPillGroup options={SITE_TYPES} value={f.site_type} onChange={(v) => set("site_type", v)} />

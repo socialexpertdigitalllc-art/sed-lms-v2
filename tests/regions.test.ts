@@ -9,6 +9,21 @@ describe("leadRegion", () => {
     expect(leadRegion(L(null))).toBe(UNKNOWN_REGION);
     expect(leadRegion(L("(000) 000-0000"))).toBe(UNKNOWN_REGION);
   });
+  it("a manual area override wins over the phone-derived state", () => {
+    expect(leadRegion({ business_phone: "(415) 555-0101", custom_area: "Texas" })).toBe("Texas");
+    expect(leadRegion({ business_phone: null, custom_area: "Texas" })).toBe("Texas");
+    // Blank/whitespace override falls back to the phone.
+    expect(leadRegion({ business_phone: "(415) 555-0101", custom_area: "  " })).toBe("California");
+  });
+  it("the facets group an overridden lead under its manual area, with its state code", () => {
+    const f = buildRegionFacets([
+      { business_phone: "(415) 555-0101", custom_area: "Texas" },
+      L("(214) 555-0005"),
+    ]);
+    expect(f.map((x) => x.region)).toEqual(["Texas"]);
+    expect(f[0].leadCount).toBe(2);
+    expect(f[0].stateCode).toBe("TX");
+  });
 });
 describe("buildRegionFacets", () => {
   const leads = [

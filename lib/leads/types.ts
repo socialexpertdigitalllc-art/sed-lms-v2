@@ -93,6 +93,10 @@ export interface Lead {
   /** Anything the agent promised the client that the build has to honour. */
   developer_instructions?: string | null;
   social_profiles?: SocialProfile[] | null;
+  /** Manual area (US state) override — wins over the phone-derived region. */
+  custom_area?: string | null;
+  /** Business category name from the shared lead_categories catalog. */
+  category?: string | null;
   /** The template the agent selected with the client (builder_templates.id). */
   recommended_template_id?: string | null;
   created_by: string | null;

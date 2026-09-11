@@ -31,6 +31,7 @@ export function SectionCard({
   subtitle,
   done,
   delay,
+  headerExtra,
   children,
 }: {
   n: number;
@@ -39,6 +40,9 @@ export function SectionCard({
   subtitle: string;
   done: boolean;
   delay: number;
+  /** Rendered at the right edge of the header — dedicated controls that
+   *  belong to the section as a whole (e.g. the Area/Category chips). */
+  headerExtra?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -66,6 +70,9 @@ export function SectionCard({
           </h2>
           <p className="text-xs text-text-muted">{subtitle}</p>
         </div>
+        {headerExtra && (
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">{headerExtra}</div>
+        )}
       </header>
       <div className="space-y-5 border-t border-border-subtle px-6 py-5">{children}</div>
     </section>
