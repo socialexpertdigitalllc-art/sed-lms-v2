@@ -60,7 +60,7 @@ import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", fu: "", region: "", tags: "", month: "", from: "", to: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tags: "", month: "", from: "", to: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
 
 export function LeadsTable({
@@ -149,6 +149,9 @@ export function LeadsTable({
   const tagSel = useMemo(() => (urlState.tags ? urlState.tags.split(",") : []), [urlState.tags]);
   const agentSel = useMemo(() => (agent ? agent.split(",") : []), [agent]);
   const typeSel = useMemo(() => (type ? type.split(",") : []), [type]);
+  // Platform filter keys are the lowercased trimmed value, so "Google" and
+  // "GOOGLE" (both live in the data) collapse into one entry.
+  const platformSel = useMemo(() => (urlState.platform ? urlState.platform.split(",") : []), [urlState.platform]);
   // The follow-up status pill (Pickup / No Pickup) as a filter.
   const fuSel = useMemo(() => (urlState.fu ? urlState.fu.split(",") : []), [urlState.fu]);
   // A closer's table defaults to THEIR OWN leads; the team is opt-in behind
@@ -164,25 +167,26 @@ export function LeadsTable({
   // Any non-default filter — drives a visible "Clear filters" escape so a
   // persisted filter can never silently hide leads.
   const filtersActive =
-    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "" || urlState.from !== "" || urlState.to !== "" || teamScope;
+    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.platform !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "" || urlState.from !== "" || urlState.to !== "" || teamScope;
   const clearFilters = () =>
-    setUrlState({ q: "", status: "All", agent: "", type: "", fu: "", region: "", tags: "", month: "", from: "", to: "", scope: "", page: "0" });
+    setUrlState({ q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tags: "", month: "", from: "", to: "", scope: "", page: "0" });
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
     return id ? [{ id, desc: dir !== "asc" }] : [];
   }, [sort]);
   const pagination = useMemo(() => ({ pageIndex: Math.max(0, Number(page) || 0), pageSize: Math.max(1, Number(size) || 15) }), [page, size]);
-  const columnVisibility = useMemo<VisibilityState>(() => ({ ...(columnPrefs.leads ?? {}), region: false, tags: false, fu_status: false }), [columnPrefs]);
+  const columnVisibility = useMemo<VisibilityState>(() => ({ ...(columnPrefs.leads ?? {}), region: false, tags: false, fu_status: false, platform: false }), [columnPrefs]);
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const f: ColumnFiltersState = [];
     if (status !== "All") f.push({ id: "status", value: status });
     if (agentSel.length) f.push({ id: "agent", value: agentSel });
     if (typeSel.length) f.push({ id: "site_type", value: typeSel });
+    if (platformSel.length) f.push({ id: "platform", value: platformSel });
     if (fuSel.length) f.push({ id: "fu_status", value: fuSel });
     if (regionSel.length) f.push({ id: "region", value: regionSel });
     if (tagSel.length) f.push({ id: "tags", value: tagSel });
     return f;
-  }, [status, agentSel, typeSel, fuSel, regionSel, tagSel]);
+  }, [status, agentSel, typeSel, platformSel, fuSel, regionSel, tagSel]);
 
   const scopedLeads = useMemo(
     () =>
@@ -207,6 +211,28 @@ export function LeadsTable({
     for (const l of scopedLeads) set.add((l.agent_id && agentNameById[l.agent_id]) || "Unassigned");
     return [...set].sort();
   }, [scopedLeads, agentNameById]);
+
+  // Dynamic platform facets: whatever values the visible leads actually carry,
+  // case-insensitively collapsed ("Google"/"GOOGLE" are one entry), so a newly
+  // submitted platform shows up in the list by itself. "No platform" covers
+  // leads whose field is empty.
+  const platformOptions = useMemo(() => {
+    const seen = new Map<string, { label: string; count: number }>();
+    let none = 0;
+    for (const l of scopedLeads) {
+      const raw = (l.platform ?? "").trim();
+      if (!raw) { none += 1; continue; }
+      const key = raw.toLowerCase();
+      const cur = seen.get(key);
+      if (cur) cur.count += 1;
+      else seen.set(key, { label: raw, count: 1 });
+    }
+    const opts = [...seen.entries()]
+      .map(([value, { label, count }]) => ({ value, label, count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    if (none > 0) opts.push({ value: "__none", label: "No platform", count: none });
+    return opts;
+  }, [scopedLeads]);
 
   const regionFacets = useMemo(() => buildRegionFacets(scopedLeads), [scopedLeads]);
   const fuCounts = useMemo(() => {
@@ -310,6 +336,16 @@ export function LeadsTable({
         accessorFn: (row) => leadRegion(row),
         filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
         enableSorting: false,
+      },
+      {
+        // Filter carrier only (like fu_status): the platform value already
+        // renders as a plain field on the detail page; here it only needs to
+        // be filterable. Keys are lowercased ("__none" = empty field).
+        id: "platform",
+        accessorFn: (row) => (row.platform ?? "").trim().toLowerCase() || "__none",
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
+        enableSorting: false,
+        enableHiding: false,
       },
       {
         id: "tags",
@@ -609,6 +645,12 @@ export function LeadsTable({
           options={SITE_TYPES.map((t) => ({ value: t }))}
           selected={typeSel}
           onChange={(next) => setUrlState({ type: next.join(","), page: "0" })}
+        />
+        <MultiSelect
+          label="Platform"
+          options={platformOptions}
+          selected={platformSel}
+          onChange={(next) => setUrlState({ platform: next.join(","), page: "0" })}
         />
         <MultiSelect
           label="Follow-up"
