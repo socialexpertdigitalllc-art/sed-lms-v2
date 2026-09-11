@@ -12,6 +12,7 @@ const COUNT_TABLES = [
   "feedback",
   "pre_leads",
   "payment_links",
+  "form_submissions",
   "profiles",
   "departments",
   "website_addons",

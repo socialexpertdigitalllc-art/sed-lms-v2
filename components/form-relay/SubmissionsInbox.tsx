@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import { Inbox as InboxIcon, Search } from "lucide-react";
 import { Panel, EmptyPanel } from "@/components/common/Panel";
 import { Select } from "@/components/common/Select";
@@ -55,6 +56,40 @@ export function SubmissionsInbox({ endpoints, canManage }: { endpoints: Endpoint
     // synchronous effect body (repo pattern — see hooks/useNavCounts.ts).
     void (async () => { await load(); })();
   }, [load]);
+
+  // Live inbox: a submission landing while this tab is open appears without a
+  // reload. postgres_changes on form_submissions (policy + publication:
+  // migration 0076) is only a POKE — rows still come through the API above,
+  // which enforces the caller's scope. The ref keeps the subscription stable
+  // across filter changes instead of resubscribing per keystroke.
+  const loadRef = useRef(load);
+  useEffect(() => { loadRef.current = load; }, [load]);
+  useEffect(() => {
+    const supabase = createClient();
+    let t: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+    const channel = supabase.channel("rt-form-submissions");
+
+    // RLS-gated postgres_changes require the realtime socket to carry the
+    // user's JWT (see hooks/useRealtimeRefresh.ts).
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (cancelled) return;
+      if (data.session) supabase.realtime.setAuth(data.session.access_token);
+      channel
+        .on("postgres_changes", { event: "*", schema: "public", table: "form_submissions" }, () => {
+          if (t) clearTimeout(t);
+          t = setTimeout(() => void loadRef.current(), 400);
+        })
+        .subscribe();
+    })();
+
+    return () => {
+      cancelled = true;
+      if (t) clearTimeout(t);
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // The bell links to /forms?submission=<id>; that row may be outside the
   // current filters, so it is fetched on its own when not in the list.
