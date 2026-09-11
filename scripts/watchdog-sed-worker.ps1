@@ -1,8 +1,10 @@
 # SED-LMS agent-worker watchdog (ASCII only - PS 5.1 reads BOM-less files as ANSI)
 #
 # REPO COPY for review/history. The DEPLOYED copy the Scheduled Task actually
-# runs is C:\Users\pc\.pm2\watchdog-sed-worker.ps1 on the office Windows box -
+# runs is <user home>\.pm2\watchdog-sed-worker.ps1 on the worker Windows box -
 # after editing here, copy it there. Setup + operation: docs/sops/ticket-agent-worker.md.
+# Paths derive from the running user's profile, so the same file works on any
+# worker box (it moved machines on 2026-09-11).
 #
 # Runs every 3 minutes from the Scheduled Task "SED-LMS-agent-worker-watchdog".
 # If nothing is listening on port 3000 (the pm2-served local LMS that feeds the
@@ -10,23 +12,24 @@
 # dump once the app is confirmed back up.
 #
 # Safety valves:
-#  - touch C:\Users\pc\.pm2\watchdog-disabled to pause the watchdog during
+#  - touch <user home>\.pm2\watchdog-disabled to pause the watchdog during
 #    deliberate maintenance (stop/build/start); delete it to resume.
 #  - it refuses to restart while D:\sed-lms-v2\.next\BUILD_ID is missing
 #    (a build is in progress / was wiped - restarting would crash-loop).
 #  - 10-minute cooldown between restart attempts so a slow cold start is not
 #    mistaken for another outage.
-# Log: C:\Users\pc\.pm2\watchdog-sed-worker.log (healthy probes are not logged).
+# Log: <user home>\.pm2\watchdog-sed-worker.log (healthy probes are not logged).
 
 param(
     [int]$Port = 3000,
     [switch]$DryRun
 )
 
-$pm2      = 'C:\Users\pc\AppData\Roaming\npm\pm2.cmd'
-$log      = 'C:\Users\pc\.pm2\watchdog-sed-worker.log'
-$state    = 'C:\Users\pc\.pm2\watchdog-sed-worker.state'
-$disable  = 'C:\Users\pc\.pm2\watchdog-disabled'
+$pm2Home  = Join-Path $env:USERPROFILE '.pm2'
+$pm2      = Join-Path $env:APPDATA 'npm\pm2.cmd'
+$log      = Join-Path $pm2Home 'watchdog-sed-worker.log'
+$state    = Join-Path $pm2Home 'watchdog-sed-worker.state'
+$disable  = Join-Path $pm2Home 'watchdog-disabled'
 $buildId  = 'D:\sed-lms-v2\.next\BUILD_ID'
 
 function Write-Log([string]$msg) {

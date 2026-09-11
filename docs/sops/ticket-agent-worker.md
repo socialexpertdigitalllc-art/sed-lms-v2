@@ -4,6 +4,16 @@ The Ticket Agent ("Send to AI" on tickets) runs Antigravity's `agy` CLI on the
 office Windows box — the ONLY machine with the Antigravity sign-in. Prod never
 runs the agent; it only creates runs and deploys approved results.
 
+> **Machine move (2026-09-11):** the worker box is now the operator's new
+> machine (user `Aqib Hassan`). Every `C:\Users\pc\...` path below reads as
+> `%USERPROFILE%\...` on the current box; the deployed watchdog/ensure scripts
+> now derive their paths from the running user's profile. Two box-specific
+> facts: `.env.local`'s `AGY_BIN` must point at THIS machine's agy.exe, and
+> `.next` is a directory junction onto the internal NVMe
+> (`%LOCALAPPDATA%\sed-lms\.next`) because the repo lives on a USB HDD that
+> drops out under a build's write load — never replace the junction with a
+> plain folder.
+
 ## One-time setup (Windows box)
 
 0. Prod database: migration `0071_site_agent_runs.sql` must be applied before

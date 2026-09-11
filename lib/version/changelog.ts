@@ -29,6 +29,25 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.19.0",
+    date: "2026-09-11",
+    title: "Area & category chips, and a faster way in",
+    changes: [
+      {
+        kind: "feature",
+        text: "The customer's real area, when their phone says otherwise. A dedicated Area chip — in the Client Identity header on the new-lead form and in the lead's own title band — sets the actual state for a customer who kept a number from somewhere else. The Region filter and its counts follow the override; leave it unset and the area keeps deriving from the phone as before.",
+      },
+      {
+        kind: "feature",
+        text: "Lead categories, built by the people submitting leads. A Category chip beside the Area chip picks from a shared list — and when the right category isn't there yet, typing it adds it to the list for everyone, right from the picker. The list starts empty and grows with use.",
+      },
+      {
+        kind: "improvement",
+        text: "New lead in one click: a + on the sidebar's Leads item opens the submission form directly, without going through the leads table first.",
+      },
+    ],
+  },
+  {
     version: "2.18.0",
     date: "2026-09-11",
     title: "Forms wired in at generation, and a live inbox",
