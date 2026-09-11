@@ -8,7 +8,7 @@ import {
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
   Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer, Images,
-  ClipboardList, ChevronDown,
+  ClipboardList, ChevronDown, Plus,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -22,14 +22,17 @@ import { BrandMark } from "@/components/branding/BrandMark";
 import type { Branding } from "@/lib/settings/appSettings";
 
 type NavChild = { href: string; label: string };
-type NavItem = { href: string; label: string; icon: LucideIcon; perm?: string; children?: NavChild[] };
+/** A small always-visible shortcut on the row itself (e.g. Leads' "+" that
+ *  jumps straight to the new-lead form), gated by its own permission. */
+type NavQuickAction = { href: string; label: string; perm: string };
+type NavItem = { href: string; label: string; icon: LucideIcon; perm?: string; children?: NavChild[]; quickAction?: NavQuickAction };
 
 /** Appended to MAIN only for users with a linked mailbox; badged with unread IMAP mail. */
 const MAILBOX_HREF = "/mailbox";
 
 const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, perm: "analytics.view" },
-  { href: "/leads", label: "Leads", icon: Building2, perm: "leads.view" },
+  { href: "/leads", label: "Leads", icon: Building2, perm: "leads.view", quickAction: { href: "/leads/new", label: "New lead", perm: "leads.create" } },
   { href: "/leads/follow-ups", label: "Follow-ups", icon: PhoneCall, perm: "leads.view" },
   { href: "/tickets", label: "Tickets", icon: Ticket, perm: "tickets.view" },
   { href: "/by-agent", label: "By Agent", icon: BarChart3, perm: "analytics.by_agent" },
@@ -185,6 +188,17 @@ export function Sidebar({
               tone={navCountTone(key)}
             />
           </Link>
+          {n.quickAction && showLabels && has(n.quickAction.perm) && !hasChildren && (
+            <Link
+              href={n.quickAction.href}
+              onClick={onMobileClose}
+              title={n.quickAction.label}
+              aria-label={n.quickAction.label}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-text-faint transition-colors hover:bg-surface hover:text-accent-ink"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Link>
+          )}
           {hasChildren && (
             <button
               type="button"
