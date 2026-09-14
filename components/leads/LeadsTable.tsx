@@ -206,20 +206,26 @@ export function LeadsTable({
     return c;
   }, [scopedLeads, visible]);
 
+  // FILTER OPTION LISTS BUILD FROM THE FULL VISIBLE SET (`leads`), never from
+  // `scopedLeads`: options derived from already-filtered rows disappear the
+  // moment another filter (a month, the team scope) empties them — an agent
+  // selected in the filter would vanish from the very list that selected
+  // them, with no way to see or unselect the value (bug report 2026-09-14).
   const agentOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const l of scopedLeads) set.add((l.agent_id && agentNameById[l.agent_id]) || "Unassigned");
+    for (const l of leads) set.add((l.agent_id && agentNameById[l.agent_id]) || "Unassigned");
     return [...set].sort();
-  }, [scopedLeads, agentNameById]);
+  }, [leads, agentNameById]);
 
   // Dynamic platform facets: whatever values the visible leads actually carry,
   // case-insensitively collapsed ("Google"/"GOOGLE" are one entry), so a newly
   // submitted platform shows up in the list by itself. "No platform" covers
-  // leads whose field is empty.
+  // leads whose field is empty. Built from `leads`, not `scopedLeads` — see
+  // the option-list rule above agentOptions.
   const platformOptions = useMemo(() => {
     const seen = new Map<string, { label: string; count: number }>();
     let none = 0;
-    for (const l of scopedLeads) {
+    for (const l of leads) {
       const raw = (l.platform ?? "").trim();
       if (!raw) { none += 1; continue; }
       const key = raw.toLowerCase();
@@ -232,9 +238,11 @@ export function LeadsTable({
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
     if (none > 0) opts.push({ value: "__none", label: "No platform", count: none });
     return opts;
-  }, [scopedLeads]);
+  }, [leads]);
 
-  const regionFacets = useMemo(() => buildRegionFacets(scopedLeads), [scopedLeads]);
+  // Same option-list rule: a selected region must never vanish from its own
+  // filter because a month emptied it.
+  const regionFacets = useMemo(() => buildRegionFacets(leads), [leads]);
   const fuCounts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const l of scopedLeads) {

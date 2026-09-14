@@ -29,6 +29,21 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.19.1",
+    date: "2026-09-14",
+    title: "Popups above everything, filters that keep their options",
+    changes: [
+      {
+        kind: "fix",
+        text: "Dialogs and pickers now open on top of the page, everywhere. A finished entrance animation was quietly trapping every popup inside its own section — upload confirmations opened inside the lead details instead of over the screen, and the Area/Category pickers were cut off by the header. The pickers also ride above any container now, like the calendar always did.",
+      },
+      {
+        kind: "fix",
+        text: "Filter lists on the leads table no longer lose entries: an agent, platform or region stays listed (and unselectable) even when a month or team scope leaves it with no matching leads — previously a selected agent could vanish from the very list that selected them.",
+      },
+    ],
+  },
+  {
     version: "2.19.0",
     date: "2026-09-11",
     title: "Area & category chips, and a faster way in",
