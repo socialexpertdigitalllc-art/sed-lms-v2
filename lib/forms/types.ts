@@ -15,6 +15,8 @@ export interface FormEndpointRow {
   allowed_origins: string[];
   daily_limit: number;
   success_redirect_url: string | null;
+  /** Explicit IANA zone for email timestamps; null = lead's area, then Eastern. */
+  timezone: string | null;
   status: FormEndpointStatus;
   created_by: string | null;
   created_at: string;

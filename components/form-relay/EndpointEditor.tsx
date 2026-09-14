@@ -7,6 +7,7 @@ import { Select } from "@/components/common/Select";
 import { Field, inputCls } from "@/components/forms/Field";
 import { btnPrimary, btnSecondary } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
+import { US_TIMEZONE_OPTIONS } from "@/lib/geo/timezones";
 import type { FormEndpointRow } from "@/lib/forms/types";
 
 export type LeadOption = { id: string; business_name: string; business_email: string | null };
@@ -38,6 +39,7 @@ export function EndpointEditor({
   const [origins, setOrigins] = useState((initial?.allowed_origins ?? []).join(", "));
   const [dailyLimit, setDailyLimit] = useState(initial?.daily_limit ?? 200);
   const [redirect, setRedirect] = useState(initial?.success_redirect_url ?? "");
+  const [timezone, setTimezone] = useState(initial?.timezone ?? "");
   const [paused, setPaused] = useState(initial?.status === "paused");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +64,7 @@ export function EndpointEditor({
       allowed_origins: splitList(origins),
       daily_limit: Math.max(1, Math.round(Number(dailyLimit)) || 200),
       success_redirect_url: redirect.trim() || null,
+      timezone: timezone || null,
       status: paused ? "paused" : "active",
     };
     const res = await fetch(initial ? `/api/forms/endpoints/${initial.id}` : "/api/forms/endpoints", {
@@ -104,6 +107,12 @@ export function EndpointEditor({
           <input className={inputCls} value={origins} onChange={(e) => setOrigins(e.target.value)} placeholder="acmeroofing.com, *.acmeroofing.com" />
         </Field>
         <Field label="Daily limit"><input type="number" min={1} className={inputCls} value={dailyLimit} onChange={(e) => setDailyLimit(Number(e.target.value))} /></Field>
+        <Field label="Email timezone" hint="For the received-at time in the email. Automatic = the lead's area, else Eastern.">
+          <Select className={inputCls} value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+            <option value="">— automatic —</option>
+            {US_TIMEZONE_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </Select>
+        </Field>
         <Field label="Redirect after plain HTML post" hint="Only used by non-JavaScript forms."><input className={inputCls} value={redirect} onChange={(e) => setRedirect(e.target.value)} placeholder="https://acmeroofing.com/thank-you" /></Field>
         <label className="flex items-center gap-2 text-sm text-text sm:col-span-2">
           <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} /> Paused (submissions are rejected with 410)

@@ -7,6 +7,8 @@ import { buildSmtpConfig } from "@/lib/mail/config";
 import type { ResolvedMailbox } from "@/lib/mail/types";
 import { notify } from "@/lib/notifications/notify";
 import { buildFormEmail, previewLine } from "@/lib/forms/email";
+import { leadRegion, UNKNOWN_REGION } from "@/lib/geo/regions";
+import { timezoneOfState, DEFAULT_FORM_TIMEZONE } from "@/lib/geo/timezones";
 import { isEmailAddress } from "@/lib/forms/parse";
 import { CLAIM_STALE_MS } from "@/lib/forms/types";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
@@ -100,12 +102,29 @@ async function deliverClaimed(
   const mailbox = await resolveSender(endpoint);
   if (!mailbox) return fail(admin, submission, "No sender mailbox configured");
 
+  // One lead fetch serves both the timestamp timezone (its area) and the
+  // post-send agent notification. Best-effort: a lead lookup failure must
+  // never block the email.
+  let lead: { agent_id: string | null; closed_by: string | null; business_phone: string | null; custom_area: string | null } | null = null;
+  if (submission.lead_id) {
+    try {
+      const { data } = await admin.from("leads").select("id, agent_id, closed_by, business_phone, custom_area").eq("id", submission.lead_id).maybeSingle();
+      if (data) lead = { agent_id: data.agent_id ?? null, closed_by: data.closed_by ?? null, business_phone: data.business_phone ?? null, custom_area: data.custom_area ?? null };
+    } catch { /* fall through to the default timezone */ }
+  }
+  // Endpoint's pinned zone → lead's area (custom_area / phone state) → Eastern.
+  const leadState = lead ? leadRegion({ business_phone: lead.business_phone, custom_area: lead.custom_area }) : UNKNOWN_REGION;
+  const timeZone = endpoint.timezone?.trim() || timezoneOfState(leadState) || DEFAULT_FORM_TIMEZONE;
+
   const built = buildFormEmail({
     endpointName: endpoint.name,
     subject: submission.subject || `New form submission from ${endpoint.name}`,
     payload: submission.payload ?? [],
     origin: submission.origin,
     createdAt: submission.created_at,
+    submitterName: submission.submitter_name,
+    submitterEmail: submission.submitter_email,
+    timeZone,
   });
   const fromName = `${(submission.submitter_name || endpoint.name).replace(/["\\\r\n]/g, "")} via SED LMS`;
   const msg: nodemailer.SendMailOptions = {
@@ -130,11 +149,6 @@ async function deliverClaimed(
     .eq("id", submission.id);
 
   try {
-    let lead: { agent_id: string | null; closed_by: string | null } | null = null;
-    if (submission.lead_id) {
-      const { data } = await admin.from("leads").select("id, agent_id, closed_by").eq("id", submission.lead_id).maybeSingle();
-      if (data) lead = { agent_id: data.agent_id ?? null, closed_by: data.closed_by ?? null };
-    }
     await notify(
       "form_submission_received",
       { leadId: submission.lead_id, lead },

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
+import { isValidTimezone } from "@/lib/geo/timezones";
 
 const hostname = z
   .string()
@@ -22,6 +23,7 @@ const mailboxIdField = z.string().uuid().nullable();
 const allowedOriginsField = z.array(hostname).max(20);
 const dailyLimitField = z.number().int().min(1).max(10_000);
 const successRedirectUrlField = httpUrl.nullable();
+const timezoneField = z.string().trim().max(64).refine(isValidTimezone, "unknown timezone").nullable();
 const statusField = z.enum(["active", "paused"]);
 
 export const endpointInputSchema = z.object({
@@ -33,6 +35,7 @@ export const endpointInputSchema = z.object({
   allowed_origins: allowedOriginsField.default([]),
   daily_limit: dailyLimitField.default(200),
   success_redirect_url: successRedirectUrlField.default(null),
+  timezone: timezoneField.default(null),
   status: statusField.default("active"),
 });
 export type EndpointInput = z.infer<typeof endpointInputSchema>;
@@ -47,6 +50,7 @@ export const endpointPatchSchema = z
     allowed_origins: allowedOriginsField,
     daily_limit: dailyLimitField,
     success_redirect_url: successRedirectUrlField,
+    timezone: timezoneField,
     status: statusField,
   })
   .partial();
