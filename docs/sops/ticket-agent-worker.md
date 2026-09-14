@@ -51,9 +51,14 @@ pm2 can show sed-lms "online" with `pid N/A` while the node process is dead
 (zombie entry — this caused a 3.5h outage on 2026-09-07 that the logon
 ensure-script couldn't catch). Guard: Scheduled Task
 `SED-LMS-agent-worker-watchdog` runs
-`C:\Users\pc\.pm2\watchdog-sed-worker.ps1` every 3 minutes (as `pc`, only
-while logged in; tracked copy: `scripts/watchdog-sed-worker.ps1` — edit
-there, then copy to `.pm2`). If nothing is listening on port 3000 it runs
+`%USERPROFILE%\.pm2\watchdog-sed-worker.ps1` every 3 minutes (as the
+operator, only while logged in; tracked copy:
+`scripts/watchdog-sed-worker.ps1` — edit there, then copy to `.pm2`).
+The task's action is `wscript.exe run-hidden.vbs watchdog-sed-worker.cmd`
+(both also tracked in `scripts/`, deployed to `.pm2`), NEVER
+`powershell.exe` directly — Task Scheduler flashes a console window for
+every interactive console-app action, which popped a cmd window on the
+operator's screen every 3 minutes (2026-09-14). If nothing is listening on port 3000 it runs
 `pm2 restart sed-lms` (falling back to `pm2 resurrect` + restart), waits for
 the port, then `pm2 save`. Log: `C:\Users\pc\.pm2\watchdog-sed-worker.log`
 (healthy probes are silent). Live-tested 2026-09-07 with a staged
