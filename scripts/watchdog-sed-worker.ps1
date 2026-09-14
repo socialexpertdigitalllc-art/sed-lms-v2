@@ -82,7 +82,16 @@ if (Test-Path $state) {
     } catch {}
 }
 
-if (-not (Test-Path $buildId)) {
+# The repo lives on a USB disk that spins down when idle; the first touch
+# after sleep can fail while it wakes (this held the watchdog off for hours
+# on 2026-09-14). Probe up to 3 times over ~10s before declaring the build
+# missing - a genuinely wiped build still fails all three.
+$buildIdPresent = $false
+for ($i = 0; $i -lt 3; $i++) {
+    if (Test-Path $buildId) { $buildIdPresent = $true; break }
+    Start-Sleep -Seconds 5
+}
+if (-not $buildIdPresent) {
     Write-Log "port $Port down but $buildId is missing (build wiped or in progress) - NOT restarting; run 'npm run build' then 'pm2 restart sed-lms'"
     exit 0
 }
