@@ -165,6 +165,7 @@ export function Sidebar({
     const count = n.href === MAILBOX_HREF ? unreadMail : key ? counts[key] : undefined;
     const hasChildren = Boolean(n.children?.length) && showLabels;
     const open = hasChildren && (openMenus[n.href] ?? branchActive(n));
+    const showQuickAction = Boolean(n.quickAction) && showLabels && has(n.quickAction!.perm) && !hasChildren;
     return (
       <div key={n.href}>
         <div className="relative">
@@ -175,6 +176,9 @@ export function Sidebar({
             className={cn(
               "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
               showLabels ? "" : "justify-center",
+              // The + overlay occupies the right edge — reserve its width so
+              // the count badge (ml-auto) lands to its LEFT, never under it.
+              showQuickAction && "pr-8",
               active || (hasChildren && branchActive(n))
                 ? "bg-accent-soft text-accent-ink"
                 : "text-text-muted hover:bg-surface hover:text-text"
@@ -188,12 +192,12 @@ export function Sidebar({
               tone={navCountTone(key)}
             />
           </Link>
-          {n.quickAction && showLabels && has(n.quickAction.perm) && !hasChildren && (
+          {showQuickAction && (
             <Link
-              href={n.quickAction.href}
+              href={n.quickAction!.href}
               onClick={onMobileClose}
-              title={n.quickAction.label}
-              aria-label={n.quickAction.label}
+              title={n.quickAction!.label}
+              aria-label={n.quickAction!.label}
               className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-text-faint transition-colors hover:bg-surface hover:text-accent-ink"
             >
               <Plus className="h-3.5 w-3.5" />
