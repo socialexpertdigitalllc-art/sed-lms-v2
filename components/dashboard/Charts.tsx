@@ -17,23 +17,9 @@ import {
 import type { NameValue } from "@/lib/leads/analytics";
 import { STATUS_COLORS, PALETTE, TICKET_COLORS } from "@/lib/dashboard/palette";
 import { formatCurrency } from "@/lib/leads/format";
+import { useChartTheme } from "./chartTheme";
 
 const TEAL = "#0D9488";
-const GRID = "#E5E9F0";
-const AXIS = "#8089A0";
-
-const tooltipStyle = {
-  borderRadius: 8,
-  border: "1px solid #DDE2EA",
-  fontSize: 12,
-  boxShadow: "0 8px 24px -12px rgba(20,27,45,0.25)",
-};
-
-const axisProps = {
-  tick: { fill: AXIS, fontSize: 11 },
-  tickLine: false,
-  axisLine: { stroke: GRID },
-};
 
 function EmptyChart({ label }: { label: string }) {
   return (
@@ -44,6 +30,7 @@ function EmptyChart({ label }: { label: string }) {
 }
 
 export function LeadsTrend({ data }: { data: NameValue[] }) {
+  const { grid, axisProps, tooltipStyle } = useChartTheme();
   if (!data.length) return <EmptyChart label="No activity yet" />;
   const fmt = (v: string) => {
     const d = new Date(v);
@@ -58,7 +45,7 @@ export function LeadsTrend({ data }: { data: NameValue[] }) {
             <stop offset="100%" stopColor={TEAL} stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid stroke={GRID} vertical={false} />
+        <CartesianGrid stroke={grid} vertical={false} />
         <XAxis dataKey="name" {...axisProps} tickFormatter={fmt} minTickGap={28} />
         <YAxis {...axisProps} allowDecimals={false} width={28} />
         <Tooltip contentStyle={tooltipStyle} labelFormatter={(label) => fmt(String(label))} />
@@ -69,14 +56,15 @@ export function LeadsTrend({ data }: { data: NameValue[] }) {
 }
 
 export function LeadsByAgent({ data }: { data: NameValue[] }) {
+  const { grid, axisProps, tooltipStyle, cursorFill } = useChartTheme();
   if (!data.length) return <EmptyChart label="No agents yet" />;
   return (
     <ResponsiveContainer width="100%" height={Math.max(140, data.length * 32)}>
       <BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 8, bottom: 0 }}>
-        <CartesianGrid stroke={GRID} horizontal={false} />
+        <CartesianGrid stroke={grid} horizontal={false} />
         <XAxis type="number" {...axisProps} allowDecimals={false} />
         <YAxis type="category" dataKey="name" {...axisProps} width={70} />
-        <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(13,148,136,0.06)" }} />
+        <Tooltip contentStyle={tooltipStyle} cursor={{ fill: cursorFill }} />
         <Bar dataKey="value" fill={TEAL} radius={[0, 4, 4, 0]} barSize={16} name="Leads" />
       </BarChart>
     </ResponsiveContainer>
@@ -84,16 +72,17 @@ export function LeadsByAgent({ data }: { data: NameValue[] }) {
 }
 
 export function RevenueByStatus({ data }: { data: { name: string; value: number }[] }) {
+  const { grid, axisProps, tooltipStyle, cursorFill } = useChartTheme();
   if (!data.length) return <EmptyChart label="No revenue yet" />;
   return (
     <ResponsiveContainer width="100%" height={Math.max(140, data.length * 32)}>
       <BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 8, bottom: 0 }}>
-        <CartesianGrid stroke={GRID} horizontal={false} />
+        <CartesianGrid stroke={grid} horizontal={false} />
         <XAxis type="number" {...axisProps} allowDecimals={false} />
         <YAxis type="category" dataKey="name" {...axisProps} width={70} />
         <Tooltip
           contentStyle={tooltipStyle}
-          cursor={{ fill: "rgba(13,148,136,0.06)" }}
+          cursor={{ fill: cursorFill }}
           formatter={(value) => [formatCurrency(Number(value)), "Revenue"]}
         />
         <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={16} name="Revenue">
@@ -107,6 +96,7 @@ export function RevenueByStatus({ data }: { data: { name: string; value: number 
 }
 
 export function StatusDonut({ data }: { data: NameValue[] }) {
+  const { tooltipStyle } = useChartTheme();
   if (!data.length) return <EmptyChart label="No leads yet" />;
   return (
     <ResponsiveContainer width="100%" height={170}>
@@ -123,6 +113,7 @@ export function StatusDonut({ data }: { data: NameValue[] }) {
 }
 
 export function TicketStatusDonut({ data }: { data: { name: string; value: number }[] }) {
+  const { tooltipStyle } = useChartTheme();
   if (!data.length) return <EmptyChart label="No tickets yet" />;
   return (
     <ResponsiveContainer width="100%" height={170}>
@@ -139,6 +130,7 @@ export function TicketStatusDonut({ data }: { data: { name: string; value: numbe
 }
 
 export function SiteTypeDonut({ data }: { data: NameValue[] }) {
+  const { tooltipStyle } = useChartTheme();
   if (!data.length) return <EmptyChart label="No site types yet" />;
   return (
     <ResponsiveContainer width="100%" height={170}>
@@ -155,15 +147,16 @@ export function SiteTypeDonut({ data }: { data: NameValue[] }) {
 }
 
 export function RatingBars({ data }: { data: NameValue[] }) {
+  const { grid, axisProps, tooltipStyle, cursorFill } = useChartTheme();
   const hasAny = data.some((d) => d.value > 0);
   if (!hasAny) return <EmptyChart label="No ratings yet" />;
   return (
     <ResponsiveContainer width="100%" height={170}>
       <BarChart data={data} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
-        <CartesianGrid stroke={GRID} vertical={false} />
+        <CartesianGrid stroke={grid} vertical={false} />
         <XAxis dataKey="name" {...axisProps} />
         <YAxis {...axisProps} allowDecimals={false} width={28} />
-        <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(13,148,136,0.06)" }} />
+        <Tooltip contentStyle={tooltipStyle} cursor={{ fill: cursorFill }} />
         <Bar dataKey="value" fill={TEAL} radius={[3, 3, 0, 0]} name="Leads" />
       </BarChart>
     </ResponsiveContainer>

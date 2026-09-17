@@ -1,10 +1,30 @@
 @import "tailwindcss";
 
+/* `dark:` utilities follow the SAME rule the tokens below do — an explicit
+   choice wins, otherwise the OS preference decides. Rarely needed (almost
+   everything themes itself through the tokens), but available for the few
+   places that must differ structurally rather than by colour. */
+@custom-variant dark {
+  &:where(html[data-theme="dark"], html[data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(html:not([data-theme="light"]), html:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
 /* ============================================================
-   SED LMS v2 — Light theme "Data Console / Teal"
+   SED LMS v2 — "Data Console / Teal"
    Tokens are exposed to Tailwind v4 via @theme, so utilities
    like bg-surface, text-text-muted, border-border, bg-ready-bg
    are generated automatically.
+
+   The @theme block below is the LIGHT theme and the base for both.
+   The dark theme re-declares the same custom properties further down
+   (see "Dark theme"), so every utility in the app follows the theme
+   without a single `dark:` class in the markup.
    ============================================================ */
 @theme {
   /* surfaces & structure */
@@ -36,6 +56,12 @@
   --color-longterm-fg: #1d4ed8;
   --color-longterm-bg: #e8f0fe;
 
+  /* Solid fill for destructive buttons, ALWAYS under white text.
+     Distinct from `dropped-fg`, which is a FOREGROUND: that one has to go
+     light on dark to stay readable, and a light red under white text is the
+     one combination this must never become. */
+  --color-danger: #b91c1c;
+
   /* typography */
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains), ui-monospace, "JetBrains Mono", monospace;
@@ -45,6 +71,134 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
+}
+
+/* Non-colour design values the themes share. Declared outside @theme so the
+   dark block can override them the same way it overrides colours. */
+:root {
+  /* the engineering grid on the marketing/header bands — dark lines on light */
+  --grid-line: rgba(20, 27, 45, 0.045);
+  color-scheme: light;
+}
+
+/* ============================================================
+   Dark theme — "Data Console / Teal, after hours"
+   ============================================================
+   The SAME tokens, re-declared. Every rule below is duplicated for two
+   selectors on purpose:
+
+     html[data-theme="dark"]          — the user chose dark, explicitly
+     @media (prefers-color-scheme: dark) html:not([data-theme="light"])
+                                      — no choice made, the OS says dark
+
+   so "system" needs no JavaScript to resolve and cannot flash: with no
+   attribute at all the media query decides, and an explicit choice always
+   wins over it. `color-scheme` is part of the swap — without it the native
+   controls this app uses (every <select>, checkbox and scrollbar) would
+   keep painting themselves white on a dark page.
+
+   ROLES ARE PRESERVED, not inverted per-token: `surface` still sits above
+   `bg`, `surface-2` is still the hover/header step away from `surface`
+   (lighter here, where it was darker on white), `*-fg` stays the readable
+   foreground for its matching `*-bg`. That is what lets ~200 components
+   theme themselves without touching their markup.
+
+   `--color-accent` deliberately does NOT change: it is the solid-button
+   fill under hardcoded `text-white`, so moving it would quietly change the
+   contrast of every primary button in the app. The two accent tokens that
+   DO move are the ones whose roles flip — `accent-soft` (a background) and
+   `accent-ink` (a foreground). */
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: #0c1016;
+  --color-surface: #151b24;
+  --color-surface-2: #1d2531;
+  --color-border: #2b3543;
+  --color-border-subtle: #202833;
+
+  --color-text: #e7ecf3;
+  --color-text-muted: #9fabbd;
+  --color-text-faint: #6d7a8d;
+
+  --color-accent: #0d9488;
+  --color-accent-soft: #0e3b38;
+  --color-accent-ink: #5eead4;
+
+  --color-ready-fg: #4ade80;
+  --color-ready-bg: #123122;
+  --color-notready-fg: #fbbf24;
+  --color-notready-bg: #382712;
+  --color-closed-fg: #d8b4fe;
+  --color-closed-bg: #2b1d3f;
+  --color-dropped-fg: #f87171;
+  --color-dropped-bg: #3a1b1d;
+  --color-longterm-fg: #93b4fd;
+  --color-longterm-bg: #1a2648;
+
+  /* Brighter than the light theme's, because it now sits on a dark page
+     rather than a white one — still dark enough to carry white text. */
+  --color-danger: #dc2626;
+
+  --grid-line: rgba(255, 255, 255, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --color-bg: #0c1016;
+    --color-surface: #151b24;
+    --color-surface-2: #1d2531;
+    --color-border: #2b3543;
+    --color-border-subtle: #202833;
+
+    --color-text: #e7ecf3;
+    --color-text-muted: #9fabbd;
+    --color-text-faint: #6d7a8d;
+
+    --color-accent: #0d9488;
+    --color-accent-soft: #0e3b38;
+    --color-accent-ink: #5eead4;
+
+    --color-ready-fg: #4ade80;
+    --color-ready-bg: #123122;
+    --color-notready-fg: #fbbf24;
+    --color-notready-bg: #382712;
+    --color-closed-fg: #d8b4fe;
+    --color-closed-bg: #2b1d3f;
+    --color-dropped-fg: #f87171;
+    --color-dropped-bg: #3a1b1d;
+    --color-longterm-fg: #93b4fd;
+    --color-longterm-bg: #1a2648;
+
+    --color-danger: #dc2626;
+
+    --grid-line: rgba(255, 255, 255, 0.04);
+  }
+}
+
+/* The theme toggle's two icons. Which one shows is decided by CSS, not by
+   React state: the button must render the CORRECT icon in the very first
+   paint, and the server cannot know the OS preference behind "system".
+   Doing it in JS would either flash the wrong icon or need a hydration
+   suppression; these four rules need neither. */
+.theme-icon-dark {
+  display: none;
+}
+html[data-theme="dark"] .theme-icon-light {
+  display: none;
+}
+html[data-theme="dark"] .theme-icon-dark {
+  display: block;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) .theme-icon-light {
+    display: none;
+  }
+  html:not([data-theme="light"]) .theme-icon-dark {
+    display: block;
+  }
 }
 
 html,
@@ -74,11 +228,11 @@ body {
    Marketing / landing atmosphere + motion
    ============================================================ */
 
-/* fine engineering grid */
+/* fine engineering grid — dark hairlines on light, light on dark */
 .bg-grid {
   background-image:
-    linear-gradient(to right, rgba(20, 27, 45, 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(20, 27, 45, 0.045) 1px, transparent 1px);
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: 56px 56px;
 }
 

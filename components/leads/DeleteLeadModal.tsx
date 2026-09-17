@@ -54,7 +54,7 @@ export function DeleteLeadModal({
           <button
             onClick={remove}
             disabled={!confirmed || busy}
-            className="px-4 py-2 text-sm rounded-md bg-dropped-fg text-white font-semibold hover:opacity-90 disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-md bg-danger text-white font-semibold hover:opacity-90 disabled:opacity-50"
           >
             {busy ? "Deleting…" : "Delete lead"}
           </button>

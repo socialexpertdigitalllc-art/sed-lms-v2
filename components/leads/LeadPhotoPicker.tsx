@@ -189,7 +189,7 @@ export function LeadPhotoPicker({
           {ext.capturing ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
           {ext.capturing ? `Capturing… ${ext.progress} found` : candidates.length ? "Re-capture photos" : "Capture photos"}
         </button>
-        {capture?.status === "failed" && <span className="text-sm text-red-400">{capture.error}</span>}
+        {capture?.status === "failed" && <span className="text-sm text-dropped-fg">{capture.error}</span>}
         {capture?.status === "none_found" && <span className="text-sm text-text-faint">No photos found on that profile.</span>}
       </div>
 

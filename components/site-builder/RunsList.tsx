@@ -196,7 +196,7 @@ export function RunsList() {
               <button
                 type="button"
                 onClick={() => void deleteRun(confirming)}
-                className="rounded-md bg-dropped-fg px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+                className="rounded-md bg-danger px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
               >
                 Delete
               </button>

@@ -423,7 +423,7 @@ export function DeploymentsBoard() {
             type="button"
             onClick={() => setConfirmBulk(Array.from(selected))}
             disabled={busyKey !== null}
-            className="inline-flex items-center gap-1 rounded-md bg-dropped-fg px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-md bg-danger px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
           >
             {busyKey === "bulk" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
             Delete selected
@@ -741,7 +741,7 @@ function ConfirmDialog({
           </button>
           <button type="button" onClick={onConfirm}
             className={cn("rounded-md px-4 py-2 text-sm font-semibold text-white hover:opacity-90",
-              danger ? "bg-dropped-fg" : "bg-accent")}>
+              danger ? "bg-danger" : "bg-accent")}>
             {confirmLabel}
           </button>
         </div>

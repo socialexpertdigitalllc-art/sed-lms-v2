@@ -4,6 +4,7 @@ import { Menu } from "lucide-react";
 import { CommandPalette } from "./CommandPalette";
 import { WebsiteBell } from "./WebsiteBell";
 import { GeneralBell } from "./GeneralBell";
+import { ThemeToggle } from "./ThemeToggle";
 import { UserMenu } from "./UserMenu";
 
 export function Topbar({
@@ -31,6 +32,7 @@ export function Topbar({
         <CommandPalette />
       </div>
       <div className="flex items-center gap-2">
+        <ThemeToggle />
         <WebsiteBell />
         <GeneralBell />
         <div className="w-px h-6 bg-border mx-1" />

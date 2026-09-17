@@ -167,7 +167,7 @@ export function DeploymentsBoard({ deployed, canDeploy }: { deployed: DeployedRo
               <button type="button" onClick={() => setConfirming(null)}
                 className="rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text">Cancel</button>
               <button type="button" onClick={() => takedown(confirming)}
-                className="rounded-md bg-dropped-fg px-4 py-2 text-sm font-semibold text-white hover:opacity-90">Take down</button>
+                className="rounded-md bg-danger px-4 py-2 text-sm font-semibold text-white hover:opacity-90">Take down</button>
             </div>
           </div>
         </div>

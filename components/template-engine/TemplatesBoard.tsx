@@ -932,7 +932,7 @@ export function TemplatesBoard() {
                 type="button"
                 onClick={confirmDelete}
                 disabled={deleting}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-md bg-dropped-fg text-white font-semibold hover:opacity-90 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-md bg-danger text-white font-semibold hover:opacity-90 disabled:opacity-50"
               >
                 {deleting ? (
                   <Loader2 className="w-4 h-4 animate-spin" />

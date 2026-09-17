@@ -96,7 +96,7 @@ export function RecipientGuardStrip({ guard, className }: { guard: RecipientGuar
               onClick={allowAnyway}
               className={cn(
                 "rounded-md border border-current px-2 py-1 text-[11px] font-medium transition-colors duration-150",
-                "hover:bg-dropped-fg hover:text-white",
+                "hover:bg-danger hover:text-white",
                 "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
               )}
             >
