@@ -29,6 +29,25 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.20.0",
+    date: "2026-09-22",
+    title: "Dark mode",
+    changes: [
+      {
+        kind: "feature",
+        text: "The whole dashboard now has a dark theme, switched from the sun/moon button in the header — every screen, table, chart, panel and dialog, not just the shell. The choice sticks on that device and is applied before the page paints, so there is no white flash on a reload, and it holds on the login screen too. Until you pick a side it simply follows whatever your computer is set to, switching itself when your system does at sunset.",
+      },
+      {
+        kind: "improvement",
+        text: "Delete, take-down and other destructive buttons keep a strong red with readable white text in both themes, and chart grids, axes and tooltips follow the theme instead of staying white.",
+      },
+      {
+        kind: "fix",
+        text: "The Leads count in the sidebar no longer hides under the + (new lead) button — the counter now sits to the left of it.",
+      },
+    ],
+  },
+  {
     version: "2.19.1",
     date: "2026-09-14",
     title: "Popups above everything, filters that keep their options",
@@ -39,7 +58,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       },
       {
         kind: "fix",
-        text: "Filter lists on the leads table no longer lose entries: an agent, platform or region stays listed (and unselectable) even when a month or team scope leaves it with no matching leads — previously a selected agent could vanish from the very list that selected them.",
+        text: "Filter lists on the leads table no longer lose entries: an agent, platform or region stays listed (so it can still be unselected) even when a month or team scope leaves it with no matching leads — previously a selected agent could vanish from the very list that selected them.",
       },
     ],
   },

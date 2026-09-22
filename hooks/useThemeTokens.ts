@@ -48,12 +48,14 @@ export function useThemeTokens<T extends Record<string, string>>(vars: T): Recor
     const observer = new MutationObserver(read);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     // …and under "system" there is no attribute to watch, only the OS.
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    media.addEventListener("change", read);
+    // Guarded: jsdom (the test environment) has no matchMedia, and a chart
+    // must still render there — it just won't follow OS changes.
+    const media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    media?.addEventListener("change", read);
 
     return () => {
       observer.disconnect();
-      media.removeEventListener("change", read);
+      media?.removeEventListener("change", read);
     };
   }, [key]);
 
