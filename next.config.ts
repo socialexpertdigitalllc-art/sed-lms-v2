@@ -2,6 +2,15 @@ import type { NextConfig } from "next";
 import { OPTIMIZED_IMAGE_HOSTS } from "./lib/images/hosts";
 
 const nextConfig: NextConfig = {
+  experimental: {
+    // With a middleware/proxy present, Next buffers every request body and
+    // TRUNCATES it at 10MB by default — a >10MB site-zip upload then reaches
+    // the route handler as a cut-off multipart stream and formData() throws
+    // ("Expected a multipart form upload"). The largest accepted upload is a
+    // 60MB zip (site-studio manual upload); 64mb covers it plus multipart
+    // framing overhead.
+    proxyClientMaxBodySize: "64mb",
+  },
   images: {
     // Thumbnails for the image picker. See lib/images/hosts.ts for the
     // measurement that motivated this: client photos are ~832 KB ImgBB
