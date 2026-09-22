@@ -1,8 +1,34 @@
 # Ticket Agent worker — operator runbook
 
-The Ticket Agent ("Send to AI" on tickets) runs Antigravity's `agy` CLI on the
-office Windows box — the ONLY machine with the Antigravity sign-in. Prod never
-runs the agent; it only creates runs and deploys approved results.
+The Ticket Agent ("Send to AI" on tickets) runs Antigravity's `agy` CLI on a
+worker device signed in to Antigravity. Prod never runs the agent; it only
+creates runs and deploys approved results.
+
+## Standalone worker kit — any device (added 2026-09-22, preferred)
+
+The worker no longer needs the LMS app, a Next build or pm2. `npm run
+build:agent-worker` writes `dist/agent-worker/`: one bundled
+`agent-worker.mjs` (same engine as `/api/site-agent/process`), an env
+template and installers. A device needs Node >= 20, `agy` signed in with
+socialexpertdigitalllc@gmail.com, and `agent-worker.env` (Supabase URL +
+service key; `npm run build:agent-worker -- --with-env` fills it from
+`.env.local` — that kit is then PRIVATE).
+
+- Windows: `install-windows.ps1` → `%LOCALAPPDATA%\sed-agent-worker`, task
+  `SED-Agent-Worker` (logon + every 3 min; a second copy exits on the
+  `%TEMP%\sed-agent\worker.lock` pid lock, so repetition = auto-restart).
+  Log `worker.log` there. Remove with `uninstall-windows.ps1`.
+- macOS/Linux: `start-worker.sh` (+ the cron lines in its header).
+- New device: `node agent-worker.mjs --check` first — read-only.
+- Many devices at once is safe: CAS claims + claim_id-guarded writes; the
+  heartbeat reads online while ANY worker is fresh. A device only polls
+  while `agy models` answers, so a signed-out device never fails runs.
+- Each extra device multiplies idle queue polling (one select + one
+  heartbeat write per 20s each) — keep the fleet small (the shared DB's
+  disk-IO budget scales with pollers × instances).
+
+The pm2/watchdog setup below is the LEGACY path (the local LMS instance with
+`AGENT_WORKER_ENABLED=1`); it still works and can run alongside the kit.
 
 > **Machine move (2026-09-11):** the worker box is now the operator's new
 > machine (user `Aqib Hassan`). Every `C:\Users\pc\...` path below reads as
