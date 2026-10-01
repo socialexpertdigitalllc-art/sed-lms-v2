@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import * as cf from "@/lib/cloudflare/client";
 import * as hostinger from "@/lib/hostinger/client";
 import { findLiveStagingDeployment, goLiveOnDomain } from "@/lib/site-studio/deploy/golive";
+import { lookupA } from "./dns";
 import type { PipelineDeps } from "./pipeline";
 
 /**
@@ -28,19 +29,7 @@ export function probeVhost(ip: string, domain: string): Promise<boolean | null> 
 }
 
 /** Public A records via Cloudflare's DNS-over-HTTPS resolver. */
-export async function resolvesTo(domain: string): Promise<string[] | null> {
-  try {
-    const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=A`, {
-      headers: { accept: "application/dns-json" },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const j = (await res.json()) as { Answer?: { type: number; data: string }[] };
-    return (j.Answer ?? []).filter((a) => a.type === 1).map((a) => a.data);
-  } catch {
-    return null;
-  }
-}
+export const resolvesTo = lookupA;
 
 export function realPipelineDeps(admin: SupabaseClient): PipelineDeps {
   return {

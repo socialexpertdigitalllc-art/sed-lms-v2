@@ -21,18 +21,36 @@ const FILTERS = [
   { id: "working", label: "In progress" },
   { id: "free", label: "Unlinked" },
   { id: "renew", label: "Auto-renew off" },
+  { id: "expiring", label: "Expiring soon" },
 ] as const;
 type Filter = (typeof FILTERS)[number]["id"];
 
+const DAY_MS = 86_400_000;
+const EXPIRING_DAYS = 30;
+
+/** Whole days until the domain expires (negative once past), or null when unknown. */
+function daysLeft(expiresAt: string | null, now: number): number | null {
+  const t = expiresAt ? Date.parse(expiresAt) : NaN;
+  return Number.isNaN(t) ? null : Math.ceil((t - now) / DAY_MS);
+}
+
+/** Expires within EXPIRING_DAYS and auto-renew isn't known to be on (Hostinger
+ *  doesn't report it per domain). */
+function expiringSoon(r: Row, now: number): boolean {
+  const d = daysLeft(r.expires_at, now);
+  return d !== null && d <= EXPIRING_DAYS && r.auto_renew !== true && r.status !== "failed";
+}
+
 /**
  * Every client domain we own — on Cloudflare (default) or Hostinger — with its
- * lead, setup state, expiry and auto-renew. Import pulls the Cloudflare
- * account's domains in; Buy finds and purchases a new one.
+ * lead, setup state, expiry and auto-renew. Import pulls in the domains already
+ * on both accounts; Buy finds and purchases a new one.
  */
 export function DomainsBoard() {
   const { toast } = useToast();
   const [rows, setRows] = useState<Row[] | null>(null);
-  const [meta, setMeta] = useState({ canManage: false, canPurchase: false, sandbox: false, cloudflareConfigured: true });
+  const [now, setNow] = useState(0);
+  const [meta, setMeta] = useState({ canManage: false, canPurchase: false, sandbox: false, cloudflareConfigured: true, hostingerConfigured: true });
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -50,7 +68,14 @@ export function DomainsBoard() {
       return;
     }
     setRows(j.domains as Row[]);
-    setMeta({ canManage: j.canManage, canPurchase: j.canPurchase, sandbox: j.sandbox, cloudflareConfigured: j.cloudflareConfigured });
+    setNow(Date.now());
+    setMeta({
+      canManage: j.canManage,
+      canPurchase: j.canPurchase,
+      sandbox: j.sandbox,
+      cloudflareConfigured: j.cloudflareConfigured,
+      hostingerConfigured: j.hostingerConfigured,
+    });
   }, [toast]);
 
   useEffect(() => {
@@ -78,13 +103,16 @@ export function DomainsBoard() {
           return !r.lead_id && r.status !== "failed";
         case "renew":
           return r.auto_renew === false;
+        case "expiring":
+          return expiringSoon(r, now);
         default:
           return true;
       }
     });
-  }, [rows, filter, query]);
+  }, [rows, filter, query, now]);
 
   const renewOff = (rows ?? []).filter((r) => r.auto_renew === false && r.status !== "failed").length;
+  const expiring = (rows ?? []).filter((r) => expiringSoon(r, now)).length;
 
   async function importNow() {
     setImporting(true);
@@ -93,12 +121,18 @@ export function DomainsBoard() {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) toast({ kind: "error", title: j.error ?? "Import failed" });
       else {
+        type Part = { added?: number; error?: string } | null;
+        const parts: [string, Part][] = [["Hostinger", j.hostinger], ["Cloudflare", j.cloudflare]];
+        const from = parts.flatMap(([name, p]) => (p && !p.error ? [`${p.added} from ${name}`] : [])).join(", ");
+        const failed = parts.flatMap(([name, p]) => (p?.error ? [`${name}: ${p.error}`] : []));
         toast({
-          kind: "success",
-          title: `Imported ${j.added} new domain${j.added === 1 ? "" : "s"} from Cloudflare`,
+          kind: failed.length ? "error" : "success",
+          title: `Imported ${j.added} new domain${j.added === 1 ? "" : "s"}${from ? ` (${from})` : ""}`,
           body:
-            `${j.connected} already set up by hand (left as they are), ${j.unassigned} not hosted yet, ${j.linked} linked to their lead.` +
-            (j.refreshed ? ` ${j.refreshed} existing refreshed.` : ""),
+            `${j.connected} already set up by hand (left as they are), ${j.unassigned} not in use yet, ${j.linked} linked to their lead.` +
+            (j.refreshed ? ` ${j.refreshed} existing refreshed.` : "") +
+            (j.skipped ? ` ${j.skipped} skipped.` : "") +
+            (failed.length ? ` ${failed.join(" ")}` : ""),
         });
         await load();
       }
@@ -132,8 +166,14 @@ export function DomainsBoard() {
         action={
           <div className="flex gap-2">
             {meta.canManage ? (
-              <button type="button" className={btnSecondary} onClick={importNow} disabled={importing || !meta.cloudflareConfigured}>
-                {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <DownloadCloud className="h-4 w-4" />} Import from Cloudflare
+              <button
+                type="button"
+                className={btnSecondary}
+                onClick={importNow}
+                disabled={importing || !meta.hostingerConfigured}
+                title="Bring in the domains already on Hostinger and Cloudflare"
+              >
+                {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <DownloadCloud className="h-4 w-4" />} Import domains
               </button>
             ) : null}
             {meta.canPurchase ? (
@@ -155,6 +195,13 @@ export function DomainsBoard() {
           <AlertTriangle className="h-4 w-4 shrink-0" />
           {renewOff} domain{renewOff === 1 ? " has" : "s have"} auto-renew turned off and will expire unless renewed.
           <button type="button" className="underline" onClick={() => setFilter("renew")}>Show</button>
+        </p>
+      ) : null}
+      {expiring > 0 ? (
+        <p className="flex items-center gap-2 rounded-md border border-notready-fg/30 bg-notready-bg p-3 text-sm text-notready-fg">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          {expiring} domain{expiring === 1 ? " expires" : "s expire"} within {EXPIRING_DAYS} days without auto-renew confirmed on — check {expiring === 1 ? "it renews" : "they renew"}.
+          <button type="button" className="underline" onClick={() => setFilter("expiring")}>Show</button>
         </p>
       ) : null}
 
@@ -181,7 +228,7 @@ export function DomainsBoard() {
         <EmptyPanel
           icon={Globe}
           title={rows.length === 0 ? "No domains yet" : "Nothing matches"}
-          hint={rows.length === 0 ? (meta.canManage ? "Import your Cloudflare domains, or buy a new one." : "An admin can import or buy domains.") : "Try another filter."}
+          hint={rows.length === 0 ? (meta.canManage ? "Import the domains already on Hostinger and Cloudflare, or buy a new one." : "An admin can import or buy domains.") : "Try another filter."}
         />
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-surface">
@@ -226,7 +273,13 @@ export function DomainsBoard() {
                       <td className="px-3 py-2 text-text-muted">{r.registrar === "cloudflare" ? "Cloudflare" : "Hostinger"}</td>
                       <td className="px-3 py-2 text-text-muted">
                         {r.expires_at ? new Date(r.expires_at).toLocaleDateString() : "—"}
-                        {r.auto_renew === false ? <span className="ml-1 text-xs font-semibold text-notready-fg">auto-renew off</span> : null}
+                        {r.auto_renew === false ? (
+                          <span className="ml-1 text-xs font-semibold text-notready-fg">auto-renew off</span>
+                        ) : expiringSoon(r, now) ? (
+                          <span className="ml-1 text-xs font-semibold text-notready-fg">
+                            {(daysLeft(r.expires_at, now) ?? 0) < 0 ? "expired" : `in ${daysLeft(r.expires_at, now)}d`}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2 text-text-muted">{r.renewal_cost_cents ? `${money(r.renewal_cost_cents, r.currency ?? "USD")}/yr` : "—"}</td>
                       <td className="px-3 py-2 text-right">
@@ -260,7 +313,10 @@ export function DomainsBoard() {
                         <td />
                         <td colSpan={7} className="px-3 py-3">
                           {r.status === "connected" ? (
-                            <p className="text-xs text-text-muted">Set up by hand before the dashboard managed domains — hosting {r.hosting_username ?? "on Hostinger"}; nothing for the dashboard to do.</p>
+                            <p className="text-xs text-text-muted">
+                              Set up by hand before the dashboard managed domains —{" "}
+                              {r.hosting_username ? `hosted on Hostinger (${r.hosting_username})` : "its site is hosted outside Hostinger"}; nothing for the dashboard to do.
+                            </p>
                           ) : r.status === "unassigned" ? (
                             <p className="text-xs text-text-muted">Not linked to a lead. Linking it starts the automatic setup.</p>
                           ) : (

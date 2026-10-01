@@ -2,8 +2,8 @@
 /**
  * LIVE verification of the domain system against the real accounts. Gated:
  * runs ONLY with LIVE_DOMAINS=1, skipped by every normal run.
- *   1. import the Cloudflare account's domains (writes client_domains only —
- *      the operator asked for this import);
+ *   1. import the Cloudflare account's domains and the Hostinger portfolio
+ *      (writes client_domains only — the operator asked for these imports);
  *   2. a purchase in Cloudflare's SANDBOX (no charge; the fake domain and its
  *      log rows are removed afterwards) through the real purchase + processor;
  *   3. read-only: the DNS planner run against a domain set up by hand must
@@ -42,6 +42,25 @@ describe.skipIf(!live)("LIVE — client domains", () => {
     console.log("[live-domains] ROWS:", JSON.stringify(data));
     expect((data ?? []).length).toBe(r.summary.total);
   }, 180000);
+
+  it("imports the Hostinger portfolio — sites already up come in as connected, company domains stay out", async () => {
+    const { importHostingerDomains } = await import("@/lib/domains/import");
+    const r = await importHostingerDomains(admin(), ADMIN_PROFILE);
+    console.log("[live-domains] HOSTINGER IMPORT:", JSON.stringify(r));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.summary.total).toBeGreaterThan(0);
+    const { data } = await admin()
+      .from("client_domains")
+      .select("domain, status, lead_id, hosting_username, expires_at")
+      .eq("registrar", "hostinger")
+      .order("domain");
+    console.log("[live-domains] HOSTINGER ROWS:", JSON.stringify(data));
+    const names = (data ?? []).map((x) => x.domain as string);
+    expect(names.length).toBeGreaterThanOrEqual(r.summary.added);
+    const { isProtectedDomain } = await import("@/lib/site-studio/deploy/protected");
+    expect(names.filter((d) => isProtectedDomain(d))).toEqual([]);
+  }, 300000);
 
   it("a SANDBOX purchase runs the real purchase + processor and stops as unassigned (no lead)", async () => {
     process.env.CLOUDFLARE_REGISTRAR_SANDBOX = "1";

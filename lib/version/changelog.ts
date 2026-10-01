@@ -29,6 +29,21 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.21.1",
+    date: "2026-10-02",
+    title: "Domains: Hostinger's domains are on the Domains page too",
+    changes: [
+      {
+        kind: "improvement",
+        text: "The Domains page now lists the domains registered on Hostinger as well as Cloudflare. \"Import domains\" brings in both: sites that are already up come in as they are and are linked to their lead, and are never touched; only a domain that points nowhere is offered for automatic setup. The company's own domains are left out.",
+      },
+      {
+        kind: "improvement",
+        text: "Domains that expire within 30 days without auto-renew confirmed on are flagged, with an \"Expiring soon\" filter. Hostinger doesn't report auto-renew per domain, so check those in hPanel.",
+      },
+    ],
+  },
+  {
     version: "2.21.0",
     date: "2026-10-02",
     title: "Domains: buy one and the site goes live on it",

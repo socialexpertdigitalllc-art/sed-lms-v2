@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { planDns, planIsEmpty } from "@/lib/domains/dns";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { dnsUse, planDns, planIsEmpty } from "@/lib/domains/dns";
 import type { DnsRecord } from "@/lib/cloudflare/client";
 
 /**
@@ -70,5 +70,47 @@ describe("planDns", () => {
 
   it("a trailing-dot CNAME target counts as the apex", () => {
     expect(planIsEmpty(planDns(D, IP, [rec("A", D, IP), rec("CNAME", `www.${D}`, `${D}.`)]))).toBe(true);
+  });
+});
+
+/**
+ * Import decides "free to set up" vs "a live site elsewhere" from public DNS.
+ * Hostinger's nameservers serve every domain on its DNS, hosted or not, so
+ * only its parking ADDRESS marks a domain free; anything else is a site we
+ * must never take over.
+ */
+describe("dnsUse", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const answers = (byName: Record<string, string[] | "fail">) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const name = new URL(url).searchParams.get("name") ?? "";
+        const a = byName[name] ?? [];
+        if (a === "fail") throw new Error("network");
+        return Response.json({ Answer: a.map((data) => ({ type: 1, data })) });
+      }),
+    );
+
+  it("parked on Hostinger's parking page (apex and www) is free", async () => {
+    answers({ "parked.com": ["2.57.91.91"], "www.parked.com": ["2.57.91.91"] });
+    expect(await dnsUse("parked.com")).toBe("free");
+  });
+
+  it("pointing nowhere is free", async () => {
+    answers({});
+    expect(await dnsUse("empty.com")).toBe("free");
+  });
+
+  it("an address anywhere else — apex or only www — is a live site", async () => {
+    answers({ "old.com": ["216.158.229.243"] });
+    expect(await dnsUse("old.com")).toBe("in_use");
+    answers({ "www.wwwonly.com": ["203.0.113.9"] });
+    expect(await dnsUse("wwwonly.com")).toBe("in_use");
+  });
+
+  it("an unreadable lookup decides nothing", async () => {
+    answers({ "flaky.com": "fail" });
+    expect(await dnsUse("flaky.com")).toBeNull();
   });
 });

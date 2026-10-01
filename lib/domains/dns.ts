@@ -67,3 +67,36 @@ export function planDns(domain: string, ip: string, records: DnsRecord[]): DnsPl
 export function planIsEmpty(p: DnsPlan): boolean {
   return p.create.length === 0 && p.update.length === 0 && p.remove.length === 0;
 }
+
+/** Public A records via Cloudflare's DNS-over-HTTPS resolver; null = no answer. */
+export async function lookupA(name: string): Promise<string[] | null> {
+  try {
+    const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=A`, {
+      headers: { accept: "application/dns-json" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { Answer?: { type: number; data: string }[] };
+    return (j.Answer ?? []).filter((a) => a.type === 1).map((a) => a.data);
+  } catch {
+    return null;
+  }
+}
+
+/** Hostinger's "domain parked" page (verified 2026-10-02 on two parked
+ *  portfolio domains). Hostinger's nameservers (dns-parking.com) serve EVERY
+ *  domain on its DNS, hosted or not, so they say nothing on their own. */
+export const HOSTINGER_PARKING_IPS = ["2.57.91.91"];
+
+/**
+ * Is a domain that Hostinger does NOT host in use somewhere else? "free" when
+ * neither it nor its www points anywhere, or only at Hostinger's parking page;
+ * "in_use" when either points at a server — a live site we must not take
+ * over (an unknown parking address errs this way too); null when DNS could
+ * not be read.
+ */
+export async function dnsUse(domain: string): Promise<"free" | "in_use" | null> {
+  const [apex, www] = await Promise.all([lookupA(domain), lookupA(`www.${domain}`)]);
+  if (apex === null || www === null) return null;
+  return [...apex, ...www].every((ip) => HOSTINGER_PARKING_IPS.includes(ip)) ? "free" : "in_use";
+}

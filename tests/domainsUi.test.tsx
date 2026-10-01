@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToastProvider } from "@/components/common/Toast";
 import { BuyDomainDialog } from "@/components/domains/BuyDomainDialog";
 import { LeadDomainCard } from "@/components/domains/LeadDomainCard";
+import { DomainsBoard } from "@/components/domains/DomainsBoard";
 import type { ClientDomainRow } from "@/lib/domains/types";
 
 /**
@@ -130,5 +131,65 @@ describe("LeadDomainCard", () => {
     );
     expect(screen.getByRole("button", { name: /Buy/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Ours/ })).toBeInTheDocument();
+  });
+});
+
+describe("DomainsBoard", () => {
+  it("one Import button brings in both registrars and says what came from where", async () => {
+    const posts: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/domains/import" && init?.method === "POST") {
+          posts.push(url);
+          return Response.json({
+            hostinger: { added: 90 }, cloudflare: { added: 0 },
+            added: 90, connected: 88, unassigned: 2, linked: 3, refreshed: 16, skipped: 0,
+          });
+        }
+        if (url === "/api/domains") {
+          return Response.json({
+            domains: [row({ status: "connected", lead_id: null, steps: {} })],
+            canManage: true, canPurchase: false, sandbox: false, cloudflareConfigured: true, hostingerConfigured: true,
+          });
+        }
+        throw new Error(`unexpected ${url}`);
+      }),
+    );
+    render(
+      <ToastProvider>
+        <DomainsBoard />
+      </ToastProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Import domains/ }));
+    expect(await screen.findByText("Imported 90 new domains (90 from Hostinger, 0 from Cloudflare)")).toBeInTheDocument();
+    expect(posts).toHaveLength(1);
+  });
+
+  it("flags a domain expiring soon unless auto-renew is known to be on", async () => {
+    const soon = new Date(Date.now() + 6 * 86_400_000).toISOString();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          domains: [
+            // Hostinger doesn't report auto-renew: unknown -> flagged
+            row({ id: "h1", domain: "lapsing.com", registrar: "hostinger", status: "connected", auto_renew: null, expires_at: soon, steps: {} }),
+            row({ id: "c1", domain: "renewing.com", status: "connected", auto_renew: true, expires_at: soon, steps: {} }),
+          ],
+          canManage: true, canPurchase: false, sandbox: false, cloudflareConfigured: true, hostingerConfigured: true,
+        }),
+      ),
+    );
+    render(
+      <ToastProvider>
+        <DomainsBoard />
+      </ToastProvider>,
+    );
+    expect(await screen.findByText(/1 domain expires within 30 days/)).toBeInTheDocument();
+    expect(screen.getAllByText("in 6d")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Expiring soon" }));
+    expect(screen.getByText("lapsing.com")).toBeInTheDocument();
+    expect(screen.queryByText("renewing.com")).not.toBeInTheDocument();
   });
 });

@@ -53,11 +53,11 @@ describe("domain sweep wiring", () => {
 });
 
 describe("classifyImport", () => {
-  const reg = (d: string) => ({ domain_name: d, status: "active", auto_renew: true });
   const hosted = new Map([["handmade.com", { domain: "handmade.com", username: "u447231526" } as never]]);
 
   it("a domain already hosted was set up by hand: connected, linked to its lead, never re-run", () => {
-    expect(classifyImport(reg("HandMade.com"), hosted, new Map([["handmade.com", "lead-9"]]))).toEqual({
+    // DNS is not even consulted for a hosted domain
+    expect(classifyImport("HandMade.com", hosted, null, new Map([["handmade.com", "lead-9"]]))).toEqual({
       domain: "handmade.com",
       status: "connected",
       leadId: "lead-9",
@@ -65,7 +65,20 @@ describe("classifyImport", () => {
     });
   });
 
-  it("a domain not hosted anywhere is unassigned (linking it later starts the setup)", () => {
-    expect(classifyImport(reg("fresh.com"), hosted, new Map([["fresh.com", "lead-1"]]))).toMatchObject({ status: "unassigned", leadId: null });
+  it("a domain pointing at a server elsewhere is a live site: connected (never taken over), linked to its lead", () => {
+    expect(classifyImport("elsewhere.com", hosted, "in_use", new Map([["elsewhere.com", "lead-2"]]))).toEqual({
+      domain: "elsewhere.com",
+      status: "connected",
+      leadId: "lead-2",
+      hostingUsername: null,
+    });
+  });
+
+  it("a domain pointing nowhere is unassigned (linking it later starts the setup)", () => {
+    expect(classifyImport("fresh.com", hosted, "free", new Map([["fresh.com", "lead-1"]]))).toMatchObject({ status: "unassigned", leadId: null });
+  });
+
+  it("unreadable DNS decides nothing — the domain waits for the next import", () => {
+    expect(classifyImport("unknown.com", hosted, null, new Map())).toBeNull();
   });
 });
