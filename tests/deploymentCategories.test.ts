@@ -102,3 +102,26 @@ describe("filterByView", () => {
     ]);
   });
 });
+
+describe("buildBoard with hosted-site types", () => {
+  it("carries each hosted site's type, onto untracked rows and tracked transfers alike", () => {
+    const transferred = tracked({ id: "d2", lead_id: "l2", url: "https://acmeplumbing.com" });
+    const rows = buildBoard(
+      [transferred],
+      [],
+      [
+        { domain: "acmeplumbing.com", siteType: "other" },
+        { domain: "wpclient.com", siteType: "wordpress" },
+      ],
+      DA,
+    );
+    expect(rows.find((r) => r.id === "d2")).toMatchObject({ siteType: "other", category: "live" });
+    expect(rows.find((r) => r.url === "https://wpclient.com")).toMatchObject({ siteType: "wordpress", id: null });
+    expect(rows.filter((r) => r.url.includes("acmeplumbing.com"))).toHaveLength(1);
+  });
+
+  it("staging rows have no site type", () => {
+    const rows = buildBoard([tracked({ lead_id: "l1" })], ["acmev1"], null, DA);
+    expect(rows.every((r) => r.siteType === null)).toBe(true);
+  });
+});

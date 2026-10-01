@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { daConfigured, ensureWildcardDns, listSubdomains } from "@/lib/template-engine/directadmin";
-import { hostingerConfigured, listDomains } from "@/lib/hostinger/client";
-import { buildBoard, filterByView, type TrackedRow } from "@/lib/site-studio/deploy/categorize";
+import { hostingerConfigured, listWebsites } from "@/lib/hostinger/client";
+import { buildBoard, filterByView, type HostedSite, type TrackedRow } from "@/lib/site-studio/deploy/categorize";
 import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
 
 // One shot per server process: make sure *.DA_DOMAIN resolves via a wildcard
@@ -34,18 +34,28 @@ const VIEWS = new Set(["all", "ready", "manual", "other", "live"]);
 // subdomain may take up to TTL to appear as "untracked" (its tracked DB row
 // shows immediately, which is what the board leads with anyway).
 const HOSTING_CACHE_TTL_MS = 60_000;
-let hostingCache: { at: number; subs: string[] | null; domains: string[] | null } | null = null;
+let hostingCache: { at: number; subs: string[] | null; domains: HostedSite[] | null } | null = null;
 
-async function fetchHostingInventory(): Promise<{ subs: string[] | null; domains: string[] | null }> {
+/** The Live tab is what the hosting actually SERVES — every website on the
+ *  plan (with its type, so WordPress sites get no file actions), not the
+ *  registrar portfolio: a registered domain with no website isn't a live site,
+ *  and a client-owned domain pointed at our hosting is one. */
+async function listHostedSites(): Promise<HostedSite[] | null> {
+  const websites = await listWebsites();
+  if (websites === null) return null;
+  return websites
+    .filter((w) => w.domain && !w.domain.toLowerCase().endsWith(".hostingersite.com"))
+    .map((w) => ({ domain: w.domain.toLowerCase(), siteType: w.website_type ?? null }));
+}
+
+async function fetchHostingInventory(): Promise<{ subs: string[] | null; domains: HostedSite[] | null }> {
   const now = Date.now();
   if (hostingCache && now - hostingCache.at < HOSTING_CACHE_TTL_MS) {
     return hostingCache;
   }
   const [subs, domains] = await Promise.all([
     daConfigured() ? listSubdomains() : Promise.resolve(null),
-    hostingerConfigured()
-      ? listDomains().then((ds) => ds.filter((d) => (d.status ?? "").toLowerCase() === "active").map((d) => d.domain))
-      : Promise.resolve(null),
+    hostingerConfigured() ? listHostedSites() : Promise.resolve(null),
   ]);
   // Don't cache a failed listing — retry on the next request instead.
   if (subs !== null || domains !== null) hostingCache = { at: now, subs, domains };
@@ -94,7 +104,7 @@ export async function GET(req: Request) {
   // The client follows up with a full request that merges hosting truth.
   const fast = searchParams.get("fast") === "1";
   const { subs, domains } = fast
-    ? { subs: null as string[] | null, domains: null as string[] | null }
+    ? { subs: null as string[] | null, domains: null as HostedSite[] | null }
     : await fetchHostingInventory();
 
   ensureWildcardOnce();
@@ -109,7 +119,7 @@ export async function GET(req: Request) {
   });
   const warnings: string[] = [];
   if (!fast && daConfigured() && subs === null) warnings.push("Could not list hosting subdomains — showing tracked rows only.");
-  if (!fast && hostingerConfigured() && domains === null) warnings.push("Could not list hosting domains.");
+  if (!fast && hostingerConfigured() && domains === null) warnings.push("Could not list the hosted websites.");
 
   return NextResponse.json({
     rows: filterByView(board, VIEWS.has(view) ? view : "all"),

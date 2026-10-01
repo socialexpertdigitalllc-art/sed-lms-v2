@@ -36,7 +36,13 @@ export interface BoardRow {
   leadStatus: string | null;
   deployedAt: string | null;
   isCustomDomain: boolean;
+  /** Hostinger's detected type for a custom-domain site ("other" = static
+   *  files, "wordpress", "nodejs", ...); null for staging rows or unknown. */
+  siteType: string | null;
 }
+
+/** A website on the Hostinger plan; a bare string means "type unknown". */
+export type HostedSite = { domain: string; siteType: string | null };
 
 function hostnameOf(url: string): string | null {
   try {
@@ -63,11 +69,16 @@ export function categorizeTracked(row: TrackedRow, daDomain: string): BoardCateg
 export function buildBoard(
   tracked: TrackedRow[],
   hostingSubdomains: string[] | null,
-  hostingerDomains: string[] | null,
+  hostingerSites: (string | HostedSite)[] | null,
   daDomain: string,
 ): BoardRow[] {
+  const sites: HostedSite[] = (hostingerSites ?? []).map((s) =>
+    typeof s === "string" ? { domain: s, siteType: null } : s,
+  );
+  const typeOf = new Map(sites.map((s) => [s.domain.toLowerCase(), s.siteType]));
   const rows: BoardRow[] = tracked.map((t) => {
     const custom = isCustomDomainUrl(t.url, daDomain);
+    const host = custom ? hostnameOf(t.url) : null;
     return {
       id: t.id,
       subdomain: custom ? null : t.subdomain,
@@ -80,6 +91,7 @@ export function buildBoard(
       leadStatus: t.leads?.status ?? null,
       deployedAt: t.deployed_at,
       isCustomDomain: custom,
+      siteType: host ? (typeOf.get(host) ?? typeOf.get(host.replace(/^www\./, "")) ?? null) : null,
     };
   });
 
@@ -103,18 +115,20 @@ export function buildBoard(
       leadStatus: null,
       deployedAt: null,
       isCustomDomain: false,
+      siteType: null,
     });
   }
 
-  // Hostinger domains → "live". The staging apex itself is infrastructure, not
+  // Hosted websites → "live". The staging apex itself is infrastructure, not
   // a client site — never list it (deleting it would take down everything).
   const claimedDomains = new Set(
     rows.filter((r) => r.isCustomDomain).map((r) => hostnameOf(r.url)).filter(Boolean),
   );
-  for (const domain of hostingerDomains ?? []) {
-    const d = domain.toLowerCase();
+  for (const site of sites) {
+    const d = site.domain.toLowerCase();
     if (d === daDomain.toLowerCase()) continue;
     if (claimedDomains.has(d)) continue;
+    claimedDomains.add(d);
     rows.push({
       id: null,
       subdomain: null,
@@ -127,6 +141,7 @@ export function buildBoard(
       leadStatus: null,
       deployedAt: null,
       isCustomDomain: true,
+      siteType: site.siteType,
     });
   }
 

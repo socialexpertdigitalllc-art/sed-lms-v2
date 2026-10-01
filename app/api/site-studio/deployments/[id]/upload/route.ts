@@ -7,8 +7,10 @@ import {
   clearDocroot,
   uploadZipAndExtract,
 } from "@/lib/template-engine/directadmin";
-import { hostingerConfigured, getWebsite, deployZipToWebsite } from "@/lib/hostinger/client";
+import { hostingerConfigured } from "@/lib/hostinger/client";
 import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
+import { overrideLiveSite, prepareSiteZip } from "@/lib/site-studio/deploy/liveFiles";
+import { snapshotSite } from "@/lib/site-studio/deploy/snapshots";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -54,6 +56,9 @@ export async function POST(req: Request, ctx: Ctx) {
   const daDomain = process.env.DA_DOMAIN ?? "";
   const sub = subFromWebsiteLink(row.url, daDomain);
   const bytes = new Uint8Array(await file.arrayBuffer());
+  const now = new Date().toISOString();
+  let snapshotted: boolean | null = null;
+  let settled = true;
 
   if (sub) {
     if (!daConfigured()) return NextResponse.json({ error: "DirectAdmin is not configured." }, { status: 422 });
@@ -81,26 +86,28 @@ export async function POST(req: Request, ctx: Ctx) {
         { status: 403 },
       );
     }
-    const site = await getWebsite(domain);
-    if (!site) return NextResponse.json({ error: `No hosting website found for ${domain}` }, { status: 502 });
-    const deployed = await deployZipToWebsite(site, bytes);
-    if (!deployed.ok) {
-      return NextResponse.json(
-        { error: `Could not write the site to ${domain}: ${deployed.message ?? "deploy failed"}` },
-        { status: 502 },
-      );
-    }
+    // The deploy wipes the docroot, so the zip must look like a website
+    // (index.html at its root, shared folder stripped) and the CURRENT files
+    // are snapshotted first — restorable from the row's file history. A failed
+    // snapshot warns, never blocks (same rule as the override route).
+    const prepared = prepareSiteZip(bytes);
+    if (!prepared.ok) return NextResponse.json({ error: prepared.message }, { status: 422 });
+    const snapshot = await snapshotSite(admin, row.url, now);
+    snapshotted = snapshot.ok;
+    if (!snapshot.ok) console.warn(`[override] snapshot of ${domain} failed: ${snapshot.message}`);
+    const result = await overrideLiveSite(row.url, prepared.zip, prepared.files);
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+    settled = result.settled;
   }
 
-  const now = new Date().toISOString();
   await admin.from("studio_deployments").update({ deployed_at: now, updated_at: now, deployed_by: auth.userId }).eq("id", id);
   await admin.from("activity_log").insert({
     user_id: auth.userId,
     action: "studio.deployment.overridden",
     entity_type: "studio_deployment",
     entity_id: id,
-    new_value: { url: row.url },
+    new_value: { url: row.url, snapshotted, settled },
   });
 
-  return NextResponse.json({ ok: true, url: row.url });
+  return NextResponse.json({ ok: true, url: row.url, snapshotted, settled });
 }

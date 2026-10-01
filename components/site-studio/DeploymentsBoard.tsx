@@ -40,7 +40,23 @@ export interface BoardRow {
   isCustomDomain: boolean;
   /** Company infrastructure (PROTECTED_DOMAINS) — destructive actions hidden. */
   protected?: boolean;
+  /** Hostinger's type for a custom-domain site: "other" = static files. */
+  siteType?: string | null;
 }
+
+/** File actions (download / history / upload) only make sense on static
+ *  sites — a WordPress/Node site isn't a folder of site files, and an upload
+ *  would erase it. Unknown type keeps the actions (the server refuses anyway). */
+function filesManaged(row: BoardRow): boolean {
+  return !row.siteType || row.siteType === "other";
+}
+
+const SITE_TYPE_LABEL: Record<string, string> = {
+  wordpress: "WordPress",
+  nodejs: "Node.js",
+  builder: "Website Builder",
+  horizons: "Horizons",
+};
 
 type View = "all" | "ready" | "manual" | "other" | "live";
 
@@ -329,6 +345,16 @@ export function DeploymentsBoard() {
     overrideInput.current?.click();
   }
 
+  async function linkCustom(row: BoardRow) {
+    let target = row;
+    if (!target.id && target.isCustomDomain) {
+      const adopted = await adoptDomainRow(target);
+      if (!adopted) return;
+      target = adopted;
+    }
+    if (target.id) setLinkFor({ deploymentId: target.id, subdomain: null, url: target.url });
+  }
+
   async function takedownCustom(row: BoardRow) {
     let target = row;
     if (!target.id && target.isCustomDomain) {
@@ -351,7 +377,17 @@ export function DeploymentsBoard() {
       const res = await fetch(`/api/site-studio/deployments/${row.id}/upload`, { method: "POST", body: fd });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) toast({ kind: "error", title: body.error ?? "Override failed" });
-      else toast({ kind: "success", title: `${row.url.replace(/^https?:\/\//, "")} updated` });
+      else {
+        const notes = [
+          body.snapshotted === false ? "Could not save the previous files to the history first." : null,
+          body.settled === false ? "Hostinger is still unpacking — refresh the site in a minute." : null,
+        ].filter(Boolean);
+        toast({
+          kind: "success",
+          title: `${row.url.replace(/^https?:\/\//, "")} updated`,
+          ...(notes.length ? { body: notes.join(" ") } : {}),
+        });
+      }
       await load();
     } finally {
       setBusyKey(null);
@@ -496,6 +532,11 @@ export function DeploymentsBoard() {
                         {row.url.replace(/^https?:\/\//, "")}
                         <ExternalLink className="h-3.5 w-3.5" />
                       </a>
+                      {row.isCustomDomain && !filesManaged(row) ? (
+                        <span className="ml-2 align-middle">
+                          <Pill tone="neutral">{SITE_TYPE_LABEL[row.siteType ?? ""] ?? row.siteType}</Pill>
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2">
                       <Pill tone={STATUS_TONE[row.status]}>{row.status.replace("_", " ")}</Pill>
@@ -562,20 +603,24 @@ export function DeploymentsBoard() {
                           </span>
                         ) : row.isCustomDomain && (row.status === "live" || row.status === "untracked") ? (
                           <>
-                            <DownloadSiteFilesButton site={row.url} disabled={busy} />
-                            <button type="button" className={iconBtn} title="File history / restore"
-                              aria-label={`File history of ${row.url}`} disabled={busy}
-                              onClick={() => setHistoryFor(row.url)}>
-                              <History className="h-4 w-4" />
-                            </button>
-                            <button type="button" className={iconBtn} title="Override with a zip upload"
-                              aria-label={`Upload new files to ${row.url}`} disabled={busy} onClick={() => void overrideCustom(row)}>
-                              <Upload className="h-4 w-4" />
-                            </button>
-                            {row.id && !row.leadId ? (
+                            {filesManaged(row) ? (
+                              <>
+                                <DownloadSiteFilesButton site={row.url} disabled={busy} />
+                                <button type="button" className={iconBtn} title="File history / restore"
+                                  aria-label={`File history of ${row.url}`} disabled={busy}
+                                  onClick={() => setHistoryFor(row.url)}>
+                                  <History className="h-4 w-4" />
+                                </button>
+                                <button type="button" className={iconBtn} title="Override with a zip upload (current files are saved to the history first)"
+                                  aria-label={`Upload new files to ${row.url}`} disabled={busy} onClick={() => void overrideCustom(row)}>
+                                  <Upload className="h-4 w-4" />
+                                </button>
+                              </>
+                            ) : null}
+                            {!row.leadId ? (
                               <button type="button" className={iconBtn} title="Link to a lead"
                                 aria-label={`Link ${row.url} to a lead`} disabled={busy}
-                                onClick={() => setLinkFor({ deploymentId: row.id, subdomain: null, url: row.url })}>
+                                onClick={() => void linkCustom(row)}>
                                 <Link2 className="h-4 w-4" />
                               </button>
                             ) : null}

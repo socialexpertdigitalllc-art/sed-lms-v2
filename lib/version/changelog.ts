@@ -29,6 +29,29 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.20.1",
+    date: "2026-10-01",
+    title: "Moving sites to their real domain works again",
+    changes: [
+      {
+        kind: "fix",
+        text: "Transfer to custom domain works again. Since the hosting-plan change in mid-August every transfer to a newer domain crashed with a bare \"Transfer failed\" — the new plan left an unnamed free-domain placeholder in the Hostinger domain list, and the transfer tripped over it. A brand-new domain is also given time to finish its hosting setup (a few minutes) instead of failing after 20 seconds, the staging subdomain is only deleted once Hostinger confirms the files are in place, and an SSL certificate is requested for the new domain.",
+      },
+      {
+        kind: "fix",
+        text: "Live Websites can be managed again from the deployments board: Download, File history and the AI developer read the live files of sites on the client hosting account (they were unreadable since the plan change), and uploading new files to a live site now saves the current files to its history first, so every overwrite can be undone.",
+      },
+      {
+        kind: "improvement",
+        text: "The transfer list now shows every domain you can use — registered on Hostinger or already hosted there — and says what will happen: hosting created, current site replaced (with a snapshot), or blocked. WordPress and other non-static sites are marked on the board and protected from uploads and transfers that would erase them. The Live Websites tab lists what the hosting actually serves.",
+      },
+      {
+        kind: "fix",
+        text: "Uploading a site zip larger than 10MB from any upload button no longer fails with \"Expected a multipart form upload\".",
+      },
+    ],
+  },
+  {
     version: "2.20.0",
     date: "2026-09-22",
     title: "Dark mode",

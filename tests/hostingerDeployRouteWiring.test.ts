@@ -13,7 +13,16 @@ import { NextResponse } from "next/server";
  * local filesystem.
  */
 
-const deployZipToWebsiteSpy = vi.hoisted(() => vi.fn(async () => ({ ok: true as const })));
+const deployZipToWebsiteSpy = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]): Promise<{ ok: true; settled: boolean } | { ok: false; message: string }> => ({
+    ok: true,
+    settled: true,
+  })),
+);
+const deleteSubdomainSpy = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({})));
+const snapshotSiteSpy = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ ok: true as const, path: "snapshots/client.com/x.zip", bytes: 10 })),
+);
 const deployZipToDirSpy = vi.hoisted(() =>
   vi.fn(async () => {
     throw new Error("fs deploy must not be used for custom domains");
@@ -30,14 +39,26 @@ const WEBSITE = vi.hoisted(() => ({
   is_enabled: true,
 }));
 
+/** Per-test Hostinger state: what the domain is today and how setup answers. */
+const hosting = vi.hoisted(() => ({
+  website: null as Record<string, unknown> | null,
+  domains: [] as { id: number; domain: string; type: string; status: string; expires_at: null }[],
+  ensure: null as Record<string, unknown> | null,
+}));
+
 vi.mock("@/lib/template-engine/fsDeploy", () => ({ deployZipToDir: deployZipToDirSpy }));
+vi.mock("@/lib/site-studio/deploy/snapshots", () => ({ snapshotSite: snapshotSiteSpy }));
 
 vi.mock("@/lib/hostinger/client", () => ({
   hostingerConfigured: () => true,
-  listDomains: async () => [{ id: 1, domain: "client.com", type: "domain", status: "active", expires_at: null }],
-  getWebsite: async () => WEBSITE,
-  ensureWebsite: async () => ({ ok: true, website: WEBSITE }),
+  listDomains: async () => hosting.domains,
+  getWebsite: async () => hosting.website,
+  ensureWebsite: async () => hosting.ensure ?? { ok: true, website: hosting.website ?? WEBSITE, created: !hosting.website },
   deployZipToWebsite: deployZipToWebsiteSpy,
+  downloadWebsiteZip: async () => ({ ok: true, zip: archivedZip }),
+  ensureSsl: async () => "installing",
+  isStaticWebsite: (w: { website_type?: string | null }) => !w.website_type || w.website_type === "other",
+  websiteTypeLabel: (t: string | null | undefined) => (t === "wordpress" ? "WordPress" : "static"),
 }));
 
 vi.mock("@/lib/template-engine/directadmin", () => ({
@@ -51,7 +72,7 @@ vi.mock("@/lib/template-engine/directadmin", () => ({
     }
   },
   archiveDocroot: async () => archivedZip,
-  deleteSubdomain: async () => ({}),
+  deleteSubdomain: deleteSubdomainSpy,
   clearDocroot: async () => ({ ok: true }),
   uploadZipAndExtract: async () => ({ ok: true }),
   docrootFor: (sub: string) => `/staging/${sub}`,
@@ -108,6 +129,7 @@ function fakeAdmin(rows: Record<string, Record<string, unknown> | null>) {
 const adminHolder = vi.hoisted(() => ({ admin: null as unknown }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => adminHolder.admin }));
 
+import { zipFromMap, unzipToMap } from "@/lib/template-engine/zip";
 import { POST as studioTransferPost } from "@/app/api/site-studio/deployments/[id]/transfer/route";
 import { POST as studioUploadPost } from "@/app/api/site-studio/deployments/[id]/upload/route";
 import { POST as v2TransferPost } from "@/app/api/template-engine/generations/[id]/transfer/route";
@@ -120,7 +142,13 @@ beforeEach(() => {
   process.env.DA_DOMAIN = "dmviral.com";
   process.env.PROTECTED_DOMAINS = "sedlms.com";
   deployZipToWebsiteSpy.mockClear();
+  deployZipToWebsiteSpy.mockImplementation(async () => ({ ok: true, settled: true }));
   deployZipToDirSpy.mockClear();
+  deleteSubdomainSpy.mockClear();
+  snapshotSiteSpy.mockClear();
+  hosting.website = WEBSITE;
+  hosting.domains = [{ id: 1, domain: "client.com", type: "domain", status: "active", expires_at: null }];
+  hosting.ensure = null;
   // reachability probe inside the routes
   vi.stubGlobal("fetch", vi.fn(async () => new Response("ok", { status: 200 })));
 });
@@ -169,17 +197,21 @@ describe("custom-domain deploys go through the Hostinger API, never the local di
     });
 
     const form = new FormData();
-    const bytes = new Uint8Array([0x50, 0x4b, 9, 9]);
-    form.append("file", new File([bytes], "site.zip", { type: "application/zip" }));
+    const bytes = zipFromMap({ "index.html": new TextEncoder().encode("<p>new</p>") });
+    form.append("file", new File([new Uint8Array(bytes)], "site.zip", { type: "application/zip" }));
     const res = await studioUploadPost(new Request("http://lms.local/api", { method: "POST", body: form }), ctx);
-    const json = (await res.json()) as { ok?: boolean; error?: string };
+    const json = (await res.json()) as { ok?: boolean; error?: string; snapshotted?: boolean };
 
     expect(json.error).toBeUndefined();
     expect(json.ok).toBe(true);
+    // the current files are saved to the history BEFORE the overwrite
+    expect(snapshotSiteSpy).toHaveBeenCalledTimes(1);
+    expect(json.snapshotted).toBe(true);
+    expect(snapshotSiteSpy.mock.invocationCallOrder[0]).toBeLessThan(deployZipToWebsiteSpy.mock.invocationCallOrder[0]);
     expect(deployZipToWebsiteSpy).toHaveBeenCalledTimes(1);
     const [siteArg, zipArg] = deployZipToWebsiteSpy.mock.calls[0] as unknown as [unknown, Uint8Array];
     expect(siteArg).toEqual(WEBSITE);
-    expect(Array.from(zipArg)).toEqual(Array.from(bytes));
+    expect(new TextDecoder().decode(unzipToMap(zipArg)["index.html"])).toBe("<p>new</p>");
     expect(deployZipToDirSpy).not.toHaveBeenCalled();
   });
 
@@ -206,5 +238,107 @@ describe("custom-domain deploys go through the Hostinger API, never the local di
     expect(deployZipToWebsiteSpy).toHaveBeenCalledTimes(1);
     expect(deployZipToWebsiteSpy).toHaveBeenCalledWith(WEBSITE, archivedZip);
     expect(deployZipToDirSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("studio transfer: safety rails", () => {
+  const stagingRow = () =>
+    fakeAdmin({
+      studio_deployments: {
+        id: "dep-1",
+        lead_id: "lead-1",
+        subdomain: "greenlawn",
+        url: "https://greenlawn.dmviral.com",
+        status: "live",
+        updated_at: "2026-09-01T00:00:00Z",
+      },
+      leads: { id: "lead-1", business_name: "Green Lawn", agent_id: "a", closed_by: "c", website_link: null },
+    });
+  const transfer = async (domain: string) => {
+    const admin = stagingRow();
+    adminHolder.admin = admin;
+    const res = await studioTransferPost(
+      new Request("http://lms.local/api", { method: "POST", body: JSON.stringify({ domain }) }),
+      ctx,
+    );
+    return { res, json: (await res.json()) as Record<string, unknown>, admin };
+  };
+
+  it("a domain that is neither registered nor hosted is refused clearly, and the failure is logged", async () => {
+    hosting.website = null;
+    hosting.domains = [];
+    const { res, json, admin } = await transfer("stranger.com");
+    expect(res.status).toBe(422);
+    expect(String(json.error)).toMatch(/neither registered/);
+    expect(deployZipToWebsiteSpy).not.toHaveBeenCalled();
+    expect(admin.updates.activity_log?.[0]).toMatchObject({ action: "studio.deployment.transfer_failed" });
+  });
+
+  it("a registered domain with no hosting yet: hosting is created, nothing to snapshot, staging removed", async () => {
+    hosting.website = null;
+    const { json } = await transfer("client.com");
+    expect(json.error).toBeUndefined();
+    expect(json).toMatchObject({ url: "https://client.com", hostingCreated: true, subdomainDeleted: true, ssl: "installing" });
+    expect(snapshotSiteSpy).not.toHaveBeenCalled();
+    expect(deleteSubdomainSpy).toHaveBeenCalledWith("greenlawn");
+  });
+
+  it("a domain that already hosts a static site is snapshotted before it is overwritten", async () => {
+    const { json } = await transfer("client.com");
+    expect(json.error).toBeUndefined();
+    expect(snapshotSiteSpy).toHaveBeenCalledTimes(1);
+    expect(snapshotSiteSpy.mock.calls[0][1]).toBe("https://client.com");
+    expect(snapshotSiteSpy.mock.invocationCallOrder[0]).toBeLessThan(deployZipToWebsiteSpy.mock.invocationCallOrder[0]);
+    expect(json.snapshot).toBe("snapshots/client.com/x.zip");
+  });
+
+  it("a WordPress site is never a transfer target — the deploy would erase it", async () => {
+    hosting.website = { ...WEBSITE, website_type: "wordpress" };
+    const { res, json } = await transfer("client.com");
+    expect(res.status).toBe(409);
+    expect(String(json.error)).toMatch(/WordPress/);
+    expect(deployZipToWebsiteSpy).not.toHaveBeenCalled();
+    expect(deleteSubdomainSpy).not.toHaveBeenCalled();
+  });
+
+  it("hosting still being set up: 409 pending, nothing deployed, staging untouched, not logged as a failure", async () => {
+    hosting.website = null;
+    hosting.ensure = { ok: false, pending: true, message: "Hostinger is still setting up hosting for client.com" };
+    const { res, json, admin } = await transfer("client.com");
+    expect(res.status).toBe(409);
+    expect(json.pending).toBe(true);
+    expect(deployZipToWebsiteSpy).not.toHaveBeenCalled();
+    expect(deleteSubdomainSpy).not.toHaveBeenCalled();
+    expect(admin.updates.activity_log ?? []).toHaveLength(0);
+  });
+
+  it("keeps the staging subdomain when Hostinger had not finished unpacking", async () => {
+    deployZipToWebsiteSpy.mockImplementation(async () => ({ ok: true, settled: false }));
+    const { json } = await transfer("client.com");
+    expect(json).toMatchObject({ url: "https://client.com", settled: false, subdomainDeleted: false });
+    expect(deleteSubdomainSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses staging addresses and protected company domains as targets", async () => {
+    for (const domain of ["foo.dmviral.com", "sedlms.com", "not a domain"]) {
+      const { res } = await transfer(domain);
+      expect(res.status).toBe(422);
+    }
+    expect(deployZipToWebsiteSpy).not.toHaveBeenCalled();
+  });
+
+  it("normalizes the pick (scheme, www, case) before using it", async () => {
+    const { json } = await transfer("https://WWW.Client.com/");
+    expect(json.url).toBe("https://client.com");
+  });
+
+  it("an unexpected crash comes back as a JSON error (not a bare 500) and is logged", async () => {
+    deployZipToWebsiteSpy.mockImplementation(async () => {
+      throw new Error("boom");
+    });
+    const { res, json, admin } = await transfer("client.com");
+    expect(res.status).toBe(500);
+    expect(String(json.error)).toMatch(/boom/);
+    expect(admin.updates.activity_log?.[0]).toMatchObject({ action: "studio.deployment.transfer_failed" });
   });
 });

@@ -1,5 +1,3 @@
-import { lstat, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
 import {
   archiveDocroot,
   clearDocroot,
@@ -7,7 +5,14 @@ import {
   subFromWebsiteLink,
   uploadZipAndExtract,
 } from "@/lib/template-engine/directadmin";
-import { deployZipToWebsite, getWebsite, hostingerConfigured } from "@/lib/hostinger/client";
+import {
+  deployZipToWebsite,
+  downloadWebsiteZip,
+  getWebsite,
+  hostingerConfigured,
+  isStaticWebsite,
+  websiteTypeLabel,
+} from "@/lib/hostinger/client";
 import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import { isProtectedDomain } from "./protected";
 
@@ -16,18 +21,16 @@ import { isProtectedDomain } from "./protected";
  * right now, not the generator artifact. Two sources, mirroring how uploads
  * land (see deployments/[id]/upload):
  *   - staging subdomains ({sub}.DA_DOMAIN): DirectAdmin's download-archive API;
- *   - custom domains: WRITES go over the Hostinger API (deployZipToWebsite —
- *     the sites live on a different hosting account than the LMS since the
- *     plan migration), while READS still come off the local docroot and so
- *     only work for the few sites left on the LMS's own account.
+ *   - custom domains: the Hostinger API both ways — reads through the file
+ *     server (downloadWebsiteZip), writes as an archive deploy
+ *     (deployZipToWebsite). Never the local disk: the client sites live on a
+ *     different hosting account than the LMS since the plan migration.
+ * Only plain static websites are read or written: a WordPress/Node site is not
+ * a folder of site files, and a static deploy would erase it.
  * The staging check MUST come before the protected-domain check — DA_DOMAIN
  * is always in the protected list, so every staging subdomain would otherwise
  * read as protected and be refused.
  */
-
-/** Cumulative uncompressed cap. Client sites upload as ≤60MB zips, so a
- *  docroot far past this is a wrong target (or junk), not a bigger site. */
-const MAX_DIR_BYTES = 300 * 1024 * 1024;
 
 /** Hostname out of a URL or bare host ("https://a.b/x", "a.b") — null when unparseable. */
 export function siteHostFrom(input: string): string | null {
@@ -53,44 +56,6 @@ export function hostCandidates(host: string): string[] {
 export function siteZipFilename(host: string, now: Date): string {
   const day = now.toISOString().slice(0, 10);
   return `${host.replace(/[^a-z0-9.-]/gi, "_")}-files-${day}.zip`;
-}
-
-/** Recursively zip a directory from the local filesystem. Symlinks are
- *  skipped (never follow a link out of the docroot); missing dir is an error. */
-export async function zipDirFromDisk(
-  dir: string,
-): Promise<{ ok: true; zip: Uint8Array; files: number } | { ok: false; message: string }> {
-  const map: Record<string, Uint8Array> = {};
-  let total = 0;
-
-  async function walk(abs: string, rel: string): Promise<string | null> {
-    let entries;
-    try {
-      entries = await readdir(abs, { withFileTypes: true });
-    } catch (e) {
-      return `could not read ${abs}: ${e instanceof Error ? e.message : "fs error"}`;
-    }
-    for (const entry of entries) {
-      const absChild = join(abs, entry.name);
-      const relChild = rel ? `${rel}/${entry.name}` : entry.name;
-      // dirent types are cheap but symlinks masquerade — lstat is the truth
-      const stat = await lstat(absChild).catch(() => null);
-      if (!stat || stat.isSymbolicLink()) continue;
-      if (stat.isDirectory()) {
-        const err = await walk(absChild, relChild);
-        if (err) return err;
-      } else if (stat.isFile()) {
-        total += stat.size;
-        if (total > MAX_DIR_BYTES) return `site files exceed ${Math.round(MAX_DIR_BYTES / 1024 / 1024)}MB`;
-        map[relChild] = new Uint8Array(await readFile(absChild));
-      }
-    }
-    return null;
-  }
-
-  const err = await walk(dir, "");
-  if (err) return { ok: false, message: err };
-  return { ok: true, zip: zipFromMap(map), files: Object.keys(map).length };
 }
 
 /**
@@ -119,11 +84,29 @@ export function prepareSiteZip(
 
 export type LiveSiteZip =
   | { ok: true; zip: Uint8Array; host: string; source: "staging" | "custom" }
-  | { ok: false; status: 403 | 422 | 502; error: string };
+  | { ok: false; status: 403 | 409 | 422 | 502; error: string };
 
 export type LiveSiteOverride =
-  | { ok: true; host: string; source: "staging" | "custom"; files: number; sub: string | null }
-  | { ok: false; status: 403 | 422 | 502; error: string };
+  | {
+      ok: true;
+      host: string;
+      source: "staging" | "custom";
+      files: number;
+      sub: string | null;
+      /** False when Hostinger accepted the deploy but had not finished
+       *  unpacking it when we stopped waiting (it normally completes). */
+      settled: boolean;
+    }
+  | { ok: false; status: 403 | 409 | 422 | 502; error: string };
+
+/** Why a custom-domain site's files can't be handled here, or null if they can. */
+function nonStaticRefusal(site: { domain: string; website_type?: string | null }, verb: string): string | null {
+  if (isStaticWebsite(site)) return null;
+  return (
+    `${site.domain} is a ${websiteTypeLabel(site.website_type)} site, not a folder of website files — ` +
+    `it can't be ${verb} from the dashboard (manage it in Hostinger's hPanel).`
+  );
+}
 
 /**
  * Replace a hosted site's live files with a (already prepareSiteZip'd) zip —
@@ -151,7 +134,7 @@ export async function overrideLiveSite(rawSite: string, zip: Uint8Array, files: 
         error: `Upload failed at ${uploaded.failedStep}: ${uploaded.message ?? "failed"}`,
       };
     }
-    return { ok: true, host, source: "staging", files, sub };
+    return { ok: true, host, source: "staging", files, sub, settled: true };
   }
 
   if (isProtectedDomain(host)) {
@@ -166,17 +149,19 @@ export async function overrideLiveSite(rawSite: string, zip: Uint8Array, files: 
   for (const candidate of hostCandidates(host)) {
     const site = await getWebsite(candidate);
     if (!site) continue;
+    const refusal = nonStaticRefusal(site, "overwritten");
+    if (refusal) return { ok: false, status: 422, error: refusal };
     // Over the API, not the disk: since the plan migration the custom domains
     // can live on a different hosting account than the LMS.
     const deployed = await deployZipToWebsite(site, zip);
     if (!deployed.ok) {
       return {
         ok: false,
-        status: 502,
+        status: deployed.pending ? 409 : 502,
         error: `Could not write the site to ${candidate}: ${deployed.message ?? "deploy failed"}`,
       };
     }
-    return { ok: true, host: candidate, source: "custom", files, sub: null };
+    return { ok: true, host: candidate, source: "custom", files, sub: null, settled: deployed.settled };
   }
   return {
     ok: false,
@@ -212,11 +197,17 @@ export async function fetchLiveSiteZip(rawSite: string): Promise<LiveSiteZip> {
   for (const candidate of hostCandidates(host)) {
     const site = await getWebsite(candidate);
     if (!site) continue;
-    const zipped = await zipDirFromDisk(site.root_directory);
-    if (!zipped.ok) {
-      return { ok: false, status: 502, error: `Could not read the files of ${candidate}: ${zipped.message}` };
+    const refusal = nonStaticRefusal(site, "downloaded or edited");
+    if (refusal) return { ok: false, status: 422, error: refusal };
+    const downloaded = await downloadWebsiteZip(site);
+    if (!downloaded.ok) {
+      return {
+        ok: false,
+        status: downloaded.pending ? 409 : 502,
+        error: `Could not read the files of ${candidate}: ${downloaded.message}`,
+      };
     }
-    return { ok: true, zip: zipped.zip, host: candidate, source: "custom" };
+    return { ok: true, zip: downloaded.zip, host: candidate, source: "custom" };
   }
   return {
     ok: false,

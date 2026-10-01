@@ -1,12 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   siteHostFrom,
   hostCandidates,
   siteZipFilename,
-  zipDirFromDisk,
   fetchLiveSiteZip,
   prepareSiteZip,
   overrideLiveSite,
@@ -71,35 +67,6 @@ describe("siteZipFilename", () => {
   });
 });
 
-describe("zipDirFromDisk", () => {
-  let dir: string;
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "livefiles-"));
-  });
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("zips a nested tree with forward-slash paths", async () => {
-    await writeFile(join(dir, "index.html"), "<h1>hi</h1>");
-    await mkdir(join(dir, "assets", "css"), { recursive: true });
-    await writeFile(join(dir, "assets", "css", "site.css"), "body{}");
-    const res = await zipDirFromDisk(dir);
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.files).toBe(2);
-    const map = unzipToMap(res.zip);
-    // unzipToMap strips a single shared root; two top-level entries here, so paths survive as-is
-    expect(Object.keys(map).sort()).toEqual(["assets/css/site.css", "index.html"]);
-    expect(new TextDecoder().decode(map["index.html"])).toBe("<h1>hi</h1>");
-  });
-
-  it("errors on a missing directory instead of returning an empty zip", async () => {
-    const res = await zipDirFromDisk(join(dir, "nope"));
-    expect(res.ok).toBe(false);
-  });
-});
-
 /** fetch stub routing by URL substring — DA archive vs Hostinger website list. */
 function stubFetch(routes: { match: string; respond: () => Response }[]) {
   vi.stubGlobal(
@@ -153,31 +120,44 @@ describe("fetchLiveSiteZip", () => {
     expect(res).toMatchObject({ ok: false, status: 422 });
   });
 
-  it("zips a custom domain's docroot from disk, falling back from www to the apex", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "livefiles-custom-"));
-    await writeFile(join(dir, "index.html"), "<p>live</p>");
-    try {
-      stubFetch([
-        {
-          match: "domain=www.client.com",
-          respond: () => Response.json({ data: [] }),
-        },
-        {
-          match: "domain=client.com",
-          respond: () =>
-            Response.json({
-              data: [{ domain: "client.com", root_directory: dir, vhost_type: "", order_id: 1, is_enabled: true }],
-            }),
-        },
-      ]);
-      const res = await fetchLiveSiteZip("https://www.client.com");
-      expect(res).toMatchObject({ ok: true, host: "client.com", source: "custom" });
-      if (res.ok) {
-        expect(new TextDecoder().decode(unzipToMap(res.zip)["index.html"])).toBe("<p>live</p>");
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true });
+  it("downloads a custom domain's live files over the Hostinger file server, falling back from www to the apex", async () => {
+    // The client sites live on a different hosting account than the LMS, so
+    // the local disk can't reach them — the bogus root_directory proves the
+    // read never goes near the filesystem.
+    const live = zipFromMap({ "index.html": enc("<p>live</p>") });
+    stubFetch([
+      { match: "domain=www.client.com", respond: () => Response.json({ data: [] }) },
+      {
+        match: "domain=client.com",
+        respond: () =>
+          Response.json({
+            data: [{ domain: "client.com", username: "u447231526", root_directory: "Z:/not-a-real-dir", website_type: "other" }],
+          }),
+      },
+      {
+        match: "/api/hosting/v1/files/upload-urls",
+        respond: () =>
+          Response.json({ url: "https://srv-files.hstgr.io/rest/x/api/tus/public_html", auth_key: "AK", rest_auth_key: "RK" }),
+      },
+      { match: "srv-files.hstgr.io/rest/x/api/raw/public_html?algo=zip", respond: () => new Response(new Uint8Array(live), { status: 200 }) },
+    ]);
+    const res = await fetchLiveSiteZip("https://www.client.com");
+    expect(res).toMatchObject({ ok: true, host: "client.com", source: "custom" });
+    if (res.ok) {
+      expect(new TextDecoder().decode(unzipToMap(res.zip)["index.html"])).toBe("<p>live</p>");
     }
+  });
+
+  it("refuses WordPress sites — they are not a folder of site files", async () => {
+    stubFetch([
+      {
+        match: "domain=client.com",
+        respond: () => Response.json({ data: [{ domain: "client.com", username: "u1", root_directory: "/x", website_type: "wordpress" }] }),
+      },
+    ]);
+    const res = await fetchLiveSiteZip("client.com");
+    expect(res).toMatchObject({ ok: false, status: 422 });
+    if (!res.ok) expect(res.error).toMatch(/WordPress/);
   });
 
   it("names the unconfigured platform instead of a generic failure", async () => {
@@ -267,12 +247,14 @@ describe("overrideLiveSite", () => {
         match: "/api/hosting/v1/files/upload-urls",
         respond: () => Response.json({ url: "https://srv-files.hstgr.io/", auth_key: "AK", rest_auth_key: "RK" }),
       },
+      // settle check: the archive is gone from public_html → deploy finished
+      { match: "srv-files.hstgr.io/api/resources/public_html/", respond: () => Response.json({ items: [{ name: "index.html" }] }) },
       { match: "srv-files.hstgr.io", respond: () => new Response(null, { status: 204 }) },
       { match: "/websites/client.com/deploy", respond: () => Response.json({ message: "ok" }) },
     ]);
     const prepared = siteZip();
     const res = await overrideLiveSite("client.com", prepared.zip, prepared.files);
-    expect(res).toMatchObject({ ok: true, host: "client.com", source: "custom", sub: null });
+    expect(res).toMatchObject({ ok: true, host: "client.com", source: "custom", sub: null, settled: true });
     const urls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes("/accounts/u447231526/websites/client.com/deploy"))).toBe(true);
   });
