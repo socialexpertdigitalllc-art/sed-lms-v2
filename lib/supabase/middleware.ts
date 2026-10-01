@@ -97,7 +97,10 @@ export async function updateSession(request: NextRequest) {
     // CORS, see app/api/forms/submit/route.ts) and its secret-header retry
     // sweep called by the instrumentation poller. Neither has a session.
     path === "/api/forms/submit" ||
-    path === "/api/forms/deliver";
+    path === "/api/forms/deliver" ||
+    // Domain pipeline sweep (buy → DNS → hosting → SSL → go live): secret-
+    // header auth, called by the instrumentation poller with no session.
+    path === "/api/domains/process";
 
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));

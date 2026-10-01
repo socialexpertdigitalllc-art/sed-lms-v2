@@ -33,7 +33,7 @@ interface HgResult {
   body: string;
 }
 
-async function hgOnce(path: string, init: { method: "GET" | "POST" | "DELETE"; json?: unknown }): Promise<HgResult> {
+async function hgOnce(path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; json?: unknown }): Promise<HgResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -57,7 +57,7 @@ async function hgOnce(path: string, init: { method: "GET" | "POST" | "DELETE"; j
 
 /** Reads retry once on a network error (never on an HTTP answer); writes never
  *  retry — a POST that timed out may still have been applied. */
-async function hg(path: string, init: { method: "GET" | "POST" | "DELETE"; json?: unknown }): Promise<HgResult> {
+async function hg(path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; json?: unknown }): Promise<HgResult> {
   const first = await hgOnce(path, init);
   if (first.status !== 0 || init.method !== "GET") return first;
   return hgOnce(path, init);
@@ -579,4 +579,145 @@ export async function deleteWebsite(domain: string): Promise<{ ok: boolean; mess
     json: { confirm: true },
   });
   return r.ok ? { ok: true } : { ok: false, message: messageOf(r) };
+}
+
+// ---------------------------------------------------------------------------
+// Hostinger as the registrar — the option for clients who need access to their
+// domain (Cloudflare stays the default: same price the first year, $10 less per
+// renewal). Verified against the account 2026-10-02:
+//   POST /api/domains/v1/availability {domain:label, tlds:[tld]} -> [{domain, is_available, restriction}]
+//   GET  /api/billing/v1/catalog?category=DOMAIN&name=.COM*      -> item "hostingercom-domain-com",
+//        price "hostingercom-domain-com-usd-1y" {price (renewal), first_period_price} in cents
+//   POST /api/domains/v1/portfolio {domain, item_id} -> 200 order {status, subscription_id} |
+//        202 {status: payment_initiated} = paid later, NOT registered (finish with /setup)
+//   POST /api/hosting/v1/domains/verify-ownership {domain} -> {is_accessible, txt_to_verify}
+
+/** "jjremodeling.com" -> ["jjremodeling", "com"]; "x.com.co" -> ["x", "com.co"]. */
+function splitDomain(domain: string): [string, string] {
+  const i = domain.indexOf(".");
+  return [domain.slice(0, i), domain.slice(i + 1)];
+}
+
+export async function checkHostingerAvailability(
+  domain: string,
+): Promise<{ available: boolean; restriction: string | null } | null> {
+  const [label, tld] = splitDomain(domain.toLowerCase());
+  if (!label || !tld) return null;
+  const r = await hg("/api/domains/v1/availability", {
+    method: "POST",
+    json: { domain: label, tlds: [tld], with_alternatives: false },
+  });
+  if (!r.ok) return null;
+  try {
+    const arr = JSON.parse(r.body) as { domain: string | null; is_available: boolean; restriction: string | null }[];
+    const hit = (Array.isArray(arr) ? arr : []).find((a) => (a.domain ?? "").toLowerCase() === domain.toLowerCase());
+    return hit ? { available: Boolean(hit.is_available), restriction: hit.restriction ?? null } : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface HostingerDomainPrice {
+  /** Catalog price item to order, e.g. "hostingercom-domain-com-usd-1y". */
+  itemId: string;
+  firstCents: number;
+  renewCents: number;
+  currency: string;
+}
+
+/** The 1-year USD price item for an extension, from the account's catalog. */
+export async function getHostingerDomainPrice(tld: string): Promise<HostingerDomainPrice | null> {
+  const t = tld.toLowerCase().replace(/^\./, "");
+  const r = await hg(`/api/billing/v1/catalog?category=DOMAIN&name=${encodeURIComponent(`.${t.toUpperCase()}*`)}`, {
+    method: "GET",
+  });
+  if (!r.ok) return null;
+  try {
+    const items = JSON.parse(r.body) as {
+      id: string;
+      prices?: { id: string; currency: string; price: number; first_period_price?: number; period: number; period_unit: string }[];
+    }[];
+    const item = (Array.isArray(items) ? items : []).find((i) => i.id === `hostingercom-domain-${t.replace(/\./g, "")}`);
+    const price = item?.prices?.find((p) => p.period === 1 && p.period_unit === "year" && p.currency === "USD");
+    if (!price) return null;
+    return { itemId: price.id, firstCents: price.first_period_price ?? price.price, renewCents: price.price, currency: price.currency };
+  } catch {
+    return null;
+  }
+}
+
+export type HostingerPurchaseResult =
+  | {
+      ok: true;
+      /** False when Hostinger took the order but the payment is still processing
+       *  (202): the domain is NOT registered yet — finish with completeDomainSetup. */
+      registered: boolean;
+      orderStatus: string;
+      orderId: number | null;
+      subscriptionId: string | null;
+    }
+  | { ok: false; message: string };
+
+/**
+ * Buy a domain on Hostinger — CHARGES the account's default payment method.
+ * Uses the account's default WHOIS contact for the extension.
+ */
+export async function purchaseHostingerDomain(domain: string, itemId: string): Promise<HostingerPurchaseResult> {
+  const r = await hg("/api/domains/v1/portfolio", { method: "POST", json: { domain: domain.toLowerCase(), item_id: itemId } });
+  if (!r.ok) return { ok: false, message: messageOf(r) };
+  try {
+    const j = JSON.parse(r.body) as { id?: number; subscription_id?: string | null; status?: string };
+    const status = j.status ?? (r.status === 202 ? "payment_initiated" : "unknown");
+    return {
+      ok: true,
+      registered: r.status !== 202 && status === "completed",
+      orderStatus: status,
+      orderId: typeof j.id === "number" ? j.id : null,
+      subscriptionId: j.subscription_id ?? null,
+    };
+  } catch {
+    return { ok: false, message: "unreadable purchase response" };
+  }
+}
+
+/** A portfolio domain's registration status (active, pending_setup, …), or null if absent. */
+export async function getHostingerPortfolioDomain(domain: string): Promise<{ status: string } | null> {
+  const r = await hg(`/api/domains/v1/portfolio/${encodeURIComponent(domain.toLowerCase())}`, { method: "GET" });
+  if (!r.ok) return null;
+  try {
+    const j = JSON.parse(r.body) as { status?: string };
+    return j.status ? { status: j.status } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Register a paid-but-not-set-up domain (no new order, no new charge). */
+export async function completeHostingerDomainSetup(domain: string): Promise<{ ok: boolean; message?: string }> {
+  const r = await hg(`/api/domains/v1/portfolio/${encodeURIComponent(domain.toLowerCase())}/setup`, { method: "POST", json: {} });
+  return r.ok ? { ok: true } : { ok: false, message: messageOf(r) };
+}
+
+/** Make sure a Hostinger subscription (e.g. a domain) renews by itself. */
+export async function enableHostingerAutoRenew(subscriptionId: string): Promise<{ ok: boolean; message?: string }> {
+  const r = await hg(`/api/billing/v1/subscriptions/${encodeURIComponent(subscriptionId)}/auto-renewal/enable`, {
+    method: "PATCH",
+  });
+  return r.ok ? { ok: true } : { ok: false, message: messageOf(r) };
+}
+
+/**
+ * Can this domain be used for a NEW website? An unused domain is accessible; a
+ * domain already used by a website (ours included) is not; a TXT record is
+ * offered only when another Hostinger customer has the domain.
+ */
+export async function verifyDomainOwnership(domain: string): Promise<{ accessible: boolean; txt: string | null } | null> {
+  const r = await hg("/api/hosting/v1/domains/verify-ownership", { method: "POST", json: { domain: domain.toLowerCase() } });
+  if (!r.ok) return null;
+  try {
+    const j = JSON.parse(r.body) as { is_accessible?: boolean; txt_to_verify?: string | null };
+    return { accessible: Boolean(j.is_accessible), txt: j.txt_to_verify ? j.txt_to_verify : null };
+  } catch {
+    return null;
+  }
 }

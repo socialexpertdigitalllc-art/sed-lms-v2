@@ -18,15 +18,18 @@ import { fetchLiveSiteZip } from "@/lib/site-studio/deploy/liveFiles";
 import { isStaticWebsite, listDomains, listWebsites } from "@/lib/hostinger/client";
 import { unzipToMap } from "@/lib/template-engine/zip";
 
-// load .env.local fully (vitest does not)
-// (CRLF-safe: a Windows-saved .env.local leaves "\r" on every line, which the
-// pattern's `.` cannot match — every variable silently failed to load)
-for (const line of readFileSync(".env.local", "utf8").split(/\r?\n/)) {
-  const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-  if (m && m[2].trim()) process.env[m[1]] = m[2].trim();
-}
-
 const live = process.env.LIVE_DL_VERIFY === "1";
+
+// load .env.local fully (vitest does not) — only when enabled: test files can
+// share a worker process, and real credentials must not leak into the normal
+// suite. (CRLF-safe: a Windows-saved .env.local leaves "\r" on every line,
+// which the pattern's `.` cannot match — every variable silently failed.)
+if (live) {
+  for (const line of readFileSync(".env.local", "utf8").split(/\r?\n/)) {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+    if (m && m[2].trim()) process.env[m[1]] = m[2].trim();
+  }
+}
 
 describe.skipIf(!live)("LIVE — download latest website files from the board", () => {
   it("zips a live staging site's CURRENT files, matching what it serves right now", async () => {

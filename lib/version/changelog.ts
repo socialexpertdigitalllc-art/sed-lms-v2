@@ -29,6 +29,29 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.21.0",
+    date: "2026-10-02",
+    title: "Domains: buy one and the site goes live on it",
+    changes: [
+      {
+        kind: "feature",
+        text: "Buy a client's domain from the lead page — Cloudflare by default (at-cost, about $10.46 a year for a .com), or Hostinger when the client needs access to the domain. You see the exact first-year and renewal price before you confirm; the price is re-checked right before buying, a name can never be bought twice, and auto-renew is switched on. Only admins, or users given the new Buy Domains permission, can buy.",
+      },
+      {
+        kind: "feature",
+        text: "Once a domain is linked to a lead the dashboard does the rest by itself: DNS records, the Hostinger hosting, the SSL certificate, and putting the lead's site live on the domain. The lead page shows each step as it happens; if the lead's site isn't deployed yet, the domain waits and goes live automatically when it is. If a step can't finish, admins get an alert and a Retry button.",
+      },
+      {
+        kind: "feature",
+        text: "New Domains page: every domain on the Cloudflare account, with its lead, status, expiry and auto-renew. Import brings them in — domains already set up by hand are only recorded and linked, never touched. Domains with auto-renew off are flagged, with a one-click switch.",
+      },
+      {
+        kind: "fix",
+        text: "The transfer list and the Live Websites tab now show all hosted sites — they stopped at the first 100 of 183.",
+      },
+    ],
+  },
+  {
     version: "2.20.1",
     date: "2026-10-01",
     title: "Moving sites to their real domain works again",

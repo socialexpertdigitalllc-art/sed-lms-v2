@@ -11,6 +11,8 @@ import { getAppSettings } from "@/lib/settings/appSettings";
 import { notFound } from "next/navigation";
 import { getActiveUsers } from "@/lib/users/directory";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
+import { domainForLead, suggestQuery } from "@/lib/domains/service";
+import { registrarSandbox } from "@/lib/cloudflare/client";
 
 export default async function LeadDetailPage({
   params,
@@ -185,6 +187,20 @@ export default async function LeadDetailPage({
     formSubmissions = (subs ?? []) as FormSubmissionRow[];
   }
 
+  // Client domain: buy / link one and watch it get connected (lib/domains).
+  const canPurchaseDomains = perms.has("domains.purchase");
+  const canManageDomains = perms.has("domains.manage");
+  const domainCard =
+    canPurchaseDomains || canManageDomains || perms.has("domains.view")
+      ? {
+          row: await domainForLead(admin, id),
+          canPurchase: canPurchaseDomains,
+          canManage: canManageDomains,
+          sandbox: registrarSandbox(),
+          suggestedQuery: suggestQuery(lead.business_name ?? null, lead.website_link ?? null),
+        }
+      : null;
+
   return (
     <LeadDetail
       lead={lead}
@@ -210,6 +226,7 @@ export default async function LeadDetailPage({
       canManageForms={canManageForms}
       formEndpoints={formEndpoints}
       formSubmissions={formSubmissions}
+      domainCard={domainCard}
     />
   );
 }

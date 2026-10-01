@@ -8,7 +8,7 @@ import {
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
   Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer, Images,
-  ClipboardList, ChevronDown, Plus,
+  ClipboardList, ChevronDown, Plus, Earth,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -41,6 +41,7 @@ const MAIN: NavItem[] = [
   { href: "/payments", label: "Payments", icon: CreditCard, perm: "payments.view" },
   { href: "/contracts", label: "Contracts", icon: FileText, perm: "contracts.view" },
   { href: "/forms", label: "Forms", icon: Inbox, perm: "forms.view" },
+  { href: "/domains", label: "Domains", icon: Earth, perm: "domains.view" },
   { href: "/notifications", label: "Notifications", icon: Bell },
   // No `perm`: the verifier is auth-gated only, like Notifications.
   { href: "/verify", label: "Verify", icon: MailCheck },

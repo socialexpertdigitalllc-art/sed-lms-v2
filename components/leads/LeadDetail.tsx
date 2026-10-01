@@ -37,6 +37,8 @@ import { RecommendedTemplateField } from "@/components/leads/RecommendedTemplate
 import { ColorSchemeSwatches } from "@/components/leads/ColorSchemeSwatches";
 import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
 import { LeadFormsCard } from "@/components/form-relay/LeadFormsCard";
+import { LeadDomainCard } from "@/components/domains/LeadDomainCard";
+import type { ClientDomainRow } from "@/lib/domains/types";
 import type { ContractRow } from "@/lib/contracts/types";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 
@@ -72,6 +74,7 @@ export function LeadDetail({
   canManageForms,
   formEndpoints,
   formSubmissions,
+  domainCard,
 }: {
   lead: Lead;
   agents: Agent[];
@@ -97,6 +100,8 @@ export function LeadDetail({
   canManageForms: boolean;
   formEndpoints: FormEndpointRow[];
   formSubmissions: FormSubmissionRow[];
+  /** The lead's client domain + what this user may do (null = no domains access). */
+  domainCard?: { row: ClientDomainRow | null; canPurchase: boolean; canManage: boolean; sandbox: boolean; suggestedQuery: string } | null;
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
@@ -572,6 +577,17 @@ export function LeadDetail({
                 leadYearlyPrice={lead.yearly_price}
               />
             )}
+            {domainCard ? (
+              <LeadDomainCard
+                leadId={lead.id}
+                leadName={lead.business_name}
+                initial={domainCard.row}
+                suggestedQuery={domainCard.suggestedQuery}
+                canPurchase={domainCard.canPurchase}
+                canManage={domainCard.canManage}
+                sandbox={domainCard.sandbox}
+              />
+            ) : null}
             {canViewForms && (
               <LeadFormsCard leadId={lead.id} endpoints={formEndpoints} submissions={formSubmissions} canManage={canManageForms} />
             )}

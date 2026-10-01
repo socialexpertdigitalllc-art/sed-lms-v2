@@ -219,6 +219,16 @@ export const NOTIFICATION_EVENTS = [
     availableRoles: ["lead_agent", "lead_closer"],
     timingMode: "delay",
   },
+  {
+    key: "domain_needs_attention",
+    label: "Domain setup needs attention",
+    description: "Connecting a client domain (DNS, hosting, SSL or putting the site live) stopped and needs a retry.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: ["lead_agent"],
+    timingMode: "delay",
+  },
 ] as const;
 
 export type NotificationEventKey = (typeof NOTIFICATION_EVENTS)[number]["key"];

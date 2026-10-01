@@ -77,4 +77,12 @@ export async function register() {
   setInterval(() => {
     fetch(`${origin}/api/forms/deliver`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 120_000);
+
+  // Domain pipeline: advances bought/linked domains through DNS, hosting, SSL
+  // and go-live. Primary path is the instant kick after a purchase/link; this
+  // sweep picks up every wait ("check again in a minute") and the domains
+  // waiting for their lead's site. One indexed read of a partial index.
+  setInterval(() => {
+    fetch(`${origin}/api/domains/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 60_000);
 }
