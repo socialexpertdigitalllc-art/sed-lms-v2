@@ -1,10 +1,12 @@
 // tests/siteAgentWorker.test.ts
 // @vitest-environment node
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, onTestFinished } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { processNextAgentRun, type WorkerDeps } from "@/lib/site-agent/worker";
 import type { AgyDriver } from "@/lib/site-agent/agy";
-import type { AgyModel } from "@/lib/site-agent/types";
+import {
+  AGY_MAX_ATTEMPTS, AGY_RETRY_DELAYS_MS, AGY_TIMEOUT_MS, type AgyModel,
+} from "@/lib/site-agent/types";
 import { zipFromMap } from "@/lib/template-engine/zip";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -163,6 +165,8 @@ function makeHarness(
   });
   const notify = vi.fn(async () => {});
   const listModels = vi.fn(listModelsImpl ?? (async () => [] as AgyModel[]));
+  // Retry back-off pauses resolve at once — tests assert the requested delays.
+  const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {});
   const mutate = (fn: (f: Record<string, Uint8Array>) => void) => fn(files);
   const deps = (driver: AgyDriver): WorkerDeps => ({
     admin: fake.admin,
@@ -175,8 +179,27 @@ function makeHarness(
     notify,
     listModels,
     now: () => new Date("2026-09-01T12:00:00Z"),
+    sleep,
   });
-  return { deps, notify, materialize, listModels, mutate, wsKeys };
+  return { deps, notify, materialize, listModels, mutate, wsKeys, sleep };
+}
+
+/** agy's real wording when Google's API drops the stream mid-turn (seen on
+ *  2026-09-02, 09-11 and four runs in a row on 2026-10-01). */
+const STREAM_CUT = "The stream was interrupted. Please continue the task you were working on.";
+
+function errorResult(error: string) {
+  return {
+    kind: "result" as const, status: "ERROR" as const, response: "", error,
+    usage: null, numTurns: 1, durationSeconds: 2,
+  };
+}
+
+function successResult(response: string) {
+  return {
+    kind: "result" as const, status: "SUCCESS" as const, response, error: null,
+    usage: null, numTurns: 1, durationSeconds: 2,
+  };
 }
 
 /** For tests where the engine must fail BEFORE ever driving agy. */
@@ -282,6 +305,181 @@ describe("processNextAgentRun", () => {
     expect(fake.runs["run-1"]).toMatchObject({ status: "failed", error: expect.stringContaining("quota exhausted") });
     expect(h.notify).toHaveBeenCalledWith("site_agent_run_failed", expect.anything(), expect.anything());
     expect(fake.activity.some((a) => a.action === "site_agent.run.failed")).toBe(true);
+    // Quota is not a blip — asking again would only burn the time budget.
+    expect(h.sleep).not.toHaveBeenCalled();
+  });
+
+  // ---- transient upstream errors: resume instead of throwing the work away ----
+
+  it("a stream cut mid-turn RESUMES the same conversation in the same folder and reaches review", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const calls: { prompt: string; conversationId: string | null | undefined; cwd: string; model: string | null | undefined }[] = [];
+
+    const out = await processNextAgentRun(h.deps(async (opts, onEvent) => {
+      calls.push({ prompt: opts.prompt, conversationId: opts.conversationId, cwd: opts.cwd, model: opts.model });
+      if (calls.length === 1) {
+        onEvent({ kind: "init", conversationId: "conv-1", permissionMode: "always-proceed" });
+        h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+        const result = errorResult(STREAM_CUT);
+        onEvent(result);
+        return { exitCode: 1, result, conversationId: "conv-1", killed: false };
+      }
+      onEvent({ kind: "init", conversationId: "conv-1", permissionMode: "always-proceed" });
+      const result = successResult("Swapped the phone number in index.html.");
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "conv-1", killed: false };
+    }));
+
+    expect(out).toMatchObject({ picked: true, runId: "run-1", outcome: "review" });
+    expect(calls).toHaveLength(2);
+    // The second call continues the conversation agy started — same folder,
+    // same model — with a short resume note, not the whole ticket again.
+    expect(calls[1].conversationId).toBe("conv-1");
+    expect(calls[1].cwd).toBe(calls[0].cwd);
+    expect(calls[1].model).toBe(calls[0].model);
+    expect(calls[1].prompt).toMatch(/cut off/i);
+    expect(calls[1].prompt).toContain("C:/scratch/agent-run");
+    expect(calls[1].prompt).not.toContain("swap number");
+    // The edit made BEFORE the cut survives into the review.
+    expect(h.materialize).toHaveBeenCalledTimes(1);
+    expect((fake.runs["run-1"].files as Record<string, unknown>)["index.html"]).toMatchObject({ action: "edit" });
+    expect(fake.runs["run-1"]).toMatchObject({
+      status: "review", conversation_id: "conv-1", summary: "Swapped the phone number in index.html.",
+    });
+    expect(h.sleep).toHaveBeenCalledTimes(1);
+    expect(String(fake.runs["run-1"].output_tail)).toMatch(/picking the task back up/i);
+    expect(fake.activity.some((a) => a.action === "site_agent.run.failed")).toBe(false);
+  });
+
+  it("an error BEFORE the agent started (sign-in refresh timeout) repeats the ORIGINAL call", async () => {
+    // 2026-10-01: agy's keyring token refresh timed out at launch, so the turn
+    // never began — there is nothing to resume, the same request is re-sent.
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const calls: { prompt: string; conversationId: string | null | undefined }[] = [];
+
+    const out = await processNextAgentRun(h.deps(async (opts, onEvent) => {
+      calls.push({ prompt: opts.prompt, conversationId: opts.conversationId });
+      if (calls.length === 1) {
+        const result = errorResult("authentication failed or timed out");
+        onEvent(result);
+        return { exitCode: 1, result, conversationId: null, killed: false };
+      }
+      h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+      const result = successResult("done");
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "conv-2", killed: false };
+    }));
+
+    expect(out).toMatchObject({ picked: true, outcome: "review" });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].prompt).toBe(calls[0].prompt);
+    expect(calls[1].conversationId ?? null).toBeNull();
+  });
+
+  it("a revise whose follow-up never started re-sends the FOLLOW-UP, not a bare 'continue'", async () => {
+    // Resuming would make the agent believe the earlier, finished turn is the
+    // task — the developer's follow-up would be silently lost.
+    const fake = makeFakeAdmin(seedRun({ conversation_id: "conv-1", instructions: "make it bold" }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    fake.storage["run-1/result.zip"] = zipFromMap({ ...SITE, "index.html": enc("<h1>new</h1>") });
+    const h = makeHarness(fake);
+    const prompts: string[] = [];
+
+    const out = await processNextAgentRun(h.deps(async (opts, onEvent) => {
+      prompts.push(opts.prompt);
+      expect(opts.conversationId).toBe("conv-1");
+      if (prompts.length === 1) {
+        const result = errorResult("API error (attempt 1): request failed: read tcp: wsarecv: connection timed out");
+        onEvent(result);
+        return { exitCode: 1, result, conversationId: "conv-1", killed: false };
+      }
+      h.mutate((f) => { f["index.html"] = enc("<h1><b>new</b></h1>"); });
+      const result = successResult("bolded");
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "conv-1", killed: false };
+    }));
+
+    expect(out).toMatchObject({ picked: true, outcome: "review" });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toBe(prompts[0]);
+    expect(prompts[1]).toContain("make it bold");
+  });
+
+  it("keeps failing → gives up after the attempt cap with agy's own message and backs off between tries", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    let n = 0;
+
+    const out = await processNextAgentRun(h.deps(async (_opts, onEvent) => {
+      n++;
+      onEvent({ kind: "init", conversationId: "conv-1", permissionMode: "always-proceed" });
+      const result = errorResult(STREAM_CUT);
+      onEvent(result);
+      return { exitCode: 1, result, conversationId: "conv-1", killed: false };
+    }));
+
+    expect(out).toMatchObject({ picked: true, outcome: "failed" });
+    expect(n).toBe(AGY_MAX_ATTEMPTS);
+    expect(h.sleep.mock.calls.map((c) => c[0])).toEqual(AGY_RETRY_DELAYS_MS.slice(0, AGY_MAX_ATTEMPTS - 1));
+    expect(fake.runs["run-1"].error).toContain("The stream was interrupted");
+    expect(fake.runs["run-1"].error).toMatch(new RegExp(`${AGY_MAX_ATTEMPTS} tries`));
+    expect(h.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a discard landing during a failed attempt stops the retries — superseded, no second call", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    let n = 0;
+
+    const out = await processNextAgentRun(h.deps(async (_opts, onEvent) => {
+      n++;
+      onEvent({ kind: "init", conversationId: "conv-1", permissionMode: "always-proceed" });
+      Object.assign(fake.runs["run-1"], { status: "discarded", claim_id: null });
+      const result = errorResult(STREAM_CUT);
+      onEvent(result);
+      return { exitCode: 1, result, conversationId: "conv-1", killed: false };
+    }));
+
+    expect(out).toMatchObject({ picked: true, outcome: "superseded" });
+    expect(n).toBe(1);
+    expect(fake.runs["run-1"].status).toBe("discarded");
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("every attempt shares ONE time budget — no try may exceed what is left of the 15-minute cap", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const budgets: number[] = [];
+    // The back-off pause must come out of the same budget: let the fake sleep
+    // move the wall clock (timers stay real so the keepalive is untouched).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    h.sleep.mockImplementation(async (ms: number) => { vi.setSystemTime(Date.now() + ms); });
+    onTestFinished(() => { vi.useRealTimers(); });
+
+    await processNextAgentRun(h.deps(async (opts, onEvent) => {
+      budgets.push(opts.timeoutMs);
+      if (budgets.length === 1) {
+        onEvent({ kind: "init", conversationId: "conv-1", permissionMode: "always-proceed" });
+        const result = errorResult(STREAM_CUT);
+        onEvent(result);
+        return { exitCode: 1, result, conversationId: "conv-1", killed: false };
+      }
+      h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+      const result = successResult("done");
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "conv-1", killed: false };
+    }));
+
+    expect(budgets).toHaveLength(2);
+    expect(budgets[0]).toBeLessThanOrEqual(AGY_TIMEOUT_MS);
+    expect(budgets[1]).toBeLessThanOrEqual(budgets[0] - AGY_RETRY_DELAYS_MS[0]);
   });
 
   it("a run whose ticket was purged fails gracefully", async () => {

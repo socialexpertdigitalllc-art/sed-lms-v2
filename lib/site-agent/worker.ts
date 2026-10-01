@@ -21,12 +21,13 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
-import { buildTaskPrompt } from "./task";
+import { buildResumePrompt, buildTaskPrompt } from "./task";
 import { harvestChanges } from "./harvest";
-import { summarizeEventForTail, type AgyDriver, type AgyRunOutcome } from "./agy";
+import { summarizeEventForTail, type AgyDriver, type AgyEvent, type AgyRunOutcome } from "./agy";
 import {
-  AGENT_SITES_BUCKET, AGY_TIMEOUT_MS, KEEPALIVE_MS, MODELS_REFRESH_MS, PROGRESS_THROTTLE_MS,
-  STALE_RUNNING_MS, TAIL_MAX_CHARS, originalZipPath, resultZipPath,
+  AGENT_SITES_BUCKET, AGY_MAX_ATTEMPTS, AGY_MIN_ATTEMPT_MS, AGY_RETRY_DELAYS_MS, AGY_TIMEOUT_MS,
+  KEEPALIVE_MS, MODELS_REFRESH_MS, PROGRESS_THROTTLE_MS, STALE_RUNNING_MS, TAIL_MAX_CHARS,
+  originalZipPath, resultZipPath,
   type AgentRunRow, type AgyModel,
 } from "./types";
 
@@ -55,6 +56,24 @@ export interface WorkerDeps {
    *  publish nothing" so the panel's model select never goes blank. */
   listModels: () => Promise<AgyModel[]>;
   now?: () => Date;
+  /** Back-off pause between agy attempts — the test seam; a real timer by default. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** agy errors another try cannot fix: the account, its quota, or the chosen
+ *  model is the problem, not the connection. Everything else agy has reported
+ *  so far — stream cuts, 500/503s, socket timeouts, a sign-in token refresh
+ *  that timed out at launch — cleared up on its own within minutes. */
+const PERMANENT_AGY_ERROR = /not logged in|not signed in|RESOURCE_EXHAUSTED|quota|PERMISSION_DENIED|(invalid|unknown|unsupported) model/i;
+
+/** True when this attempt failed in a way worth another try. A time-cap kill
+ *  (budget spent) and a launch failure (broken worker, released below) are
+ *  not; a missing result event is — that is agy dying mid-run. */
+function isRetryable(o: AgyRunOutcome): boolean {
+  if (o.killed || o.spawnError) return false;
+  if (!o.result) return true;
+  if (o.result.status === "SUCCESS") return false;
+  return !PERMANENT_AGY_ERROR.test(o.result.error ?? "");
 }
 
 export type WorkerOutcome =
@@ -279,46 +298,78 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
       if (!owned) cancelled = true;
     };
 
+    const onEvent = (e: AgyEvent) => {
+      const line = summarizeEventForTail(e);
+      if (!line) return;
+      // agy's result.response echoes the closing agent_response text_delta
+      // verbatim (both real success captures) — skip the RESULT line when
+      // its trimmed text is exactly what the tail already ends with, at a
+      // chunk boundary. Scoped to result on purpose: a genuinely repeated
+      // narration line (say, a retried identical tool call) is real
+      // progress and must be kept. Lives here so summarizeEventForTail
+      // stays pure.
+      if (e.kind === "result") {
+        const t = line.trim();
+        const prior = tail.trimEnd();
+        if (t && (prior === t || prior.endsWith("\n" + t))) return;
+      }
+      tail += (tail ? "\n" : "") + line;
+      flush().catch(() => {});
+    };
+
     // Keepalive: agy can run for minutes without emitting an event, and the
     // stale-reclaim predicate reads updated_at. This guarded no-field patch
     // (it touches ONLY updated_at) keeps a live run visibly alive — so it can
     // never be reclaimed as stale — and doubles as the discard listener
     // between events: a missed patch flips `cancelled`, and shouldCancel
-    // kills the child.
+    // kills the child. It spans the retry pauses too.
     const keepalive = setInterval(() => {
       patch({}).then((owned) => { if (!owned) cancelled = true; }).catch(() => {});
     }, KEEPALIVE_MS);
+    const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    // ONE budget for every attempt, so the 15-minute cap (and the stale
+    // window's margin over it) holds however often the stream drops.
+    const deadline = Date.now() + AGY_TIMEOUT_MS;
+    let attemptPrompt = prompt;
+    let attemptConversation = run.conversation_id;
+    let attempts = 0;
     let outcome: AgyRunOutcome;
     try {
-      outcome = await deps.driver(
-        {
-          cwd,
-          prompt,
-          conversationId: run.conversation_id,
-          timeoutMs: AGY_TIMEOUT_MS,
-          // v2 F2: the run's chosen model (null = Antigravity default).
-          model: run.model ?? null,
-          shouldCancel: () => cancelled,
-        },
-        (e) => {
-          const line = summarizeEventForTail(e);
-          if (!line) return;
-          // agy's result.response echoes the closing agent_response text_delta
-          // verbatim (both real success captures) — skip the RESULT line when
-          // its trimmed text is exactly what the tail already ends with, at a
-          // chunk boundary. Scoped to result on purpose: a genuinely repeated
-          // narration line (say, a retried identical tool call) is real
-          // progress and must be kept. Lives here so summarizeEventForTail
-          // stays pure.
-          if (e.kind === "result") {
-            const t = line.trim();
-            const prior = tail.trimEnd();
-            if (t && (prior === t || prior.endsWith("\n" + t))) return;
-          }
-          tail += (tail ? "\n" : "") + line;
-          flush().catch(() => {});
-        },
-      );
+      for (;;) {
+        attempts++;
+        let started = false;
+        outcome = await deps.driver(
+          {
+            cwd,
+            prompt: attemptPrompt,
+            conversationId: attemptConversation,
+            timeoutMs: deadline - Date.now(),
+            // v2 F2: the run's chosen model (null = Antigravity default).
+            model: run.model ?? null,
+            shouldCancel: () => cancelled,
+          },
+          (e) => {
+            if (e.kind === "init" || e.kind === "step") started = true;
+            onEvent(e);
+          },
+        );
+        if (cancelled || attempts >= AGY_MAX_ATTEMPTS || !isRetryable(outcome)) break;
+        const pause = AGY_RETRY_DELAYS_MS[Math.min(attempts, AGY_RETRY_DELAYS_MS.length) - 1];
+        if (deadline - Date.now() - pause < AGY_MIN_ATTEMPT_MS) break;
+        // A turn that got going is CONTINUED in its own conversation — its
+        // edits are already on disk in cwd. One that never started is sent
+        // again unchanged: swapping a revise's follow-up for "continue" would
+        // silently drop the developer's instructions.
+        if (started && outcome.conversationId) {
+          attemptConversation = outcome.conversationId;
+          attemptPrompt = buildResumePrompt({ workspaceDir: cwd });
+        }
+        tail += `${tail ? "\n" : ""}⟳ The connection to the AI dropped — picking the task back up in ${pause / 1000}s (try ${attempts + 1} of ${AGY_MAX_ATTEMPTS})…`;
+        await flush(true);
+        if (cancelled) break;
+        await sleep(pause);
+        if (cancelled) break;
+      }
     } finally {
       clearInterval(keepalive);
     }
@@ -327,6 +378,7 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
       await deps.workspace.cleanup(wsKey).catch(() => {});
       return { picked: true, runId: run.id, outcome: "superseded" };
     }
+    const triedNote = attempts > 1 ? ` (gave up after ${attempts} tries)` : "";
 
     if (outcome.killed) return await fail("The agent hit the 15-minute time cap and was stopped.");
     if (!outcome.result) {
@@ -347,10 +399,10 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
         await deps.workspace.cleanup(wsKey).catch(() => {});
         return { picked: true, runId: run.id, outcome: "superseded" };
       }
-      return await fail("agy ran but produced no result event — check the CLI's sign-in and its log on the worker box.");
+      return await fail(`agy ran but produced no result event${triedNote} — check the CLI's sign-in and its log on the worker box.`);
     }
     if (outcome.result.status !== "SUCCESS") {
-      return await fail(`Antigravity reported an error: ${outcome.result.error ?? "unknown"}`);
+      return await fail(`Antigravity reported an error: ${outcome.result.error ?? "unknown"}${triedNote}`);
     }
 
     const edited = await deps.workspace.collect(wsKey);

@@ -28,6 +28,22 @@ export function composeTicketTask(title: string, items: string[]): string {
   return `Title: ${title}\nChecklist:\n${list}`;
 }
 
+/**
+ * Follow-up sent with --conversation after a turn was cut off mid-way by a
+ * transient upstream error. The contract and the ticket are already in that
+ * conversation, so this only re-anchors the folder (agy ≥1.1.26 needs it
+ * named) and asks for the closing summary the worker stores — covering the
+ * whole ticket, since edits made before the cut are part of the result.
+ */
+export function buildResumePrompt(args: { workspaceDir?: string | null }): string {
+  const where = args.workspaceDir?.trim() ? `this exact folder: ${args.workspaceDir.trim()}` : "the current directory";
+  return [
+    `Your previous turn was cut off by a connection error before you finished. The site's files are still in ${where} — exactly as you left them.`,
+    `Continue the same ticket under the same rules: check what is already done, finish only what is still missing, and do not redo or undo edits that are already in place.`,
+    `When you are done, reply with a short plain-text summary of exactly what you changed for this ticket — including any changes made before the interruption — and in which files.`,
+  ].join("\n");
+}
+
 export function buildTaskPrompt(args: {
   businessName: string;
   ticketTitle: string;

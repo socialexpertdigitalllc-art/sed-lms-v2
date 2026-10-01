@@ -76,7 +76,17 @@ export const STALE_RUNNING_MS = 20 * 60_000;
  *  live run's updated_at moving (so it can't be reclaimed as stale) and
  *  notices a dashboard discard even when agy emits no events for minutes. */
 export const KEEPALIVE_MS = 30_000;
-/** Hard wall-clock cap on one agy invocation. */
+/** Hard wall-clock cap on one run's agy work — ALL attempts below share it. */
 export const AGY_TIMEOUT_MS = 15 * 60_000;
+/** Google's Cloud Code API drops streams and 500s in bursts; agy retries a
+ *  failed request itself, but a stream cut MID-turn ends a headless run with
+ *  ERROR ("The stream was interrupted. Please continue the task you were
+ *  working on."). Treating that as final threw away finished edits (four runs
+ *  in a row on 2026-10-01), so the worker resumes the conversation instead:
+ *  up to this many agy calls per run, pausing per AGY_RETRY_DELAYS_MS. */
+export const AGY_MAX_ATTEMPTS = 4;
+export const AGY_RETRY_DELAYS_MS = [10_000, 30_000, 60_000] as const;
+/** Not worth another try with less than this left of AGY_TIMEOUT_MS. */
+export const AGY_MIN_ATTEMPT_MS = 90_000;
 /** Heartbeat is stale (worker offline) after this. */
 export const HEARTBEAT_STALE_MS = 5 * 60_000;
