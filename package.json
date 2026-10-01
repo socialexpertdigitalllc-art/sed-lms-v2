@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm run build:extension && next build",
+    "build": "npm run build:extension && (next build || next build --webpack)",
     "build:extension": "node scripts/build-extension.mjs",
     "build:agent-worker": "node scripts/build-agent-worker.mjs",
     "start": "next start",
