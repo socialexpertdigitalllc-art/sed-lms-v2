@@ -42,6 +42,14 @@ describe("domain sweep wiring", () => {
     expect(src).toMatch(/\/api\/domains\/process/);
   });
 
+  it("the domains sweep (registrar sync + site health) is allowlisted, polled, and demands the secret", async () => {
+    expect(readFileSync("lib/supabase/middleware.ts", "utf8")).toMatch(/path === "\/api\/domains\/sweep"/);
+    expect(readFileSync("instrumentation.ts", "utf8")).toMatch(/\/api\/domains\/sweep/);
+    const { POST: sweep } = await import("@/app/api/domains/sweep/route");
+    expect((await sweep(new Request("http://x/api/domains/sweep", { method: "POST" }))).status).toBe(401);
+    expect((await sweep(new Request("http://x/api/domains/sweep", { method: "POST", headers: { "x-wge-secret": "nope" } }))).status).toBe(401);
+  });
+
   it("the processor refuses calls without the right secret", async () => {
     const none = await POST(new Request("http://x/api/domains/process", { method: "POST" }));
     expect(none.status).toBe(401);

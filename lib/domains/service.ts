@@ -28,6 +28,7 @@ import {
   getHostingerDomainPrice,
   purchaseHostingerDomain,
   enableHostingerAutoRenew,
+  disableHostingerAutoRenew,
 } from "@/lib/hostinger/client";
 import { normalizeTargetDomain } from "@/lib/site-studio/deploy/transfer";
 import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
@@ -328,6 +329,14 @@ export async function assignDomain(
   if (row.status === "purchasing" || row.status === "failed") {
     return { ok: false, status: 409, error: "Wait for the purchase to finish before linking this domain" };
   }
+  // setup can't put a site live on a lapsed or departed registration
+  if (row.status === "unassigned" && (row.registrar_status === "expired" || row.registrar_status === "missing")) {
+    return {
+      ok: false,
+      status: 409,
+      error: row.registrar_status === "expired" ? "This domain has expired — renew it first" : "This domain is no longer in our registrar account",
+    };
+  }
   const { data: lead } = await admin.from("leads").select("id, website_link").eq("id", leadId).maybeSingle();
   if (!lead) return { ok: false, status: 404, error: "Lead not found" };
   const { data: other } = await admin
@@ -421,10 +430,11 @@ export async function setDomainAutoRenew(
     const r = await setAutoRenew(row.domain, on);
     if (!r.ok) return { ok: false, status: 502, error: `Cloudflare: ${r.message ?? "could not change auto-renew"}` };
   } else {
-    if (!on) return { ok: false, status: 422, error: "Turn auto-renew off for Hostinger domains in hPanel" };
-    if (!row.hostinger_subscription_id) return { ok: false, status: 422, error: "No Hostinger subscription recorded for this domain" };
-    const r = await enableHostingerAutoRenew(row.hostinger_subscription_id);
-    if (!r.ok) return { ok: false, status: 502, error: `Hostinger: ${r.message ?? "could not enable auto-renew"}` };
+    if (!row.hostinger_subscription_id) {
+      return { ok: false, status: 422, error: "This domain's Hostinger subscription isn't known yet — press Sync now and try again" };
+    }
+    const r = on ? await enableHostingerAutoRenew(row.hostinger_subscription_id) : await disableHostingerAutoRenew(row.hostinger_subscription_id);
+    if (!r.ok) return { ok: false, status: 502, error: `Hostinger: ${r.message ?? `could not turn auto-renew ${on ? "on" : "off"}`}` };
   }
   const { data, error } = await admin
     .from("client_domains")

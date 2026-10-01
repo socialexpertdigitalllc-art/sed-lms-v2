@@ -8,16 +8,17 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 /**
- * POST /api/domains/import — pull the domains we already own into the
- * dashboard: the Hostinger portfolio, plus the Cloudflare account when it is
- * configured. Ones whose site is already up come in as `connected` (set up by
- * hand — never touched again); ones pointing nowhere are `unassigned`.
- * Re-running only refreshes expiry / auto-renew.
+ * POST /api/domains/import (also /api/domains/sync) — bring the dashboard in
+ * step with the registrars now: new domains on the Hostinger portfolio and the
+ * Cloudflare account (when configured) come in — expired ones too; known ones
+ * get their expiry, status, auto-renew and price refreshed; ones the registrar
+ * no longer lists are marked missing. The background sweep does the same every
+ * six hours.
  */
 export async function POST() {
   const auth = await requireDomains("manage");
   if ("error" in auth) return domainsAuthError(auth.error);
-  // both imports read Hostinger's website list to know what is hosted already
+  // both registrars are read against Hostinger's website list
   if (!hostingerConfigured()) return NextResponse.json({ error: "Hostinger is not configured." }, { status: 422 });
 
   const r = await importAllDomains(auth.admin, auth.userId, { cloudflare: cloudflareConfigured() });
@@ -38,5 +39,8 @@ export async function POST() {
     linked: sum("linked"),
     refreshed: sum("refreshed"),
     skipped: sum("skipped"),
+    expired: sum("expired"),
+    missing: sum("missing"),
+    alerts: r.alerts,
   });
 }

@@ -37,3 +37,10 @@ export function shouldRemind(
   const n = now.getTime();
   return n >= opens && n < t;
 }
+
+/** Department targets as slugs. Rules seeded by migrations named departments
+ *  ("Admin", "Management") while departments are keyed by slug ("admin") — the
+ *  mismatch silently dropped every recipient of those rules. */
+export function departmentSlugs(targets: string[]): string[] {
+  return [...new Set(targets.map((t) => t.trim().toLowerCase()).filter(Boolean))];
+}

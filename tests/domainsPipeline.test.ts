@@ -37,6 +37,7 @@ function row(over: Partial<ClientDomainRow> = {}): ClientDomainRow {
     created_by: "user-1",
     created_at: "2026-10-02T00:00:00Z",
     updated_at: "2026-10-02T00:00:00Z",
+    registrar_status: "active", registered_at: null, next_billing_at: null, synced_at: null, details: {}, health_state: null, health: {}, health_checked_at: null,
     ...over,
   };
 }

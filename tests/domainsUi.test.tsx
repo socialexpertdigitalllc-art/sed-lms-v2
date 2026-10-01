@@ -87,7 +87,8 @@ const row = (over: Partial<ClientDomainRow> = {}): ClientDomainRow => ({
   hosting_username: "u447231526", hostinger_order_id: null, hostinger_subscription_id: null,
   registration_cost_cents: 1046, renewal_cost_cents: 1046, currency: "USD", auto_renew: true,
   expires_at: "2027-10-02T00:00:00Z", purchased_by: "u1", purchased_at: null, created_by: "u1",
-  created_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-02T00:00:00Z", ...over,
+  created_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-02T00:00:00Z",
+  registrar_status: "active", registered_at: null, next_billing_at: null, synced_at: null, details: {}, health_state: null, health: {}, health_checked_at: null, ...over,
 });
 
 describe("LeadDomainCard", () => {
@@ -135,24 +136,21 @@ describe("LeadDomainCard", () => {
 });
 
 describe("DomainsBoard", () => {
-  it("one Import button brings in both registrars and says what came from where", async () => {
+  const meta = { canManage: true, canPurchase: false, sandbox: false, cloudflareConfigured: true, hostingerConfigured: true };
+
+  it("Sync now reads both registrars and says what changed", async () => {
     const posts: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
-        if (url === "/api/domains/import" && init?.method === "POST") {
+        if (url === "/api/domains/sync" && init?.method === "POST") {
           posts.push(url);
           return Response.json({
-            hostinger: { added: 90 }, cloudflare: { added: 0 },
-            added: 90, connected: 88, unassigned: 2, linked: 3, refreshed: 16, skipped: 0,
+            hostinger: { added: 2 }, cloudflare: { added: 0 },
+            added: 2, connected: 1, unassigned: 1, linked: 0, refreshed: 103, skipped: 0, expired: 14, missing: 0,
           });
         }
-        if (url === "/api/domains") {
-          return Response.json({
-            domains: [row({ status: "connected", lead_id: null, steps: {} })],
-            canManage: true, canPurchase: false, sandbox: false, cloudflareConfigured: true, hostingerConfigured: true,
-          });
-        }
+        if (url === "/api/domains") return Response.json({ domains: [row({ status: "connected", lead_id: null, steps: {} })], ...meta });
         throw new Error(`unexpected ${url}`);
       }),
     );
@@ -161,23 +159,28 @@ describe("DomainsBoard", () => {
         <DomainsBoard />
       </ToastProvider>,
     );
-    fireEvent.click(await screen.findByRole("button", { name: /Import domains/ }));
-    expect(await screen.findByText("Imported 90 new domains (90 from Hostinger, 0 from Cloudflare)")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /Sync now/ }));
+    expect(await screen.findByText("Synced — 2 new domains")).toBeInTheDocument();
     expect(posts).toHaveLength(1);
   });
 
-  it("flags a domain expiring soon unless auto-renew is known to be on", async () => {
+  it("flags expired, expiring-without-renewal and down sites — and filters to them", async () => {
     const soon = new Date(Date.now() + 6 * 86_400_000).toISOString();
+    const past = new Date(Date.now() - 9 * 86_400_000).toISOString();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
         Response.json({
           domains: [
-            // Hostinger doesn't report auto-renew: unknown -> flagged
-            row({ id: "h1", domain: "lapsing.com", registrar: "hostinger", status: "connected", auto_renew: null, expires_at: soon, steps: {} }),
+            row({ id: "h1", domain: "lapsing.com", registrar: "hostinger", status: "connected", auto_renew: false, expires_at: soon, steps: {} }),
             row({ id: "c1", domain: "renewing.com", status: "connected", auto_renew: true, expires_at: soon, steps: {} }),
+            row({ id: "x1", domain: "lapsed.com", registrar: "hostinger", status: "connected", registrar_status: "expired", auto_renew: false, expires_at: past, steps: {} }),
+            row({
+              id: "d1", domain: "broken.com", status: "connected", steps: {}, health_state: "down",
+              health: { state: "down", summary: "Nothing answers on HTTPS", http_status: null, final_url: null, ms: null, ssl: null, dns: { apex: ["1.2.3.4"], www: [] }, consecutive_failures: 2, since: past },
+            }),
           ],
-          canManage: true, canPurchase: false, sandbox: false, cloudflareConfigured: true, hostingerConfigured: true,
+          ...meta,
         }),
       ),
     );
@@ -186,10 +189,19 @@ describe("DomainsBoard", () => {
         <DomainsBoard />
       </ToastProvider>,
     );
-    expect(await screen.findByText(/1 domain expires within 30 days/)).toBeInTheDocument();
-    expect(screen.getAllByText("in 6d")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Expiring soon" }));
+    expect(await screen.findByText("1 domain has expired.")).toBeInTheDocument();
+    expect(screen.getByText(/1 domain expires within 30 days and isn't set to renew/)).toBeInTheDocument();
+    expect(screen.getByText(/1 client site is down/)).toBeInTheDocument();
+    expect(screen.getByText("in 6d")).toBeInTheDocument();
+    expect(screen.getByText("expired 9d ago")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Expiring soon/ }));
     expect(screen.getByText("lapsing.com")).toBeInTheDocument();
     expect(screen.queryByText("renewing.com")).not.toBeInTheDocument();
+    expect(screen.queryByText("lapsed.com")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Site down/ }));
+    expect(screen.getByText("broken.com")).toBeInTheDocument();
+    expect(screen.queryByText("lapsing.com")).not.toBeInTheDocument();
   });
 });

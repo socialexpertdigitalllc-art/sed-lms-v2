@@ -63,7 +63,8 @@ function domainRow(over: Partial<ClientDomainRow> = {}): ClientDomainRow {
     hostinger_order_id: null, hostinger_subscription_id: null, registration_cost_cents: 1046,
     renewal_cost_cents: 1046, currency: "USD", auto_renew: true, expires_at: null,
     purchased_by: "user-1", purchased_at: null, created_by: "user-1",
-    created_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-02T00:00:00Z", ...over,
+    created_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-02T00:00:00Z",
+  registrar_status: "active", registered_at: null, next_billing_at: null, synced_at: null, details: {}, health_state: null, health: {}, health_checked_at: null, ...over,
   };
 }
 

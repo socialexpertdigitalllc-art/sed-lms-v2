@@ -22,13 +22,14 @@ const hg = vi.hoisted(() => ({
   getHostingerDomainPrice: vi.fn(),
   purchaseHostingerDomain: vi.fn(),
   enableHostingerAutoRenew: vi.fn(),
+  disableHostingerAutoRenew: vi.fn(),
 }));
 vi.mock("@/lib/cloudflare/client", () => cf);
 vi.mock("@/lib/hostinger/client", () => hg);
 // keep the transfer module (normalizeTargetDomain) away from DirectAdmin/Hostinger imports
 vi.mock("@/lib/site-studio/deploy/snapshots", () => ({ snapshotSite: vi.fn() }));
 
-import { purchaseDomain, assignDomain } from "@/lib/domains/service";
+import { purchaseDomain, assignDomain, setDomainAutoRenew } from "@/lib/domains/service";
 
 type Rec = Record<string, unknown>;
 let seq = 0;
@@ -217,9 +218,34 @@ describe("assignDomain", () => {
     expect(await assignDomain(db.admin, "d1", "lead-1", "admin-1")).toMatchObject({ ok: false, status: 409 });
   });
 
+  it("an expired domain can't start a setup — it has to be renewed first", async () => {
+    const db = fakeDb({ leads: [{ id: "lead-1" }], client_domains: [{ id: "d1", domain: "acme.com", status: "unassigned", lead_id: null, registrar_status: "expired" }] });
+    expect(await assignDomain(db.admin, "d1", "lead-1", "admin-1")).toMatchObject({ ok: false, status: 409, error: expect.stringMatching(/renew it first/) });
+    expect(db.tables.client_domains[0]).toMatchObject({ status: "unassigned", lead_id: null });
+  });
+
   it("unlinking stops an active setup (the running worker's claim is cleared)", async () => {
     const db = fakeDb({ leads: [], client_domains: [{ id: "d1", domain: "acme.com", status: "setting_up", lead_id: "lead-1", claim_id: "w1" }] });
     expect((await assignDomain(db.admin, "d1", null, "admin-1")).ok).toBe(true);
     expect(db.tables.client_domains[0]).toMatchObject({ status: "unassigned", lead_id: null, claim_id: null });
+  });
+});
+
+describe("setDomainAutoRenew — Hostinger", () => {
+  it("turns auto-renew off on the domain's own subscription (on, too)", async () => {
+    hg.disableHostingerAutoRenew.mockResolvedValue({ ok: true });
+    hg.enableHostingerAutoRenew.mockResolvedValue({ ok: true });
+    const db = fakeDb({ client_domains: [{ id: "d1", domain: "acme.com", registrar: "hostinger", hostinger_subscription_id: "sub-9", auto_renew: true }] });
+    expect(await setDomainAutoRenew(db.admin, "d1", false, "admin-1")).toMatchObject({ ok: true });
+    expect(hg.disableHostingerAutoRenew).toHaveBeenCalledWith("sub-9");
+    expect(db.tables.client_domains[0].auto_renew).toBe(false);
+    expect(await setDomainAutoRenew(db.admin, "d1", true, "admin-1")).toMatchObject({ ok: true });
+    expect(hg.enableHostingerAutoRenew).toHaveBeenCalledWith("sub-9");
+  });
+
+  it("without a matched subscription nothing is changed", async () => {
+    const db = fakeDb({ client_domains: [{ id: "d1", domain: "acme.com", registrar: "hostinger", hostinger_subscription_id: null, auto_renew: true }] });
+    expect(await setDomainAutoRenew(db.admin, "d1", false, "admin-1")).toMatchObject({ ok: false, status: 422 });
+    expect(hg.disableHostingerAutoRenew).not.toHaveBeenCalled();
   });
 });

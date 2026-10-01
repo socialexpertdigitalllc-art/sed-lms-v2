@@ -33,7 +33,7 @@ interface HgResult {
   body: string;
 }
 
-async function hgOnce(path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; json?: unknown }): Promise<HgResult> {
+async function hgOnce(path: string, init: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; json?: unknown }): Promise<HgResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -57,7 +57,7 @@ async function hgOnce(path: string, init: { method: "GET" | "POST" | "PATCH" | "
 
 /** Reads retry once on a network error (never on an HTTP answer); writes never
  *  retry — a POST that timed out may still have been applied. */
-async function hg(path: string, init: { method: "GET" | "POST" | "PATCH" | "DELETE"; json?: unknown }): Promise<HgResult> {
+async function hg(path: string, init: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; json?: unknown }): Promise<HgResult> {
   const first = await hgOnce(path, init);
   if (first.status !== 0 || init.method !== "GET") return first;
   return hgOnce(path, init);
@@ -87,6 +87,7 @@ export interface HostingerDomain {
   type: string;
   status: string;
   expires_at: string | null;
+  created_at?: string | null;
 }
 
 /**
@@ -720,4 +721,272 @@ export async function verifyDomainOwnership(domain: string): Promise<{ accessibl
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// registrar management: subscriptions, domain settings, DNS zone, forwarding,
+// moving a domain to another Hostinger account
+
+type Done = { ok: true } | { ok: false; message: string };
+const done = (r: HgResult): Done => (r.ok ? { ok: true } : { ok: false, message: messageOf(r) });
+const enc = (domain: string) => encodeURIComponent(domain.toLowerCase());
+
+export interface HostingerSubscription {
+  id: string;
+  /** ".COM Domain", "Cloud Startup", … — a domain subscription never names its domain. */
+  name: string;
+  /** active | not_renewing | non_renewing | cancelled | … */
+  status: string;
+  is_auto_renewed: boolean;
+  /** cents */
+  renewal_price: number | null;
+  total_price: number | null;
+  currency_code: string | null;
+  created_at: string | null;
+  expires_at: string | null;
+  next_billing_at: string | null;
+}
+
+/** Every billing subscription on the account, or null when unreadable. */
+export async function listSubscriptions(): Promise<HostingerSubscription[] | null> {
+  const r = await hg("/api/billing/v1/subscriptions", { method: "GET" });
+  if (!r.ok) return null;
+  try {
+    const arr = JSON.parse(r.body) as HostingerSubscription[];
+    return Array.isArray(arr) ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface HostingerDomainDetails {
+  status: string;
+  message: string | null;
+  locked: boolean | null;
+  lockable: boolean | null;
+  privacy: boolean | null;
+  privacyAllowed: boolean | null;
+  nameservers: string[];
+  registeredAt: string | null;
+  expiresAt: string | null;
+}
+
+/** A portfolio domain's registrar settings (lock, privacy, nameservers, …). */
+export async function getHostingerDomainDetails(domain: string): Promise<HostingerDomainDetails | null> {
+  const r = await hg(`/api/domains/v1/portfolio/${enc(domain)}`, { method: "GET" });
+  if (!r.ok) return null;
+  try {
+    const j = JSON.parse(r.body) as {
+      status?: string;
+      message?: string | null;
+      is_locked?: boolean;
+      is_lockable?: boolean;
+      is_privacy_protected?: boolean;
+      is_privacy_protection_allowed?: boolean;
+      name_servers?: Record<string, string | null> | null;
+      registered_at?: string | null;
+      expires_at?: string | null;
+    };
+    const ns = j.name_servers ?? {};
+    return {
+      status: (j.status ?? "").toLowerCase(),
+      message: j.message ?? null,
+      locked: typeof j.is_locked === "boolean" ? j.is_locked : null,
+      lockable: typeof j.is_lockable === "boolean" ? j.is_lockable : null,
+      privacy: typeof j.is_privacy_protected === "boolean" ? j.is_privacy_protected : null,
+      privacyAllowed: typeof j.is_privacy_protection_allowed === "boolean" ? j.is_privacy_protection_allowed : null,
+      nameservers: Object.keys(ns)
+        .sort()
+        .map((k) => ns[k])
+        .filter((n): n is string => typeof n === "string" && n.length > 0),
+      registeredAt: j.registered_at ?? null,
+      expiresAt: j.expires_at ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Transfer lock on/off (off is needed before a transfer to another registrar). */
+export async function setHostingerDomainLock(domain: string, on: boolean): Promise<Done> {
+  return done(await hg(`/api/domains/v1/portfolio/${enc(domain)}/domain-lock`, { method: on ? "PUT" : "DELETE" }));
+}
+
+/** WHOIS privacy protection on/off. */
+export async function setHostingerPrivacy(domain: string, on: boolean): Promise<Done> {
+  return done(await hg(`/api/domains/v1/portfolio/${enc(domain)}/privacy-protection`, { method: on ? "PUT" : "DELETE" }));
+}
+
+/** Point the domain at other nameservers (2–4). Wrong values take the domain offline. */
+export async function setHostingerNameservers(domain: string, nameservers: string[]): Promise<Done> {
+  const ns = nameservers.map((n) => n.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean);
+  if (ns.length < 2 || ns.length > 4) return { ok: false, message: "Give 2 to 4 nameservers" };
+  const json: Record<string, string> = {};
+  ns.forEach((n, i) => (json[`ns${i + 1}`] = n));
+  return done(await hg(`/api/domains/v1/portfolio/${enc(domain)}/nameservers`, { method: "PUT", json }));
+}
+
+/** The transfer (EPP) code. Each call invalidates the previous code. */
+export async function getHostingerAuthCode(domain: string): Promise<{ ok: true; code: string | null } | { ok: false; message: string }> {
+  const r = await hg(`/api/domains/v1/portfolio/${enc(domain)}/auth-code`, { method: "GET" });
+  if (!r.ok) return { ok: false, message: messageOf(r) };
+  try {
+    return { ok: true, code: (JSON.parse(r.body) as { auth_code?: string | null }).auth_code ?? null };
+  } catch {
+    return { ok: false, message: "unreadable response" };
+  }
+}
+
+/** Stop a subscription (e.g. a domain) from renewing by itself. */
+export async function disableHostingerAutoRenew(subscriptionId: string): Promise<Done> {
+  return done(await hg(`/api/billing/v1/subscriptions/${encodeURIComponent(subscriptionId)}/auto-renewal/disable`, { method: "DELETE" }));
+}
+
+/**
+ * Renew a subscription NOW — CHARGES the default payment method. `pending`
+ * means Hostinger took the order but the payment is still processing.
+ */
+export async function renewHostingerSubscription(
+  subscriptionId: string,
+): Promise<{ ok: true; pending: boolean; orderStatus: string; totalCents: number | null } | { ok: false; message: string }> {
+  const r = await hg(`/api/billing/v1/subscriptions/${encodeURIComponent(subscriptionId)}/renew`, { method: "POST", json: {} });
+  if (!r.ok) return { ok: false, message: messageOf(r) };
+  try {
+    const j = JSON.parse(r.body) as { status?: string; total?: number };
+    const status = j.status ?? (r.status === 202 ? "payment_initiated" : "unknown");
+    return {
+      ok: true,
+      pending: r.status === 202 || status !== "completed",
+      orderStatus: status,
+      totalCents: typeof j.total === "number" ? j.total : null,
+    };
+  } catch {
+    return { ok: true, pending: true, orderStatus: "unknown", totalCents: null };
+  }
+}
+
+// DNS zone ------------------------------------------------------------------
+
+export interface HostingerZoneRecord {
+  /** "@" for the apex */
+  name: string;
+  type: string;
+  ttl: number;
+  records: { content: string; is_disabled?: boolean }[];
+}
+
+export async function getHostingerZone(domain: string): Promise<HostingerZoneRecord[] | null> {
+  const r = await hg(`/api/dns/v1/zones/${enc(domain)}`, { method: "GET" });
+  if (!r.ok) return null;
+  try {
+    const arr = JSON.parse(r.body) as HostingerZoneRecord[];
+    return Array.isArray(arr) ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Replace (overwrite) the record sets that share a name + type with the given ones. */
+export async function putHostingerZone(
+  domain: string,
+  zone: { name: string; type: string; ttl: number; records: { content: string }[] }[],
+): Promise<Done> {
+  return done(await hg(`/api/dns/v1/zones/${enc(domain)}`, { method: "PUT", json: { overwrite: true, zone } }));
+}
+
+/** Remove whole record sets (every record of that name + type). */
+export async function deleteHostingerZoneRecords(domain: string, filters: { name: string; type: string }[]): Promise<Done> {
+  return done(await hg(`/api/dns/v1/zones/${enc(domain)}`, { method: "DELETE", json: { filters } }));
+}
+
+/** Back to Hostinger's default records — email (MX/TXT) records are kept. */
+export async function resetHostingerZone(domain: string): Promise<Done> {
+  return done(
+    await hg(`/api/dns/v1/zones/${enc(domain)}/reset`, {
+      method: "POST",
+      json: { sync: true, reset_email_records: false, whitelisted_record_types: ["MX", "TXT"] },
+    }),
+  );
+}
+
+export interface HostingerDnsSnapshot {
+  id: number;
+  reason: string;
+  created_at: string;
+}
+
+export async function listHostingerDnsSnapshots(domain: string): Promise<HostingerDnsSnapshot[] | null> {
+  const r = await hg(`/api/dns/v1/snapshots/${enc(domain)}`, { method: "GET" });
+  if (!r.ok) return null;
+  try {
+    const arr = JSON.parse(r.body) as HostingerDnsSnapshot[];
+    return Array.isArray(arr) ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function restoreHostingerDnsSnapshot(domain: string, snapshotId: number): Promise<Done> {
+  return done(await hg(`/api/dns/v1/snapshots/${enc(domain)}/${snapshotId}/restore`, { method: "POST", json: {} }));
+}
+
+// forwarding ----------------------------------------------------------------
+
+export interface HostingerForwarding {
+  redirectType: "301" | "302";
+  redirectUrl: string;
+}
+
+/** The domain's redirect: null when it has none (Hostinger answers that with
+ *  200 and empty fields), "error" when unreadable. */
+export async function getHostingerForwarding(domain: string): Promise<HostingerForwarding | null | "error"> {
+  const r = await hg(`/api/domains/v1/forwarding/${enc(domain)}`, { method: "GET" });
+  if (r.status === 404) return null;
+  if (!r.ok) return "error";
+  try {
+    const j = JSON.parse(r.body) as { redirect_type?: string; redirect_url?: string };
+    if (!j.redirect_url || (j.redirect_type !== "301" && j.redirect_type !== "302")) return null;
+    return { redirectType: j.redirect_type, redirectUrl: j.redirect_url };
+  } catch {
+    return "error";
+  }
+}
+
+export async function setHostingerForwarding(domain: string, redirectType: "301" | "302", redirectUrl: string): Promise<Done> {
+  const current = await getHostingerForwarding(domain);
+  if (current === "error") return { ok: false, message: "Could not read the current forwarding" };
+  const json = { redirect_type: redirectType, redirect_url: redirectUrl };
+  return current
+    ? done(await hg(`/api/domains/v1/forwarding/${enc(domain)}`, { method: "PUT", json }))
+    : done(await hg("/api/domains/v1/forwarding", { method: "POST", json: { domain: domain.toLowerCase(), ...json } }));
+}
+
+export async function deleteHostingerForwarding(domain: string): Promise<Done> {
+  return done(await hg(`/api/domains/v1/forwarding/${enc(domain)}`, { method: "DELETE" }));
+}
+
+// moving a domain to another Hostinger account (e.g. the client's own) --------
+
+/** Hand the domain to another Hostinger account; it changes hands once that account accepts. */
+export async function startHostingerDomainMove(domain: string, newCustomerEmail: string): Promise<Done> {
+  return done(
+    await hg(`/api/domains/v1/move/outgoing/${enc(domain)}`, { method: "POST", json: { new_customer_email: newCustomerEmail.trim() } }),
+  );
+}
+
+/** The outgoing move in progress (initiated | activating | completed), null when none, "error" when unreadable. */
+export async function getHostingerDomainMove(domain: string): Promise<{ status: string; createdAt: string | null } | null | "error"> {
+  const r = await hg(`/api/domains/v1/move/outgoing/${enc(domain)}`, { method: "GET" });
+  if (r.status === 404) return null;
+  if (!r.ok) return "error";
+  try {
+    const j = JSON.parse(r.body) as { status?: string; created_at?: string };
+    return j.status ? { status: j.status, createdAt: j.created_at ?? null } : null;
+  } catch {
+    return "error";
+  }
+}
+
+export async function cancelHostingerDomainMove(domain: string): Promise<Done> {
+  return done(await hg(`/api/domains/v1/move/outgoing/${enc(domain)}`, { method: "DELETE" }));
 }

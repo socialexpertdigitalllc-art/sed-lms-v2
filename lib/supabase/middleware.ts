@@ -100,7 +100,8 @@ export async function updateSession(request: NextRequest) {
     path === "/api/forms/deliver" ||
     // Domain pipeline sweep (buy → DNS → hosting → SSL → go live): secret-
     // header auth, called by the instrumentation poller with no session.
-    path === "/api/domains/process";
+    path === "/api/domains/process" ||
+    path === "/api/domains/sweep";
 
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));

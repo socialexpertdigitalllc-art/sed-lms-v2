@@ -62,6 +62,39 @@ describe.skipIf(!live)("LIVE — client domains", () => {
     expect(names.filter((d) => isProtectedDomain(d))).toEqual([]);
   }, 300000);
 
+  it("full sync of both registrars (alerts muted) — expired domains in, Hostinger auto-renew known", async () => {
+    const { importAllDomains } = await import("@/lib/domains/import");
+    const { cloudflareConfigured } = await import("@/lib/cloudflare/client");
+    const muted = (async () => {}) as never;
+    const r = await importAllDomains(admin(), ADMIN_PROFILE, { cloudflare: cloudflareConfigured(), notify: muted });
+    console.log("[live-domains] SYNC:", JSON.stringify(r));
+    expect(r.ok).toBe(true);
+    const { data } = await admin()
+      .from("client_domains")
+      .select("domain, registrar, status, registrar_status, auto_renew, renewal_cost_cents, next_billing_at, hostinger_subscription_id");
+    const rows = (data ?? []) as Record<string, unknown>[];
+    const tally = (k: string) => rows.reduce<Record<string, number>>((a, x) => ((a[String(x[k])] = (a[String(x[k])] ?? 0) + 1), a), {});
+    console.log("[live-domains] registrar_status:", JSON.stringify(tally("registrar_status")), "auto_renew:", JSON.stringify(tally("auto_renew")));
+    console.log("[live-domains] hostinger without subscription:", rows.filter((x) => x.registrar === "hostinger" && !x.hostinger_subscription_id).map((x) => x.domain));
+    console.log("[live-domains] priced:", rows.filter((x) => typeof x.renewal_cost_cents === "number").length, "of", rows.length);
+  }, 300000);
+
+  it("health checks on a handful of real sites (read-only toward the sites)", async () => {
+    const { healthSweep } = await import("@/lib/domains/health");
+    const muted = (async () => {}) as never;
+    const r = await healthSweep(admin(), { limit: 10, budgetMs: 120000, notify: muted });
+    console.log("[live-domains] HEALTH:", JSON.stringify(r));
+    const { data } = await admin()
+      .from("client_domains")
+      .select("domain, health_state, health")
+      .not("health_state", "is", null)
+      .limit(12);
+    for (const x of (data ?? []) as { domain: string; health_state: string; health: { summary?: string; ssl?: { valid_to?: string } | null } }[]) {
+      console.log(`[live-domains]   ${x.domain.padEnd(34)} ${x.health_state.padEnd(9)} ${x.health?.summary ?? ""} ${x.health?.ssl?.valid_to ? "ssl→" + x.health.ssl.valid_to.slice(0, 10) : ""}`);
+    }
+    expect(r.checked).toBeGreaterThan(0);
+  }, 300000);
+
   it("a SANDBOX purchase runs the real purchase + processor and stops as unassigned (no lead)", async () => {
     process.env.CLOUDFLARE_REGISTRAR_SANDBOX = "1";
     try {

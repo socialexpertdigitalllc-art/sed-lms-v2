@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { NotificationRule, NotifyContext, ContextualRole } from "@/lib/notifications/types";
+import { departmentSlugs } from "@/lib/notifications/logic";
 
 function roleValue(role: ContextualRole, ctx: NotifyContext): string | null {
   switch (role) {
@@ -17,7 +18,7 @@ function roleValue(role: ContextualRole, ctx: NotifyContext): string | null {
 export function expandTargets(rule: NotificationRule, ctx: NotifyContext, deptMembers: Record<string, string[]>): string[] {
   if (!rule.enabled) return [];
   const ids = new Set<string>();
-  for (const slug of rule.target_departments) for (const id of deptMembers[slug] ?? []) ids.add(id);
+  for (const slug of departmentSlugs(rule.target_departments)) for (const id of deptMembers[slug] ?? []) ids.add(id);
   for (const u of rule.target_users) ids.add(u);
   for (const role of rule.target_roles) { const v = roleValue(role, ctx); if (v) ids.add(v); }
   if (ctx.actorId) ids.delete(ctx.actorId);
@@ -28,14 +29,14 @@ export async function resolveRecipients(rule: NotificationRule, ctx: NotifyConte
   const deptMembers: Record<string, string[]> = {};
   if (rule.enabled && rule.target_departments.length) {
     const admin = createAdminClient();
-    const { data: depts } = await admin.from("departments").select("id, slug").in("slug", rule.target_departments);
+    const { data: depts } = await admin.from("departments").select("id, slug").in("slug", departmentSlugs(rule.target_departments));
     const idToSlug = new Map((depts ?? []).map((d) => [d.id, d.slug]));
     const { data: mem } = await admin.from("department_members")
       .select("department_id, user_id, profiles!department_members_user_id_fkey(id)")
       .in("department_id", (depts ?? []).map((d) => d.id));
-    for (const m of mem ?? []) {
-      const slug = idToSlug.get((m as any).department_id); if (!slug) continue;
-      (deptMembers[slug] ??= []).push((m as any).user_id);
+    for (const m of (mem ?? []) as { department_id: string; user_id: string }[]) {
+      const slug = idToSlug.get(m.department_id); if (!slug) continue;
+      (deptMembers[slug] ??= []).push(m.user_id);
     }
   }
   return expandTargets(rule, ctx, deptMembers);

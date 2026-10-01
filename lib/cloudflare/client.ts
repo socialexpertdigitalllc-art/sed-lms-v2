@@ -209,6 +209,20 @@ export async function setAutoRenew(domain: string, on: boolean): Promise<{ ok: b
   return r.ok ? { ok: true } : { ok: false, message: cfMessage(r) };
 }
 
+/** Transfer lock and WHOIS privacy — the other two settings the Registrar API
+ *  can change (it cannot renew, give a transfer code or transfer out: those
+ *  stay in Cloudflare's dashboard, see CF_REGISTRAR_DASHBOARD). */
+export async function updateRegistration(
+  domain: string,
+  patch: { locked?: boolean; privacy_mode?: "redaction" | "off" },
+): Promise<{ ok: boolean; message?: string }> {
+  const r = await cf<unknown>(`${registrar()}/registrations/${encodeURIComponent(domain)}`, { method: "PATCH", json: patch });
+  return r.ok ? { ok: true } : { ok: false, message: cfMessage(r) };
+}
+
+/** Cloudflare's own "Manage domains" page (documented deep link). */
+export const CF_REGISTRAR_DASHBOARD = "https://dash.cloudflare.com/?to=/:account/registrar/domains";
+
 /** Every domain registered on the account (cursor-paginated). */
 export async function listRegistrations(): Promise<CfRegistration[] | null> {
   const all: CfRegistration[] = [];
@@ -260,9 +274,11 @@ export interface DnsRecord {
   content: string;
   proxied?: boolean;
   ttl?: number;
+  /** MX only */
+  priority?: number;
 }
 
-export type DnsRecordInput = { type: string; name: string; content: string; proxied?: boolean; ttl?: number; comment?: string };
+export type DnsRecordInput = { type: string; name: string; content: string; proxied?: boolean; ttl?: number; priority?: number; comment?: string };
 
 export async function listDnsRecords(zoneId: string): Promise<DnsRecord[] | null> {
   const all: DnsRecord[] = [];

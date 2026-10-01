@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { departmentSlugs } from "@/lib/notifications/logic";
 import type { NotificationRule } from "@/lib/notifications/types";
 
 type EventMeta = {
@@ -57,7 +58,8 @@ function toggleIn(list: string[], value: string): string[] {
 function initialState(rule: NotificationRule | undefined): RuleState {
   return {
     enabled: rule?.enabled ?? true,
-    target_departments: rule?.target_departments ?? [],
+    // older rules name departments ("Admin"); the chips are slugs ("admin")
+    target_departments: departmentSlugs(rule?.target_departments ?? []),
     target_users: rule?.target_users ?? [],
     target_roles: rule?.target_roles ?? [],
     delay_minutes: rule?.delay_minutes ?? 0,

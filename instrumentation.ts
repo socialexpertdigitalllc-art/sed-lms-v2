@@ -85,4 +85,12 @@ export async function register() {
   setInterval(() => {
     fetch(`${origin}/api/domains/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 60_000);
+
+  // Domains round: a registrar sync every 6 hours (expiry, auto-renew, new and
+  // departed domains, renewal alerts) and the site health checks that are due
+  // (each site every ~6 hours; a first failure is re-checked within minutes so
+  // an outage alert is confirmed). Writes only what changed.
+  setInterval(() => {
+    fetch(`${origin}/api/domains/sweep`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 900_000);
 }

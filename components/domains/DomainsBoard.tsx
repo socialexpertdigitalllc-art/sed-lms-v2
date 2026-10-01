@@ -1,50 +1,58 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ChevronDown, ChevronRight, DownloadCloud, ExternalLink, Globe, Link2, Loader2, RotateCw, Search, ShoppingCart, Unlink } from "lucide-react";
+import { AlertTriangle, ExternalLink, Globe, Link2, Loader2, RefreshCw, RotateCw, Search, ShoppingCart, Unlink } from "lucide-react";
 import { EmptyPanel, PageHeader } from "@/components/common/Panel";
 import { btnPrimary, btnSecondary, btnGhostSm } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
 import { cn } from "@/lib/utils";
-import { DomainStatusPill, DomainSteps, isWorking, money } from "@/components/domains/DomainBits";
+import {
+  AutoRenewLabel,
+  DomainStatusPill,
+  ExpiryLabel,
+  HealthDot,
+  RegistrationPill,
+  daysLeft,
+  isWorking,
+  money,
+} from "@/components/domains/DomainBits";
 import { BuyDomainDialog } from "@/components/domains/BuyDomainDialog";
 import { PickLeadDialog } from "@/components/domains/PickDialogs";
-import type { ClientDomainRow } from "@/lib/domains/types";
+import type { ClientDomainRow, DomainHealth } from "@/lib/domains/types";
 
 type Row = ClientDomainRow & { leads?: { business_name: string } | null };
+
+const EXPIRING_DAYS = 30;
 
 const FILTERS = [
   { id: "all", label: "All" },
   { id: "attention", label: "Needs attention" },
-  { id: "working", label: "In progress" },
-  { id: "free", label: "Unlinked" },
-  { id: "renew", label: "Auto-renew off" },
+  { id: "expired", label: "Expired" },
   { id: "expiring", label: "Expiring soon" },
+  { id: "renew", label: "Auto-renew off" },
+  { id: "down", label: "Site down" },
+  { id: "free", label: "Unlinked" },
+  { id: "working", label: "In progress" },
 ] as const;
 type Filter = (typeof FILTERS)[number]["id"];
 
-const DAY_MS = 86_400_000;
-const EXPIRING_DAYS = 30;
-
-/** Whole days until the domain expires (negative once past), or null when unknown. */
-function daysLeft(expiresAt: string | null, now: number): number | null {
-  const t = expiresAt ? Date.parse(expiresAt) : NaN;
-  return Number.isNaN(t) ? null : Math.ceil((t - now) / DAY_MS);
-}
-
-/** Expires within EXPIRING_DAYS and auto-renew isn't known to be on (Hostinger
- *  doesn't report it per domain). */
+/** Still registered, but expires within EXPIRING_DAYS and isn't set to renew. */
 function expiringSoon(r: Row, now: number): boolean {
   const d = daysLeft(r.expires_at, now);
-  return d !== null && d <= EXPIRING_DAYS && r.auto_renew !== true && r.status !== "failed";
+  return r.registrar_status !== "expired" && r.registrar_status !== "missing" && d !== null && d >= 0 && d <= EXPIRING_DAYS && r.auto_renew !== true && r.status !== "failed";
 }
+const siteDown = (r: Row) =>
+  (r.health_state === "down" || r.health_state === "ssl_error") &&
+  ["live", "connected", "waiting_for_site"].includes(r.status) &&
+  r.registrar_status !== "expired";
 
 /**
  * Every client domain we own — on Cloudflare (default) or Hostinger — with its
- * lead, setup state, expiry and auto-renew. Import pulls in the domains already
- * on both accounts; Buy finds and purchases a new one.
+ * lead, setup state, site health, expiry and auto-renew. Sync brings the
+ * registrars' changes in (it also runs by itself every six hours); a domain's
+ * own page manages everything else.
  */
 export function DomainsBoard() {
   const { toast } = useToast();
@@ -53,10 +61,9 @@ export function DomainsBoard() {
   const [meta, setMeta] = useState({ canManage: false, canPurchase: false, sandbox: false, cloudflareConfigured: true, hostingerConfigured: true });
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<string | null>(null);
   const [buyOpen, setBuyOpen] = useState(false);
   const [linkFor, setLinkFor] = useState<Row | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -90,54 +97,71 @@ export function DomainsBoard() {
     return () => clearInterval(t);
   }, [rows, load]);
 
+  const counts = useMemo(() => {
+    const all = rows ?? [];
+    return {
+      expired: all.filter((r) => r.registrar_status === "expired").length,
+      expiring: all.filter((r) => expiringSoon(r, now)).length,
+      renewOff: all.filter((r) => r.auto_renew === false && r.registrar_status === "active" && r.status !== "failed").length,
+      down: all.filter(siteDown).length,
+      attention: all.filter((r) => r.status === "needs_attention" || r.status === "failed").length,
+    };
+  }, [rows, now]);
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return (rows ?? []).filter((r) => {
+    const list = (rows ?? []).filter((r) => {
       if (q && !r.domain.includes(q) && !(r.leads?.business_name ?? "").toLowerCase().includes(q)) return false;
       switch (filter) {
         case "attention":
-          return r.status === "needs_attention" || r.status === "failed";
-        case "working":
-          return isWorking(r.status) || r.status === "waiting_for_site";
-        case "free":
-          return !r.lead_id && r.status !== "failed";
-        case "renew":
-          return r.auto_renew === false;
+          return r.status === "needs_attention" || r.status === "failed" || siteDown(r);
+        case "expired":
+          return r.registrar_status === "expired";
         case "expiring":
           return expiringSoon(r, now);
+        case "renew":
+          return r.auto_renew === false && r.registrar_status === "active" && r.status !== "failed";
+        case "down":
+          return siteDown(r);
+        case "free":
+          return !r.lead_id && r.status !== "failed" && r.registrar_status !== "missing";
+        case "working":
+          return isWorking(r.status) || r.status === "waiting_for_site";
         default:
           return true;
       }
     });
+    // renewal views read best soonest-first
+    if (filter === "expired" || filter === "expiring" || filter === "renew") {
+      list.sort((a, b) => Date.parse(a.expires_at ?? "9999") - Date.parse(b.expires_at ?? "9999"));
+    }
+    return list;
   }, [rows, filter, query, now]);
 
-  const renewOff = (rows ?? []).filter((r) => r.auto_renew === false && r.status !== "failed").length;
-  const expiring = (rows ?? []).filter((r) => expiringSoon(r, now)).length;
-
-  async function importNow() {
-    setImporting(true);
+  async function syncNow() {
+    setSyncing(true);
     try {
-      const res = await fetch("/api/domains/import", { method: "POST" });
+      const res = await fetch("/api/domains/sync", { method: "POST" });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) toast({ kind: "error", title: j.error ?? "Import failed" });
+      if (!res.ok) toast({ kind: "error", title: j.error ?? "Sync failed" });
       else {
         type Part = { added?: number; error?: string } | null;
         const parts: [string, Part][] = [["Hostinger", j.hostinger], ["Cloudflare", j.cloudflare]];
-        const from = parts.flatMap(([name, p]) => (p && !p.error ? [`${p.added} from ${name}`] : [])).join(", ");
         const failed = parts.flatMap(([name, p]) => (p?.error ? [`${name}: ${p.error}`] : []));
         toast({
           kind: failed.length ? "error" : "success",
-          title: `Imported ${j.added} new domain${j.added === 1 ? "" : "s"}${from ? ` (${from})` : ""}`,
+          title: j.added ? `Synced — ${j.added} new domain${j.added === 1 ? "" : "s"}` : "Synced with the registrars",
           body:
-            `${j.connected} already set up by hand (left as they are), ${j.unassigned} not in use yet, ${j.linked} linked to their lead.` +
-            (j.refreshed ? ` ${j.refreshed} existing refreshed.` : "") +
-            (j.skipped ? ` ${j.skipped} skipped.` : "") +
+            `${j.refreshed} updated` +
+            (j.added ? `, ${j.connected} already set up by hand, ${j.unassigned} not in use, ${j.linked} linked to their lead` : "") +
+            (j.missing ? `, ${j.missing} no longer in the account` : "") +
+            "." +
             (failed.length ? ` ${failed.join(" ")}` : ""),
         });
         await load();
       }
     } finally {
-      setImporting(false);
+      setSyncing(false);
     }
   }
 
@@ -158,22 +182,30 @@ export function DomainsBoard() {
 
   const patch = (body: unknown): RequestInit => ({ method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+  const banners = [
+    counts.expired ? { key: "expired" as Filter, tone: "dropped", text: `${counts.expired} domain${counts.expired === 1 ? " has" : "s have"} expired.` } : null,
+    counts.expiring
+      ? { key: "expiring" as Filter, tone: "notready", text: `${counts.expiring} domain${counts.expiring === 1 ? " expires" : "s expire"} within ${EXPIRING_DAYS} days and ${counts.expiring === 1 ? "isn't" : "aren't"} set to renew.` }
+      : null,
+    counts.down ? { key: "down" as Filter, tone: "dropped", text: `${counts.down} client site${counts.down === 1 ? " is" : "s are"} down or ${counts.down === 1 ? "has" : "have"} an SSL problem.` } : null,
+  ].filter((b): b is { key: Filter; tone: string; text: string } => b !== null);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title="Domains"
-        description="Client domains on Cloudflare (default) and Hostinger. Link one to a lead and the dashboard connects DNS, hosting and SSL, then puts the lead's site live on it."
+        description="Every client domain on Hostinger and Cloudflare — kept in sync with the registrars and checked for site health automatically. Open a domain to renew it, change its DNS or registrar settings, or hand it over."
         action={
           <div className="flex gap-2">
             {meta.canManage ? (
               <button
                 type="button"
                 className={btnSecondary}
-                onClick={importNow}
-                disabled={importing || !meta.hostingerConfigured}
-                title="Bring in the domains already on Hostinger and Cloudflare"
+                onClick={syncNow}
+                disabled={syncing || !meta.hostingerConfigured}
+                title="Read the latest from Hostinger and Cloudflare now (runs by itself every six hours)"
               >
-                {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <DownloadCloud className="h-4 w-4" />} Import domains
+                {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Sync now
               </button>
             ) : null}
             {meta.canPurchase ? (
@@ -190,32 +222,40 @@ export function DomainsBoard() {
           Cloudflare is not configured on this server (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID).
         </p>
       ) : null}
-      {renewOff > 0 ? (
-        <p className="flex items-center gap-2 rounded-md border border-notready-fg/30 bg-notready-bg p-3 text-sm text-notready-fg">
+      {banners.map((b) => (
+        <p
+          key={b.key}
+          className={cn(
+            "flex items-center gap-2 rounded-md border p-3 text-sm",
+            b.tone === "dropped" ? "border-dropped-fg/30 bg-dropped-bg text-dropped-fg" : "border-notready-fg/30 bg-notready-bg text-notready-fg",
+          )}
+        >
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          {renewOff} domain{renewOff === 1 ? " has" : "s have"} auto-renew turned off and will expire unless renewed.
-          <button type="button" className="underline" onClick={() => setFilter("renew")}>Show</button>
+          {b.text}
+          <button type="button" className="underline" onClick={() => setFilter(b.key)}>
+            Show
+          </button>
         </p>
-      ) : null}
-      {expiring > 0 ? (
-        <p className="flex items-center gap-2 rounded-md border border-notready-fg/30 bg-notready-bg p-3 text-sm text-notready-fg">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          {expiring} domain{expiring === 1 ? " expires" : "s expire"} within {EXPIRING_DAYS} days without auto-renew confirmed on — check {expiring === 1 ? "it renews" : "they renew"}.
-          <button type="button" className="underline" onClick={() => setFilter("expiring")}>Show</button>
-        </p>
-      ) : null}
+      ))}
 
       <div className="flex flex-wrap items-center gap-2">
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => setFilter(f.id)}
-            className={cn("rounded-full border px-3 py-1 text-xs", filter === f.id ? "border-accent bg-accent-soft text-accent-ink" : "border-border text-text-muted hover:bg-surface-2")}
-          >
-            {f.label}
-          </button>
-        ))}
+        {FILTERS.map((f) => {
+          const n = f.id === "expired" ? counts.expired : f.id === "expiring" ? counts.expiring : f.id === "renew" ? counts.renewOff : f.id === "down" ? counts.down : null;
+          return (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setFilter(f.id)}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs",
+                filter === f.id ? "border-accent bg-accent-soft text-accent-ink" : "border-border text-text-muted hover:bg-surface-2",
+              )}
+            >
+              {f.label}
+              {n ? <span className="ml-1 font-mono">{n}</span> : null}
+            </button>
+          );
+        })}
         <div className="relative ml-auto w-64">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-faint" />
           <input className={cn(inputCls, "pl-8")} placeholder="Domain or lead…" aria-label="Search domains" value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -223,112 +263,109 @@ export function DomainsBoard() {
       </div>
 
       {rows === null ? (
-        <div className="grid place-items-center p-12 text-text-faint"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        <div className="grid place-items-center p-12 text-text-faint">
+          <Loader2 className="h-6 w-6 animate-spin" />
+        </div>
       ) : visible.length === 0 ? (
         <EmptyPanel
           icon={Globe}
           title={rows.length === 0 ? "No domains yet" : "Nothing matches"}
-          hint={rows.length === 0 ? (meta.canManage ? "Import the domains already on Hostinger and Cloudflare, or buy a new one." : "An admin can import or buy domains.") : "Try another filter."}
+          hint={rows.length === 0 ? (meta.canManage ? "Sync to bring in the domains on Hostinger and Cloudflare, or buy a new one." : "An admin can sync or buy domains.") : "Try another filter."}
         />
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-surface">
           <table className="w-full text-sm">
             <thead className="border-b border-border text-left text-xs text-text-muted">
               <tr>
-                <th className="w-6 px-3 py-2" />
                 <th className="px-3 py-2">Domain</th>
                 <th className="px-3 py-2">Lead</th>
                 <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Site</th>
                 <th className="px-3 py-2">Registrar</th>
                 <th className="px-3 py-2">Expires</th>
+                <th className="px-3 py-2">Auto-renew</th>
                 <th className="px-3 py-2">Renews at</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {visible.map((r) => {
-                const expanded = open === r.id;
                 const rowBusy = busy === r.id;
+                const health = r.health_state ? (r.health as DomainHealth) : null;
                 return (
-                  <Fragment key={r.id}>
-                    <tr className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
-                      <td className="px-3 py-2">
-                        <button type="button" aria-label={expanded ? "Hide steps" : "Show steps"} onClick={() => setOpen(expanded ? null : r.id)} className="text-text-faint hover:text-text">
-                          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </button>
-                      </td>
-                      <td className="px-3 py-2">
-                        <a href={`https://${r.domain}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-accent-ink hover:underline">
-                          {r.domain} <ExternalLink className="h-3.5 w-3.5" />
+                  <tr key={r.id} className="border-b border-border-subtle last:border-0 hover:bg-surface-2">
+                    <td className="px-3 py-2">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Link href={`/domains/${r.id}`} className="font-medium text-accent-ink hover:underline">
+                          {r.domain}
+                        </Link>
+                        <a href={`https://${r.domain}`} target="_blank" rel="noreferrer" title="Open the site" aria-label={`Open ${r.domain}`} className="text-text-faint hover:text-text">
+                          <ExternalLink className="h-3.5 w-3.5" />
                         </a>
-                      </td>
-                      <td className="px-3 py-2">
-                        {r.lead_id ? (
-                          <Link href={`/leads/${r.lead_id}`} className="text-text hover:underline">{r.leads?.business_name ?? "Lead"}</Link>
-                        ) : (
-                          <span className="text-text-faint">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2"><DomainStatusPill status={r.status} /></td>
-                      <td className="px-3 py-2 text-text-muted">{r.registrar === "cloudflare" ? "Cloudflare" : "Hostinger"}</td>
-                      <td className="px-3 py-2 text-text-muted">
-                        {r.expires_at ? new Date(r.expires_at).toLocaleDateString() : "—"}
-                        {r.auto_renew === false ? (
-                          <span className="ml-1 text-xs font-semibold text-notready-fg">auto-renew off</span>
-                        ) : expiringSoon(r, now) ? (
-                          <span className="ml-1 text-xs font-semibold text-notready-fg">
-                            {(daysLeft(r.expires_at, now) ?? 0) < 0 ? "expired" : `in ${daysLeft(r.expires_at, now)}d`}
-                          </span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      {r.lead_id ? (
+                        <Link href={`/leads/${r.lead_id}`} className="text-text hover:underline">
+                          {r.leads?.business_name ?? "Lead"}
+                        </Link>
+                      ) : (
+                        <span className="text-text-faint">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="inline-flex flex-wrap items-center gap-1">
+                        <DomainStatusPill status={r.status} />
+                        <RegistrationPill status={r.registrar_status} />
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <HealthDot state={r.health_state} summary={health?.summary} />
+                    </td>
+                    <td className="px-3 py-2 text-text-muted">{r.registrar === "cloudflare" ? "Cloudflare" : "Hostinger"}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-text-muted">
+                      <ExpiryLabel row={r} now={now} />
+                    </td>
+                    <td className="px-3 py-2">
+                      <AutoRenewLabel value={r.registrar_status === "expired" ? null : r.auto_renew} />
+                    </td>
+                    <td className="px-3 py-2 text-text-muted">{r.renewal_cost_cents ? `${money(r.renewal_cost_cents, r.currency ?? "USD")}/yr` : "—"}</td>
+                    <td className="px-3 py-2 text-right">
+                      <span className="inline-flex items-center gap-1">
+                        {rowBusy ? <Loader2 className="h-4 w-4 animate-spin text-text-faint" /> : null}
+                        {meta.canManage && !r.lead_id && (r.status === "unassigned" || r.status === "connected") && r.registrar_status !== "missing" ? (
+                          <button type="button" className={btnGhostSm} disabled={rowBusy} onClick={() => setLinkFor(r)}>
+                            <Link2 className="h-3.5 w-3.5" /> Link lead
+                          </button>
                         ) : null}
-                      </td>
-                      <td className="px-3 py-2 text-text-muted">{r.renewal_cost_cents ? `${money(r.renewal_cost_cents, r.currency ?? "USD")}/yr` : "—"}</td>
-                      <td className="px-3 py-2 text-right">
-                        <span className="inline-flex items-center gap-1">
-                          {rowBusy ? <Loader2 className="h-4 w-4 animate-spin text-text-faint" /> : null}
-                          {meta.canManage && !r.lead_id && (r.status === "unassigned" || r.status === "connected") ? (
-                            <button type="button" className={btnGhostSm} disabled={rowBusy} onClick={() => setLinkFor(r)}>
-                              <Link2 className="h-3.5 w-3.5" /> Link lead
-                            </button>
-                          ) : null}
-                          {meta.canManage && (r.status === "needs_attention" || r.status === "waiting_for_site") ? (
-                            <button type="button" className={btnGhostSm} disabled={rowBusy} onClick={() => void act(r, `/api/domains/${r.id}/retry`, { method: "POST" }, `Retrying ${r.domain}`)}>
-                              <RotateCw className="h-3.5 w-3.5" /> {r.status === "waiting_for_site" ? "Check" : "Retry"}
-                            </button>
-                          ) : null}
-                          {meta.canManage && r.auto_renew === false && r.status !== "failed" ? (
-                            <button type="button" className={btnGhostSm} disabled={rowBusy} onClick={() => void act(r, `/api/domains/${r.id}`, patch({ autoRenew: true }), `Auto-renew on for ${r.domain}`)}>
-                              Turn on auto-renew
-                            </button>
-                          ) : null}
-                          {meta.canManage && r.lead_id && r.status !== "purchasing" ? (
-                            <button type="button" className={btnGhostSm} disabled={rowBusy} onClick={() => void act(r, `/api/domains/${r.id}`, patch({ leadId: null }), `${r.domain} unlinked`)}>
-                              <Unlink className="h-3.5 w-3.5" />
-                            </button>
-                          ) : null}
-                        </span>
-                      </td>
-                    </tr>
-                    {expanded ? (
-                      <tr className="border-b border-border-subtle bg-surface-2/40">
-                        <td />
-                        <td colSpan={7} className="px-3 py-3">
-                          {r.status === "connected" ? (
-                            <p className="text-xs text-text-muted">
-                              Set up by hand before the dashboard managed domains —{" "}
-                              {r.hosting_username ? `hosted on Hostinger (${r.hosting_username})` : "its site is hosted outside Hostinger"}; nothing for the dashboard to do.
-                            </p>
-                          ) : r.status === "unassigned" ? (
-                            <p className="text-xs text-text-muted">Not linked to a lead. Linking it starts the automatic setup.</p>
-                          ) : (
-                            <DomainSteps row={r} />
-                          )}
-                          {r.last_error && (r.status === "needs_attention" || r.status === "failed") ? (
-                            <p className="mt-2 rounded-md bg-dropped-bg p-2 text-xs text-dropped-fg">{r.last_error}</p>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
+                        {meta.canManage && (r.status === "needs_attention" || r.status === "waiting_for_site") ? (
+                          <button type="button" className={btnGhostSm} disabled={rowBusy} onClick={() => void act(r, `/api/domains/${r.id}/retry`, { method: "POST" }, `Retrying ${r.domain}`)}>
+                            <RotateCw className="h-3.5 w-3.5" /> {r.status === "waiting_for_site" ? "Check" : "Retry"}
+                          </button>
+                        ) : null}
+                        {meta.canManage && r.auto_renew === false && r.registrar_status === "active" && r.status !== "failed" ? (
+                          <button type="button" className={btnGhostSm} disabled={rowBusy} onClick={() => void act(r, `/api/domains/${r.id}`, patch({ autoRenew: true }), `Auto-renew on for ${r.domain}`)}>
+                            Turn on auto-renew
+                          </button>
+                        ) : null}
+                        {meta.canManage && r.lead_id && r.status !== "purchasing" ? (
+                          <button
+                            type="button"
+                            className={btnGhostSm}
+                            disabled={rowBusy}
+                            title="Unlink from the lead"
+                            aria-label={`Unlink ${r.domain} from its lead`}
+                            onClick={() => void act(r, `/api/domains/${r.id}`, patch({ leadId: null }), `${r.domain} unlinked`)}
+                          >
+                            <Unlink className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                        <Link href={`/domains/${r.id}`} className={btnGhostSm}>
+                          Manage
+                        </Link>
+                      </span>
+                    </td>
+                  </tr>
                 );
               })}
             </tbody>

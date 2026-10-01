@@ -229,6 +229,26 @@ export const NOTIFICATION_EVENTS = [
     availableRoles: ["lead_agent"],
     timingMode: "delay",
   },
+  {
+    key: "domain_renewal_due",
+    label: "Domain expiring or expired",
+    description: "A client domain with auto-renew off expires within 30 days (reminders at 30, 7 and 1 day), or a domain just expired.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: ["lead_agent"],
+    timingMode: "delay",
+  },
+  {
+    key: "domain_site_down",
+    label: "Client site down",
+    description: "A client's site stopped answering or its SSL certificate broke — confirmed by two checks in a row.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: ["lead_agent"],
+    timingMode: "delay",
+  },
 ] as const;
 
 export type NotificationEventKey = (typeof NOTIFICATION_EVENTS)[number]["key"];
