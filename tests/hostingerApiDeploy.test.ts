@@ -291,6 +291,21 @@ describe("listWebsites / getWebsite", () => {
     expect((await listWebsites())?.map((w) => w.domain)).toEqual(["site1.com", "site2.com"]);
   });
 
+  it("pages by meta.total when the response has no last_page (the real API shape: 183 sites, 100 per page)", async () => {
+    const pages: number[] = [];
+    stubFetch((call) => {
+      const page = Number(new URL(call.url).searchParams.get("page"));
+      pages.push(page);
+      const count = page === 1 ? 100 : 83;
+      return Response.json({
+        data: Array.from({ length: count }, (_, i) => ({ domain: `p${page}-${i}.com`, username: "u1" })),
+        meta: { current_page: page, per_page: 100, total: 183 },
+      });
+    });
+    expect((await listWebsites())?.length).toBe(183);
+    expect(pages).toEqual([1, 2]);
+  });
+
   it("picks the exact domain out of the substring-filtered results, case-insensitively", async () => {
     stubFetch(() =>
       Response.json({

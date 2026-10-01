@@ -122,24 +122,35 @@ export interface HostingerWebsite {
   website_type?: string | null;
 }
 
-function parseWebsites(body: string): { data: HostingerWebsite[]; lastPage: number } {
+function parseWebsites(body: string): { data: HostingerWebsite[]; lastPage: number | null } {
   try {
-    const j = JSON.parse(body) as { data?: HostingerWebsite[]; meta?: { last_page?: number } };
-    return { data: Array.isArray(j.data) ? j.data : [], lastPage: j.meta?.last_page ?? 1 };
+    const j = JSON.parse(body) as {
+      data?: HostingerWebsite[];
+      meta?: { last_page?: number; total?: number; per_page?: number };
+    };
+    const data = Array.isArray(j.data) ? j.data : [];
+    // The websites list reports {current_page, per_page, total} — no last_page.
+    const m = j.meta;
+    const lastPage = m?.last_page ?? (m?.total && m?.per_page ? Math.ceil(m.total / m.per_page) : null);
+    return { data, lastPage };
   } catch {
     return { data: [], lastPage: 1 };
   }
 }
 
+const WEBSITES_PAGE = 100;
+
 /** Every hosted website on every plan of the account, or null on any failure. */
 export async function listWebsites(): Promise<HostingerWebsite[] | null> {
   const all: HostingerWebsite[] = [];
   for (let page = 1; page <= 20; page++) {
-    const r = await hg(`/api/hosting/v1/websites?per_page=100&page=${page}`, { method: "GET" });
+    const r = await hg(`/api/hosting/v1/websites?per_page=${WEBSITES_PAGE}&page=${page}`, { method: "GET" });
     if (!r.ok) return null;
     const { data, lastPage } = parseWebsites(r.body);
     all.push(...data);
-    if (page >= lastPage || data.length === 0) break;
+    // Stop at the reported last page, or — when the response doesn't say —
+    // at the first short page.
+    if (data.length === 0 || (lastPage !== null ? page >= lastPage : data.length < WEBSITES_PAGE)) break;
   }
   return all;
 }
