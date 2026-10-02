@@ -165,6 +165,39 @@ export function toPublicServiceDetail(row: WebsiteServiceRow): PublicServiceDeta
   };
 }
 
+export const WEBSITE_LEAD_STATUSES = ["new", "contacted", "qualified", "won", "lost"] as const;
+export type WebsiteLeadStatus = (typeof WEBSITE_LEAD_STATUSES)[number];
+
+export interface WebsiteLeadRow {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  message: string;
+  service_slug: string | null;
+  tier_name: string | null;
+  coupon: string | null;
+  coupon_valid: boolean | null;
+  source_page: string | null;
+  referrer: string | null;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  utm_term: string | null;
+  utm_content: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  is_spam: boolean;
+  spam_reason: "honeypot" | "too_fast" | "rate_ip" | "manual" | null;
+  status: WebsiteLeadStatus;
+  notes: string;
+  assigned_to: string | null;
+  contacted_at: string | null;
+  submitted_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /** Cache tags the website's /api/revalidate accepts. */
 export const WEBSITE_TAGS = ["site-content", "offers", "portfolio", "testimonials", "stats"] as const;
 export type WebsiteTag = (typeof WEBSITE_TAGS)[number];

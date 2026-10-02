@@ -96,6 +96,49 @@ export const portfolioSchema = z.object({
   sort_order: z.number().int().min(0).max(10_000).default(0),
 });
 
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullish()
+    .transform((v) => (v ? v : null));
+
+/** What the website posts to /api/public/leads (server-to-server). */
+export const websiteLeadIntakeSchema = z.object({
+  name: z.string().trim().min(2, "Please enter your name.").max(200),
+  email: z
+    .string()
+    .trim()
+    .max(320)
+    .regex(/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/, "Please enter a valid email address."),
+  phone: z.string().trim().max(60).default(""),
+  message: z.string().trim().max(5000).default(""),
+  service_slug: optionalText(80),
+  tier_name: optionalText(120),
+  coupon: optionalText(64),
+  source_page: optionalText(1000),
+  referrer: optionalText(1000),
+  utm_source: optionalText(200),
+  utm_medium: optionalText(200),
+  utm_campaign: optionalText(200),
+  utm_term: optionalText(200),
+  utm_content: optionalText(200),
+  // The visitor's details, relayed by the website's server (it sees them; we don't).
+  ip: optionalText(100),
+  user_agent: optionalText(500),
+  submitted_at: z.string().trim().max(40).nullish(),
+  // Spam gates the website applies; we record rather than drop.
+  company_website: z.string().max(500).nullish(),
+  elapsed_ms: z.number().nullish(),
+});
+
+export const websiteLeadUpdateSchema = z.object({
+  status: z.enum(["new", "contacted", "qualified", "won", "lost"]).optional(),
+  notes: z.string().max(10_000).optional(),
+  is_spam: z.boolean().optional(),
+});
+
 export const settingsSchema = z.object({
   stats: z.object({
     sitesLaunched: z.number().int().min(0).max(1_000_000),

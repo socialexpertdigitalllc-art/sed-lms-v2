@@ -240,6 +240,16 @@ export const NOTIFICATION_EVENTS = [
     timingMode: "delay",
   },
   {
+    key: "website_lead_received",
+    label: "New lead from the agency website",
+    description: "A visitor submitted the quote form on socialexpertdigitalllc.com (Website → Leads).",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: [],
+    timingMode: "delay",
+  },
+  {
     key: "domain_site_down",
     label: "Client site down",
     description: "A client's site stopped answering or its SSL certificate broke — confirmed by two checks in a row.",
