@@ -42,6 +42,7 @@ const MAIN: NavItem[] = [
   { href: "/contracts", label: "Contracts", icon: FileText, perm: "contracts.view" },
   { href: "/forms", label: "Forms", icon: Inbox, perm: "forms.view" },
   { href: "/domains", label: "Domains", icon: Earth, perm: "domains.view" },
+  { href: "/website", label: "Website", icon: Globe, perm: "website.view" },
   { href: "/notifications", label: "Notifications", icon: Bell },
   // No `perm`: the verifier is auth-gated only, like Notifications.
   { href: "/verify", label: "Verify", icon: MailCheck },
