@@ -79,6 +79,9 @@ function deps(over: { cf?: Partial<PipelineDeps["cf"]>; hostinger?: Partial<Pipe
     } as PipelineDeps["hostinger"],
     goLive: over.goLive ?? (vi.fn(async () => ({ ok: true, url: "https://acme.com", settled: true })) as unknown as PipelineDeps["goLive"]),
     findStaging: over.findStaging ?? (vi.fn(async () => ({ id: "dep-1", url: "https://acmev1.dmviral.com" })) as unknown as PipelineDeps["findStaging"]),
+    // a freshly hosted domain holds no site of its own
+    siteOnDomain: over.siteOnDomain ?? vi.fn(async () => false),
+    recordLive: over.recordLive ?? (vi.fn(async () => {}) as unknown as PipelineDeps["recordLive"]),
     probeVhost: over.probeVhost ?? vi.fn(async () => true),
     resolvesTo: over.resolvesTo ?? vi.fn(async () => ["1.2.3.4"]),
   };
@@ -269,7 +272,27 @@ describe("site", () => {
   it("a staging site: goes live on the domain through the shared transfer", async () => {
     const d = deps();
     expect(await runStep(row(), "site", d)).toMatchObject({ kind: "live" });
-    expect(d.goLive).toHaveBeenCalledWith(expect.objectContaining({ deploymentId: "dep-1", domain: "acme.com", actorId: "user-1" }));
+    // the staging site is looked up for the lead (tracked, or through its dmviral link)
+    expect(d.findStaging).toHaveBeenCalledWith(d.admin, "lead-1", "user-1");
+    expect(d.goLive).toHaveBeenCalledWith(expect.objectContaining({ deploymentId: "dep-1", domain: "acme.com", actorId: "user-1", leadId: "lead-1" }));
+  });
+
+  // 2026-10-02, GG Tile: the client was waiting, so the site was uploaded to
+  // the domain by hand — the domain sat at "Waiting for site" forever.
+  it("a site already on the domain (uploaded by hand) is recorded as live — never overwritten", async () => {
+    const d = deps({ siteOnDomain: vi.fn(async () => true) });
+    const out = await runStep(row(), "site", d);
+    expect(out).toMatchObject({ kind: "live", detail: expect.stringMatching(/already on the domain/) });
+    expect(d.recordLive).toHaveBeenCalledWith(expect.objectContaining({ leadId: "lead-1", domain: "acme.com", actorId: "user-1", how: "found_on_domain" }));
+    expect(d.goLive).not.toHaveBeenCalled();
+    expect(d.findStaging).not.toHaveBeenCalled();
+  });
+
+  it("Hostinger can't be read: waits — an unreadable domain is never taken for an empty one", async () => {
+    const d = deps({ siteOnDomain: vi.fn(async () => null) });
+    expect(await runStep(row(), "site", d)).toMatchObject({ kind: "wait" });
+    expect(d.goLive).not.toHaveBeenCalled();
+    expect(d.recordLive).not.toHaveBeenCalled();
   });
 
   it("the transfer is still settling: waits; a real failure stops", async () => {

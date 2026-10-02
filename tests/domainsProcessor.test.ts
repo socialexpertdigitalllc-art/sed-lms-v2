@@ -97,6 +97,8 @@ function happyDeps(admin: PipelineDeps["admin"], over: Partial<PipelineDeps> = {
     } as unknown as PipelineDeps["hostinger"],
     goLive: vi.fn(async () => ({ ok: true, url: "https://acme.com", settled: true })) as unknown as PipelineDeps["goLive"],
     findStaging: vi.fn(async () => ({ id: "dep-1", url: "https://acmev1.dmviral.com" })) as unknown as PipelineDeps["findStaging"],
+    siteOnDomain: vi.fn(async () => false),
+    recordLive: vi.fn(async () => {}) as unknown as PipelineDeps["recordLive"],
     probeVhost: vi.fn(async () => true),
     resolvesTo: vi.fn(async () => ["76.13.203.71"]),
     ...over,

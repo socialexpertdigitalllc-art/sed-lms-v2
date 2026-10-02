@@ -48,7 +48,7 @@ export async function retireOtherLiveRows(
 export async function adoptSubdomain(
   admin: Admin,
   sub: string,
-  actorId: string,
+  actorId: string | null,
 ): Promise<{ row: DeploymentRecord } | { error: string }> {
   const daDomain = process.env.DA_DOMAIN ?? "";
   const url = `https://${sub}.${daDomain}`;

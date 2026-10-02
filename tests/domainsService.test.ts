@@ -24,12 +24,18 @@ const hg = vi.hoisted(() => ({
   enableHostingerAutoRenew: vi.fn(),
   disableHostingerAutoRenew: vi.fn(),
 }));
+const golive = vi.hoisted(() => ({
+  findOrTrackStaging: vi.fn(),
+  goLiveOnDomain: vi.fn(),
+  recordSiteOnDomain: vi.fn(async () => {}),
+}));
 vi.mock("@/lib/cloudflare/client", () => cf);
 vi.mock("@/lib/hostinger/client", () => hg);
+vi.mock("@/lib/site-studio/deploy/golive", () => golive);
 // keep the transfer module (normalizeTargetDomain) away from DirectAdmin/Hostinger imports
 vi.mock("@/lib/site-studio/deploy/snapshots", () => ({ snapshotSite: vi.fn() }));
 
-import { purchaseDomain, assignDomain, setDomainAutoRenew } from "@/lib/domains/service";
+import { purchaseDomain, assignDomain, setDomainAutoRenew, markDomainLive, copyStagingToDomain, nudgeWaitingDomain } from "@/lib/domains/service";
 
 type Rec = Record<string, unknown>;
 let seq = 0;
@@ -247,5 +253,55 @@ describe("setDomainAutoRenew — Hostinger", () => {
     const db = fakeDb({ client_domains: [{ id: "d1", domain: "acme.com", registrar: "hostinger", hostinger_subscription_id: null, auto_renew: true }] });
     expect(await setDomainAutoRenew(db.admin, "d1", false, "admin-1")).toMatchObject({ ok: false, status: 422 });
     expect(hg.disableHostingerAutoRenew).not.toHaveBeenCalled();
+  });
+});
+
+describe("closing the site step by hand (the GG Tile case)", () => {
+  beforeEach(() => {
+    golive.findOrTrackStaging.mockReset();
+    golive.goLiveOnDomain.mockReset();
+    golive.recordSiteOnDomain.mockClear();
+  });
+
+  const waiting = { id: "d1", domain: "ggtileinc.com", registrar: "cloudflare", status: "waiting_for_site", step: "site", lead_id: "lead-1", steps: { ssl: { state: "done" } }, claim_id: "w1" };
+
+  it("mark live: stops waiting, keeps the earlier steps, points the lead at the domain — copies nothing", async () => {
+    const db = fakeDb({ client_domains: [{ ...waiting }], activity_log: [] });
+    const r = await markDomainLive(db.admin, "d1", "admin-1");
+    expect(r).toMatchObject({ ok: true });
+    expect(db.tables.client_domains[0]).toMatchObject({ status: "live", step: null, next_run_at: null, claim_id: null, steps: { ssl: { state: "done" }, site: { state: "done" } } });
+    expect(golive.recordSiteOnDomain).toHaveBeenCalledWith(expect.objectContaining({ leadId: "lead-1", domain: "ggtileinc.com", how: "marked_by_hand" }));
+    expect(golive.goLiveOnDomain).not.toHaveBeenCalled();
+    expect(db.tables.activity_log.at(-1)).toMatchObject({ action: "domain.marked_live" });
+  });
+
+  it("mark live is refused before the site step (setup still running, or no lead)", async () => {
+    const db = fakeDb({ client_domains: [{ ...waiting, status: "setting_up", step: "dns" }, { ...waiting, id: "d2", lead_id: null }] });
+    expect(await markDomainLive(db.admin, "d1", "admin-1")).toMatchObject({ ok: false, status: 409 });
+    expect(await markDomainLive(db.admin, "d2", "admin-1")).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it("copy staging: runs the shared transfer for the lead's staging site, then the domain is live", async () => {
+    golive.findOrTrackStaging.mockResolvedValue({ id: "dep-7", url: "https://ggtile.dmviral.com" });
+    golive.goLiveOnDomain.mockResolvedValue({ ok: true, url: "https://ggtileinc.com", settled: true, snapshot: "snapshots/x.zip" });
+    const db = fakeDb({ client_domains: [{ ...waiting }], activity_log: [] });
+    const r = await copyStagingToDomain(db.admin, "d1", "admin-1");
+    expect(r).toMatchObject({ ok: true });
+    expect(golive.goLiveOnDomain).toHaveBeenCalledWith(expect.objectContaining({ deploymentId: "dep-7", domain: "ggtileinc.com", leadId: "lead-1" }));
+    expect(db.tables.client_domains[0]).toMatchObject({ status: "live", steps: { site: { state: "done", detail: "Copied from https://ggtile.dmviral.com by hand" } } });
+  });
+
+  it("copy staging without a staging site says how to give it one", async () => {
+    golive.findOrTrackStaging.mockResolvedValue(null);
+    const db = fakeDb({ client_domains: [{ ...waiting }] });
+    expect(await copyStagingToDomain(db.admin, "d1", "admin-1")).toMatchObject({ ok: false, status: 409, error: expect.stringMatching(/dmviral link/) });
+    expect(golive.goLiveOnDomain).not.toHaveBeenCalled();
+  });
+
+  it("a new website link on the lead makes its waiting domain due now", async () => {
+    const db = fakeDb({ client_domains: [{ ...waiting, next_run_at: "2026-10-02T14:16:22Z" }] });
+    expect(await nudgeWaitingDomain(db.admin, "lead-1")).toBe("d1");
+    expect(Date.parse(db.tables.client_domains[0].next_run_at as string)).toBeLessThanOrEqual(Date.now());
+    expect(await nudgeWaitingDomain(db.admin, "lead-without-domain")).toBeNull();
   });
 });

@@ -11,7 +11,7 @@ import type { DomainHealth } from "@/lib/domains/types";
 const now = new Date("2026-10-02T12:00:00Z");
 const day = (n: number) => new Date(now.getTime() + n * 86_400_000).toISOString();
 let n = 0;
-const health = (state: DomainHealth["state"], summary = state): DomainHealth => ({
+const health = (state: DomainHealth["state"], summary: string = state): DomainHealth => ({
   state,
   summary,
   http_status: state === "up" ? 200 : null,

@@ -62,6 +62,17 @@ describe.skipIf(!live)("LIVE — client domains", () => {
     expect(names.filter((d) => isProtectedDomain(d))).toEqual([]);
   }, 300000);
 
+  it("read-only: a site uploaded to the domain by hand is seen; a parked domain holds none", async () => {
+    const { siteOnDomain } = await import("@/lib/domains/deps");
+    const { stagingSubFromLink } = await import("@/lib/site-studio/deploy/golive");
+    const gg = await siteOnDomain("ggtileinc.com");
+    const parked = await siteOnDomain("primetirellc.com");
+    console.log("[live-domains] siteOnDomain ggtileinc.com:", gg, "primetirellc.com:", parked);
+    expect(gg).toBe(true);
+    expect(parked).toBe(false);
+    expect(stagingSubFromLink("https://ggtile.dmviral.com/")).toBe("ggtile");
+  }, 120000);
+
   it("full sync of both registrars (alerts muted) — expired domains in, Hostinger auto-renew known", async () => {
     const { importAllDomains } = await import("@/lib/domains/import");
     const { cloudflareConfigured } = await import("@/lib/cloudflare/client");

@@ -6,7 +6,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type * as Cf from "@/lib/cloudflare/client";
 import type * as Hg from "@/lib/hostinger/client";
-import type { goLiveOnDomain, findLiveStagingDeployment } from "@/lib/site-studio/deploy/golive";
+import type { goLiveOnDomain, findOrTrackStaging, recordSiteOnDomain } from "@/lib/site-studio/deploy/golive";
 import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
 import { clientSitesIp, planDns, planIsEmpty } from "./dns";
 import type { ClientDomainRow, StepKey } from "./types";
@@ -45,7 +45,13 @@ export interface PipelineDeps {
     | "enableHostingerAutoRenew"
   >;
   goLive: typeof goLiveOnDomain;
-  findStaging: typeof findLiveStagingDeployment;
+  /** The lead's staging site — tracked, or found through the lead's dmviral link. */
+  findStaging: typeof findOrTrackStaging;
+  /** Does the domain's website already hold a site (a homepage in its folder)?
+   *  null = Hostinger couldn't be read — never taken for "empty". */
+  siteOnDomain: (domain: string) => Promise<boolean | null>;
+  /** Record a site already on the domain as the lead's (link, log, notify). */
+  recordLive: typeof recordSiteOnDomain;
   /** Does the hosting server at `ip` serve `domain`? null = could not tell. */
   probeVhost: (ip: string, domain: string) => Promise<boolean | null>;
   /** Public A records of a domain (DNS-over-HTTPS); null = lookup failed. */
@@ -257,18 +263,34 @@ async function siteStep(row: ClientDomainRow, deps: PipelineDeps): Promise<StepO
   if (current && current.replace(/^www\./, "") === row.domain) {
     return { kind: "live", detail: "The lead's website is live on this domain" };
   }
-  const staging = await deps.findStaging(deps.admin, row.lead_id);
+  const actorId = row.purchased_by ?? row.created_by;
+
+  // A site already on the domain is the lead's site — uploaded by hand while
+  // the client waited, or an earlier transfer. Record it; never overwrite it.
+  const onDomain = await deps.siteOnDomain(row.domain);
+  if (onDomain === null) return wait("Could not read the domain's files on Hostinger", MIN);
+  if (onDomain) {
+    await deps.recordLive({ admin: deps.admin, leadId: row.lead_id, domain: row.domain, actorId, how: "found_on_domain" });
+    return {
+      kind: "live",
+      detail: "The site was already on the domain (uploaded by hand) — the lead's website link now points here; nothing was overwritten",
+    };
+  }
+
+  const staging = await deps.findStaging(deps.admin, row.lead_id, actorId);
   if (!staging) {
     return {
       kind: "waiting_for_site",
-      detail: "The domain is ready — the lead's site goes live here automatically once it is deployed",
+      detail:
+        "The domain is ready — the lead's site goes live here as soon as it has one: deploy it to a staging site (or put its dmviral link on the lead), or upload it to the domain",
     };
   }
   const r = await deps.goLive({
     admin: deps.admin,
     deploymentId: staging.id,
     domain: row.domain,
-    actorId: row.purchased_by ?? row.created_by,
+    actorId,
+    leadId: row.lead_id,
   });
   if (r.ok) {
     return {

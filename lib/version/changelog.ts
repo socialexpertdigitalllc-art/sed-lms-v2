@@ -29,6 +29,37 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.22.0",
+    date: "2026-10-02",
+    title: "Domains: everything managed from the dashboard, plus analytics",
+    changes: [
+      {
+        kind: "feature",
+        text: "Every domain has its own page: renew it (Hostinger, with the price shown before you confirm), turn auto-renew on or off on either registrar, edit its DNS records, transfer lock, WHOIS privacy, nameservers and forwarding, get the transfer code, or move it into a client's own Hostinger account. Where Cloudflare's API can't do something (renewing early, the transfer code), the page links straight to it in Cloudflare.",
+      },
+      {
+        kind: "feature",
+        text: "Expired domains are on the Domains page too, and Hostinger domains now show whether they renew automatically. The dashboard re-reads both registrars every six hours and tells Admin about domains expiring without auto-renew (30, 7 and 1 day before) and domains that just expired.",
+      },
+      {
+        kind: "feature",
+        text: "Site health: every client site is checked every few hours (DNS, SSL certificate, HTTPS), with 30-day uptime and response times on each domain's page. Admin is alerted when a site goes down, confirmed by two checks in a row.",
+      },
+      {
+        kind: "feature",
+        text: "New Domain analytics page: portfolio size, sites up, uptime, auto-renew rate, yearly renewal cost and upcoming charges, possible savings, a 12-month renewal calendar, growth, and a list of what needs action first.",
+      },
+      {
+        kind: "fix",
+        text: "A domain waiting for its site no longer waits forever: if the site is uploaded to the domain by hand it's recognised as live (and never overwritten), and a staging site that's only a dmviral link on the lead is picked up and moved — right away when the link is added. The domain page also offers Mark as live and Copy staging site.",
+      },
+      {
+        kind: "fix",
+        text: "Domain alerts reach Admin now — they were addressed to the department's name instead of its id, so nobody received them.",
+      },
+    ],
+  },
+  {
     version: "2.21.1",
     date: "2026-10-02",
     title: "Domains: Hostinger's domains are on the Domains page too",

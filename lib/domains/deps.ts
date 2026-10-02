@@ -3,7 +3,7 @@ import { request } from "node:http";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as cf from "@/lib/cloudflare/client";
 import * as hostinger from "@/lib/hostinger/client";
-import { findLiveStagingDeployment, goLiveOnDomain } from "@/lib/site-studio/deploy/golive";
+import { findOrTrackStaging, goLiveOnDomain, recordSiteOnDomain } from "@/lib/site-studio/deploy/golive";
 import { lookupA } from "./dns";
 import type { PipelineDeps } from "./pipeline";
 
@@ -31,6 +31,16 @@ export function probeVhost(ip: string, domain: string): Promise<boolean | null> 
 /** Public A records via Cloudflare's DNS-over-HTTPS resolver. */
 export const resolvesTo = lookupA;
 
+/** Does the domain's Hostinger website already hold a site? A homepage in its
+ *  folder means someone put one there. null = Hostinger couldn't be read. */
+export async function siteOnDomain(domain: string): Promise<boolean | null> {
+  const w = await hostinger.findWebsite(domain);
+  if (w === "error") return null;
+  if (!w) return false;
+  const files = await hostinger.listWebsiteFiles(w);
+  return files ? hostinger.hasIndexPage(files) : null;
+}
+
 export function realPipelineDeps(admin: SupabaseClient): PipelineDeps {
   return {
     admin,
@@ -57,7 +67,9 @@ export function realPipelineDeps(admin: SupabaseClient): PipelineDeps {
       enableHostingerAutoRenew: hostinger.enableHostingerAutoRenew,
     },
     goLive: goLiveOnDomain,
-    findStaging: findLiveStagingDeployment,
+    findStaging: findOrTrackStaging,
+    siteOnDomain,
+    recordLive: recordSiteOnDomain,
     probeVhost,
     resolvesTo,
     sandbox: cf.registrarSandbox(),

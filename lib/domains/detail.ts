@@ -1,6 +1,7 @@
 // lib/domains/detail.ts — everything the domain page shows, in one read: the
 // row (with its lead), its activity history and 30 days of health checks.
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { findLiveStagingDeployment, stagingSubFromLink } from "@/lib/site-studio/deploy/golive";
 import type { ClientDomainRow, HealthState } from "./types";
 
 export type DomainWithLead = ClientDomainRow & { leads?: { business_name: string | null } | null };
@@ -27,6 +28,19 @@ export interface DomainDetail {
   checks: DomainCheck[];
   uptime30: number | null;
   avgMs30: number | null;
+  /** The lead's staging site (tracked, or the dmviral link on the lead) — what "Copy staging site" would copy. */
+  stagingUrl: string | null;
+}
+
+/** The lead's staging site, read-only: its tracked deployment, else a dmviral link on the lead. */
+async function stagingFor(admin: SupabaseClient, leadId: string | null): Promise<string | null> {
+  if (!leadId) return null;
+  const tracked = await findLiveStagingDeployment(admin, leadId);
+  if (tracked) return tracked.url;
+  const { data } = await admin.from("leads").select("website_link").eq("id", leadId).maybeSingle();
+  const link = (data as { website_link?: string | null } | null)?.website_link ?? "";
+  const sub = stagingSubFromLink(link);
+  return sub ? `https://${sub}.${process.env.DA_DOMAIN ?? ""}` : null;
 }
 
 export async function loadDomainRow(admin: SupabaseClient, id: string): Promise<DomainWithLead | null> {
@@ -77,6 +91,7 @@ export async function loadDomainDetail(admin: SupabaseClient, id: string, now = 
     domain,
     activity,
     checks: list,
+    stagingUrl: await stagingFor(admin, domain.lead_id),
     uptime30: counted.length ? Math.round((up.length / counted.length) * 1000) / 10 : null,
     avgMs30: timed.length ? Math.round(timed.reduce((n, c) => n + (c.ms ?? 0), 0) / timed.length) : null,
   };

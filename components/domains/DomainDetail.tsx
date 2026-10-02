@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, CalendarClock, ExternalLink, Globe, History, Link2, Loader2, RefreshCw, RotateCw, Stethoscope, Trash2, Unlink } from "lucide-react";
+import { Activity, CalendarClock, CheckCircle2, Copy, ExternalLink, Globe, History, Link2, Loader2, RefreshCw, RotateCw, Stethoscope, Trash2, Unlink } from "lucide-react";
 import { Panel, Pill } from "@/components/common/Panel";
 import { BackLink } from "@/components/common/BackLink";
 import { RelativeTime } from "@/components/common/RelativeTime";
@@ -39,6 +39,8 @@ const ACTIVITY_WORDS: Record<string, string> = {
   "domain.dns_changed": "DNS record",
   "domain.dns_reset": "DNS reset to defaults",
   "domain.dns_restored": "DNS restored to an earlier version",
+  "domain.marked_live": "Marked live by hand",
+  "domain.site_copied": "Staging site copied to the domain",
 };
 
 function activityText(a: DomainActivity): string {
@@ -77,7 +79,8 @@ const STATUS_WORDS: Record<string, string> = {
   live: "The lead's website is live on this domain.",
   connected: "Set up by hand before the dashboard managed domains — the dashboard only watches it.",
   unassigned: "Not linked to a lead. Linking it starts the automatic setup (hosting, DNS, SSL, the site).",
-  waiting_for_site: "Ready — waiting for the lead's site to be deployed, then it goes live by itself.",
+  waiting_for_site:
+    "Ready — waiting for the lead's site. It goes live by itself once the lead has a staging site (or its dmviral link on the lead), or once the site is uploaded to the domain.",
   setting_up: "The dashboard is connecting it now.",
   purchasing: "The registrar is completing the purchase.",
   needs_attention: "Setup stopped — see the reason below and retry.",
@@ -96,6 +99,7 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
   const [linkOpen, setLinkOpen] = useState(false);
   const [confirmRenew, setConfirmRenew] = useState(false);
   const [confirmRenewOff, setConfirmRenewOff] = useState(false);
+  const [confirmSite, setConfirmSite] = useState<"mark_live" | "copy_staging" | null>(null);
   const d = detail.domain;
   const health = d.health_state ? (d.health as DomainHealth) : null;
 
@@ -118,6 +122,8 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
   }, [d.status, reload]);
 
   const expired = d.registrar_status === "expired";
+  // the site step can be closed by hand: waiting for the site, or stopped at it
+  const atSiteStep = d.status === "waiting_for_site" || (d.status === "needs_attention" && d.step === "site");
   const missing = d.registrar_status === "missing";
   const left = now ? daysLeft(d.expires_at, now) : null;
   const registrarName = d.registrar === "cloudflare" ? "Cloudflare" : "Hostinger";
@@ -159,6 +165,15 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
 
   async function retry() {
     const r = await call("retry", `/api/domains/${d.id}/retry`, { method: "POST" }, { title: `Retrying ${d.domain}` });
+    if (r.ok) await reload();
+  }
+
+  async function siteAction(action: "mark_live" | "copy_staging") {
+    const r = await call("site", `/api/domains/${d.id}/site`, { method: "POST", body: { action } }, {
+      title: action === "mark_live" ? `${d.domain} marked live` : `Staging site copied to ${d.domain}`,
+      body: "The lead's website link now points at the domain.",
+    });
+    setConfirmSite(null);
     if (r.ok) await reload();
   }
 
@@ -306,9 +321,21 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
               <p className="rounded-md bg-dropped-bg p-2 text-xs text-dropped-fg">{d.last_error}</p>
             ) : null}
             {canManage && (d.status === "needs_attention" || d.status === "waiting_for_site") ? (
-              <button type="button" className={btnSecondarySm} onClick={() => void retry()} disabled={busy === "retry"}>
-                <RotateCw className="h-3.5 w-3.5" /> {d.status === "waiting_for_site" ? "Check again" : "Retry"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={btnSecondarySm} onClick={() => void retry()} disabled={busy === "retry"}>
+                  <RotateCw className="h-3.5 w-3.5" /> {d.status === "waiting_for_site" ? "Check again" : "Retry"}
+                </button>
+                {atSiteStep && detail.stagingUrl ? (
+                  <button type="button" className={btnSecondarySm} onClick={() => setConfirmSite("copy_staging")} disabled={busy === "site"}>
+                    <Copy className="h-3.5 w-3.5" /> Copy staging site
+                  </button>
+                ) : null}
+                {atSiteStep ? (
+                  <button type="button" className={btnSecondarySm} onClick={() => setConfirmSite("mark_live")} disabled={busy === "site"}>
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Mark as live
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             <div className="flex items-center justify-between gap-2 border-t border-border-subtle pt-3 text-xs">
               <span className="text-text-muted">Hosting</span>
@@ -424,6 +451,34 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
             and adds a year to the registration.
           </p>
           {expired ? <p>It has already expired, so Hostinger may add a late-renewal fee.</p> : null}
+        </ConfirmAction>
+      ) : null}
+      {confirmSite === "copy_staging" ? (
+        <ConfirmAction
+          title={`Copy the staging site to ${d.domain}?`}
+          confirmLabel="Copy it"
+          busy={busy === "site"}
+          onConfirm={() => void siteAction("copy_staging")}
+          onClose={() => setConfirmSite(null)}
+        >
+          <p>
+            The files of <span className="font-mono text-text">{detail.stagingUrl}</span> replace whatever {d.domain} serves now (a copy of the current files is kept
+            first). The lead&apos;s website link becomes https://{d.domain} and the staging subdomain is removed once Hostinger confirms the files.
+          </p>
+        </ConfirmAction>
+      ) : null}
+      {confirmSite === "mark_live" ? (
+        <ConfirmAction
+          title={`Mark ${d.domain} as live?`}
+          confirmLabel="Mark as live"
+          busy={busy === "site"}
+          onConfirm={() => void siteAction("mark_live")}
+          onClose={() => setConfirmSite(null)}
+        >
+          <p>
+            Use this when the site is already on {d.domain} — uploaded by hand, or hosted elsewhere. Nothing is copied or changed on the domain; the lead&apos;s website
+            link becomes https://{d.domain}.
+          </p>
         </ConfirmAction>
       ) : null}
       {confirmRenewOff ? (

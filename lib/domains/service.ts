@@ -32,6 +32,7 @@ import {
 } from "@/lib/hostinger/client";
 import { normalizeTargetDomain } from "@/lib/site-studio/deploy/transfer";
 import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
+import { findOrTrackStaging, goLiveOnDomain, recordSiteOnDomain } from "@/lib/site-studio/deploy/golive";
 import { toCents, type ClientDomainRow, type DomainRegistrar } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -416,7 +417,7 @@ export async function retryDomain(admin: SupabaseClient, id: string, actorId: st
   return { ok: true, domain: data as ClientDomainRow, kick: true };
 }
 
-/** Auto-renew on/off at the registrar (Hostinger: on only — its API has no "off" here). */
+/** Auto-renew on/off at the registrar (a Hostinger domain through its matched billing subscription). */
 export async function setDomainAutoRenew(
   admin: SupabaseClient,
   id: string,
@@ -465,4 +466,109 @@ export function suggestQuery(businessName: string | null, websiteLink: string | 
   const daDomain = (process.env.DA_DOMAIN ?? "").toLowerCase();
   if (host && daDomain && !host.endsWith(`.${daDomain}`)) return host.replace(/^www\./, "");
   return (businessName ?? "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** The site step can be closed by hand: waiting for the site, or stopped AT the site step. */
+const atSiteStep = (row: ClientDomainRow) => row.status === "waiting_for_site" || (row.status === "needs_attention" && row.step === "site");
+
+async function finishSite(admin: SupabaseClient, row: ClientDomainRow, detail: string): Promise<ClientDomainRow | null> {
+  const at = new Date().toISOString();
+  const { data } = await admin
+    .from("client_domains")
+    .update({
+      status: "live",
+      step: null,
+      steps: { ...(row.steps ?? {}), site: { state: "done", at, detail } },
+      last_error: null,
+      attempts: 0,
+      next_run_at: null,
+      // a background run holding the row loses its claim: this decision stands
+      claim_id: null,
+      claimed_at: null,
+      updated_at: at,
+    })
+    .eq("id", row.id)
+    .select("*")
+    .single();
+  return (data as ClientDomainRow | null) ?? null;
+}
+
+/**
+ * The site is live on the domain — put there some way the dashboard didn't
+ * see (uploaded by hand, hosted elsewhere): stop waiting, point the lead's
+ * website link at the domain, log it. Nothing is copied or overwritten.
+ */
+export async function markDomainLive(admin: SupabaseClient, id: string, actorId: string): Promise<MutateResult> {
+  const { data: rowData } = await admin.from("client_domains").select("*").eq("id", id).maybeSingle();
+  if (!rowData) return { ok: false, status: 404, error: "Domain not found" };
+  const row = rowData as ClientDomainRow;
+  if (!row.lead_id) return { ok: false, status: 409, error: "Link the domain to a lead first" };
+  if (!atSiteStep(row)) return { ok: false, status: 409, error: "Only a domain waiting for its site can be marked live" };
+  const updated = await finishSite(admin, row, "Marked live by hand — the site was already on the domain");
+  if (!updated) return { ok: false, status: 500, error: "update failed" };
+  await recordSiteOnDomain({ admin, leadId: row.lead_id, domain: row.domain, actorId, how: "marked_by_hand" });
+  await admin.from("activity_log").insert({
+    user_id: actorId,
+    action: "domain.marked_live",
+    entity_type: "client_domain",
+    entity_id: id,
+    new_value: { domain: row.domain, lead_id: row.lead_id },
+  });
+  return { ok: true, domain: updated, kick: false };
+}
+
+/**
+ * Copy the lead's staging site onto the domain NOW — replacing whatever the
+ * domain serves (the transfer keeps a copy of it in the file history first).
+ * For when the automatic step wouldn't: the domain already had other files.
+ */
+export async function copyStagingToDomain(admin: SupabaseClient, id: string, actorId: string): Promise<MutateResult> {
+  const { data: rowData } = await admin.from("client_domains").select("*").eq("id", id).maybeSingle();
+  if (!rowData) return { ok: false, status: 404, error: "Domain not found" };
+  const row = rowData as ClientDomainRow;
+  if (!row.lead_id) return { ok: false, status: 409, error: "Link the domain to a lead first" };
+  if (row.status === "purchasing" || row.status === "failed" || row.status === "setting_up") {
+    return { ok: false, status: 409, error: "Wait for the domain's setup to finish first" };
+  }
+  if (row.registrar_status === "expired" || row.registrar_status === "missing") {
+    return { ok: false, status: 409, error: "This domain isn't registered to us any more — renew it first" };
+  }
+  const staging = await findOrTrackStaging(admin, row.lead_id, actorId);
+  if (!staging) {
+    return { ok: false, status: 409, error: "This lead has no staging site to copy — put its dmviral link on the lead first" };
+  }
+  const r = await goLiveOnDomain({ admin, deploymentId: staging.id, domain: row.domain, actorId, leadId: row.lead_id });
+  if (!r.ok) return { ok: false, status: r.pending ? 409 : 502, error: r.error };
+  const updated = await finishSite(admin, row, `Copied from ${staging.url} by hand${r.settled ? "" : " (Hostinger is still unpacking the files)"}`);
+  if (!updated) return { ok: false, status: 500, error: "update failed" };
+  await admin.from("activity_log").insert({
+    user_id: actorId,
+    action: "domain.site_copied",
+    entity_type: "client_domain",
+    entity_id: id,
+    new_value: { domain: row.domain, from: staging.url, lead_id: row.lead_id, snapshot: r.snapshot },
+  });
+  return { ok: true, domain: updated, kick: false };
+}
+
+/**
+ * A domain parked waiting for this lead's site looks again NOW — e.g. its
+ * dmviral link was just put on the lead — instead of at its next 10-minute
+ * check. Returns the domain's id (for an instant background kick), or null.
+ */
+export async function nudgeWaitingDomain(admin: SupabaseClient, leadId: string): Promise<string | null> {
+  const { data } = await admin
+    .from("client_domains")
+    .select("id")
+    .eq("lead_id", leadId)
+    .eq("status", "waiting_for_site")
+    .maybeSingle();
+  const row = data as { id: string } | null;
+  if (!row) return null;
+  await admin
+    .from("client_domains")
+    .update({ next_run_at: new Date().toISOString() })
+    .eq("id", row.id)
+    .eq("status", "waiting_for_site");
+  return row.id;
 }

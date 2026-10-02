@@ -50,6 +50,12 @@ describe("domain sweep wiring", () => {
     expect((await sweep(new Request("http://x/api/domains/sweep", { method: "POST", headers: { "x-wge-secret": "nope" } }))).status).toBe(401);
   });
 
+  it("putting a website link on a lead makes its waiting domain look again at once", () => {
+    const src = readFileSync("app/api/leads/[id]/route.ts", "utf8");
+    expect(src).toMatch(/nudgeWaitingDomain\(/);
+    expect(src).toMatch(/processDomains\(realPipelineDeps/);
+  });
+
   it("the processor refuses calls without the right secret", async () => {
     const none = await POST(new Request("http://x/api/domains/process", { method: "POST" }));
     expect(none.status).toBe(401);

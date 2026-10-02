@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { ToastProvider } from "@/components/common/Toast";
 import { DomainDetailView } from "@/components/domains/DomainDetail";
 import { DomainAnalyticsView } from "@/components/domains/DomainAnalytics";
@@ -79,8 +79,9 @@ const row = (over: Partial<ClientDomainRow> = {}): ClientDomainRow & { leads: { 
   ...over,
 });
 
-const detail = (over: Partial<ClientDomainRow> = {}): DomainDetail => ({
+const detail = (over: Partial<ClientDomainRow> = {}, stagingUrl: string | null = null): DomainDetail => ({
   domain: row(over),
+  stagingUrl,
   activity: [{ id: "a1", action: "domain.dns_changed", at: inDays(-1), by: "Admin", value: { change: "added", after: { type: "TXT", name: "@", content: "v=spf1" } } }],
   checks: [
     { at: inDays(-1), state: "up", http_status: 200, ms: 400, error: null },
@@ -127,6 +128,7 @@ function stubApi(calls: { url: string; method: string; body?: unknown }[], setti
       }
       if (url.endsWith("/registrar")) return Response.json({ ok: true, settings });
       if (url.endsWith("/renew")) return Response.json({ ok: true, pending: false, totalCents: 2019 });
+      if (url.endsWith("/site")) return Response.json({ domain: row({ status: "live" }) });
       if (url === "/api/domains/sync") return Response.json({ added: 0, refreshed: 1 });
       if (url.startsWith("/api/domains/")) return Response.json(detail({ expires_at: inDays(371) }));
       throw new Error(`unexpected ${method} ${url}`);
@@ -208,5 +210,34 @@ describe("DomainAnalyticsView", () => {
     // a.com expires in 6 days with auto-renew off → the top action
     expect(screen.getByRole("link", { name: "a.com" })).toHaveAttribute("href", "/domains/a");
     expect(screen.getByText(/Expires in 6 days — auto-renew is off/)).toBeInTheDocument();
+  });
+});
+
+describe("DomainDetailView — waiting for the site", () => {
+  it("offers to copy the lead's staging site or mark the domain live — each confirmed first", async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    stubApi(calls);
+    render(
+      <ToastProvider>
+        <DomainDetailView initial={detail({ status: "waiting_for_site", step: "site" }, "https://ggtile.dmviral.com/")} canManage canPurchase />
+      </ToastProvider>,
+    );
+    expect(screen.getByRole("button", { name: /Copy staging site/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Mark as live/ }));
+    expect(calls.some((c) => c.url.endsWith("/site"))).toBe(false); // not before confirming
+    const dialog = await screen.findByRole("dialog", { name: /Mark acme.com as live/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Mark as live" }));
+    await waitFor(() => expect(calls.find((c) => c.url.endsWith("/site"))).toMatchObject({ method: "POST", body: { action: "mark_live" } }));
+  });
+
+  it("no staging site: only marking live is offered", () => {
+    stubApi([]);
+    render(
+      <ToastProvider>
+        <DomainDetailView initial={detail({ status: "waiting_for_site", step: "site" })} canManage canPurchase />
+      </ToastProvider>,
+    );
+    expect(screen.queryByRole("button", { name: /Copy staging site/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Mark as live/ })).toBeInTheDocument();
   });
 });

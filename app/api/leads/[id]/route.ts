@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
@@ -12,6 +12,9 @@ import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { blamesLateColumn, withoutLateColumns } from "@/lib/leads/lateColumns";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
+import { nudgeWaitingDomain } from "@/lib/domains/service";
+import { processDomains } from "@/lib/domains/processor";
+import { realPipelineDeps } from "@/lib/domains/deps";
 
 /** Fields only an Admin-department member may change (see the PATCH gate). */
 const ADMIN_ONLY_FIELDS = ["agent_id", "closed_by", "rating"] as const;
@@ -227,6 +230,14 @@ export async function PATCH(
           websiteUrl: newLink,
         }
       );
+    } catch {}
+    // A domain waiting for this lead's site looks again right away (e.g. the
+    // dmviral link was just put on the lead) instead of at its next check.
+    try {
+      const waiting = await nudgeWaitingDomain(createAdminClient(), id);
+      if (waiting) {
+        after(() => processDomains(realPipelineDeps(createAdminClient()), { onlyId: waiting, budgetMs: 240_000 }).then(() => undefined));
+      }
     } catch {}
   }
 

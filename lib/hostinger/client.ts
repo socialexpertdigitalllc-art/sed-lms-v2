@@ -158,11 +158,52 @@ export async function listWebsites(): Promise<HostingerWebsite[] | null> {
 
 /** The website for a domain (exact, case-insensitive), or null if none. */
 export async function getWebsite(domain: string): Promise<HostingerWebsite | null> {
+  const w = await findWebsite(domain);
+  return w === "error" ? null : w;
+}
+
+/** Like getWebsite, but a failed read is "error" — never mistaken for "no website". */
+export async function findWebsite(domain: string): Promise<HostingerWebsite | null | "error"> {
   const d = domain.toLowerCase();
   // the domain filter is a substring match — fetch a full page, pick the exact one
   const r = await hg(`/api/hosting/v1/websites?domain=${encodeURIComponent(d)}&per_page=100`, { method: "GET" });
-  if (!r.ok) return null;
+  if (!r.ok) return "error";
   return parseWebsites(r.body).data.find((w) => (w.domain ?? "").toLowerCase() === d) ?? null;
+}
+
+export interface WebsiteFile {
+  name: string;
+  /** relative to the website folder (public_html); no "/" = top level */
+  path: string;
+  type: string;
+  size: number | null;
+}
+
+/** What sits at the top of a website's folder, or null when it can't be read. */
+export async function listWebsiteFiles(website: { domain: string; username: string }): Promise<WebsiteFile[] | null> {
+  const r = await hg(
+    `/api/hosting/v1/accounts/${encodeURIComponent(website.username)}/domains/${encodeURIComponent(website.domain)}/files?max_depth=1&max_items=500`,
+    { method: "GET" },
+  );
+  if (!r.ok) return null;
+  try {
+    const j = JSON.parse(r.body) as { items?: { name?: string; path?: string; type?: string; size_bytes?: number }[] };
+    if (!Array.isArray(j.items)) return null;
+    return j.items.map((i) => ({
+      name: i.name ?? "",
+      path: i.path ?? i.name ?? "",
+      type: i.type ?? "file",
+      size: typeof i.size_bytes === "number" ? i.size_bytes : null,
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/** A homepage at the top of the folder: a site someone put there. (Hostinger's
+ *  own placeholder for a new website is default.php, which doesn't count.) */
+export function hasIndexPage(files: WebsiteFile[]): boolean {
+  return files.some((f) => f.type === "file" && !f.path.includes("/") && /^index.(html?|php)$/i.test(f.name));
 }
 
 /** Only a plain static website can take a static archive deploy — the deploy
