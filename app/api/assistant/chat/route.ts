@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assistantGuard, storeError } from "@/lib/assistant/http";
-import { createConversation, getConversation } from "@/lib/assistant/store";
+import { createConversation, deleteTurn, getConversation, latestQuestion, updateConversation } from "@/lib/assistant/store";
 import { endRun, startRun } from "@/lib/assistant/runs";
 import { runTurn } from "@/lib/assistant/engine";
 import { titleFromMessage } from "@/lib/assistant/prompt";
@@ -19,12 +19,19 @@ export const maxDuration = 600;
  * that disconnects mid-answer finds the finished reply when it reopens the
  * chat. Starting without a conversationId creates a new conversation, named
  * after the question.
+ *
+ * `replaceTurnId` asks the chat's LATEST question again — as it was
+ * (regenerate) or edited — replacing that turn instead of adding one. Only the
+ * latest: answers further up shaped everything after them.
  */
 
-const bodySchema = z.object({
-  conversationId: z.string().uuid().nullish(),
-  message: z.string().trim().min(1, "Type a message first.").max(8000, "Keep a message under 8,000 characters."),
-});
+const bodySchema = z
+  .object({
+    conversationId: z.string().uuid().nullish(),
+    message: z.string().trim().min(1, "Type a message first.").max(8000, "Keep a message under 8,000 characters."),
+    replaceTurnId: z.string().uuid().nullish(),
+  })
+  .refine((b) => !b.replaceTurnId || b.conversationId, { message: "Pick the chat to answer again." });
 
 /** Keep-alive: proxies drop a connection that is silent for too long while
  *  the model thinks or a big lookup runs. */
@@ -60,6 +67,28 @@ export async function POST(req: Request) {
   const claim = startRun(caller.user.id, conversation.id);
   if ("reason" in claim) {
     return NextResponse.json({ error: claim.message }, { status: claim.reason === "rate" ? 429 : 409 });
+  }
+
+  // Replacing a turn happens only once this request holds the conversation,
+  // so no other answer can land in between and make it no longer the latest.
+  const replace = parsed.data.replaceTurnId;
+  if (replace) {
+    try {
+      const latest = await latestQuestion(admin, caller.user.id, conversation.id);
+      if (latest?.turnId !== replace) {
+        endRun(conversation.id, claim.controller);
+        return NextResponse.json({ error: "Only the latest question can be asked again." }, { status: 409 });
+      }
+      await deleteTurn(admin, caller.user.id, conversation.id, replace);
+      // A chat still named after the question being edited follows the edit.
+      if (conversation.title === titleFromMessage(latest.content) && latest.content !== parsed.data.message) {
+        const retitled = await updateConversation(admin, caller.user.id, conversation.id, { title: titleFromMessage(parsed.data.message) });
+        if (retitled) conversation = retitled;
+      }
+    } catch (e) {
+      endRun(conversation.id, claim.controller);
+      return storeError(e, "Could not replace the answer.");
+    }
   }
 
   const encoder = new TextEncoder();

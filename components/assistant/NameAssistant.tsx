@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { DEFAULT_ASSISTANT_NAME, MAX_ASSISTANT_NAME_LENGTH, NAME_SUGGESTIONS } from "@/lib/assistant/name";
 import { useAssistant } from "@/providers/AssistantProvider";
 import { btnPrimary, btnSecondary } from "@/components/common/buttons";
 import { cn } from "@/lib/utils";
+import { SedAiAvatar } from "./SedAiMark";
 
 /**
  * Naming the assistant. On first open the user is asked what to call it; the
@@ -44,9 +45,7 @@ export function NameAssistant({ mode, onDone, compact }: { mode: "first" | "rena
       }}
     >
       <div className="mb-5 text-center">
-        <div className="mx-auto mb-3 grid h-11 w-11 place-items-center rounded-full bg-accent text-white">
-          <Sparkles className="h-5 w-5" aria-hidden />
-        </div>
+        <SedAiAvatar size="md" className="mx-auto mb-3" />
         <h2 className="font-display text-lg font-semibold tracking-tight text-text">
           {mode === "first" ? `Meet your ${DEFAULT_ASSISTANT_NAME}` : "Rename your assistant"}
         </h2>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { answerText, applyEvent, liveTurn, turnsFromMessages } from "@/lib/assistant/turns";
+import { answerText, applyEvent, formatDuration, liveTurn, turnsFromMessages } from "@/lib/assistant/turns";
 import type { UiMessage } from "@/lib/assistant/view";
 
 const msg = (over: Partial<UiMessage>): UiMessage => ({
@@ -57,6 +57,29 @@ describe("turn model", () => {
       { kind: "tool", callId: "c1", name: "calculate", label: "Calculating", status: "ok", summary: "1+1 = 2", args: {} },
       { kind: "text", text: "Great month." },
     ]);
+  });
+
+  it("knows which message is the answer, how it was rated, and how long it took", () => {
+    const [turn] = turnsFromMessages([
+      msg({ id: "t1", role: "user", content: "Q", created_at: "2026-10-09T10:00:00.000Z" }),
+      msg({ id: "a1", tool_calls: [{ id: "c1", name: "calculate" }], created_at: "2026-10-09T10:00:03.000Z" }),
+      msg({ id: "x1", role: "tool", tool_call_id: "c1", tool_name: "calculate", created_at: "2026-10-09T10:00:04.000Z" }),
+      msg({ id: "a2", content: "Answer.", meta: { feedback: "down" }, created_at: "2026-10-09T10:00:12.000Z" }),
+    ]);
+    expect(turn).toMatchObject({ answerId: "a2", feedback: "down" });
+    expect(formatDuration(turn.endedAt! - turn.startedAt!)).toBe("12s");
+    expect(formatDuration(65_000)).toBe("1m 05s");
+    expect(formatDuration(200)).toBe("1s");
+  });
+
+  it("does not offer a rating on a failed or stopped answer", () => {
+    const [failed] = turnsFromMessages([msg({ id: "t1", role: "user", content: "Q" }), msg({ id: "a1", status: "error", error: "x" })]);
+    const [stopped] = turnsFromMessages([msg({ id: "t2", role: "user", content: "Q" }), msg({ id: "a2", content: "Part", status: "stopped" })]);
+    expect(failed.answerId).toBeNull();
+    expect(stopped.answerId).toBeNull();
+    const live = applyEvent(liveTurn("tmp", "Q"), { type: "done", messageId: "m1", stopped: false });
+    expect(live.answerId).toBe("m1");
+    expect(live.endedAt).not.toBeNull();
   });
 
   it("marks a stopped answer as stopped", () => {

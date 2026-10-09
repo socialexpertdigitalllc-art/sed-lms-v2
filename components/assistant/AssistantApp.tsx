@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Brain, Eye, PanelLeft, Pencil, Sparkles, SquarePen, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ArrowDown, Brain, Eye, PanelLeft, Pencil, SquarePen, X } from "lucide-react";
 import type { AssistantMemory } from "@/lib/assistant/types";
 import type { ClientConversation, UiMessage } from "@/lib/assistant/view";
 import { useAssistant } from "@/providers/AssistantProvider";
@@ -9,16 +9,23 @@ import { iconBtn } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
 import { Composer } from "./Composer";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { ConversationList } from "./ConversationList";
 import { MemoryPanel } from "./MemoryPanel";
 import { NameAssistant } from "./NameAssistant";
+import { SedAiAvatar } from "./SedAiMark";
+import { Suggestions } from "./Suggestions";
 import { TurnView } from "./TurnView";
 import { JSON_HEADERS, useAssistantChat } from "./useAssistantChat";
+import { useStickToBottom } from "./useStickToBottom";
 
 /**
  * The full Assistant page: the user's chats on the left, the open chat on the
- * right, opened from the header. The floating chat (AssistantPanel) is the
- * quick way in from any screen; both run on the same chat hook.
+ * right, opened from the header. A new chat opens the way ChatGPT and Claude
+ * do — a greeting with the message box in the middle of the screen — and
+ * moves the box to the bottom once the conversation starts. The floating
+ * chat (AssistantPanel) is the quick way in from any screen; both run on the
+ * same chat hook.
  */
 
 export interface AssistantAppProps {
@@ -49,8 +56,8 @@ export function AssistantApp(props: AssistantAppProps) {
   const [scopeOpen, setScopeOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [listOpen, setListOpen] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const stickRef = useRef(true);
+  const [deleting, setDeleting] = useState<ClientConversation | null>(null);
+  const { scrollRef, contentRef, onScroll, onClickCapture, atBottom, scrollToBottom } = useStickToBottom();
 
   const chat = useAssistantChat({
     initialConversationId: props.initialConversationId,
@@ -64,13 +71,12 @@ export function AssistantApp(props: AssistantAppProps) {
       if (e.status !== 404) toast({ kind: "error", title: "Could not open the chat", body: e.message });
     },
   });
-  const { shown, newChat, select } = chat;
+  const { shown, newChat, select, send } = chat;
 
-  // Keep the newest words in view — unless the user scrolled up to read.
+  // A chat that is opened (or started) starts at its newest message.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [shown]);
+    scrollToBottom(false);
+  }, [chat.activeId, scrollToBottom]);
 
   const open = useCallback(
     (id: string) => {
@@ -84,6 +90,14 @@ export function AssistantApp(props: AssistantAppProps) {
     setListOpen(false);
     newChat();
   }, [newChat]);
+
+  const ask = useCallback(
+    (text: string) => {
+      scrollToBottom(false);
+      void send(text);
+    },
+    [send, scrollToBottom],
+  );
 
   async function patchConversation(c: ClientConversation, patch: { title?: string; pinned?: boolean }) {
     setConversations((prev) => upsert(prev, { ...c, ...patch }));
@@ -99,7 +113,7 @@ export function AssistantApp(props: AssistantAppProps) {
   }
 
   async function removeConversation(c: ClientConversation) {
-    if (!window.confirm(`Delete "${c.title}"? This cannot be undone.`)) return;
+    setDeleting(null);
     try {
       const res = await fetch(`/api/assistant/conversations/${c.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`);
@@ -110,7 +124,7 @@ export function AssistantApp(props: AssistantAppProps) {
     }
   }
 
-  const frame = "relative flex h-[calc(100dvh-5.5rem)] overflow-hidden rounded-lg border border-border bg-surface sm:h-[calc(100dvh-6.5rem)]";
+  const frame = "relative flex h-[calc(100dvh-5.5rem)] overflow-hidden rounded-xl border border-border bg-surface sm:h-[calc(100dvh-6.5rem)]";
 
   // First visit: the user names their assistant before anything else.
   if (!named) {
@@ -125,6 +139,17 @@ export function AssistantApp(props: AssistantAppProps) {
   const active = conversations.find((c) => c.id === chat.activeId) ?? null;
   const lastIndex = shown.length - 1;
   const firstName = displayName.split(/\s+/)[0] || "there";
+  const empty = shown.length === 0 && !chat.loading;
+  const idle = !chat.running;
+
+  const notice = chat.notice ? (
+    <div className="mx-auto mb-2 flex w-full max-w-3xl items-start gap-2 rounded-xl border border-dropped-bg bg-dropped-bg/40 px-3 py-2 text-[13px] text-dropped-fg" role="alert">
+      <span className="min-w-0 flex-1">{chat.notice}</span>
+      <button type="button" onClick={chat.clearNotice} className="shrink-0 rounded p-0.5 hover:bg-dropped-bg" aria-label="Dismiss">
+        <X className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </div>
+  ) : null;
 
   return (
     <div className={frame}>
@@ -135,13 +160,11 @@ export function AssistantApp(props: AssistantAppProps) {
           listOpen ? "flex flex-col shadow-xl" : "hidden",
         )}
       >
-        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent text-white" aria-hidden>
-            <Sparkles className="h-4 w-4" />
-          </div>
+        <div className="flex items-center gap-2.5 px-4 pb-1 pt-4">
+          <SedAiAvatar size="sm" />
           <div className="min-w-0 flex-1">
             <p className="truncate font-display text-sm font-semibold text-text">{name}</p>
-            <p className="text-[11px] text-text-faint">Your assistant</p>
+            <p className="text-[11px] text-text-faint">Your assistant · SED AI</p>
           </div>
           <button type="button" className={iconBtn} onClick={() => setRenaming(true)} aria-label={`Rename ${name}`} title="Rename">
             <Pencil className="h-3.5 w-3.5" />
@@ -158,7 +181,7 @@ export function AssistantApp(props: AssistantAppProps) {
             if (c) void patchConversation(c, { title });
           }}
           onTogglePin={(c) => void patchConversation(c, { pinned: !c.pinned })}
-          onDelete={(c) => void removeConversation(c)}
+          onDelete={(c) => setDeleting(c)}
         />
       </aside>
       {listOpen ? <button type="button" className="absolute inset-0 z-10 bg-black/20 md:hidden" aria-label="Close chats" onClick={() => setListOpen(false)} /> : null}
@@ -208,77 +231,110 @@ export function AssistantApp(props: AssistantAppProps) {
           </div>
         ) : null}
 
-        <div
-          ref={scrollRef}
-          className="min-h-0 flex-1 overflow-y-auto"
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-          }}
-        >
-          {shown.length === 0 ? (
-            <div className="mx-auto flex min-h-full max-w-2xl flex-col justify-center px-4 py-10">
-              {chat.loading ? (
-                <p className="text-center text-sm text-text-faint">Opening the chat…</p>
-              ) : (
-                <>
-                  <div className="mb-6 text-center">
-                    <div className="mx-auto mb-3 grid h-11 w-11 place-items-center rounded-full bg-accent text-white">
-                      <Sparkles className="h-5 w-5" aria-hidden />
-                    </div>
-                    <h2 className="font-display text-xl font-semibold tracking-tight text-text">
-                      Hi {firstName}, I&apos;m {name}. What should we work out?
-                    </h2>
-                    <p className="mx-auto mt-1.5 max-w-md text-sm text-text-muted">
-                      I read your dashboard data, do the maths, and find the patterns — then tell you what to do about them. I remember what
-                      you tell me between chats.
-                    </p>
+        {empty ? (
+          // New chat: greeting and message box in the middle, like ChatGPT and Claude.
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* my-auto, not justify-center: centred when it fits, and still
+                scrollable from the top on a short screen when it does not. */}
+            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-4 py-10">
+              <div className="my-auto">
+                <div className="mb-7 text-center">
+                  <SedAiAvatar size="lg" className="mx-auto mb-4" />
+                  <h2 className="font-display text-2xl font-semibold tracking-tight text-text sm:text-[1.75rem]">
+                    Hi {firstName}, I&apos;m <span className="sed-ai-gradient-text">{name}</span>
+                  </h2>
+                  <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-text-muted">
+                    Ask me about your leads, calls, team or strategy. I look up the real numbers, do the maths and tell you what to do — and I
+                    remember what you tell me.
+                  </p>
+                </div>
+                {notice}
+                <Composer assistantName={name} onSend={ask} onStop={() => void chat.stop()} running={chat.running} autoFocus />
+                {props.suggestions.length ? (
+                  <div className="mt-6">
+                    <Suggestions items={props.suggestions} onPick={ask} layout="grid" />
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {props.suggestions.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => void chat.send(s)}
-                        className="rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-sm text-text-muted transition-colors hover:border-accent/50 hover:bg-accent-soft/40 hover:text-text"
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
+                ) : null}
+              </div>
             </div>
-          ) : (
-            <div className="mx-auto max-w-3xl space-y-8 px-4 py-6">
-              {shown.map((t, i) => (
-                <TurnView
-                  key={t.id}
-                  turn={t}
-                  assistantName={name}
-                  onRetry={i === lastIndex && t.status === "error" && !chat.running ? (q) => void chat.send(q) : undefined}
-                />
-              ))}
-              {chat.remoteRunning && !chat.live ? (
-                <p className="text-center text-xs text-text-faint">Still answering — this updates on its own.</p>
+          </div>
+        ) : (
+          <>
+            <div className="relative min-h-0 flex-1">
+              <div ref={scrollRef} onScroll={onScroll} onClickCapture={onClickCapture} className="h-full overflow-y-auto" aria-busy={chat.running}>
+                <div ref={contentRef} className="mx-auto max-w-3xl space-y-8 px-4 pb-8 pt-6">
+                  {chat.loading ? (
+                    <div className="space-y-4 pt-2" aria-label="Opening the chat">
+                      <div className="ml-auto h-10 w-2/5 animate-pulse rounded-3xl bg-surface-2" />
+                      <div className="h-4 w-3/4 animate-pulse rounded bg-surface-2" />
+                      <div className="h-4 w-2/3 animate-pulse rounded bg-surface-2" />
+                      <div className="h-4 w-1/2 animate-pulse rounded bg-surface-2" />
+                    </div>
+                  ) : (
+                    shown.map((t, i) => {
+                      const latest = i === lastIndex;
+                      return (
+                        <TurnView
+                          key={t.id}
+                          turn={t}
+                          assistantName={name}
+                          latest={latest}
+                          onRetry={latest && t.status === "error" && idle ? () => chat.retry(t) : undefined}
+                          onRegenerate={latest && idle && t.status !== "error" ? () => chat.regenerate(t) : undefined}
+                          onEdit={latest && idle ? (text) => chat.edit(t, text) : undefined}
+                          onRate={(id, value) => void chat.rate(id, value)}
+                        />
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+              {!atBottom ? (
+                <button
+                  type="button"
+                  onClick={() => scrollToBottom()}
+                  className="absolute bottom-3 left-1/2 grid h-9 w-9 -translate-x-1/2 place-items-center rounded-full border border-border bg-surface text-text-muted shadow-md transition-colors hover:text-text"
+                  aria-label="Scroll to the latest message"
+                  title="Latest message"
+                >
+                  <ArrowDown className="h-4 w-4" aria-hidden />
+                </button>
               ) : null}
             </div>
-          )}
-        </div>
 
-        <div className="shrink-0 border-t border-border bg-surface px-3 pb-2 pt-3">
-          <Composer assistantName={name} onSend={(t) => void chat.send(t)} onStop={() => void chat.stop()} running={chat.running} autoFocus />
-        </div>
+            <div className="shrink-0 bg-surface px-3 pb-3 pt-1">
+              {notice}
+              <Composer
+                assistantName={name}
+                onSend={ask}
+                onStop={() => void chat.stop()}
+                running={chat.running}
+                placeholder={`Reply to ${name}…`}
+                autoFocus
+              />
+            </div>
+          </>
+        )}
       </section>
 
       {memoryOpen ? <MemoryPanel assistantName={name} memories={memories} onChange={setMemories} onClose={() => setMemoryOpen(false)} /> : null}
 
       {renaming ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label={`Rename ${name}`}>
-          <div className="w-full max-w-md rounded-xl border border-border bg-surface shadow-xl">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface shadow-xl">
             <NameAssistant mode="rename" compact onDone={() => setRenaming(false)} />
           </div>
         </div>
+      ) : null}
+
+      {deleting ? (
+        <ConfirmDialog
+          title="Delete this chat?"
+          body={`"${deleting.title}" and everything in it will be deleted. This cannot be undone.`}
+          confirmLabel="Delete"
+          onConfirm={() => void removeConversation(deleting)}
+          onCancel={() => setDeleting(null)}
+        />
       ) : null}
     </div>
   );

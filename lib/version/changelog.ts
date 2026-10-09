@@ -29,6 +29,45 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.24.0",
+    date: "2026-10-09",
+    title: "SED Assistant: a chat that works like the best AI apps",
+    changes: [
+      {
+        kind: "feature",
+        text: "A new look for the assistant's button in the top bar: the SED AI pill, black with a magenta-to-blue edge, carrying your assistant's name. The floating button in the corner and the assistant's avatar in chats match it.",
+      },
+      {
+        kind: "feature",
+        text: "Answers feel like the AI apps you already know. While it works you see what it is doing (\"Reading the pipeline…\"), then the answer types out smoothly. What it did is folded into one line (\"Worked for 12s · 3 lookups\") that opens to show its reasoning and every lookup.",
+      },
+      {
+        kind: "feature",
+        text: "Under every answer: copy, thumbs up or down, and regenerate. Hover your latest question to copy or edit it, and the assistant answers the edited question in its place.",
+      },
+      {
+        kind: "feature",
+        text: "New chats open with the message box in the middle of the screen and suggested questions under it. Scroll up and a button takes you back to the newest message. Code in answers has its own copy button.",
+      },
+      {
+        kind: "improvement",
+        text: "Press Ctrl+J (⌘J on a Mac) on any screen to open or close the assistant.",
+      },
+      {
+        kind: "improvement",
+        text: "The assistant talks more naturally: short replies to quick questions and greetings, answers in the language you write in, no filler, and it never mentions its internal tools.",
+      },
+      {
+        kind: "improvement",
+        text: "Deleting a chat asks for confirmation inside the app instead of a browser pop-up.",
+      },
+      {
+        kind: "fix",
+        text: "When the assistant can't take a message (for example, too many in an hour), the reason now stays on screen. In a chat that already had messages it used to disappear.",
+      },
+    ],
+  },
+  {
     version: "2.23.1",
     date: "2026-10-09",
     title: "SED Assistant: on every screen, under a name you choose",

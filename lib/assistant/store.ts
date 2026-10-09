@@ -2,10 +2,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   MEMORY_KINDS,
   NEW_CHAT_TITLE,
+  type AnswerFeedback,
   type AssistantConversation,
   type AssistantMemory,
   type AssistantMessageRow,
   type MemoryKind,
+  type MessageMeta,
 } from "./types";
 
 /**
@@ -137,6 +139,73 @@ export async function insertMessage(
     .single();
   if (error || !data) throw new Error(error?.message ?? "Could not save the message");
   return data as AssistantMessageRow;
+}
+
+/** The conversation's latest question (its turn id and text), or null for a
+ *  chat with no questions yet. */
+export async function latestQuestion(
+  admin: Admin,
+  userId: string,
+  conversationId: string,
+): Promise<{ turnId: string; content: string } | null> {
+  const { data, error } = await admin
+    .from("assistant_messages")
+    .select("turn_id, content")
+    .eq("conversation_id", conversationId)
+    .eq("user_id", userId)
+    .eq("role", "user")
+    .order("seq", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const row = data as { turn_id: string | null; content: string } | null;
+  return row?.turn_id ? { turnId: row.turn_id, content: row.content } : null;
+}
+
+/** Delete one turn: the question and every message answering it. Used to ask
+ *  the latest question again (regenerate) or an edited version of it. */
+export async function deleteTurn(admin: Admin, userId: string, conversationId: string, turnId: string): Promise<number> {
+  const { data, error } = await admin
+    .from("assistant_messages")
+    .delete()
+    .eq("conversation_id", conversationId)
+    .eq("user_id", userId)
+    .eq("turn_id", turnId)
+    .select("id");
+  if (error) throw new Error(error.message);
+  return (data ?? []).length;
+}
+
+/**
+ * Rate an answer, or clear the rating (null). Only the caller's own answers:
+ * anyone else's message id reads as not found. Returns false when there is no
+ * such answer.
+ */
+export async function setAnswerFeedback(
+  admin: Admin,
+  userId: string,
+  messageId: string,
+  feedback: AnswerFeedback | null,
+): Promise<boolean> {
+  const { data, error } = await admin
+    .from("assistant_messages")
+    .select("id, role, meta")
+    .eq("id", messageId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const row = data as { id: string; role: string; meta: MessageMeta | null } | null;
+  if (!row || row.role !== "assistant") return false;
+  const meta: MessageMeta = { ...(row.meta ?? {}) };
+  if (feedback) meta.feedback = feedback;
+  else delete meta.feedback;
+  const { error: updateError } = await admin
+    .from("assistant_messages")
+    .update({ meta: Object.keys(meta).length ? meta : null })
+    .eq("id", messageId)
+    .eq("user_id", userId);
+  if (updateError) throw new Error(updateError.message);
+  return true;
 }
 
 /* --------------------------------------------------------------- memories */

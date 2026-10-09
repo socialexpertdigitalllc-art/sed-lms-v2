@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Check, MessageSquare, Pencil, Pin, PinOff, Search, SquarePen, Trash2, X } from "lucide-react";
 import type { ClientConversation } from "@/lib/assistant/view";
-import { btnPrimary, iconBtn, iconBtnDanger } from "@/components/common/buttons";
+import { iconBtn, iconBtnDanger } from "@/components/common/buttons";
 import { cn } from "@/lib/utils";
 
 /** The user's own chats, newest first, pinned on top, grouped by when they were last used. */
@@ -65,8 +65,12 @@ export function ConversationList({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="space-y-2 p-3">
-        <button type="button" onClick={onNew} className={cn(btnPrimary, "w-full")}>
-          <SquarePen className="h-4 w-4" aria-hidden /> New chat
+        <button
+          type="button"
+          onClick={onNew}
+          className="flex w-full items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-text shadow-sm transition-colors hover:bg-surface-2"
+        >
+          <SquarePen className="h-4 w-4 text-text-muted" aria-hidden /> New chat
         </button>
         <label className="relative block">
           <span className="sr-only">Search chats</span>

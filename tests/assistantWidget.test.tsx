@@ -111,6 +111,14 @@ describe("floating assistant", () => {
     expect(screen.getByRole("button", { name: "Ask Nova" })).toBeInTheDocument();
   });
 
+  it("opens and closes with Ctrl+J from anywhere", async () => {
+    render(withProviders(<AssistantWidget />));
+    await userEvent.keyboard("{Control>}j{/Control}");
+    expect(await screen.findByRole("dialog", { name: "Nova chat" })).toBeInTheDocument();
+    await userEvent.keyboard("{Control>}j{/Control}");
+    expect(screen.queryByRole("dialog", { name: "Nova chat" })).not.toBeInTheDocument();
+  });
+
   it("stays out of the way on the full Assistant page, and for someone without access", () => {
     nav.path = "/assistant";
     const { unmount } = render(withProviders(<AssistantWidget />));
@@ -132,7 +140,7 @@ describe("the floating chat", () => {
     expect(screen.getByText("Meet your SED Assistant")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Sage" }));
     await userEvent.click(screen.getByRole("button", { name: "Save and start" }));
-    expect(await screen.findByText("Hi Sam, I'm Sage.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Hi Sam, I'm Sage" })).toBeInTheDocument();
   });
 
   it("chats right there, remembers the open conversation, and never names a model", async () => {
@@ -167,10 +175,11 @@ describe("the floating chat", () => {
     const onClose = vi.fn();
     render(withProviders(<AssistantPanel hidden={false} onClose={onClose} />));
 
-    expect(screen.getByText("Hi Sam, I'm Nova.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Hi Sam, I'm Nova" })).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Message the assistant"), "How many closes?{Enter}");
 
     expect(await screen.findByText("closes.", { exact: false })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /1 lookup/ }));
     expect(screen.getByText("Reading the pipeline")).toBeInTheDocument();
     await waitFor(() => expect(window.localStorage.getItem("sed-assistant:open-chat:sam")).toBe(conversation.id));
     expect(screen.getByRole("link", { name: "Open full screen" })).toHaveAttribute("href", `/assistant?c=${conversation.id}`);
@@ -206,6 +215,6 @@ describe("the floating chat", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "Conversation not found" }), { status: 404 })));
     render(withProviders(<AssistantPanel hidden={false} onClose={() => {}} />));
     await waitFor(() => expect(window.localStorage.getItem("sed-assistant:open-chat:sam")).toBeNull());
-    expect(await screen.findByText("Hi Sam, I'm Nova.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Hi Sam, I'm Nova" })).toBeInTheDocument();
   });
 });

@@ -37,6 +37,15 @@ export interface ToolCallMeta {
   args?: Record<string, unknown>;
 }
 
+/** The user's rating of an answer (thumbs up / down). */
+export type AnswerFeedback = "up" | "down";
+
+/** `meta` on a message row: a tool call's display facts (tool rows), or the
+ *  user's rating of the answer (the final assistant row of a turn). */
+export interface MessageMeta extends Partial<ToolCallMeta> {
+  feedback?: AnswerFeedback;
+}
+
 export interface AssistantMessageRow {
   id: string;
   seq: number;
@@ -48,7 +57,7 @@ export interface AssistantMessageRow {
   tool_calls: unknown[] | null;
   tool_call_id: string | null;
   tool_name: string | null;
-  meta: ToolCallMeta | null;
+  meta: MessageMeta | null;
   provider: string | null;
   model: string | null;
   usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;

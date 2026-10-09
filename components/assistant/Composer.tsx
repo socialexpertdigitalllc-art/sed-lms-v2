@@ -7,7 +7,10 @@ import { cn } from "@/lib/utils";
 
 const MAX = 8000;
 
-/** Enter sends, Shift+Enter starts a new line; Stop while an answer is coming. */
+/**
+ * The message box. Enter sends, Shift+Enter starts a new line; while an
+ * answer is coming the send button becomes Stop. Grows with the text.
+ */
 export function Composer({
   assistantName,
   onSend,
@@ -16,6 +19,7 @@ export function Composer({
   disabled,
   autoFocus,
   compact,
+  placeholder,
 }: {
   assistantName: string;
   onSend: (text: string) => void;
@@ -23,8 +27,9 @@ export function Composer({
   running: boolean;
   disabled?: boolean;
   autoFocus?: boolean;
-  /** The floating chat: a shorter footnote. */
+  /** The floating chat: smaller type and a shorter footnote. */
   compact?: boolean;
+  placeholder?: string;
 }) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -48,12 +53,14 @@ export function Composer({
     setText("");
   }
 
+  const round = "grid h-9 w-9 shrink-0 place-items-center rounded-full transition-[background-color,opacity] duration-150";
+
   return (
     <div className="mx-auto w-full max-w-3xl">
       <div
         className={cn(
-          "flex items-end gap-2 rounded-xl border bg-surface px-3 py-2 shadow-sm transition-colors",
-          disabled ? "border-border opacity-60" : "border-border focus-within:border-accent",
+          "flex items-end gap-2 rounded-[26px] border bg-surface py-2 pl-4 pr-2 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.12)] transition-colors",
+          disabled ? "border-border opacity-60" : "border-border focus-within:border-accent/60",
         )}
       >
         <textarea
@@ -68,18 +75,15 @@ export function Composer({
           }}
           rows={1}
           disabled={disabled}
-          placeholder={disabled ? `${assistantName} is not available right now` : `Ask ${assistantName} about your leads, calls, team or strategy…`}
-          className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-text placeholder:text-text-faint focus:outline-none"
+          placeholder={disabled ? `${assistantName} is not available right now` : (placeholder ?? `Ask ${assistantName} anything…`)}
+          className={cn(
+            "max-h-[200px] min-h-[24px] flex-1 resize-none self-center bg-transparent py-1 leading-relaxed text-text placeholder:text-text-faint focus:outline-none",
+            compact ? "text-sm" : "text-[15px]",
+          )}
           aria-label="Message the assistant"
         />
         {running ? (
-          <button
-            type="button"
-            onClick={onStop}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-text text-surface transition-opacity hover:opacity-85"
-            aria-label="Stop answering"
-            title="Stop"
-          >
+          <button type="button" onClick={onStop} className={cn(round, "bg-text text-surface hover:opacity-85")} aria-label="Stop answering" title="Stop">
             <Square className="h-3.5 w-3.5 fill-current" />
           </button>
         ) : (
@@ -87,18 +91,18 @@ export function Composer({
             type="button"
             onClick={send}
             disabled={!text.trim() || disabled}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-white transition-colors hover:bg-accent-ink disabled:opacity-40"
+            className={cn(round, "bg-text text-surface hover:opacity-85 disabled:bg-border disabled:text-text-faint disabled:hover:opacity-100")}
             aria-label="Send message"
             title="Send (Enter)"
           >
-            <ArrowUp className="h-4 w-4" />
+            <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.5} />
           </button>
         )}
       </div>
       <p className="mt-1.5 text-center text-[11px] text-text-faint">
         {compact
-          ? `${AI_BRAND} can make mistakes — check important numbers.`
-          : `${assistantName} only sees what your account can see. ${AI_BRAND} can make mistakes — check important numbers.`}
+          ? `${AI_BRAND} can make mistakes. Check important numbers.`
+          : `${assistantName} only sees what your account can see. ${AI_BRAND} can make mistakes, so check important numbers.`}
         {text.length > MAX - 1000 ? ` · ${MAX - text.length} characters left` : ""}
       </p>
     </div>

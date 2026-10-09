@@ -1,4 +1,4 @@
-import type { AssistantStreamEvent } from "./types";
+import type { AnswerFeedback, AssistantStreamEvent } from "./types";
 import type { UiMessage } from "./view";
 
 /**
@@ -30,18 +30,44 @@ export interface TurnModel {
   segments: Segment[];
   status: "running" | "done" | "error" | "stopped";
   error: string | null;
+  /** The finished answer's message id — what a thumbs up/down is saved on. */
+  answerId: string | null;
+  feedback: AnswerFeedback | null;
+  /** When the question was asked and the answer finished (epoch ms), for
+   *  "Worked for 12s". Null when unknown. */
+  startedAt: number | null;
+  endedAt: number | null;
 }
+
+/** A turn still waiting for the server to accept it has this id prefix. */
+export const PENDING_PREFIX = "pending-";
+
+const stamp = (iso: string): number | null => {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+};
 
 /** Saved rows → turns. Rows arrive in insertion order. */
 export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
   const turns: TurnModel[] = [];
   for (const row of rows) {
     if (row.role === "user") {
-      turns.push({ id: row.id, question: row.content, segments: [], status: "done", error: null });
+      turns.push({
+        id: row.id,
+        question: row.content,
+        segments: [],
+        status: "done",
+        error: null,
+        answerId: null,
+        feedback: null,
+        startedAt: stamp(row.created_at),
+        endedAt: null,
+      });
       continue;
     }
     const turn = turns[turns.length - 1];
     if (!turn) continue;
+    turn.endedAt = stamp(row.created_at) ?? turn.endedAt;
     if (row.role === "assistant") {
       if (row.reasoning) turn.segments.push({ kind: "reasoning", text: row.reasoning });
       if (row.content) turn.segments.push({ kind: "text", text: row.content });
@@ -49,6 +75,11 @@ export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
         turn.status = "error";
         turn.error = row.error;
       } else if (row.status === "stopped") turn.status = "stopped";
+      else if (!row.tool_calls?.length && row.content) {
+        // The round that answered in words — the answer a rating is about.
+        turn.answerId = row.id;
+        turn.feedback = row.meta?.feedback ?? null;
+      }
       continue;
     }
     turn.segments.push({
@@ -64,8 +95,8 @@ export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
   return turns;
 }
 
-export function liveTurn(id: string, question: string): TurnModel {
-  return { id, question, segments: [], status: "running", error: null };
+export function liveTurn(id: string, question: string, now = Date.now()): TurnModel {
+  return { id, question, segments: [], status: "running", error: null, answerId: null, feedback: null, startedAt: now, endedAt: null };
 }
 
 /** Fold one stream event into the live turn. */
@@ -100,12 +131,19 @@ export function applyEvent(turn: TurnModel, e: AssistantStreamEvent): TurnModel 
         ),
       };
     case "done":
-      return { ...turn, status: e.stopped ? "stopped" : "done" };
+      return { ...turn, status: e.stopped ? "stopped" : "done", answerId: e.stopped ? null : e.messageId, endedAt: Date.now() };
     case "error":
-      return { ...turn, status: "error", error: e.message };
+      return { ...turn, status: "error", error: e.message, endedAt: Date.now() };
     default:
       return turn;
   }
+}
+
+/** "12s", "1m 05s" — how long an answer took. */
+export function formatDuration(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 }
 
 /** The answer's words, for copying. */

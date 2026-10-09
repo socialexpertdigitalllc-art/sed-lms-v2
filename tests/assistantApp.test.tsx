@@ -52,15 +52,22 @@ const saved: UiMessage[] = [
   { id: "a2", turn_id: "turn-1", role: "assistant", content: "You closed **6** deals this month.", reasoning: null, tool_calls: null, tool_call_id: null, tool_name: null, meta: null, status: "complete", error: null, created_at: "" },
 ];
 
-function renderApp(name: string | null = "Nova") {
+function renderApp(name: string | null = "Nova", over: Partial<AssistantAppProps> = {}) {
   return render(
     <ToastProvider>
       <AssistantProvider enabled userId="sam" displayName="Sam Khan" initialName={name}>
-        <AssistantApp {...props} />
+        <AssistantApp {...props} {...over} />
       </AssistantProvider>
     </ToastProvider>,
   );
 }
+
+/** The chat as saved: one answered question. */
+const savedChat: Partial<AssistantAppProps> = {
+  initialConversations: [conversation],
+  initialConversationId: conversation.id,
+  initialMessages: saved,
+};
 
 function ndjson(list: AssistantStreamEvent[]): Response {
   const enc = new TextEncoder();
@@ -100,11 +107,13 @@ describe("AssistantApp", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderApp();
-    expect(screen.getByText("Hi Sam, I'm Nova. What should we work out?")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Hi Sam, I'm Nova" })).toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText("Message the assistant"), "How am I doing?{Enter}");
 
     expect(await screen.findByText("this month.", { exact: false })).toBeInTheDocument();
+    // What it did is folded into one line, and unfolds to the lookups.
+    await userEvent.click(await screen.findByRole("button", { name: /1 lookup/ }));
     expect(screen.getByText("Reading the pipeline")).toBeInTheDocument();
     expect(screen.getByText(/42 leads · 6 closed/)).toBeInTheDocument();
     // Bold rendered as an element, not as asterisks.
@@ -142,7 +151,7 @@ describe("AssistantApp", () => {
     await userEvent.type(screen.getByLabelText("Assistant name"), "Atlas");
     await userEvent.click(screen.getByRole("button", { name: "Save and start" }));
 
-    expect(await screen.findByText("Hi Sam, I'm Atlas. What should we work out?")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Hi Sam, I'm Atlas" })).toBeInTheDocument();
     const [, init] = fetchMock.mock.calls.find(([u]) => u === "/api/me/preferences")!;
     expect(JSON.parse(String(init!.body))).toEqual({ assistantName: "Atlas" });
   });
@@ -156,5 +165,108 @@ describe("AssistantApp", () => {
     await userEvent.type(screen.getByLabelText("Message the assistant"), "hi{Enter}");
     expect(await screen.findByText("That's 60 messages in the last hour.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Try again/ })).toBeInTheDocument();
+  });
+
+  it("keeps a refused message on screen in an ongoing chat — and editing it asks anew, replacing nothing", async () => {
+    let refuse = true;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/assistant/chat" && init?.method === "POST") {
+        if (refuse) return new Response(JSON.stringify({ error: "That's 60 messages in the last hour." }), { status: 429 });
+        return ndjson(events);
+      }
+      return new Response(JSON.stringify({ conversation, messages: saved, running: false }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("Nova", savedChat);
+
+    await userEvent.type(screen.getByLabelText("Message the assistant"), "And last week?{Enter}");
+    expect(await screen.findByText("That's 60 messages in the last hour.")).toBeInTheDocument();
+    // Nothing was saved, so there is nothing to reload over it.
+    expect(fetchMock.mock.calls.filter(([u]) => u === `/api/assistant/conversations/${conversation.id}`)).toHaveLength(0);
+
+    refuse = false;
+    const edits = screen.getAllByRole("button", { name: "Edit question" });
+    await userEvent.click(edits[edits.length - 1]);
+    const box = screen.getByLabelText("Edit your question");
+    await userEvent.clear(box);
+    await userEvent.type(box, "And the week before?{Enter}");
+    const posts = fetchMock.mock.calls.filter(([u]) => u === "/api/assistant/chat");
+    expect(JSON.parse(String(posts[posts.length - 1][1]!.body))).toEqual({ conversationId: conversation.id, message: "And the week before?" });
+  });
+
+  it("regenerates the latest answer in its place", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/assistant/chat" && init?.method === "POST") return ndjson(events);
+      if (url === `/api/assistant/conversations/${conversation.id}`) {
+        return new Response(JSON.stringify({ conversation, messages: saved, running: false }), { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("Nova", savedChat);
+
+    await userEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    const [, init] = fetchMock.mock.calls.find(([u]) => u === "/api/assistant/chat")!;
+    expect(JSON.parse(String(init!.body))).toEqual({ conversationId: conversation.id, message: "How am I doing?", replaceTurnId: "turn-1" });
+    // Replaced, not added: the question is still there exactly once.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/assistant/conversations/${conversation.id}`, { cache: "no-store" }));
+    await waitFor(() => expect(screen.getAllByText("How am I doing?")).toHaveLength(1));
+  });
+
+  it("edits the latest question and answers the new one", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/assistant/chat" && init?.method === "POST") return ndjson(events);
+      return new Response(JSON.stringify({ conversation, messages: saved, running: false }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("Nova", savedChat);
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit question" }));
+    const box = screen.getByLabelText("Edit your question");
+    await userEvent.clear(box);
+    await userEvent.type(box, "How did I do last week?");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    const [, init] = fetchMock.mock.calls.find(([u]) => u === "/api/assistant/chat")!;
+    expect(JSON.parse(String(init!.body))).toEqual({ conversationId: conversation.id, message: "How did I do last week?", replaceTurnId: "turn-1" });
+  });
+
+  it("puts the answer back when the server will not regenerate it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "Still answering your previous message in this chat." }), { status: 409 })),
+    );
+    renderApp("Nova", savedChat);
+    await userEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Still answering your previous message in this chat.");
+    expect(screen.getByText("this month.", { exact: false })).toBeInTheDocument();
+  });
+
+  it("rates an answer, and takes the rating back", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("Nova", savedChat);
+
+    const up = screen.getByRole("button", { name: "Good answer" });
+    await userEvent.click(up);
+    expect(up).toHaveAttribute("aria-pressed", "true");
+    expect(fetchMock).toHaveBeenCalledWith("/api/assistant/messages/a2/feedback", expect.objectContaining({ method: "POST", body: JSON.stringify({ feedback: "up" }) }));
+    await userEvent.click(up);
+    expect(up).toHaveAttribute("aria-pressed", "false");
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/assistant/messages/a2/feedback", expect.objectContaining({ body: JSON.stringify({ feedback: null }) }));
+  });
+
+  it("asks in the app — not a browser popup — before deleting a chat", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ deleted: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm");
+    renderApp("Nova", { initialConversations: [conversation] });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete chat" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete this chat?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(fetchMock).toHaveBeenCalledWith(`/api/assistant/conversations/${conversation.id}`, { method: "DELETE" });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(conversation.title)).not.toBeInTheDocument());
   });
 });

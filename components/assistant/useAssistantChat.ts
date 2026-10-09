@@ -1,15 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AssistantMemory, AssistantStreamEvent } from "@/lib/assistant/types";
+import type { AnswerFeedback, AssistantMemory, AssistantStreamEvent } from "@/lib/assistant/types";
 import type { ClientConversation, UiMessage } from "@/lib/assistant/view";
-import { applyEvent, liveTurn, turnsFromMessages, type TurnModel } from "@/lib/assistant/turns";
+import { applyEvent, liveTurn, PENDING_PREFIX, turnsFromMessages, type TurnModel } from "@/lib/assistant/turns";
 
 /**
  * One open chat with the assistant: which conversation is open, its turns,
  * the answer streaming in right now, and the actions (send, stop, switch,
- * start over). Shared by the full Assistant page and the floating chat so
- * both behave identically.
+ * start over, regenerate, edit the latest question, rate an answer). Shared
+ * by the full Assistant page and the floating chat so both behave identically.
  *
  * An answer streams in as NDJSON events and is saved server-side as it goes,
  * so switching chats or closing the panel mid-answer is harmless: the answer
@@ -59,6 +59,9 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
   const [live, setLive] = useState<TurnModel | null>(null);
   const [remoteRunning, setRemoteRunning] = useState(Boolean(opts.initialRunning));
   const [loading, setLoading] = useState(false);
+  /** A request the server turned down before answering (busy, over the hourly
+   *  budget…), shown above the message box. */
+  const [notice, setNotice] = useState<string | null>(null);
 
   const activeRef = useRef<string | null>(opts.initialConversationId ?? null);
   const streamRef = useRef<{ controller: AbortController; conversationId: string | null } | null>(null);
@@ -101,6 +104,7 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
       setLive(null);
       setTurns([]);
       setRemoteRunning(false);
+      setNotice(null);
       setLoading(true);
       fetchConversation(id)
         .then((r) => {
@@ -127,32 +131,64 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     setTurns([]);
     setLive(null);
     setRemoteRunning(false);
+    setNotice(null);
   }, [detach, setActive]);
 
   const running = live?.status === "running" || remoteRunning;
 
+  // Read inside the actions without making them depend on every change.
+  const turnsRef = useRef(turns);
+  const liveRef = useRef(live);
+  useEffect(() => {
+    turnsRef.current = turns;
+    liveRef.current = live;
+  }, [turns, live]);
+
+  /**
+   * Ask something. With `replaceTurnId` the chat's latest question is asked
+   * again (regenerate) or replaced by an edited one: that turn leaves the
+   * thread at once, and comes back if the server turns the request down.
+   */
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, opts: { replaceTurnId?: string } = {}) => {
       if (streamRef.current || remoteRunning) return;
       const controller = new AbortController();
       const startedIn = activeRef.current;
       let conversationId = startedIn;
       streamRef.current = { controller, conversationId };
-      setLive(liveTurn(`pending-${Date.now()}`, text));
+      const before = turnsRef.current;
+      const liveBefore = liveRef.current;
+      if (opts.replaceTurnId) setTurns(before.filter((t) => t.id !== opts.replaceTurnId));
+      setNotice(null);
+      setLive(liveTurn(`${PENDING_PREFIX}${Date.now()}`, text));
 
       let finished = false;
+      // Did the server take the question in? Until it has, there is no answer
+      // on its way to wait for, and nothing saved to reload.
+      let responded = false;
       try {
         const res = await fetch("/api/assistant/chat", {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ conversationId: startedIn, message: text }),
+          body: JSON.stringify(
+            opts.replaceTurnId ? { conversationId: startedIn, message: text, replaceTurnId: opts.replaceTurnId } : { conversationId: startedIn, message: text },
+          ),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
           const body = (await res.json().catch(() => ({}))) as { error?: string };
-          setLive((t) => t && { ...t, status: "error", error: body.error ?? `The request failed (HTTP ${res.status}).` });
+          const message = body.error ?? `The request failed (HTTP ${res.status}).`;
+          if (opts.replaceTurnId) {
+            // Nothing was replaced: put the turn back and say why.
+            setTurns(before);
+            setLive(liveBefore);
+            setNotice(message);
+          } else {
+            setLive((t) => t && { ...t, status: "error", error: message, endedAt: Date.now() });
+          }
           return;
         }
+        responded = true;
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -195,11 +231,23 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
         }
       } catch {
         if (controller.signal.aborted) return; // switched chats, or stopped before it began
+        if (!responded) {
+          // Never reached the server (offline): nothing is on its way.
+          if (opts.replaceTurnId) {
+            setTurns(before);
+            setLive(liveBefore);
+            setNotice("Could not reach SED AI. Check your connection and try again.");
+          } else {
+            setLive((t) => t && { ...t, status: "error", error: "Could not reach SED AI. Check your connection and try again.", endedAt: Date.now() });
+          }
+          return;
+        }
+        // The connection dropped mid-answer: the server keeps going and saving.
         setRemoteRunning(true);
       } finally {
         if (streamRef.current?.controller === controller) streamRef.current = null;
         // Swap the live turn for the saved one — in one update, so it never shows twice.
-        if (conversationId && activeRef.current === conversationId && !controller.signal.aborted) {
+        if (responded && conversationId && activeRef.current === conversationId && !controller.signal.aborted) {
           try {
             const r = await fetchConversation(conversationId);
             if (activeRef.current === conversationId) {
@@ -216,6 +264,50 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     [remoteRunning, setActive],
   );
 
+  /**
+   * Ask the latest question again — as it was, or edited — in its place. A
+   * question the server never took in (offline, over the limit) has nothing
+   * saved to replace: it is simply asked anew.
+   */
+  const askAgain = useCallback(
+    (turn: TurnModel, text = turn.question) => {
+      const question = text.trim();
+      if (!question) return;
+      if (turn.id.startsWith(PENDING_PREFIX)) {
+        setLive(null);
+        void send(question);
+      } else void send(question, { replaceTurnId: turn.id });
+    },
+    [send],
+  );
+
+  /** Answer the latest question again, replacing its answer. */
+  const regenerate = useCallback((turn: TurnModel) => askAgain(turn), [askAgain]);
+  /** Replace the latest question with an edited one, and answer that instead. */
+  const edit = useCallback((turn: TurnModel, text: string) => askAgain(turn, text), [askAgain]);
+  /** A failed answer: try again in its place. */
+  const retry = useCallback((turn: TurnModel) => askAgain(turn), [askAgain]);
+
+  /** Thumbs up / down on an answer (null clears it). Optimistic. */
+  const rate = useCallback(async (answerId: string, feedback: AnswerFeedback | null) => {
+    const apply = (value: AnswerFeedback | null) => (t: TurnModel) => (t.answerId === answerId ? { ...t, feedback: value } : t);
+    const previous = [...turnsRef.current].find((t) => t.answerId === answerId)?.feedback ?? null;
+    setTurns((list) => list.map(apply(feedback)));
+    setLive((t) => (t ? apply(feedback)(t) : t));
+    try {
+      const res = await fetch(`/api/assistant/messages/${answerId}/feedback`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ feedback }),
+      });
+      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`);
+    } catch (e) {
+      setTurns((list) => list.map(apply(previous)));
+      setLive((t) => (t ? apply(previous)(t) : t));
+      setNotice(`Could not save your feedback: ${(e as Error).message}`);
+    }
+  }, []);
+
   const stop = useCallback(async () => {
     const id = streamRef.current?.conversationId ?? activeRef.current;
     if (!id) {
@@ -230,18 +322,29 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     );
   }, []);
 
+  // Saved turns plus the one streaming in now. An answer still being written
+  // elsewhere (another tab, or before a reload) shows its latest turn as live.
+  let shown = turns;
+  if (live) shown = [...turns, live];
+  else if (remoteRunning && turns.length) shown = [...turns.slice(0, -1), { ...turns[turns.length - 1], status: "running" }];
+
   return {
     activeId,
     turns,
     live,
-    /** Saved turns plus the one streaming in now. */
-    shown: live ? [...turns, live] : turns,
+    shown,
     running,
     remoteRunning,
     loading,
+    notice,
+    clearNotice: useCallback(() => setNotice(null), []),
     select,
     newChat,
     send,
+    regenerate,
+    edit,
+    retry,
+    rate,
     stop,
   };
 }
