@@ -8,7 +8,7 @@ import {
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
   Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer, Images,
-  ClipboardList, ChevronDown, Plus, Earth,
+  ClipboardList, ChevronDown, Plus, Earth, BrainCircuit,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -32,6 +32,7 @@ const MAILBOX_HREF = "/mailbox";
 
 const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, perm: "analytics.view" },
+  { href: "/assistant", label: "AI Assistant", icon: BrainCircuit, perm: "assistant.use" },
   { href: "/leads", label: "Leads", icon: Building2, perm: "leads.view", quickAction: { href: "/leads/new", label: "New lead", perm: "leads.create" } },
   { href: "/leads/follow-ups", label: "Follow-ups", icon: PhoneCall, perm: "leads.view" },
   { href: "/tickets", label: "Tickets", icon: Ticket, perm: "tickets.view" },

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import type { AssistantMessageRow } from "./types";
+export { toUiMessage, type UiMessage } from "./view";
 
 /** Shared plumbing for /api/assistant/*. SERVER ONLY. */
 
@@ -47,47 +47,3 @@ export function storeError(e: unknown, fallback = "Could not complete that reque
 }
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** What the chat UI renders. Tool calls are reduced to name + arguments: the
- *  vendor's raw extras (signatures) mean nothing to a browser. */
-export interface UiMessage {
-  id: string;
-  turn_id: string | null;
-  role: AssistantMessageRow["role"];
-  content: string;
-  reasoning: string | null;
-  tool_calls: { id: string; name: string }[] | null;
-  tool_call_id: string | null;
-  tool_name: string | null;
-  meta: AssistantMessageRow["meta"];
-  status: AssistantMessageRow["status"];
-  error: string | null;
-  model: string | null;
-  created_at: string;
-}
-
-export function toUiMessage(row: AssistantMessageRow): UiMessage {
-  const calls = Array.isArray(row.tool_calls)
-    ? row.tool_calls
-        .map((c) => {
-          const call = c as { id?: unknown; function?: { name?: unknown } };
-          return typeof call.id === "string" && typeof call.function?.name === "string" ? { id: call.id, name: call.function.name } : null;
-        })
-        .filter((c): c is { id: string; name: string } => c !== null)
-    : null;
-  return {
-    id: row.id,
-    turn_id: row.turn_id,
-    role: row.role,
-    content: row.content,
-    reasoning: row.reasoning,
-    tool_calls: calls && calls.length ? calls : null,
-    tool_call_id: row.tool_call_id,
-    tool_name: row.tool_name,
-    meta: row.meta,
-    status: row.status,
-    error: row.error,
-    model: row.model,
-    created_at: row.created_at,
-  };
-}

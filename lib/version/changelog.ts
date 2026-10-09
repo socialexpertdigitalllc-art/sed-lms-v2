@@ -29,6 +29,37 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.23.0",
+    date: "2026-10-09",
+    title: "AI Assistant: an analyst for your data in every dashboard",
+    changes: [
+      {
+        kind: "feature",
+        text: "New AI Assistant page. Ask it anything about your work — how this month compares with last, which leads to call first, when calls get picked up, which categories and states close best, how the team is doing — and it looks up the real numbers, does the maths, and answers with tables, charts and a plan. Answers stream in as they are written, with every lookup it made shown alongside.",
+      },
+      {
+        kind: "feature",
+        text: "It only sees what you can see. An agent's assistant reads only their own leads, a closer's reads their team's, and an admin's reads every agent's leads plus attendance and the activity log — the same permissions as the rest of the dashboard. \"What I can see\" in the chat header lists exactly what yours has access to.",
+      },
+      {
+        kind: "feature",
+        text: "Proper chats: start as many as you like, rename, pin, search and delete them, and pick up where you left off. Closing the tab mid-answer loses nothing — the answer finishes and is waiting when you come back.",
+      },
+      {
+        kind: "feature",
+        text: "Memory: the assistant remembers your goals, preferences and how you work between chats, and tells you when it saves something. See, edit, add or remove what it knows in the Memory panel. Your chats and memories are private to you.",
+      },
+      {
+        kind: "improvement",
+        text: "Runs on MiniMax by default; switch it to Gemini (or set its output budget) under Admin → AI Models → AI Assistant. Models that can't look data up are not offered for it.",
+      },
+      {
+        kind: "improvement",
+        text: "New permission \"Use AI Assistant\", on for every department by default — turn it off per department or per user in the usual permission screens.",
+      },
+    ],
+  },
+  {
     version: "2.22.0",
     date: "2026-10-02",
     title: "Domains: everything managed from the dashboard, plus analytics",
