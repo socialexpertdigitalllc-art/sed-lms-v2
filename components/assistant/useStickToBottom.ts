@@ -16,7 +16,16 @@ export function useStickToBottom() {
 
   const follow = useCallback(() => {
     const el = scrollRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (stickRef.current) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    // Not following (the user is reading): is anything below them now? If
+    // it all fits, there is nothing to jump to — follow again.
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setAtBottom(near);
+    if (near) stickRef.current = true;
   }, []);
 
   /** Attach to the element inside the scroller that holds the messages. */
@@ -48,10 +57,9 @@ export function useStickToBottom() {
    * than be carried past it. Attach to the scroller's onClickCapture.
    */
   const onClickCapture = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest("button[aria-expanded]")) {
-      stickRef.current = false;
-      setAtBottom(false);
-    }
+    // Whether the jump button is needed is decided once the content has
+    // actually changed size (see follow).
+    if ((e.target as HTMLElement).closest("button[aria-expanded]")) stickRef.current = false;
   }, []);
 
   /** Jump to the newest message and keep following from there. */
