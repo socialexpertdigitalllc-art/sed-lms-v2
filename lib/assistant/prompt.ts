@@ -1,4 +1,5 @@
 import { visibleStatuses } from "@/lib/leads/categories";
+import { AI_BRAND, DEFAULT_ASSISTANT_NAME } from "./name";
 import { memoryHandle } from "./store";
 import type { AssistantMemory } from "./types";
 
@@ -48,6 +49,8 @@ export function describeScope({ perms, teamSize }: ScopeFacts): string[] {
 
 export interface PromptInput {
   companyName: string;
+  /** What this user named their assistant. */
+  assistantName: string;
   displayName: string;
   departments: string[];
   timezone: string;
@@ -75,7 +78,11 @@ export function buildSystemPrompt(p: PromptInput): string {
     ? p.memories.map((m) => `- [${memoryHandle(m.id)}] (${m.kind}) ${m.content}`).join("\n")
     : "- Nothing yet.";
 
-  return `You are the AI assistant built into ${p.companyName}'s dashboard — the sales CRM of a web-design agency. Agents phone US small businesses, log them as leads, follow up by phone, and close website deals (a one-time price plus a yearly renewal). Closers manage teams of agents; admins see the whole company. Your job is the thinking work: finding patterns, doing the maths, connecting data across leads, calls, tickets and people, and turning it into clear analysis, opinions and plans.
+  const named = p.assistantName !== DEFAULT_ASSISTANT_NAME;
+  return `You are ${p.assistantName}, the AI assistant built into ${p.companyName}'s dashboard — the sales CRM of a web-design agency. Agents phone US small businesses, log them as leads, follow up by phone, and close website deals (a one-time price plus a yearly renewal). Closers manage teams of agents; admins see the whole company. Your job is the thinking work: finding patterns, doing the maths, connecting data across leads, calls, tickets and people, and turning it into clear analysis, opinions and plans.
+
+## Who you are
+Your name is ${p.assistantName}${named ? ` — ${p.displayName} chose it, so use it` : ""}. You run on ${AI_BRAND}, the company's own AI. If anyone asks what you are, which AI or model powers you, or who made you, say you are ${p.assistantName}, built on ${AI_BRAND}. Never name, confirm or guess an underlying model, vendor or provider.
 
 ## Who you are helping
 ${who}. It is ${nowLine(p.now, p.timezone)}.
@@ -107,30 +114,6 @@ ${CHART_EXAMPLE}
 You remember this person between conversations. What you know about them:
 ${memories}
 Use it to personalise your answers. When they tell you something durable — a goal or target, how they like answers, how they work, a strategy decision — or ask you to remember something, save it with save_memory: one short fact per memory, in the third person. Do not save numbers that live in the dashboard; look those up fresh. If a memory turns out to be outdated or they ask you to forget it, use forget_memory (and save the corrected fact). Mention it briefly when you save or forget something.`;
-}
-
-/**
- * Starter questions for an empty chat — only ones this user's assistant can
- * actually answer, so the first thing they try never hits a wall.
- */
-export function suggestionsFor(perms: Set<string>): string[] {
-  const out: string[] = [];
-  const team = perms.has("analytics.by_agent") || perms.has("analytics.view_all_agents") || perms.has("reports.agent_periodic");
-  if (perms.has("leads.view")) {
-    out.push(
-      perms.has("leads.view_all")
-        ? "How is the pipeline doing this month compared with last month?"
-        : "How am I doing this month compared with last month?",
-    );
-    out.push("Which Ready leads should be called first today, and why?");
-    out.push("At what time of day do our calls get picked up most — in the customer's own timezone?");
-    out.push("Which business categories and states close best, and where are we wasting effort?");
-  }
-  if (team) out.push("Compare the agents this month — who is ahead, who is slipping, and what should each one work on?");
-  if (perms.has("admin.logs.view")) out.push("Who was late or missing hours this week?");
-  if (perms.has("tickets.view")) out.push("Which tickets are overdue, and who owns them?");
-  out.push("Remember that my target is 10 closed websites a month.");
-  return out.slice(0, 6);
 }
 
 /**

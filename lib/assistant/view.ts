@@ -1,11 +1,30 @@
-import type { AssistantMessageRow } from "./types";
+import type { AssistantConversation, AssistantMessageRow } from "./types";
 
 /**
- * The client-safe shape of stored messages. Pure — imported by the chat UI as
- * well as the API, so it must never pull in server modules.
+ * The client-safe shapes of stored conversations and messages. Pure —
+ * imported by the chat UI as well as the API, so it must never pull in server
+ * modules.
+ *
+ * NO VENDOR DETAILS cross this boundary: which provider and model answered is
+ * kept server-side for admins and debugging, and never sent to a browser. To
+ * end users the assistant runs on SED AI.
  */
 
-/** What the chat UI renders. Tool calls are reduced to name + arguments: the
+/** A conversation as the browser sees it. */
+export type ClientConversation = Omit<AssistantConversation, "last_provider" | "last_model">;
+
+export function toClientConversation(c: AssistantConversation): ClientConversation {
+  return {
+    id: c.id,
+    title: c.title,
+    pinned: c.pinned,
+    created_at: c.created_at,
+    updated_at: c.updated_at,
+    last_message_at: c.last_message_at,
+  };
+}
+
+/** What the chat UI renders. Tool calls are reduced to their id and name: the
  *  vendor's raw extras (signatures) mean nothing to a browser. */
 export interface UiMessage {
   id: string;
@@ -19,7 +38,6 @@ export interface UiMessage {
   meta: AssistantMessageRow["meta"];
   status: AssistantMessageRow["status"];
   error: string | null;
-  model: string | null;
   created_at: string;
 }
 
@@ -44,7 +62,6 @@ export function toUiMessage(row: AssistantMessageRow): UiMessage {
     meta: row.meta,
     status: row.status,
     error: row.error,
-    model: row.model,
     created_at: row.created_at,
   };
 }

@@ -14,7 +14,6 @@ const msg = (over: Partial<UiMessage>): UiMessage => ({
   meta: null,
   status: "complete",
   error: null,
-  model: "MiniMax-M3",
   created_at: "",
   ...over,
 });
@@ -40,7 +39,7 @@ describe("turn model", () => {
 
   it("builds the same thing live, event by event — and a retry drops only the current round", () => {
     let t = liveTurn("tmp", "How did I do?");
-    t = applyEvent(t, { type: "start", conversation: {} as never, userMessageId: "t1", provider: "minimax", model: "MiniMax-M3", modelLabel: "" });
+    t = applyEvent(t, { type: "start", conversation: {} as never, userMessageId: "t1" });
     t = applyEvent(t, { type: "reasoning", delta: "think" });
     t = applyEvent(t, { type: "reasoning", delta: "ing" });
     t = applyEvent(t, { type: "tool_start", callId: "c1", name: "calculate", label: "Calculating", args: {} });

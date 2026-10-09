@@ -30,7 +30,6 @@ export interface TurnModel {
   segments: Segment[];
   status: "running" | "done" | "error" | "stopped";
   error: string | null;
-  model: string | null;
 }
 
 /** Saved rows → turns. Rows arrive in insertion order. */
@@ -38,7 +37,7 @@ export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
   const turns: TurnModel[] = [];
   for (const row of rows) {
     if (row.role === "user") {
-      turns.push({ id: row.id, question: row.content, segments: [], status: "done", error: null, model: null });
+      turns.push({ id: row.id, question: row.content, segments: [], status: "done", error: null });
       continue;
     }
     const turn = turns[turns.length - 1];
@@ -46,7 +45,6 @@ export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
     if (row.role === "assistant") {
       if (row.reasoning) turn.segments.push({ kind: "reasoning", text: row.reasoning });
       if (row.content) turn.segments.push({ kind: "text", text: row.content });
-      if (row.model) turn.model = row.model;
       if (row.status === "error") {
         turn.status = "error";
         turn.error = row.error;
@@ -67,7 +65,7 @@ export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
 }
 
 export function liveTurn(id: string, question: string): TurnModel {
-  return { id, question, segments: [], status: "running", error: null, model: null };
+  return { id, question, segments: [], status: "running", error: null };
 }
 
 /** Fold one stream event into the live turn. */
@@ -76,7 +74,7 @@ export function applyEvent(turn: TurnModel, e: AssistantStreamEvent): TurnModel 
   const last = segments[segments.length - 1];
   switch (e.type) {
     case "start":
-      return { ...turn, id: e.userMessageId, model: e.model };
+      return { ...turn, id: e.userMessageId };
     case "text":
     case "reasoning": {
       const kind = e.type;

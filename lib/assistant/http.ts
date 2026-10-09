@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-export { toUiMessage, type UiMessage } from "./view";
+import { assistantNameFrom, DEFAULT_ASSISTANT_NAME } from "./name";
+export { toClientConversation, toUiMessage, type ClientConversation, type UiMessage } from "./view";
 
 /** Shared plumbing for /api/assistant/*. SERVER ONLY. */
 
@@ -12,6 +13,8 @@ export interface AssistantCaller {
   /** The caller's own (RLS) client. */
   supabase: SupabaseClient;
   displayName: string;
+  /** What this user named their assistant (or the SED Assistant default). */
+  assistantName: string;
 }
 
 /** Signed in AND allowed to use the assistant, or the response to return. */
@@ -23,11 +26,12 @@ export async function assistantGuard(): Promise<{ ok: true; caller: AssistantCal
   if (!user) return { ok: false, response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   const perms = await getUserPermissions(user.id);
   if (!perms.has("assistant.use")) {
-    return { ok: false, response: NextResponse.json({ error: "Your account does not have access to the AI Assistant." }, { status: 403 }) };
+    return { ok: false, response: NextResponse.json({ error: "Your account does not have access to the SED Assistant." }, { status: 403 }) };
   }
-  const { data: profile } = await supabase.from("profiles").select("display_name").eq("id", user.id).maybeSingle();
+  const { data: profile } = await supabase.from("profiles").select("display_name, ui_preferences").eq("id", user.id).maybeSingle();
   const displayName = (profile?.display_name as string | null)?.trim() || user.email?.split("@")[0] || "there";
-  return { ok: true, caller: { user, perms, supabase, displayName } };
+  const assistantName = assistantNameFrom(profile?.ui_preferences) ?? DEFAULT_ASSISTANT_NAME;
+  return { ok: true, caller: { user, perms, supabase, displayName, assistantName } };
 }
 
 /** The tables do not exist yet: migration 0083 has not been applied. */
@@ -37,7 +41,7 @@ export function isMissingTableError(e: unknown): boolean {
 }
 
 export const MIGRATION_MESSAGE =
-  "The AI Assistant's database tables are not set up yet. An admin needs to apply migration 0083_ai_assistant.sql.";
+  "The SED Assistant's database tables are not set up yet. An admin needs to apply migration 0083_ai_assistant.sql.";
 
 /** A store failure as a response; never echoes internals beyond the reason. */
 export function storeError(e: unknown, fallback = "Could not complete that request."): NextResponse {

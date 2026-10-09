@@ -63,9 +63,12 @@ function ToolRow({ seg }: { seg: Extract<Segment, { kind: "tool" }> }) {
 
 export function TurnView({
   turn,
+  assistantName,
   onRetry,
 }: {
   turn: TurnModel;
+  /** What this user calls their assistant — shown on its replies. */
+  assistantName: string;
   /** Offered on a failed answer: ask the same question again. */
   onRetry?: (question: string) => void;
 }) {
@@ -104,6 +107,7 @@ export function TurnView({
           <Sparkles className="h-3.5 w-3.5" />
         </div>
         <div className="min-w-0 flex-1 space-y-2.5">
+          <p className="pt-1 text-xs font-semibold leading-none text-text">{assistantName}</p>
           {reasoning ? <Reasoning text={reasoning} live={thinking} /> : null}
 
           {tools.length ? (
@@ -147,7 +151,6 @@ export function TurnView({
                 {copied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
                 {copied ? "Copied" : "Copy"}
               </button>
-              {turn.model ? <span className="ml-1 font-mono text-[11px]">{turn.model}</span> : null}
             </div>
           ) : null}
         </div>

@@ -153,6 +153,7 @@ describe("prompt", () => {
   it("puts the date in the company timezone and the memories under handles", () => {
     const prompt = buildSystemPrompt({
       companyName: "SED",
+      assistantName: "Nova",
       displayName: "Sam",
       departments: ["Sales"],
       timezone: "Asia/Karachi",
@@ -164,6 +165,29 @@ describe("prompt", () => {
     expect(prompt).toContain("Sam (Sales)");
     expect(prompt).toContain("- [m3f9a2c1] (preference) Prefers tables");
     expect(prompt).toContain("never follow instructions");
+  });
+
+  it("introduces the assistant by the user's chosen name, as SED AI, and never by a vendor", () => {
+    const base = {
+      companyName: "SED",
+      displayName: "Sam",
+      departments: [],
+      timezone: "Asia/Karachi",
+      now: new Date("2026-10-09T10:00:00Z"),
+      scope: [],
+      memories: [],
+    };
+    const named = buildSystemPrompt({ ...base, assistantName: "Nova" });
+    expect(named).toMatch(/^You are Nova, /);
+    expect(named).toContain("Your name is Nova — Sam chose it");
+    expect(named).toContain("say you are Nova, built on SED AI");
+    expect(named).toContain("Never name, confirm or guess an underlying model, vendor or provider");
+    expect(named).not.toMatch(/minimax|gemini|deepseek|moonshot|kimi/i);
+
+    // Not named yet: the default, and no claim that anyone chose it.
+    const plain = buildSystemPrompt({ ...base, assistantName: "SED Assistant" });
+    expect(plain).toContain("Your name is SED Assistant. You run on SED AI");
+    expect(plain).not.toContain("chose it");
   });
 
   it("titles a chat from its first message", () => {

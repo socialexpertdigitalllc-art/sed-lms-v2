@@ -78,6 +78,7 @@ export async function POST(req: Request) {
       void runTurn({
         userId: caller.user.id,
         displayName: caller.displayName,
+        assistantName: caller.assistantName,
         perms: caller.perms,
         db: caller.supabase,
         admin,

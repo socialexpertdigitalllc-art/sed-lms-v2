@@ -2,23 +2,29 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Square } from "lucide-react";
+import { AI_BRAND } from "@/lib/assistant/name";
 import { cn } from "@/lib/utils";
 
 const MAX = 8000;
 
 /** Enter sends, Shift+Enter starts a new line; Stop while an answer is coming. */
 export function Composer({
+  assistantName,
   onSend,
   onStop,
   running,
   disabled,
   autoFocus,
+  compact,
 }: {
+  assistantName: string;
   onSend: (text: string) => void;
   onStop: () => void;
   running: boolean;
   disabled?: boolean;
   autoFocus?: boolean;
+  /** The floating chat: a shorter footnote. */
+  compact?: boolean;
 }) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -62,7 +68,7 @@ export function Composer({
           }}
           rows={1}
           disabled={disabled}
-          placeholder={disabled ? "The assistant is not available right now" : "Ask about your leads, calls, team or strategy…"}
+          placeholder={disabled ? `${assistantName} is not available right now` : `Ask ${assistantName} about your leads, calls, team or strategy…`}
           className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-text placeholder:text-text-faint focus:outline-none"
           aria-label="Message the assistant"
         />
@@ -90,7 +96,9 @@ export function Composer({
         )}
       </div>
       <p className="mt-1.5 text-center text-[11px] text-text-faint">
-        The assistant only sees what your account can see. It can make mistakes — check important numbers.
+        {compact
+          ? `${AI_BRAND} can make mistakes — check important numbers.`
+          : `${assistantName} only sees what your account can see. ${AI_BRAND} can make mistakes — check important numbers.`}
         {text.length > MAX - 1000 ? ` · ${MAX - text.length} characters left` : ""}
       </p>
     </div>

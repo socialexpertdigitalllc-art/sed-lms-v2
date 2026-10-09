@@ -11,6 +11,9 @@ import { ToastProvider } from "@/components/common/Toast";
 import { NotificationToaster } from "@/components/layout/NotificationToaster";
 import { TabBadge } from "@/components/layout/TabBadge";
 import { VersionBadge } from "@/components/layout/VersionBadge";
+import { AssistantProvider } from "@/providers/AssistantProvider";
+import { AssistantWidget } from "@/components/assistant/AssistantWidget";
+import { assistantNameFrom } from "@/lib/assistant/name";
 
 export default async function AppLayout({
   children,
@@ -49,9 +52,17 @@ export default async function AppLayout({
         <ToastProvider>
           <ActivityTracker />
           <UiPrefsProvider initial={uiInitial}>
-            <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
-              {children}
-            </AppShell>
+            <AssistantProvider
+              enabled={perms.has("assistant.use")}
+              userId={user.id}
+              displayName={profile?.display_name ?? ""}
+              initialName={assistantNameFrom(uiPrefs)}
+            >
+              <AppShell email={user.email ?? ""} displayName={profile?.display_name ?? ""} branding={branding} sidebarPinned={sidebarPinned}>
+                {children}
+              </AppShell>
+              <AssistantWidget />
+            </AssistantProvider>
           </UiPrefsProvider>
           <NotificationToaster />
           <TabBadge />

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { assistantGuard, storeError, toUiMessage, UUID_RE } from "@/lib/assistant/http";
+import { assistantGuard, storeError, toClientConversation, toUiMessage, UUID_RE } from "@/lib/assistant/http";
 import { deleteConversation, getConversation, listMessages, updateConversation } from "@/lib/assistant/store";
 import { isRunning, stopRun } from "@/lib/assistant/runs";
 
@@ -25,7 +25,7 @@ export async function GET(_req: Request, { params }: Ctx) {
     const conversation = await getConversation(admin, guard.caller.user.id, id);
     if (!conversation) return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
     const messages = await listMessages(admin, guard.caller.user.id, id);
-    return NextResponse.json({ conversation, messages: messages.map(toUiMessage), running: isRunning(id) });
+    return NextResponse.json({ conversation: toClientConversation(conversation), messages: messages.map(toUiMessage), running: isRunning(id) });
   } catch (e) {
     return storeError(e, "Could not load the conversation.");
   }
@@ -48,7 +48,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   try {
     const conversation = await updateConversation(createAdminClient(), guard.caller.user.id, id, parsed.data);
     if (!conversation) return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
-    return NextResponse.json({ conversation });
+    return NextResponse.json({ conversation: toClientConversation(conversation) });
   } catch (e) {
     return storeError(e, "Could not update the conversation.");
   }

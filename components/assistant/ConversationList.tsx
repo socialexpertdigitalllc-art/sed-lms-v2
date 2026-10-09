@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Check, MessageSquare, Pencil, Pin, PinOff, Search, SquarePen, Trash2, X } from "lucide-react";
-import type { AssistantConversation } from "@/lib/assistant/types";
+import type { ClientConversation } from "@/lib/assistant/view";
 import { btnPrimary, iconBtn, iconBtnDanger } from "@/components/common/buttons";
 import { cn } from "@/lib/utils";
 
@@ -29,14 +29,14 @@ export function ConversationList({
   onTogglePin,
   onDelete,
 }: {
-  conversations: AssistantConversation[];
+  conversations: ClientConversation[];
   activeId: string | null;
   runningIds: Set<string>;
   onSelect: (id: string) => void;
   onNew: () => void;
   onRename: (id: string, title: string) => void;
-  onTogglePin: (c: AssistantConversation) => void;
-  onDelete: (c: AssistantConversation) => void;
+  onTogglePin: (c: ClientConversation) => void;
+  onDelete: (c: ClientConversation) => void;
 }) {
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
@@ -46,7 +46,7 @@ export function ConversationList({
     const q = query.trim().toLowerCase();
     const now = new Date();
     const list = q ? conversations.filter((c) => c.title.toLowerCase().includes(q)) : conversations;
-    const out: { label: string; items: AssistantConversation[] }[] = [];
+    const out: { label: string; items: ClientConversation[] }[] = [];
     for (const c of list) {
       const label = c.pinned ? "Pinned" : bucketOf(c.last_message_at, now);
       const g = out.find((x) => x.label === label);

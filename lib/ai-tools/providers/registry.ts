@@ -398,7 +398,7 @@ const imageRank: AiTaskDescriptor = {
 
 const assistantChat: AiTaskDescriptor = {
   key: "assistant_chat",
-  label: "AI Assistant",
+  label: "SED Assistant",
   description:
     "The chat assistant every user talks to from their own dashboard. It answers by CALLING TOOLS that read that user's data — leads, follow-ups, tickets, team stats — so FUNCTION CALLING IS MANDATORY: a model that cannot call tools does not fail, it answers with numbers it made up. Multi-turn, streamed to the user as it is written.",
   where: "lib/assistant/engine.ts",

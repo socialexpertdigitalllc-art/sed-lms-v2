@@ -61,15 +61,16 @@ export interface AssistantMessageRow {
  * The chat stream, one JSON object per line (NDJSON). The server persists
  * everything it streams, so a client that drops off mid-answer loses nothing:
  * reopening the conversation shows the finished reply.
+ *
+ * Deliberately says nothing about which vendor or model is answering — see
+ * lib/assistant/view.ts.
  */
 export type AssistantStreamEvent =
   | {
       type: "start";
-      conversation: AssistantConversation;
+      /** Client-safe: no provider/model fields (see toClientConversation). */
+      conversation: Omit<AssistantConversation, "last_provider" | "last_model">;
       userMessageId: string;
-      provider: string;
-      model: string;
-      modelLabel: string;
     }
   | { type: "text"; delta: string }
   | { type: "reasoning"; delta: string }

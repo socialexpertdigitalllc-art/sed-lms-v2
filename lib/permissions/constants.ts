@@ -94,7 +94,7 @@ export const PERMISSIONS = [
   { key: "domains.purchase", name: "Buy Domains", category: "domains", is_sensitive: true },
   { key: "website.view", name: "View Website CMS", category: "website" },
   { key: "website.manage", name: "Manage Website CMS", category: "website", is_sensitive: true },
-  { key: "assistant.use", name: "Use AI Assistant", category: "assistant" },
+  { key: "assistant.use", name: "Use SED Assistant", category: "assistant" },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];

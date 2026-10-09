@@ -75,7 +75,8 @@ vi.mock("@/lib/users/directory", () => ({
 }));
 vi.mock("@/lib/teams/closers", () => ({ getTeamAgentIds: async () => [] }));
 
-const { runTurn } = await import("@/lib/assistant/engine");
+const { friendlyError, runTurn } = await import("@/lib/assistant/engine");
+const { ProviderHttpError } = await import("@/lib/ai-tools/providers/errors");
 const { resetGates } = await import("@/lib/ai-tools/providers/gate");
 
 const frame = (obj: unknown) => `data: ${JSON.stringify(obj)}`;
@@ -112,6 +113,7 @@ async function ask(text: string, perms = new Set(["assistant.use"]), signal = ne
   await runTurn({
     userId: "sam",
     displayName: "Sam Khan",
+    assistantName: "Nova",
     perms,
     db,
     admin,
@@ -158,8 +160,16 @@ describe("runTurn", () => {
     expect(toolMsg).toMatchObject({ role: "tool", tool_call_id: "call_1", name: "calculate" });
     expect(JSON.parse(toolMsg.content)).toEqual({ expression: "10 - 4", result: 6 });
 
-    // The system prompt carries the memory, under its handle.
-    expect(bodyOf(fetchMock, 0).messages[0].content).toContain("[m3f9a2c1] (goal) Wants to close 10 sites in October");
+    // The system prompt carries the memory, under its handle — and the
+    // assistant's name, as this user chose it.
+    const system = bodyOf(fetchMock, 0).messages[0].content;
+    expect(system).toContain("[m3f9a2c1] (goal) Wants to close 10 sites in October");
+    expect(system).toMatch(/^You are Nova, /);
+
+    // Nothing sent to the browser says which vendor or model answered.
+    const start = events.find((e) => e.type === "start")!;
+    expect(Object.keys(start).sort()).toEqual(["conversation", "type", "userMessageId"]);
+    expect(JSON.stringify(events)).not.toMatch(/minimax|gemini/i);
 
     // Streamed to the browser in order.
     const kinds = events.filter((e) => e.type !== "ping").map((e) => e.type);
@@ -259,5 +269,24 @@ describe("runTurn", () => {
     const events = await ask("hi");
     expect(events.at(-1)).toMatchObject({ type: "done" });
     expect(rows.at(-1)?.content).toBe("Second time lucky.");
+  });
+
+  it("words every failure for users without naming a vendor or echoing the vendor's own text", () => {
+    const failures = [
+      new Error("MiniMax is not configured (missing MINIMAX_API_KEY)."),
+      new ProviderHttpError("invalid api key for minimax", 401, null, null),
+      new ProviderHttpError("insufficient balance", 402, null, null),
+      new ProviderHttpError("Gemini: rate limit", 429, null, null),
+      new ProviderHttpError("MiniMax error 2013: invalid params", 400, null, null),
+      new ProviderHttpError("upstream gemini overloaded", 503, null, null),
+      new Error("MiniMax MiniMax-M3 call timed out after 150s"),
+      new Error("anything else"),
+    ];
+    for (const e of failures) {
+      const message = friendlyError(e);
+      expect(message).not.toMatch(/minimax|gemini|deepseek|kimi|moonshot|api key for/i);
+      expect(message.length).toBeGreaterThan(10);
+    }
+    expect(friendlyError(failures[0])).toMatch(/SED AI isn't set up yet/);
   });
 });

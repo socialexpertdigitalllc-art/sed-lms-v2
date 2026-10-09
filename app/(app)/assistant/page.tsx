@@ -4,17 +4,17 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { getTeamAgentIds } from "@/lib/teams/closers";
-import { resolveTaskModelCached } from "@/lib/ai-tools/providers/run";
 import { getConversation, listConversations, listMemories, listMessages } from "@/lib/assistant/store";
-import { describeScope, suggestionsFor } from "@/lib/assistant/prompt";
-import { modelLabel } from "@/lib/assistant/engine";
+import { describeScope } from "@/lib/assistant/prompt";
+import { suggestionsFor } from "@/lib/assistant/suggestions";
 import { isMissingTableError, MIGRATION_MESSAGE, UUID_RE } from "@/lib/assistant/http";
-import { toUiMessage, type UiMessage } from "@/lib/assistant/view";
+import { toClientConversation, toUiMessage, type ClientConversation, type UiMessage } from "@/lib/assistant/view";
+import { DEFAULT_ASSISTANT_NAME } from "@/lib/assistant/name";
 import { isRunning } from "@/lib/assistant/runs";
-import type { AssistantConversation, AssistantMemory } from "@/lib/assistant/types";
+import type { AssistantMemory } from "@/lib/assistant/types";
 import { AssistantApp } from "@/components/assistant/AssistantApp";
 
-export const metadata = { title: "AI Assistant" };
+export const metadata = { title: DEFAULT_ASSISTANT_NAME };
 
 function Notice({ title, body }: { title: string; body: string }) {
   return (
@@ -28,6 +28,11 @@ function Notice({ title, body }: { title: string; body: string }) {
   );
 }
 
+/**
+ * The full Assistant page, opened from the header. The user's name for their
+ * assistant, and the first-open naming step, come from AssistantProvider in
+ * the app layout.
+ */
 export default async function AssistantPage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
   const supabase = await createClient();
   const {
@@ -37,40 +42,38 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
 
   const perms = await getUserPermissions(user.id);
   if (!perms.has("assistant.use")) {
-    return <Notice title="AI Assistant" body="Your account does not have access to the AI Assistant. Ask an admin to grant the “Use AI Assistant” permission." />;
+    return (
+      <Notice
+        title={DEFAULT_ASSISTANT_NAME}
+        body="Your account does not have access to the SED Assistant. Ask an admin to grant the “Use SED Assistant” permission."
+      />
+    );
   }
 
   const { c } = await searchParams;
   const admin = createAdminClient();
 
-  let conversations: AssistantConversation[] = [];
+  let conversations: ClientConversation[] = [];
   let memories: AssistantMemory[] = [];
   let messages: UiMessage[] = [];
   let activeId: string | null = null;
   try {
-    [conversations, memories] = await Promise.all([listConversations(admin, user.id), listMemories(admin, user.id)]);
+    const [list, mem] = await Promise.all([listConversations(admin, user.id), listMemories(admin, user.id)]);
+    conversations = list.map(toClientConversation);
+    memories = mem;
     if (c && UUID_RE.test(c) && (await getConversation(admin, user.id, c))) {
       activeId = c;
       messages = (await listMessages(admin, user.id, c)).map(toUiMessage);
     }
   } catch (e) {
-    if (isMissingTableError(e)) return <Notice title="AI Assistant — almost ready" body={MIGRATION_MESSAGE} />;
+    if (isMissingTableError(e)) return <Notice title={`${DEFAULT_ASSISTANT_NAME} — almost ready`} body={MIGRATION_MESSAGE} />;
     throw e;
   }
 
-  const [profile, teamIds, label] = await Promise.all([
-    supabase.from("profiles").select("display_name").eq("id", user.id).maybeSingle(),
-    getTeamAgentIds(admin, user.id).catch(() => [] as string[]),
-    resolveTaskModelCached("assistant_chat")
-      .then(modelLabel)
-      .catch(() => null),
-  ]);
-  const displayName = (profile.data?.display_name as string | null)?.trim() || user.email?.split("@")[0] || "there";
+  const teamIds = await getTeamAgentIds(admin, user.id).catch(() => [] as string[]);
 
   return (
     <AssistantApp
-      displayName={displayName}
-      modelLabel={label}
       scope={describeScope({ perms, teamSize: teamIds.length })}
       suggestions={suggestionsFor(perms)}
       initialConversations={conversations}

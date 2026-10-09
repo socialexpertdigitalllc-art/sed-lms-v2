@@ -6,6 +6,7 @@ import { WebsiteBell } from "./WebsiteBell";
 import { GeneralBell } from "./GeneralBell";
 import { ThemeToggle } from "./ThemeToggle";
 import { UserMenu } from "./UserMenu";
+import { AssistantHeaderButton } from "@/components/assistant/AssistantHeaderButton";
 
 export function Topbar({
   email,
@@ -32,6 +33,7 @@ export function Topbar({
         <CommandPalette />
       </div>
       <div className="flex items-center gap-2">
+        <AssistantHeaderButton />
         <ThemeToggle />
         <WebsiteBell />
         <GeneralBell />

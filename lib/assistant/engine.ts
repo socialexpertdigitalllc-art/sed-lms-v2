@@ -14,6 +14,7 @@ import { parseToolArgs, runTool, toolDefinitions, toolsFor, ALL_TOOLS, type Tool
 import { TurnData } from "./tools/data";
 import type { ToolContext } from "./tools/types";
 import type { AssistantConversation, AssistantStreamEvent } from "./types";
+import { toClientConversation } from "./view";
 
 /**
  * One answer, end to end: save the question, assemble what the model needs
@@ -36,6 +37,8 @@ const TEMPERATURE = 1;
 export interface TurnInput {
   userId: string;
   displayName: string;
+  /** What this user named their assistant — it introduces itself by it. */
+  assistantName: string;
   perms: Set<string>;
   /** The user's own client (RLS) — every data tool reads through it. */
   db: SupabaseClient;
@@ -62,19 +65,24 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-/** What went wrong, in words a user (or the admin they forward it to) can act on. */
+/**
+ * What went wrong, in words a user (or the admin they forward it to) can act
+ * on. NEVER names a vendor or model — to users the assistant runs on SED AI —
+ * and never echoes a vendor's own error text, which often names itself. The
+ * raw failure is logged server-side for whoever debugs it.
+ */
 export function friendlyError(e: unknown): string {
   const status = e instanceof ProviderHttpError ? e.status : null;
   const msg = e instanceof Error ? e.message : String(e);
   if (/is not configured/i.test(msg)) {
-    return "The AI Assistant has no working model. An admin can add a MiniMax or Gemini key under Admin → AI Models.";
+    return "SED AI isn't set up yet. An admin can finish the setup under Admin → AI Models.";
   }
-  if (status === 401 || status === 403) return "The AI provider rejected its API key. An admin should check the key under Admin → AI Models.";
-  if (status === 402) return "The AI provider account is out of credit. An admin needs to top it up.";
-  if (status === 429) return "The AI provider is rate-limiting requests right now. Try again in a minute.";
-  if (msg.includes(CALL_TIMEOUT_MARKER)) return "The AI model took too long to respond. Try again — a narrower question helps.";
-  if (status !== null && status >= 500) return "The AI provider is having trouble right now. Try again in a moment.";
-  if (status === 400) return `The AI provider refused the request: ${msg}`;
+  if (status === 401 || status === 403) return "SED AI couldn't sign in to its AI service. An admin should check Admin → AI Models.";
+  if (status === 402) return "SED AI's AI service has run out of credit. An admin needs to top it up.";
+  if (status === 429) return "SED AI is busy right now. Try again in a minute.";
+  if (msg.includes(CALL_TIMEOUT_MARKER)) return "SED AI took too long to respond. Try again — a narrower question helps.";
+  if (status !== null && status >= 500) return "SED AI is having trouble right now. Try again in a moment.";
+  if (status === 400) return "SED AI couldn't process that request. Try rephrasing it, or start a new chat.";
   return "Something went wrong while answering. Try again.";
 }
 
@@ -88,6 +96,7 @@ async function departmentsOf(admin: SupabaseClient, userId: string): Promise<str
     .filter((n): n is string => typeof n === "string" && n.length > 0);
 }
 
+/** "MiniMax · MiniMax-M3" — for server logs only; users only ever see SED AI. */
 export function modelLabel(r: Pick<ResolvedTaskModel, "providerKey" | "model">): string {
   return `${getProvider(r.providerKey)?.label ?? r.providerKey} · ${r.model}`;
 }
@@ -110,14 +119,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
     return;
   }
 
-  emit({
-    type: "start",
-    conversation,
-    userMessageId: turnId,
-    provider: resolved.providerKey,
-    model: resolved.model,
-    modelLabel: modelLabel(resolved),
-  });
+  emit({ type: "start", conversation: toClientConversation(conversation), userMessageId: turnId });
 
   const data = new TurnData({ db: input.db, admin, userId });
   const [settings, memories, departments, teamIds, rows] = await Promise.all([
@@ -145,6 +147,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
   const definitions = toolDefinitions(tools);
   const system = buildSystemPrompt({
     companyName: settings.company_name || "the company",
+    assistantName: input.assistantName,
     displayName: input.displayName,
     departments,
     timezone,
@@ -221,8 +224,8 @@ export async function runTurn(input: TurnInput): Promise<void> {
         }
         const message =
           result.finishReason === "length"
-            ? "The model used its whole output budget thinking and never got to the answer. Try a narrower question — or an admin can raise the AI Assistant's max output tokens under Admin → AI Models."
-            : "The model returned an empty answer. Try rephrasing the question.";
+            ? "SED AI used its whole answer budget thinking and never got to the answer. Try a narrower question — or an admin can raise the SED Assistant's max output tokens under Admin → AI Models."
+            : "SED AI returned an empty answer. Try rephrasing the question.";
         await insertMessage(admin, userId, conversation.id, {
           role: "assistant",
           turn_id: turnId,

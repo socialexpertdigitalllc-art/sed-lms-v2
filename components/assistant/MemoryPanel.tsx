@@ -100,10 +100,12 @@ function MemoryRow({ memory, onChange, onRemove }: { memory: AssistantMemory; on
 }
 
 export function MemoryPanel({
+  assistantName,
   memories,
   onChange,
   onClose,
 }: {
+  assistantName: string;
   memories: AssistantMemory[];
   onChange: (next: AssistantMemory[]) => void;
   onClose: () => void;
@@ -149,7 +151,7 @@ export function MemoryPanel({
               <Brain className="h-4 w-4 text-accent" aria-hidden /> Memory
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-text-muted">
-              What the assistant remembers about you and uses in every chat. It adds to this when you tell it something worth
+              What {assistantName} remembers about you and uses in every chat. It adds to this when you tell it something worth
               keeping. Only you can see these.
             </p>
           </div>
@@ -184,7 +186,7 @@ export function MemoryPanel({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
           {grouped.length === 0 ? (
-            <p className="px-2 py-8 text-center text-sm text-text-faint">Nothing yet. Tell the assistant your goals and how you like to work.</p>
+            <p className="px-2 py-8 text-center text-sm text-text-faint">Nothing yet. Tell {assistantName} your goals and how you like to work.</p>
           ) : (
             grouped.map((g) => (
               <section key={g.kind} className="mb-4">

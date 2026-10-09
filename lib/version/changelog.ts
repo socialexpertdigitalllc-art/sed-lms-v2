@@ -29,13 +29,36 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "2.23.0",
+    version: "2.23.1",
     date: "2026-10-09",
-    title: "AI Assistant: an analyst for your data in every dashboard",
+    title: "SED Assistant: on every screen, under a name you choose",
     changes: [
       {
         kind: "feature",
-        text: "New AI Assistant page. Ask it anything about your work — how this month compares with last, which leads to call first, when calls get picked up, which categories and states close best, how the team is doing — and it looks up the real numbers, does the maths, and answers with tables, charts and a plan. Answers stream in as they are written, with every lookup it made shown alongside.",
+        text: "The assistant is now on every screen. The round button in the bottom-right corner opens a chat in front of whatever you're working on, so you never have to leave the page. Close it mid-answer and the answer keeps writing; reopen it and the chat you had open is still there. \"Open full screen\" takes the conversation to the full page.",
+      },
+      {
+        kind: "feature",
+        text: "Name your assistant. The first time you open it, it asks what you'd like to call it (or you can keep \"SED Assistant\"). It uses that name everywhere you see it and introduces itself by it. The name is yours alone, and you can rename it any time from the chat.",
+      },
+      {
+        kind: "improvement",
+        text: "The assistant has moved from the left sidebar to the top bar, next to the light/dark switch, and is now called the SED Assistant.",
+      },
+      {
+        kind: "improvement",
+        text: "Answers no longer say which AI model wrote them. The assistant runs on SED AI, and that's the only name it uses for itself, in its answers and in its error messages.",
+      },
+    ],
+  },
+  {
+    version: "2.23.0",
+    date: "2026-10-09",
+    title: "SED Assistant: an analyst for your data in every dashboard",
+    changes: [
+      {
+        kind: "feature",
+        text: "New SED Assistant. Ask it anything about your work — how this month compares with last, which leads to call first, when calls get picked up, which categories and states close best, how the team is doing — and it looks up the real numbers, does the maths, and answers with tables, charts and a plan. Answers stream in as they are written, with every lookup it made shown alongside.",
       },
       {
         kind: "feature",
@@ -51,11 +74,11 @@ export const CHANGELOG: ChangelogEntry[] = [
       },
       {
         kind: "improvement",
-        text: "Runs on MiniMax by default; switch it to Gemini (or set its output budget) under Admin → AI Models → AI Assistant. Models that can't look data up are not offered for it.",
+        text: "Runs on SED AI. Admins set it up under Admin → AI Models → SED Assistant.",
       },
       {
         kind: "improvement",
-        text: "New permission \"Use AI Assistant\", on for every department by default — turn it off per department or per user in the usual permission screens.",
+        text: "New permission \"Use SED Assistant\", on for every department by default — turn it off per department or per user in the usual permission screens.",
       },
     ],
   },
