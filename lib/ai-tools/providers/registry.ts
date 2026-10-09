@@ -32,6 +32,13 @@ export interface AiModelDescriptor {
   /** Accepts `image_url` content parts on the chat/completions endpoint. */
   vision: boolean;
   /**
+   * Accepts `tools` and answers with `tool_calls` on the chat/completions
+   * endpoint (OpenAI-style function calling). Opt-in: absent means "not
+   * verified", and a task that needs it refuses the model — a model that
+   * cannot call tools does not fail, it just makes the numbers up.
+   */
+  toolCalling?: boolean;
+  /**
    * Provider-documented HARD ceiling on output tokens for THIS model — the
    * largest value the vendor will accept, not a house preference. An operator
    * may dial a task DOWN from here (see `ai_task_assignments.max_output_tokens`
@@ -99,10 +106,10 @@ const gemini: AiProviderDescriptor = {
   // OpenAI-compatible surface, so one call path serves every provider here.
   endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
   models: [
-    { id: "gemini-3.1-pro-preview", vision: true, maxOutputTokens: 64000, note: "Verified default for planning and whole-file rewrites." },
-    { id: "gemini-3.5-flash", vision: true, maxOutputTokens: 64000, note: "Cheap and fast; the verified default for image vetting." },
-    { id: "gemini-2.5-pro", vision: true, maxOutputTokens: 64000 },
-    { id: "gemini-2.5-flash", vision: true, maxOutputTokens: 64000 },
+    { id: "gemini-3.1-pro-preview", vision: true, toolCalling: true, maxOutputTokens: 64000, note: "Verified default for planning and whole-file rewrites." },
+    { id: "gemini-3.5-flash", vision: true, toolCalling: true, maxOutputTokens: 64000, note: "Cheap and fast; the verified default for image vetting." },
+    { id: "gemini-2.5-pro", vision: true, toolCalling: true, maxOutputTokens: 64000 },
+    { id: "gemini-2.5-flash", vision: true, toolCalling: true, maxOutputTokens: 64000 },
   ],
   credentialFields: [{ key: "api_key", label: "API key", type: "password" }],
   capabilities: { vision: true, longOutput: true, maxOutputTokens: 64000 },
@@ -115,7 +122,7 @@ const deepseek: AiProviderDescriptor = {
   label: "DeepSeek",
   endpoint: "https://api.deepseek.com/chat/completions",
   models: [
-    { id: "deepseek-chat", vision: false, maxOutputTokens: 8192, note: "Text only. Good at strict JSON; too small to rewrite a whole page." },
+    { id: "deepseek-chat", vision: false, toolCalling: true, maxOutputTokens: 8192, note: "Text only. Good at strict JSON; too small to rewrite a whole page." },
     { id: "deepseek-reasoner", vision: false, maxOutputTokens: 8192, note: "Text only. Slower, stronger reasoning." },
   ],
   credentialFields: [{ key: "api_key", label: "API key", type: "password" }],
@@ -129,10 +136,10 @@ const webcraft: AiProviderDescriptor = {
   label: "Kimi (Moonshot)",
   endpoint: "https://api.moonshot.ai/v1/chat/completions",
   models: [
-    { id: "moonshot-v1-128k", vision: false, maxOutputTokens: 32000, note: "Text only. Large enough to return a whole page." },
-    { id: "kimi-k2-0711-preview", vision: false, maxOutputTokens: 32000, note: "Text only." },
-    { id: "moonshot-v1-32k", vision: false, maxOutputTokens: 32000, note: "Text only." },
-    { id: "moonshot-v1-auto", vision: false, maxOutputTokens: 32000, note: "Text only. Moonshot picks the context size." },
+    { id: "moonshot-v1-128k", vision: false, toolCalling: true, maxOutputTokens: 32000, note: "Text only. Large enough to return a whole page." },
+    { id: "kimi-k2-0711-preview", vision: false, toolCalling: true, maxOutputTokens: 32000, note: "Text only." },
+    { id: "moonshot-v1-32k", vision: false, toolCalling: true, maxOutputTokens: 32000, note: "Text only." },
+    { id: "moonshot-v1-auto", vision: false, toolCalling: true, maxOutputTokens: 32000, note: "Text only. Moonshot picks the context size." },
   ],
   credentialFields: [{ key: "api_key", label: "API key", type: "password" }],
   capabilities: { vision: false, longOutput: true, maxOutputTokens: 32000 },
@@ -174,15 +181,16 @@ const minimax: AiProviderDescriptor = {
     {
       id: "MiniMax-M3",
       vision: true,
+      toolCalling: true,
       maxOutputTokens: 524288,
       recommendedOutputTokens: 131072,
       contextWindow: 1000000,
       note: "1M context, up to 512K output. The only MiniMax model documented to accept image input.",
     },
-    { id: "MiniMax-M2.7", vision: false, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
-    { id: "MiniMax-M2.5", vision: false, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
-    { id: "MiniMax-M2.1", vision: false, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
-    { id: "MiniMax-M2", vision: false, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2.7", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2.5", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2.1", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
   ],
   credentialFields: [{ key: "api_key", label: "API key", type: "password" }],
   capabilities: { vision: true, longOutput: true, maxOutputTokens: 524288 },
@@ -246,7 +254,8 @@ export type AiTaskKey =
   | "template_compile"
   | "content_write"
   | "site_build"
-  | "image_rank";
+  | "image_rank"
+  | "assistant_chat";
 
 export interface AiTaskDescriptor {
   key: AiTaskKey;
@@ -260,6 +269,8 @@ export interface AiTaskDescriptor {
     vision: boolean;
     /** Hard requirement: the model must be able to emit at least this much. */
     minOutputTokens: number;
+    /** Hard requirement: the model must support function calling. */
+    toolCalling?: boolean;
   };
   /** Fallback, and what a fresh install runs. */
   defaultProvider: string;
@@ -385,6 +396,21 @@ const imageRank: AiTaskDescriptor = {
   routable: true,
 };
 
+const assistantChat: AiTaskDescriptor = {
+  key: "assistant_chat",
+  label: "AI Assistant",
+  description:
+    "The chat assistant every user talks to from their own dashboard. It answers by CALLING TOOLS that read that user's data — leads, follow-ups, tickets, team stats — so FUNCTION CALLING IS MANDATORY: a model that cannot call tools does not fail, it answers with numbers it made up. Multi-turn, streamed to the user as it is written.",
+  where: "lib/assistant/engine.ts",
+  // A reply is prose plus a table or a chart spec — but MiniMax counts its
+  // visible thinking against the same output budget, and a deep analysis can
+  // think for several thousand tokens before the first word of the answer.
+  requires: { vision: false, minOutputTokens: 8000, toolCalling: true },
+  defaultProvider: "minimax",
+  defaultModel: "MiniMax-M3",
+  routable: true,
+};
+
 export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
   contentPlan,
   fileRegen,
@@ -394,6 +420,7 @@ export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
   contentWrite,
   siteBuild,
   imageRank,
+  assistantChat,
 ];
 
 export function getTask(key: string): AiTaskDescriptor | undefined {
@@ -422,6 +449,9 @@ export function assignmentError(taskKey: string, providerKey: string, modelId: s
 
   if (task.requires.vision && !model.vision) {
     return `${task.label} sends images, and ${provider.label} ${model.id} cannot read them. It would answer about images it never saw instead of failing, so this pairing is refused.`;
+  }
+  if (task.requires.toolCalling && !model.toolCalling) {
+    return `${task.label} looks data up by calling tools, and ${provider.label} ${model.id} is not known to support tool calling. It would answer with numbers it made up instead of failing, so this pairing is refused.`;
   }
   if (model.maxOutputTokens < task.requires.minOutputTokens) {
     return `${task.label} needs to emit up to ${task.requires.minOutputTokens.toLocaleString("en-US")} tokens, but ${provider.label} ${model.id} caps out at ${model.maxOutputTokens.toLocaleString("en-US")}. Its output would be truncated.`;

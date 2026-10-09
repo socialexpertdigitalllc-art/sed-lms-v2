@@ -63,7 +63,7 @@ describe("AI provider registry", () => {
 });
 
 describe("AI task registry", () => {
-  it("describes exactly the eight AI tasks", () => {
+  it("describes exactly the nine AI tasks", () => {
     expect(AI_TASK_REGISTRY.map((t) => t.key)).toEqual([
       "content_plan",
       "file_regen",
@@ -73,6 +73,7 @@ describe("AI task registry", () => {
       "content_write",
       "site_build",
       "image_rank",
+      "assistant_chat",
     ]);
     expect(isAiTaskKey("file_regen")).toBe(true);
     expect(isAiTaskKey("nope")).toBe(false);
@@ -154,6 +155,25 @@ describe("capability constraints", () => {
     expect(getTask("image_rank")!.defaultModel).toBe("MiniMax-M3");
     expect(isValidAssignment("image_rank", "minimax", "MiniMax-M3")).toBe(true);
     expect(isValidAssignment("image_rank", "deepseek", "deepseek-chat")).toBe(false);
+  });
+
+  it("defaults the AI Assistant to MiniMax M3 and lets it move to Gemini, never to a model without tool calling", () => {
+    const task = getTask("assistant_chat")!;
+    expect(task.routable).toBe(true);
+    expect(task.requires.toolCalling).toBe(true);
+    expect(task.defaultProvider).toBe("minimax");
+    expect(task.defaultModel).toBe("MiniMax-M3");
+    // Every MiniMax and Gemini model may serve it — the two providers this
+    // feature is built for.
+    for (const id of ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"]) {
+      expect(isValidAssignment("assistant_chat", "minimax", id)).toBe(true);
+    }
+    for (const id of ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"]) {
+      expect(isValidAssignment("assistant_chat", "gemini", id)).toBe(true);
+    }
+    // Not verified to call tools → refused, with a reason an operator can act on.
+    expect(assignmentError("assistant_chat", "deepseek", "deepseek-reasoner")).toMatch(/tool calling/);
+    expect(capableModelsForTask("assistant_chat").every(({ model }) => model.toolCalling === true)).toBe(true);
   });
 
   it("requires a real long-output ceiling for Site Builder's whole-page rewrite", () => {

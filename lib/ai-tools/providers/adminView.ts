@@ -54,7 +54,7 @@ export interface AiTaskSetting {
   label: string;
   description: string;
   where: string;
-  requires: { vision: boolean; minOutputTokens: number };
+  requires: { vision: boolean; minOutputTokens: number; toolCalling?: boolean };
   routable: boolean;
   defaultProvider: string;
   defaultModel: string;

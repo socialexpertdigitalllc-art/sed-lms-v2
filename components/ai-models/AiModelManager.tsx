@@ -589,6 +589,11 @@ function TaskRow({ task, onPatch }: { task: AiTaskSetting; onPatch: (key: string
                 long output required
               </Pill>
             ) : null}
+            {task.requires.toolCalling ? (
+              <Pill tone="accent" className="normal-case">
+                tool calling required
+              </Pill>
+            ) : null}
             {!task.routable ? (
               <Pill tone="neutral" className="normal-case">
                 chosen per generation
@@ -676,6 +681,9 @@ function TaskRow({ task, onPatch }: { task: AiTaskSetting; onPatch: (key: string
         {task.requires.vision ? " — text-only models are excluded because they would answer about images they never saw" : ""}
         {task.requires.minOutputTokens >= 32000
           ? ` — models that cap below ${task.requires.minOutputTokens.toLocaleString("en-US")} output tokens are excluded because they would truncate the page`
+          : ""}
+        {task.requires.toolCalling
+          ? " — models without verified tool calling are excluded because they would answer with numbers they made up"
           : ""}
         .
       </p>
