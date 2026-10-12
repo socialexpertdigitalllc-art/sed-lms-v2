@@ -44,6 +44,14 @@ function row(over: Partial<ClientDomainRow> = {}): ClientDomainRow {
 
 const WEBSITE = { domain: "acme.com", username: "u447231526", root_directory: "/home/u/domains/acme.com/public_html", vhost_type: "addon", order_id: 1, is_enabled: true, website_type: "other" };
 
+/** A portfolio answer in Hostinger's shape. */
+const listed = (status: string, more: { message?: string | null; expiresAt?: string | null; registeredAt?: string | null } = {}) => ({
+  status,
+  message: more.message ?? null,
+  expiresAt: more.expiresAt ?? null,
+  registeredAt: more.registeredAt ?? null,
+});
+
 function deps(over: { cf?: Partial<PipelineDeps["cf"]>; hostinger?: Partial<PipelineDeps["hostinger"]> } & Partial<Omit<PipelineDeps, "cf" | "hostinger">> = {}): PipelineDeps {
   const lead = { website_link: null as string | null };
   const admin = {
@@ -72,7 +80,7 @@ function deps(over: { cf?: Partial<PipelineDeps["cf"]>; hostinger?: Partial<Pipe
       ensureSsl: vi.fn(async () => "active"),
       isStaticWebsite: (w: { website_type?: string | null }) => !w.website_type || w.website_type === "other",
       websiteTypeLabel: (t: string | null | undefined) => (t === "wordpress" ? "WordPress" : "static"),
-      getHostingerPortfolioDomain: vi.fn(async () => ({ status: "active" })),
+      getHostingerPortfolioDomain: vi.fn(async () => listed("active")),
       completeHostingerDomainSetup: vi.fn(async () => ({ ok: true })),
       enableHostingerAutoRenew: vi.fn(async () => ({ ok: true })),
       ...over.hostinger,
@@ -121,20 +129,81 @@ describe("registration (Cloudflare)", () => {
 });
 
 describe("registration (Hostinger)", () => {
-  const hRow = row({ registrar: "hostinger", hostinger_subscription_id: "sub-1" });
-  it("active: done, and auto-renew is switched on", async () => {
-    const d = deps();
-    expect(await runStep(hRow, "registration", d)).toMatchObject({ kind: "done", patch: { auto_renew: true } });
+  const hRow = row({ registrar: "hostinger", hostinger_subscription_id: "sub-1", hostinger_order_id: 62896992 });
+  it("active: done — auto-renew switched on, expiry and registration date kept", async () => {
+    const d = deps({
+      hostinger: {
+        getHostingerPortfolioDomain: vi.fn(async () => listed("active", { expiresAt: "2027-10-12T00:00:00Z", registeredAt: "2026-10-12T22:50:00Z" })),
+      },
+    });
+    expect(await runStep(hRow, "registration", d)).toMatchObject({
+      kind: "done",
+      patch: { auto_renew: true, registrar_status: "active", expires_at: "2027-10-12T00:00:00Z", registered_at: "2026-10-12T22:50:00Z" },
+    });
     expect(d.hostinger.enableHostingerAutoRenew).toHaveBeenCalledWith("sub-1");
   });
   it("paid but not set up: completes the setup (no new charge) and waits", async () => {
-    const d = deps({ hostinger: { getHostingerPortfolioDomain: vi.fn(async () => ({ status: "pending_setup" })) } });
-    expect(await runStep(hRow, "registration", d)).toMatchObject({ kind: "wait" });
+    const d = deps({ hostinger: { getHostingerPortfolioDomain: vi.fn(async () => listed("pending_setup")) } });
+    expect(await runStep(hRow, "registration", d)).toMatchObject({ kind: "wait", detail: "Finishing the registration on Hostinger" });
     expect(d.hostinger.completeHostingerDomainSetup).toHaveBeenCalledWith("acme.com");
   });
-  it("not in the portfolio yet (payment processing): waits", async () => {
-    const d = deps({ hostinger: { getHostingerPortfolioDomain: vi.fn(async () => null) } });
+  it("paid but not set up, and Hostinger refuses to finish it: stops with what to do in hPanel", async () => {
+    const d = deps({
+      hostinger: {
+        getHostingerPortfolioDomain: vi.fn(async () => listed("pending_setup")),
+        completeHostingerDomainSetup: vi.fn(async () => ({ ok: false, status: 422, message: "Contact details are required" })),
+      },
+    });
+    const out = await runStep(hRow, "registration", d);
+    expect(out).toMatchObject({ kind: "fail", purchaseFailed: false });
+    expect((out as { detail: string }).detail).toMatch(/Contact details are required.*hPanel.*acme\.com.*Retry/);
+  });
+  it("setup call with no clear answer: keeps trying", async () => {
+    const d = deps({
+      hostinger: {
+        getHostingerPortfolioDomain: vi.fn(async () => listed("pending_setup")),
+        completeHostingerDomainSetup: vi.fn(async () => ({ ok: false, status: 503, message: "Service unavailable" })),
+      },
+    });
     expect(await runStep(hRow, "registration", d)).toMatchObject({ kind: "wait" });
+  });
+  it("being registered: waits, and says what Hostinger says", async () => {
+    const d = deps({ hostinger: { getHostingerPortfolioDomain: vi.fn(async () => listed("requested", { message: "Registration in progress" })) } });
+    expect(await runStep(hRow, "registration", d)).toMatchObject({
+      kind: "wait",
+      detail: "Hostinger is registering the domain (requested) — Hostinger says: Registration in progress",
+    });
+  });
+  it("not in the account yet: waits, naming the order", async () => {
+    const d = deps({ hostinger: { getHostingerPortfolioDomain: vi.fn(async () => null) } });
+    expect(await runStep(hRow, "registration", d)).toMatchObject({
+      kind: "wait",
+      detail: "Waiting for Hostinger to process order #62896992 — the domain isn't in the account yet",
+    });
+  });
+  it("Hostinger unreachable: waits briefly, without claiming anything about the order", async () => {
+    const d = deps({ hostinger: { getHostingerPortfolioDomain: vi.fn(async () => "error" as const) } });
+    expect(await runStep(hRow, "registration", d)).toMatchObject({ kind: "wait", detail: "Could not reach Hostinger to check the registration" });
+  });
+  it("failed at Hostinger: the purchase failed", async () => {
+    const d = deps({ hostinger: { getHostingerPortfolioDomain: vi.fn(async () => listed("failed")) } });
+    expect(await runStep(hRow, "registration", d)).toMatchObject({ kind: "fail", purchaseFailed: true });
+  });
+});
+
+describe("DNS (Hostinger-registered)", () => {
+  const hRow = row({ registrar: "hostinger" });
+  it("pointing at the website: done", async () => {
+    const d = deps({ resolvesTo: vi.fn(async () => ["76.13.203.71"]) });
+    expect(await runStep(hRow, "dns", d)).toMatchObject({ kind: "done", detail: "DNS points at 76.13.203.71" });
+  });
+  it("still on Hostinger's parking page: not done — SSL would be asked for against the wrong server", async () => {
+    const d = deps({ resolvesTo: vi.fn(async () => ["2.57.91.91"]) });
+    expect(await runStep(hRow, "dns", d)).toMatchObject({ kind: "wait", detail: expect.stringMatching(/parking page/) });
+  });
+  it("not resolving yet, or the lookup failed: waits", async () => {
+    expect(await runStep(hRow, "dns", deps({ resolvesTo: vi.fn(async () => []) }))).toMatchObject({ kind: "wait" });
+    expect(await runStep(hRow, "dns", deps({ resolvesTo: vi.fn(async () => null) }))).toMatchObject({ kind: "wait" });
   });
 });
 

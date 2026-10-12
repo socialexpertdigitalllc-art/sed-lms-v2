@@ -8,7 +8,7 @@ import type * as Cf from "@/lib/cloudflare/client";
 import type * as Hg from "@/lib/hostinger/client";
 import type { goLiveOnDomain, findOrTrackStaging, recordSiteOnDomain } from "@/lib/site-studio/deploy/golive";
 import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
-import { clientSitesIp, planDns, planIsEmpty } from "./dns";
+import { clientSitesIp, HOSTINGER_PARKING_IPS, planDns, planIsEmpty } from "./dns";
 import type { ClientDomainRow, StepKey } from "./types";
 
 export type StepOutcome =
@@ -134,7 +134,10 @@ async function cfRegistration(row: ClientDomainRow, deps: PipelineDeps): Promise
 async function hostingerRegistration(row: ClientDomainRow, deps: PipelineDeps): Promise<StepOutcome> {
   if (row.origin === "imported") return done("Already registered on Hostinger");
   const p = await deps.hostinger.getHostingerPortfolioDomain(row.domain);
-  if (!p) return wait("Waiting for Hostinger to confirm the order (payment processing)", 5 * MIN);
+  const order = row.hostinger_order_id ? ` #${row.hostinger_order_id}` : "";
+  if (p === "error") return wait("Could not reach Hostinger to check the registration", MIN);
+  if (!p) return wait(`Waiting for Hostinger to process order${order} — the domain isn't in the account yet`, 5 * MIN);
+  const said = p.message ? ` — Hostinger says: ${p.message}` : "";
   switch (p.status) {
     case "active": {
       let autoRenew: boolean | null = null;
@@ -142,17 +145,32 @@ async function hostingerRegistration(row: ClientDomainRow, deps: PipelineDeps): 
         const r = await deps.hostinger.enableHostingerAutoRenew(row.hostinger_subscription_id);
         if (r.ok) autoRenew = true;
       }
-      return done("Registered on Hostinger", autoRenew === null ? undefined : { auto_renew: autoRenew });
+      const patch: Partial<ClientDomainRow> = { registrar_status: "active" };
+      if (autoRenew !== null) patch.auto_renew = autoRenew;
+      if (p.expiresAt) patch.expires_at = p.expiresAt;
+      if (p.registeredAt) patch.registered_at = p.registeredAt;
+      return done("Registered on Hostinger", patch);
     }
     case "pending_setup": {
+      // Paid for, but Hostinger is waiting for the registration to be finished.
       const r = await deps.hostinger.completeHostingerDomainSetup(row.domain);
-      return wait(r.ok ? "Completing the registration on Hostinger" : `Hostinger setup: ${r.message ?? "retrying"}`, MIN);
+      if (r.ok) return wait("Finishing the registration on Hostinger", MIN);
+      if (r.status && r.status >= 400 && r.status < 500 && r.status !== 429) {
+        // A definite refusal won't change by asking again: a person finishes it.
+        return fail(
+          `The domain is paid for, but Hostinger is waiting for its setup and won't finish it from here (${r.message ?? `HTTP ${r.status}`}). ` +
+            `In hPanel open Domains → ${row.domain} → Set up, then press Retry.`,
+        );
+      }
+      return wait(`Finishing the registration on Hostinger: ${r.message ?? "retrying"}`, MIN);
     }
     case "requested":
+    case "pending":
+    case "in_progress":
     case "pending_verification":
-      return wait(`Hostinger: registration ${p.status.replace(/_/g, " ")}`, 2 * MIN);
+      return wait(`Hostinger is registering the domain (${p.status.replace(/_/g, " ")})${said}`, 2 * MIN);
     default:
-      return fail(`Hostinger reports the domain as ${p.status.replace(/_/g, " ")}`, p.status === "failed");
+      return fail(`Hostinger reports the domain as ${p.status.replace(/_/g, " ")}${said}`, p.status === "failed");
   }
 }
 
@@ -233,11 +251,19 @@ async function cfDnsStep(row: ClientDomainRow, deps: PipelineDeps): Promise<Step
 
 async function hostingerDnsStep(row: ClientDomainRow, deps: PipelineDeps): Promise<StepOutcome> {
   // A Hostinger-registered domain uses Hostinger's nameservers, which point it
-  // at the website as soon as the website exists — just confirm it resolves.
+  // at the website once the website exists. Until then — and for as long as
+  // resolvers remember — it answers with Hostinger's parking page, which is
+  // not the website: SSL would be requested against the wrong server.
   const ips = await deps.resolvesTo(row.domain);
   if (ips === null) return wait("Could not look up the domain's DNS", 30 * SEC);
-  if (ips.length > 0) return done(`DNS points at ${ips.join(", ")}`);
-  return wait("Waiting for Hostinger's DNS to point the domain at the website", MIN);
+  const website = ips.filter((ip) => !HOSTINGER_PARKING_IPS.includes(ip));
+  if (website.length > 0) return done(`DNS points at ${website.join(", ")}`);
+  return wait(
+    ips.length > 0
+      ? "Hostinger's DNS still shows its parking page — waiting for it to point the domain at the website"
+      : "Waiting for Hostinger's DNS to point the domain at the website",
+    MIN,
+  );
 }
 
 async function sslStep(row: ClientDomainRow, deps: PipelineDeps): Promise<StepOutcome> {

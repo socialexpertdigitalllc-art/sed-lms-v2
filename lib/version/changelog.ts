@@ -29,6 +29,29 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.24.1",
+    date: "2026-10-12",
+    title: "Domains bought from Hostinger go live on their own",
+    changes: [
+      {
+        kind: "fix",
+        text: "A domain bought from Hostinger no longer sits at \"Purchasing\" saying the payment is processing. The setup now sees an order Hostinger is still registering, finishes a pending registration by itself (or says exactly what to do in hPanel), and shows what Hostinger reports at each check, with the order number.",
+      },
+      {
+        kind: "fix",
+        text: "A registered Hostinger domain is no longer stopped with \"Hostinger reports the domain as Active\". Hostinger writes the status with a capital letter, and the setup didn't recognise it.",
+      },
+      {
+        kind: "fix",
+        text: "A new Hostinger domain no longer counts as pointed at the website while it still shows Hostinger's parking page.",
+      },
+      {
+        kind: "fix",
+        text: "SED Assistant: the \"jump to latest\" arrow only appears when there is something further down to jump to.",
+      },
+    ],
+  },
+  {
     version: "2.24.0",
     date: "2026-10-09",
     title: "SED Assistant: a chat that works like the best AI apps",

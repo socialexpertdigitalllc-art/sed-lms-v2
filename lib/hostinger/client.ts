@@ -722,22 +722,68 @@ export async function purchaseHostingerDomain(domain: string, itemId: string): P
   }
 }
 
-/** A portfolio domain's registration status (active, pending_setup, …), or null if absent. */
-export async function getHostingerPortfolioDomain(domain: string): Promise<{ status: string } | null> {
-  const r = await hg(`/api/domains/v1/portfolio/${encodeURIComponent(domain.toLowerCase())}`, { method: "GET" });
-  if (!r.ok) return null;
-  try {
-    const j = JSON.parse(r.body) as { status?: string };
-    return j.status ? { status: j.status } : null;
-  } catch {
-    return null;
-  }
+export interface HostingerPortfolioStatus {
+  /** Lowercased: active, pending_setup, requested, pending_verification, expired, … */
+  status: string;
+  /** Hostinger's own note on the domain, when it gives one. */
+  message: string | null;
+  expiresAt: string | null;
+  registeredAt: string | null;
 }
 
-/** Register a paid-but-not-set-up domain (no new order, no new charge). */
-export async function completeHostingerDomainSetup(domain: string): Promise<{ ok: boolean; message?: string }> {
+/** Of several portfolio entries for one name, the current one: not expired
+ *  over expired, a registration still in progress (no expiry yet) over a
+ *  finished one, then the one that expires last. */
+function currentEntry(entries: HostingerDomain[]): HostingerDomain {
+  const rank = (d: HostingerDomain) => [(d.status ?? "").toLowerCase() === "expired" ? 0 : 1, d.expires_at ? 0 : 1, d.expires_at ?? ""] as const;
+  return entries.reduce((a, b) => {
+    const [ra, rb] = [rank(a), rank(b)];
+    for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return rb[i] > ra[i] ? b : a;
+    return a;
+  });
+}
+
+/**
+ * Where a domain stands in the account: its status, null when Hostinger does
+ * not list it (yet), or "error" when the account couldn't be read.
+ *
+ * The domain's own page answers only once it is registered. A paid order that
+ * is still being registered (pending_setup, requested, …) shows up only in
+ * the portfolio LIST, so that is asked too. Without it such an order read as
+ * "not in the account yet" for good, and its setup was never finished
+ * (odneyremodeling.com, 2026-10-12).
+ */
+export async function getHostingerPortfolioDomain(domain: string): Promise<HostingerPortfolioStatus | null | "error"> {
+  const name = domain.toLowerCase();
+  const r = await hg(`/api/domains/v1/portfolio/${encodeURIComponent(name)}`, { method: "GET" });
+  if (r.ok) {
+    try {
+      const j = JSON.parse(r.body) as { status?: string | null; message?: string | null; expires_at?: string | null; registered_at?: string | null };
+      if (j.status) {
+        return { status: j.status.toLowerCase(), message: j.message ?? null, expiresAt: j.expires_at ?? null, registeredAt: j.registered_at ?? null };
+      }
+    } catch {
+      /* unreadable — the list below answers */
+    }
+  }
+  const all = await listDomains();
+  if (!all) return "error";
+  const listed = all.filter((d) => d.domain.toLowerCase() === name);
+  if (listed.length === 0) return null;
+  const d = currentEntry(listed);
+  return {
+    status: (d.status ?? "").toLowerCase() || "unknown",
+    message: null,
+    expiresAt: d.expires_at ?? null,
+    registeredAt: d.created_at ?? null,
+  };
+}
+
+/** Register a paid-but-not-set-up domain (no new order, no new charge).
+ *  `status` is Hostinger's HTTP status on a refusal (0: no answer). */
+export async function completeHostingerDomainSetup(domain: string): Promise<{ ok: boolean; status?: number; message?: string }> {
   const r = await hg(`/api/domains/v1/portfolio/${encodeURIComponent(domain.toLowerCase())}/setup`, { method: "POST", json: {} });
-  return r.ok ? { ok: true } : { ok: false, message: messageOf(r) };
+  return r.ok ? { ok: true } : { ok: false, status: r.status, message: messageOf(r) };
 }
 
 /** Make sure a Hostinger subscription (e.g. a domain) renews by itself. */
