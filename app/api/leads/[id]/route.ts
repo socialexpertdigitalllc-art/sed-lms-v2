@@ -12,6 +12,7 @@ import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { blamesLateColumn, withoutLateColumns } from "@/lib/leads/lateColumns";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
+import { notifyReceiptNeeded } from "@/lib/receipts/notify";
 import { nudgeWaitingDomain } from "@/lib/domains/service";
 import { processDomains } from "@/lib/domains/processor";
 import { realPipelineDeps } from "@/lib/domains/deps";
@@ -198,6 +199,14 @@ export async function PATCH(
         }
       );
     } catch {}
+    if (newStatus === "Closed") {
+      await notifyReceiptNeeded({
+        leadId: id,
+        businessName: before.business_name,
+        lead: { agent_id: before.agent_id, closed_by: before.closed_by },
+        actorId: user.id,
+      });
+    }
     if (newStatus === "Ready") {
       try {
         await notify(

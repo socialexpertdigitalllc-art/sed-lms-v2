@@ -78,6 +78,7 @@ export const PERMISSIONS = [
   { key: "dashboard.chart.ticket_status_split", name: "Chart: Ticket Status Split", category: "dashboard" },
   { key: "payments.view", name: "View Payment Links", category: "payments" },
   { key: "payments.manage", name: "Manage Payment Links", category: "payments", is_sensitive: true },
+  { key: "receipts.send", name: "Create & Send Payment Receipts", category: "payments", is_sensitive: true },
   { key: "mail.manage", name: "Manage Company Mailboxes", category: "mail", is_sensitive: true },
   { key: "integrations.manage", name: "Manage Integrations (Google, Templates)", category: "integrations", is_sensitive: true },
   { key: "contracts.view", name: "View Contracts", category: "contracts" },

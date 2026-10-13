@@ -140,6 +140,16 @@ export const NOTIFICATION_EVENTS = [
     timingMode: "delay",
   },
   {
+    key: "receipt_needed",
+    label: "Lead closed: payment receipt needed",
+    description: "A lead was marked Closed, so the client needs a payment receipt.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "general",
+    availableRoles: ["lead_agent", "lead_closer"],
+    timingMode: "delay",
+  },
+  {
     key: "contract_sent",
     label: "Contract sent to client",
     description: "A contract was emailed to the client.",

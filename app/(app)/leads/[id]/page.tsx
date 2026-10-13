@@ -13,13 +13,18 @@ import { getActiveUsers } from "@/lib/users/directory";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 import { domainForLead, suggestQuery } from "@/lib/domains/service";
 import { registrarSandbox } from "@/lib/cloudflare/client";
+import { receiptSenderAddress } from "@/lib/receipts/settings";
+import type { ReceiptRow } from "@/lib/receipts/types";
 
 export default async function LeadDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ receipt?: string }>;
 }) {
   const { id } = await params;
+  const { receipt: receiptParam } = await searchParams;
   const supabase = await createClient();
 
   const { data: leadRaw } = await supabase
@@ -201,6 +206,20 @@ export default async function LeadDetailPage({
         }
       : null;
 
+  // Payment receipts. Before migration 0085 nobody holds receipts.send, and a
+  // missing table just reads as "no receipts".
+  const canSendReceipts = perms.has("receipts.send");
+  let receipts: ReceiptRow[] = [];
+  let receiptSender: string | null = null;
+  if (canSendReceipts) {
+    const [{ data: receiptRows }, sender] = await Promise.all([
+      admin.from("lead_receipts").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
+      receiptSenderAddress(),
+    ]);
+    receipts = (receiptRows ?? []) as ReceiptRow[];
+    receiptSender = sender;
+  }
+
   return (
     <LeadDetail
       lead={lead}
@@ -227,6 +246,10 @@ export default async function LeadDetailPage({
       formEndpoints={formEndpoints}
       formSubmissions={formSubmissions}
       domainCard={domainCard}
+      canSendReceipts={canSendReceipts}
+      receipts={receipts}
+      receiptSender={receiptSender}
+      openReceiptOnLoad={receiptParam === "new"}
     />
   );
 }
