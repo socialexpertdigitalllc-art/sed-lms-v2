@@ -12,6 +12,7 @@ export function StatusChangeModal({
   websiteLink,
   open,
   onClose,
+  onSaved,
 }: {
   leadId: string;
   current: string;
@@ -19,6 +20,8 @@ export function StatusChangeModal({
   websiteLink: string | null;
   open: boolean;
   onClose: () => void;
+  /** Called with the new status after it saved (e.g. Closed → open the receipt form). */
+  onSaved?: (status: string) => void;
 }) {
   const router = useRouter();
   const { all } = usePermissions();
@@ -46,6 +49,7 @@ export function StatusChangeModal({
       return;
     }
     onClose();
+    onSaved?.(status);
     router.refresh();
   }
 

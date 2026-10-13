@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon, LayoutTemplate, Tags, X, Plus, Lock } from "lucide-react";
+import { ArrowLeft, Building2, ClipboardList, Wrench, CalendarClock, Image as ImageIcon, LayoutTemplate, Tags, X, Plus, Lock, ReceiptText } from "lucide-react";
 import type { Lead, LeadTag } from "@/lib/leads/types";
 import { tagColor } from "@/lib/leads/tagColors";
 import { toggleTag, ownTags } from "@/lib/leads/tagFilter";
@@ -41,6 +41,9 @@ import { LeadDomainCard } from "@/components/domains/LeadDomainCard";
 import type { ClientDomainRow } from "@/lib/domains/types";
 import type { ContractRow } from "@/lib/contracts/types";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
+import { ReceiptModal } from "@/components/receipts/ReceiptModal";
+import { LeadReceiptsCard } from "@/components/receipts/LeadReceiptsCard";
+import type { ReceiptRow } from "@/lib/receipts/types";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -75,6 +78,10 @@ export function LeadDetail({
   formEndpoints,
   formSubmissions,
   domainCard,
+  canSendReceipts = false,
+  receipts = [],
+  receiptSender = null,
+  openReceiptOnLoad = false,
 }: {
   lead: Lead;
   agents: Agent[];
@@ -102,6 +109,13 @@ export function LeadDetail({
   formSubmissions: FormSubmissionRow[];
   /** The lead's client domain + what this user may do (null = no domains access). */
   domainCard?: { row: ClientDomainRow | null; canPurchase: boolean; canManage: boolean; sandbox: boolean; suggestedQuery: string } | null;
+  /** Holds receipts.send: may create, email and download payment receipts. */
+  canSendReceipts?: boolean;
+  receipts?: ReceiptRow[];
+  /** The billing address receipts are emailed from; null = no mailbox linked. */
+  receiptSender?: string | null;
+  /** Opened from the "receipt needed" bell (?receipt=new). */
+  openReceiptOnLoad?: boolean;
 }) {
   const { has } = usePermissions();
   const canEdit = has("leads.edit");
@@ -119,6 +133,16 @@ export function LeadDetail({
   const { toast } = useToast();
 
   const [statusOpen, setStatusOpen] = useState(false);
+  // null = closed; { existing: null } = new receipt form; { existing } = an issued one.
+  const [receiptModal, setReceiptModal] = useState<{ existing: ReceiptRow | null } | null>(
+    () => (openReceiptOnLoad && canSendReceipts ? { existing: null } : null)
+  );
+  const closeReceiptModal = () => {
+    setReceiptModal(null);
+    // Drop ?receipt=new so a reload doesn't reopen the form.
+    if (openReceiptOnLoad) router.replace(`/leads/${lead.id}`, { scroll: false });
+  };
+  const needsReceipt = canSendReceipts && lead.status === "Closed" && receipts.length === 0;
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [queueMsg, setQueueMsg] = useState<string | null>(null);
   const [queuing, setQueuing] = useState(false);
@@ -239,6 +263,11 @@ export function LeadDetail({
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button onClick={() => router.refresh()} className={btn + " text-text-muted"}>Refresh</button>
             {canChangeStatus && <button onClick={() => setStatusOpen(true)} className={btn}>Change status</button>}
+            {canSendReceipts && (
+              <button onClick={() => setReceiptModal({ existing: null })} className={btn + " inline-flex items-center gap-1.5"}>
+                <ReceiptText size={14} /> Receipt
+              </button>
+            )}
             {canWebcraft && <Link href={`/ai-tools/webcraft?lead=${lead.id}`} className={btn}>Generate (WebCraft)</Link>}
             {canDeepseek && <Link href={`/ai-tools/deepseek?lead=${lead.id}`} className={btn}>Generate (DeepSeek)</Link>}
             {canQueue && (
@@ -256,6 +285,31 @@ export function LeadDetail({
       </div>
 
       {queueMsg && <div className="mb-4 rounded-lg bg-accent-soft px-4 py-2.5 text-sm text-accent-ink">{queueMsg}</div>}
+
+      {needsReceipt && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-closed-fg/25 bg-closed-bg px-4 py-2.5 text-sm text-closed-fg">
+          <span className="inline-flex items-center gap-2">
+            <ReceiptText size={15} className="shrink-0" /> This lead is Closed and the client hasn&apos;t been sent a payment receipt yet.
+          </span>
+          <button
+            onClick={() => setReceiptModal({ existing: null })}
+            className="rounded-md bg-surface px-3 py-1.5 text-xs font-semibold text-text shadow-sm hover:bg-surface-2"
+          >
+            Create receipt
+          </button>
+        </div>
+      )}
+
+      {/* The sidebar is desktop-only; phones get the receipt list here. */}
+      {canSendReceipts && (
+        <div className="mb-6 lg:hidden">
+          <LeadReceiptsCard
+            receipts={receipts}
+            onNew={() => setReceiptModal({ existing: null })}
+            onOpen={(r) => setReceiptModal({ existing: r })}
+          />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         <div className="min-w-0 space-y-5">
@@ -566,6 +620,13 @@ export function LeadDetail({
 
         <aside className="hidden lg:block">
           <div className="sticky top-6 space-y-6">
+            {canSendReceipts && (
+              <LeadReceiptsCard
+                receipts={receipts}
+                onNew={() => setReceiptModal({ existing: null })}
+                onOpen={(r) => setReceiptModal({ existing: r })}
+              />
+            )}
             {canViewContracts && (
               <LeadContractsCard
                 leadId={lead.id}
@@ -597,7 +658,21 @@ export function LeadDetail({
         </aside>
       </div>
 
-      <StatusChangeModal leadId={lead.id} current={lead.status} businessName={lead.business_name} websiteLink={lead.website_link} open={statusOpen} onClose={() => setStatusOpen(false)} />
+      <StatusChangeModal
+        leadId={lead.id}
+        current={lead.status}
+        businessName={lead.business_name}
+        websiteLink={lead.website_link}
+        open={statusOpen}
+        onClose={() => setStatusOpen(false)}
+        onSaved={(s) => {
+          // Closing a deal is when the client pays: go straight to the receipt.
+          if (s === "Closed" && canSendReceipts) setReceiptModal({ existing: null });
+        }}
+      />
+      {receiptModal && (
+        <ReceiptModal lead={lead} senderAddress={receiptSender} existing={receiptModal.existing} onClose={closeReceiptModal} />
+      )}
       <DeleteLeadModal leadId={lead.id} businessName={lead.business_name} open={deleteOpen} onClose={() => setDeleteOpen(false)} />
     </div>
   );

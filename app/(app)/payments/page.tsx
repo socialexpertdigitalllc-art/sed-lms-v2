@@ -4,6 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { PaymentLinksBoard } from "@/components/payments/PaymentLinksBoard";
 import type { PaymentLink } from "@/lib/payments/types";
+import { ReceiptSettingsCard } from "@/components/receipts/ReceiptSettingsCard";
+import { getReceiptSettings, receiptSenderAddress } from "@/lib/receipts/settings";
 
 export default async function PaymentsPage() {
   const supabase = await createClient();
@@ -30,5 +32,21 @@ export default async function PaymentsPage() {
   const { data } = await (canManage ? query : query.eq("is_active", true));
   const links = (data ?? []) as PaymentLink[];
 
-  return <PaymentLinksBoard links={links} canManage={canManage} />;
+  // Receipt settings live with payments: same people (Accounts/Admin) manage both.
+  let receiptSettings: React.ReactNode = null;
+  if (canManage) {
+    const [settings, sender, { data: mailboxes }] = await Promise.all([
+      getReceiptSettings(),
+      receiptSenderAddress(),
+      admin.from("company_mailboxes").select("id, email_address").eq("status", "verified").order("email_address"),
+    ]);
+    receiptSettings = <ReceiptSettingsCard initial={settings} sender={sender} mailboxes={mailboxes ?? []} />;
+  }
+
+  return (
+    <>
+      {receiptSettings}
+      <PaymentLinksBoard links={links} canManage={canManage} />
+    </>
+  );
 }

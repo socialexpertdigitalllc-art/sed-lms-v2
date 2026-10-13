@@ -8,6 +8,7 @@ import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { endsFollowUps, isFollowUpEligible, nextStreak } from "@/lib/leads/followups";
 import { logFollowUpSchema } from "@/lib/leads/followupSchema";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
+import { notifyReceiptNeeded } from "@/lib/receipts/notify";
 import { blamesLateColumn } from "@/lib/leads/lateColumns";
 
 export async function GET(
@@ -189,6 +190,14 @@ export async function POST(
         }
       );
     } catch {}
+    if (statusChange === "Closed") {
+      await notifyReceiptNeeded({
+        leadId: id,
+        businessName: lead.business_name,
+        lead: { agent_id: lead.agent_id, closed_by: lead.closed_by },
+        actorId: user.id,
+      });
+    }
     if (statusChange === "Ready") {
       try {
         await notify(
