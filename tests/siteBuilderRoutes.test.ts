@@ -834,6 +834,36 @@ describe("POST /api/site-builder/runs/[id]/pages/[file]/regenerate — a failed 
     expect(uploadMock).not.toHaveBeenCalled();
   });
 
+  it("brings the run's other stored pages up to the site finish — so the preview and the zip match", async () => {
+    // A run generated before the finish existed: its about page has no
+    // contrast guard and no logo sizing. Regenerating ANY page sweeps them all.
+    const pages = {
+      "components.js": { status: "ok", kind: "component", name: "Shared components", html: "// REWRITTEN" },
+      "index.html": { status: "failed", kind: "existing", error: "boom" },
+      "about.html": { status: "ok", kind: "existing", html: "<html><head></head><body>About Acme</body></html>" },
+    };
+    const { admin, state } = makeWritableAdmin(
+      [RUN({ status: "review", pages })],
+      [{ id: "lead-1", business_name: "Acme", specify_pages: ["Home"], logo_link: "https://i.ibb.co/x/logo.png", color_scheme: "black, red" }],
+    );
+    adminHolder.admin = admin;
+
+    const res = await post("index.html");
+
+    expect(res.status).toBe(200);
+    const stored = state.runs[0].pages as Record<string, { html?: string }>;
+    expect(stored["about.html"].html).toContain('<script id="sb-contrast-guard">');
+    expect(stored["about.html"].html).toContain('img[src="https://i.ibb.co/x/logo.png"]');
+    expect(stored["about.html"].html).toContain("About Acme");
+    // This template's components file has no SITE THEME — nothing to set.
+    expect(stored["components.js"].html).toBe("// REWRITTEN");
+    // The regenerated page itself was finished inside regeneratePage.
+    expect(regeneratePageMock.mock.calls[0][0]).toMatchObject({
+      brief: { logo: "https://i.ibb.co/x/logo.png", color_scheme: "black, red" },
+      components: { file: "components.js", source: "// REWRITTEN" },
+    });
+  });
+
   it("regenerates normally once the run is released", async () => {
     const { admin, state, uploadMock } = makeWritableAdmin([
       RUN({ status: "failed", pages: AFTER_FAILURE, error: "boom", generation_id: null }),

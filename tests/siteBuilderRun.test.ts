@@ -1109,3 +1109,103 @@ describe("runSite live output", () => {
     expect(seen).toEqual([undefined]);
   });
 });
+
+describe("the site finish — the lead's colours, readable text, a big logo", () => {
+  const THEMED = `const SITE_THEME = \`
+:root {
+  --green: #2f7d32;          /* PRIMARY — buttons, links, icons, highlights */
+  --gold: #c9a227;           /* ACCENT — stars, small highlights */
+  --charcoal-deep: #1f1f1f;  /* DARK — top bar, header, footer backgrounds */
+}
+\`;`;
+  const brief: BusinessBrief = {
+    business_name: "Acme Plumbing",
+    services: [],
+    service_areas: [],
+    color_scheme: "black, red, gold",
+    logo: "https://i.ibb.co/q/logo.png",
+  };
+  /** A model that ignores the scheme: white buttons, a near-white accent. */
+  const offScheme = THEMED.replace("#2f7d32", "#ffffff").replace("#c9a227", "#fefefe");
+
+  it("the components file is rewritten with the lead's theme already in it — and an off-scheme rewrite never survives", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "js/components.js": THEMED });
+    const calls: { system: string; user: string }[] = [];
+    const call: AiCall = async (system, user) => {
+      calls.push({ system, user });
+      return { text: system.includes("shared-components file") ? offScheme : okHtml("PAGE") };
+    };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    // what the model was given: the lead's theme, and the roles in words
+    expect(calls[0].user).toContain("--green: #dc2626;");
+    expect(calls[0].user).toContain("Colour roles (binding — see the colour rules): primary #dc2626");
+    // what was stored and shipped: 1st brand colour primary, 2nd secondary, black the dark areas
+    const stored = result.pages["js/components.js"].html!;
+    expect(stored).toContain("--green: #dc2626;");
+    expect(stored).toContain("--gold: #d4af37;");
+    expect(stored).toContain("--charcoal-deep: #111111;");
+    expect(stored).not.toMatch(/#ffffff|#fefefe/);
+    expect(calls[1].user).toContain("--green: #dc2626;");
+    expect(dec.decode(unzipToMap(result.zipBytes!)["js/components.js"])).toBe(stored);
+  });
+
+  it("every page ships the contrast guard and the big-logo stylesheet, in the store and the zip alike", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>", "about.html": "<html>about</html>" });
+    const call: AiCall = async (_s, u) => ({ text: okHtml(u.includes("index.html") ? "HOME" : "ABOUT") });
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [] });
+
+    const files = unzipToMap(result.zipBytes!);
+    for (const f of ["index.html", "about.html"]) {
+      const html = result.pages[f].html!;
+      expect(html).toContain('<script id="sb-contrast-guard">');
+      expect(html).toContain('img[src="https://i.ibb.co/q/logo.png"]');
+      expect(dec.decode(files[f])).toBe(html);
+    }
+  });
+
+  it("a page carried from an earlier attempt is finished too — with no AI call", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" });
+    let calls = 0;
+    const call: AiCall = async () => {
+      calls += 1;
+      return { text: okHtml("X") };
+    };
+    const resume: Record<string, PageState> = { "index.html": { status: "ok", kind: "existing", html: okHtml("CARRIED") } };
+    const result = await runSite({ aiCall: call, brief, images: [], template: tpl, requestedPages: [], resume });
+
+    expect(calls).toBe(0);
+    expect(result.pages["index.html"].html).toContain("CARRIED");
+    expect(result.pages["index.html"].html).toContain('<script id="sb-contrast-guard">');
+  });
+
+  it("regeneratePage finishes what it returns, and a components regeneration starts from the themed source", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "js/components.js": THEMED });
+    let seenUser = "";
+    const call: AiCall = async (s, u) => {
+      seenUser = u;
+      return { text: s.includes("shared-components file") ? offScheme : okHtml("REGENERATED") };
+    };
+    const page = await regeneratePage({
+      aiCall: call, brief, images: [], template: tpl, siteFiles: ["index.html"], file: "index.html", kind: "existing",
+    });
+    expect(page.ok && page.html).toContain('<script id="sb-contrast-guard">');
+    expect(seenUser).toContain("Colour roles (binding");
+
+    const comp = await regeneratePage({
+      aiCall: call, brief, images: [], template: tpl, siteFiles: ["index.html"], file: "js/components.js", kind: "component",
+    });
+    expect(seenUser).toContain("--green: #dc2626;");
+    expect(comp.ok && comp.html).toContain("--green: #dc2626;");
+    expect(comp.ok && comp.html).not.toContain("<script");
+  });
+
+  it("a lead with no colour scheme keeps the template's palette exactly", async () => {
+    const tpl = bundle({ "index.html": "<html>home</html>" }, { "js/components.js": THEMED });
+    const call: AiCall = async (system) => ({ text: system.includes("shared-components file") ? THEMED : okHtml("PAGE") });
+    const result = await runSite({
+      aiCall: call, brief: { ...brief, color_scheme: undefined }, images: [], template: tpl, requestedPages: [],
+    });
+    expect(result.pages["js/components.js"].html).toBe(THEMED);
+  });
+});

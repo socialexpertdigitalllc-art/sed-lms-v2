@@ -2,6 +2,7 @@ import { zipFromMap } from "@/lib/site-studio/zip";
 import { buildDossier } from "@/lib/site-studio/run/dossier";
 import { rewriteFormTargets, isSweepableFile } from "./formRelay";
 import { generatePage, generateNewPage, generateComponents, type AiCall } from "./generate";
+import { briefWithPalette, finishFile, planSiteFinish } from "./finish";
 import type { TemplateBundle } from "./templates";
 import type { BusinessBrief, SuppliedImage, SharedComponents } from "./prompt";
 
@@ -233,6 +234,31 @@ export function findComponentsFile(template: TemplateBundle): ComponentsSource |
 }
 
 /**
+ * The deterministic pass every generated file gets before it is stored — the
+ * code half of guarantees whose instruction half is in the prompt:
+ *
+ *  - Form Relay: with an endpoint on the brief, a stale web3forms URL or the
+ *    template's own access_key cannot survive into the site;
+ *  - the site finish (finish.ts): the lead's colour scheme set on the SITE
+ *    THEME, the contrast guard and the big-logo sizing on every page.
+ *
+ * Idempotent, so a page carried from a previous attempt — or one finished
+ * before — sweeps harmlessly again. `brief` is what the prompts see: the
+ * lead's brief plus the colour roles the theme is set to.
+ */
+export function siteSweep(leadBrief: BusinessBrief, template: TemplateBundle) {
+  const relay = leadBrief.form_relay;
+  const components = findComponentsFile(template);
+  const finish = planSiteFinish(leadBrief, components);
+  return {
+    components,
+    brief: briefWithPalette(leadBrief, finish),
+    sweep: (file: string, source: string): string =>
+      finishFile(file, relay && isSweepableFile(file) ? rewriteFormTargets(source, relay) : source, finish),
+  };
+}
+
+/**
  * Pick 2–3 existing pages as design references for a new page: the home
  * page plus the one or two OTHER pages most different in size from it — a
  * cheap proxy for "structurally different" that needs no HTML parsing (see
@@ -397,23 +423,16 @@ export interface RunSiteResult {
  * interrupted upload is recovered without paying for the site twice.
  */
 export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
-  const { aiCall, brief, images, template, requestedPages, onProgress, onOutput, resume } = args;
+  const { aiCall, images, template, requestedPages, onProgress, onOutput, resume } = args;
   /** The per-file streaming callback for one generation — undefined when the
    *  caller wants no live output, so the calls stay non-streaming. */
   const chunkSink = (file: string) => (onOutput ? (delta: string) => onOutput(file, delta) : undefined);
 
-  /**
-   * Form Relay safety net (the deterministic half — the prompt carries the
-   * instruction half): with an endpoint on the brief, every generated text
-   * file is swept so a stale web3forms URL or the template's own access_key
-   * cannot survive into the zip, whatever the model did. Idempotent, so
-   * carried pages from a previous attempt sweep harmlessly again.
-   */
-  const relay = brief.form_relay;
-  const sweep = (file: string, source: string): string =>
-    relay && isSweepableFile(file) ? rewriteFormTargets(source, relay) : source;
+  // Every generated file is swept (Form Relay + site finish) before it is
+  // stored — see `siteSweep`.
+  const relay = args.brief.form_relay;
+  const { components, brief, sweep } = siteSweep(args.brief, template);
 
-  const components = findComponentsFile(template);
   // A components.html is a page FILE but never a page of the site — it must
   // not be selectable, and must not count toward "did any page succeed".
   const selectablePages = template.pageFiles.filter((f) => f !== components?.file);
@@ -472,9 +491,11 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
     } else {
       pages[components.file] = { ...pages[components.file], status: "generating" };
       await emit();
+      // The model rewrites the template's file with the lead's theme already
+      // in it, so the rest of what it writes is chosen against the real colours.
       const outcome = await generateComponents(
         { aiCall },
-        { brief, images, file: components.file, source: components.source, siteFiles, onChunk: chunkSink(components.file) },
+        { brief, images, file: components.file, source: sweep(components.file, components.source), siteFiles, onChunk: chunkSink(components.file) },
       );
       const sweptComponents = outcome.ok ? sweep(components.file, outcome.html) : "";
       pages[components.file] = outcome.ok
@@ -596,18 +617,16 @@ export interface RegeneratePageArgs {
  *  instruction. Used by the regenerate route so a disliked page can be
  *  redone without touching the rest of the run. */
 export async function regeneratePage(args: RegeneratePageArgs) {
-  const { aiCall, brief, images, template, siteFiles, file, kind, name, components, instruction, onChunk } = args;
+  const { aiCall, images, template, siteFiles, file, kind, name, components, instruction, onChunk } = args;
 
-  // Same Form Relay safety net as a full run's pages — a regenerated page
-  // must not be the one place a stale form destination can slip back in.
-  const relay = brief.form_relay;
+  // Same sweep as a full run's pages — a regenerated page must not be the one
+  // place a stale form destination, an off-scheme theme, a small logo or
+  // unreadable text can slip back in.
+  const { components: original, brief, sweep } = siteSweep(args.brief, template);
   const sweepOutcome = <T extends { ok: boolean; html?: string }>(o: T): T =>
-    o.ok && typeof o.html === "string" && relay && isSweepableFile(file)
-      ? { ...o, html: rewriteFormTargets(o.html, relay) }
-      : o;
+    o.ok && typeof o.html === "string" ? { ...o, html: sweep(file, o.html) } : o;
 
   if (kind === "component") {
-    const original = findComponentsFile(template);
     if (!original || original.file !== file) {
       return { ok: false as const, error: `${file}: not this template's components file.` };
     }
@@ -615,7 +634,7 @@ export async function regeneratePage(args: RegeneratePageArgs) {
       brief,
       images,
       file,
-      source: original.source,
+      source: sweep(file, original.source),
       siteFiles,
       instruction,
       onChunk,
@@ -630,7 +649,7 @@ export async function regeneratePage(args: RegeneratePageArgs) {
     return sweepOutcome(await generatePage({ aiCall }, { brief, images, pageFile: file, pageHtml, siteFiles, components, instruction, onChunk }));
   }
 
-  const componentsFile = findComponentsFile(template)?.file;
+  const componentsFile = original?.file;
   const references = pickReferencePages(
     template.pageFiles.filter((f) => f !== componentsFile),
     template.pages,

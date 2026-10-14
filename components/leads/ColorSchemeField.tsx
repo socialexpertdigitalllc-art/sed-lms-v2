@@ -9,6 +9,7 @@ import {
   formatColorScheme,
   parseColorScheme,
 } from "@/lib/leads/colorScheme";
+import { schemeRoles } from "@/lib/site-builder/palette";
 import {
   useColorSchemeCheck,
   type ColorSchemeContext,
@@ -25,6 +26,10 @@ const NEW_SWATCH = "#808080";
  * The string IS the state: every edit re-parses `value`, mutates that list and
  * writes back the canonical form. There is no separate array to drift out of
  * sync with the text input next to it.
+ *
+ * Each swatch says how the generated site will use it (palette.ts): in order,
+ * primary, secondary, complementary — white and light colours become the
+ * background, black the dark areas.
  */
 export function ColorSwatchRow({
   value,
@@ -36,6 +41,7 @@ export function ColorSwatchRow({
   disabled?: boolean;
 }) {
   const entries = parseColorScheme(value);
+  const roles = schemeRoles(value);
 
   function replaceAt(i: number, next: string) {
     const list = [...entries];
@@ -77,6 +83,7 @@ export function ColorSwatchRow({
               </span>
             )}
             <span className="font-mono text-[11px] text-text-muted">{hex ?? entry}</span>
+            {roles[i] && <span className="text-[10px] font-medium uppercase tracking-wide text-text-faint">{roles[i]}</span>}
             <button
               type="button"
               onClick={() => removeAt(i)}

@@ -29,6 +29,33 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.26.0",
+    date: "2026-10-14",
+    title: "Site Builder follows the lead's colours, keeps text readable, and shows the logo big",
+    changes: [
+      {
+        kind: "fix",
+        text: "Generated sites now follow the colour scheme in the lead's details, in order: the 1st colour is the primary (buttons, links, icons, highlights), the 2nd the secondary (accents, badges, call-to-action details) and the 3rd the complementary colour. The theme is set in code, so the AI can no longer reorder the colours, keep the template's own, or invent shades.",
+      },
+      {
+        kind: "improvement",
+        text: "White and very light colours become the site's background, never a button colour, and black runs the dark areas (top bar, header, footer). With no dark colour in the scheme, those areas get a near-black with a hint of the brand colour. Colour names become proper brand shades: \"blue\" is a rich blue, not screen blue. The lead form shows each colour's job beside its swatch.",
+      },
+      {
+        kind: "fix",
+        text: "Text stays readable on every generated page: buttons, badges, headings, links, stars and form fields. Light text on a light background, or dark on dark, is corrected automatically in the visitor's browser. This includes content that appears later and buttons on hover. Text over photos, and colours that already read well, stay as designed.",
+      },
+      {
+        kind: "fix",
+        text: "The lead's logo is big and prominent: 80px tall in the header on desktop (56px on phones) and up to 72px in the footer. It used to be 44px.",
+      },
+      {
+        kind: "improvement",
+        text: "Existing sites pick this up when regenerated: regenerating any one page of a run brings every page of that site up to date, in the preview and the download alike. Live sites change once they are redeployed.",
+      },
+    ],
+  },
+  {
     version: "2.25.0",
     date: "2026-10-14",
     title: "A faster AI developer you can tune, and previews that show the real site",

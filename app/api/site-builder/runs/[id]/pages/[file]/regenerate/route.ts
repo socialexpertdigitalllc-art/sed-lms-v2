@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { loadTemplateBundle } from "@/lib/site-builder/templates";
 import { productionSiteBuildCall } from "@/lib/site-builder/generate";
-import { regeneratePage, buildBrief, assembleZip, findComponentsFile, outputPathFor, BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
+import { regeneratePage, buildBrief, assembleZip, findComponentsFile, siteSweep, outputPathFor, BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
 import { clearLive, recordOutput } from "@/lib/site-builder/liveProgress";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
@@ -91,12 +91,18 @@ export async function POST(req: Request, ctx: Ctx) {
   // appear in "link only to these".
   const siteFiles = Object.keys(pages).filter((f) => pages[f].kind !== "component");
 
+  // The run's stored files get the same deterministic sweep a fresh run gives
+  // them (lead colour scheme on the theme, contrast guard, big logo — see
+  // `siteSweep`). Idempotent; it is what brings a run generated before that
+  // finish existed up to date, and keeps the preview and the zip identical.
+  const { sweep } = siteSweep(brief, bundle);
+
   // The run's current rewritten components file, as page-prompt context —
   // same context the original generation gave every page.
   const componentsEntry = Object.entries(pages).find(([, p]) => p.kind === "component");
   const components =
     componentsEntry && componentsEntry[1].status === "ok" && componentsEntry[1].html !== undefined
-      ? { file: componentsEntry[0], source: componentsEntry[1].html }
+      ? { file: componentsEntry[0], source: sweep(componentsEntry[0], componentsEntry[1].html) }
       : undefined;
 
   const outcome = await regeneratePage({
@@ -123,7 +129,9 @@ export async function POST(req: Request, ctx: Ctx) {
   clearLive(id);
 
   const newPages: Record<string, PageState> = {
-    ...pages,
+    ...Object.fromEntries(
+      Object.entries(pages).map(([f, p]) => [f, p.status === "ok" && p.html !== undefined ? { ...p, html: sweep(f, p.html) } : p]),
+    ),
     [file]: outcome.ok
       ? { status: "ok", kind: current.kind, name: current.name, html: outcome.html }
       : { status: "failed", kind: current.kind, name: current.name, error: outcome.error },
