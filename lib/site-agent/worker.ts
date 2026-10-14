@@ -22,10 +22,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import { buildResumePrompt, buildTaskPrompt } from "./task";
+import { buildSiteBrief } from "./brief";
 import { harvestChanges } from "./harvest";
+import { effectiveRunOptions, readDefaults } from "./options";
 import { summarizeEventForTail, type AgyDriver, type AgyEvent, type AgyRunOutcome } from "./agy";
 import {
-  AGENT_SITES_BUCKET, AGY_MAX_ATTEMPTS, AGY_MIN_ATTEMPT_MS, AGY_RETRY_DELAYS_MS, AGY_TIMEOUT_MS,
+  AGENT_SITES_BUCKET, AGY_MIN_ATTEMPT_MS, AGY_RETRY_DELAYS_MS,
   KEEPALIVE_MS, MODELS_REFRESH_MS, PROGRESS_THROTTLE_MS, STALE_RUNNING_MS, TAIL_MAX_CHARS,
   originalZipPath, resultZipPath,
   type AgentRunRow, type AgyModel,
@@ -127,6 +129,34 @@ async function publishModelsIfStale(deps: WorkerDeps): Promise<void> {
       .update({ agent_worker_models: { fetched_at: now().toISOString(), models } })
       .eq("singleton", true);
   } catch { /* best-effort — the outcome already belongs to the caller */ }
+}
+
+/** The team defaults + published model catalogue, read once per run. Never
+ *  throws: a missing column (0086 not applied) or a read error means "no
+ *  defaults", and the run proceeds on the built-ins. */
+async function teamSettings(admin: SupabaseClient): Promise<{ defaults: unknown; models: AgyModel[] }> {
+  try {
+    const { data, error } = await admin
+      .from("app_settings")
+      .select("agent_defaults, agent_worker_models")
+      .eq("singleton", true)
+      .maybeSingle();
+    if (error) {
+      const fallback = await admin.from("app_settings").select("agent_worker_models").eq("singleton", true).maybeSingle();
+      return { defaults: null, models: modelsOf(fallback.data) };
+    }
+    const row = data as { agent_defaults?: unknown } | null;
+    return { defaults: row?.agent_defaults ?? null, models: modelsOf(data) };
+  } catch {
+    return { defaults: null, models: [] };
+  }
+}
+
+function modelsOf(row: unknown): AgyModel[] {
+  const raw = (row as { agent_worker_models?: { models?: unknown } | null } | null)?.agent_worker_models?.models;
+  return Array.isArray(raw)
+    ? raw.filter((m): m is AgyModel => !!m && typeof (m as AgyModel).id === "string" && typeof (m as AgyModel).label === "string")
+    : [];
 }
 
 async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
@@ -246,6 +276,23 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
       ? (await admin.from("leads").select("business_name").eq("id", run.lead_id).maybeSingle()).data
       : null;
 
+    // The run's controls (speed, time limit, retries, site map, team rules),
+    // over the team defaults for a run that carries none, and the model
+    // catalogue. One best-effort read: before migration 0086 the defaults
+    // column is missing and everything falls back to the built-ins.
+    const settings = await teamSettings(admin);
+    const opts = effectiveRunOptions(run.options, settings.defaults);
+    // A model the worker no longer offers can only fail ("invalid model"):
+    // Gemini 3.7 was withdrawn on 2026-10-13 under runs still using it.
+    let model = run.model ?? null;
+    let modelNote: string | null = null;
+    if (model && settings.models.length && !settings.models.some((m) => m.id === model)) {
+      const fallback = readDefaults(settings.defaults).model ?? null;
+      const usable = fallback && settings.models.some((m) => m.id === fallback) ? fallback : null;
+      modelNote = `Model "${model}" is no longer offered by Antigravity — using ${usable ? `"${usable}"` : "Antigravity's default"} instead.`;
+      model = usable;
+    }
+
     // Workspace: a revise (conversation_id set) continues from the last
     // RESULT so the agent sees its own prior work; the diff stays against
     // ORIGINAL so the change list is cumulative.
@@ -283,11 +330,15 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
       taskText: run.task_text ?? null,
       // agy ≥1.1.26 doesn't anchor the model to the launch cwd — name it.
       workspaceDir: cwd,
+      speed: opts.speed,
+      // The map of the files the agent will see (a revise sees its last result).
+      siteBrief: opts.siteMap ? buildSiteBrief(seedMap) : null,
+      houseRules: opts.houseRules,
     });
 
     // Progress: throttled tail patches; a patch matching zero rows means we
     // lost ownership (discarded) → the driver's shouldCancel kills agy.
-    let tail = "";
+    let tail = modelNote ? `⚠ ${modelNote}` : "";
     let lastFlush = 0;
     let cancelled = false;
     const flush = async (force = false) => {
@@ -327,9 +378,10 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
       patch({}).then((owned) => { if (!owned) cancelled = true; }).catch(() => {});
     }, KEEPALIVE_MS);
     const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    // ONE budget for every attempt, so the 15-minute cap (and the stale
-    // window's margin over it) holds however often the stream drops.
-    const deadline = Date.now() + AGY_TIMEOUT_MS;
+    // ONE budget for every attempt (the run's time limit), so the cap holds
+    // however often the stream drops.
+    const deadline = Date.now() + opts.timeLimitMs;
+    const startedAt = Date.now();
     let attemptPrompt = prompt;
     let attemptConversation = run.conversation_id;
     let attempts = 0;
@@ -345,7 +397,7 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
             conversationId: attemptConversation,
             timeoutMs: deadline - Date.now(),
             // v2 F2: the run's chosen model (null = Antigravity default).
-            model: run.model ?? null,
+            model,
             shouldCancel: () => cancelled,
           },
           (e) => {
@@ -353,7 +405,7 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
             onEvent(e);
           },
         );
-        if (cancelled || attempts >= AGY_MAX_ATTEMPTS || !isRetryable(outcome)) break;
+        if (cancelled || attempts >= opts.maxAttempts || !isRetryable(outcome)) break;
         const pause = AGY_RETRY_DELAYS_MS[Math.min(attempts, AGY_RETRY_DELAYS_MS.length) - 1];
         if (deadline - Date.now() - pause < AGY_MIN_ATTEMPT_MS) break;
         // A turn that got going is CONTINUED in its own conversation — its
@@ -364,7 +416,7 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
           attemptConversation = outcome.conversationId;
           attemptPrompt = buildResumePrompt({ workspaceDir: cwd });
         }
-        tail += `${tail ? "\n" : ""}⟳ The connection to the AI dropped — picking the task back up in ${pause / 1000}s (try ${attempts + 1} of ${AGY_MAX_ATTEMPTS})…`;
+        tail += `${tail ? "\n" : ""}⟳ The connection to the AI dropped — picking the task back up in ${pause / 1000}s (try ${attempts + 1} of ${opts.maxAttempts})…`;
         await flush(true);
         if (cancelled) break;
         await sleep(pause);
@@ -380,7 +432,13 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     }
     const triedNote = attempts > 1 ? ` (gave up after ${attempts} tries)` : "";
 
-    if (outcome.killed) return await fail("The agent hit the 15-minute time cap and was stopped.");
+    if (outcome.killed) {
+      const minutes = Math.round(opts.timeLimitMs / 60_000);
+      return await fail(
+        `The agent hit its ${minutes}-minute time limit and was stopped. Try again with a longer limit, ` +
+          `or split the request into smaller ones.`,
+      );
+    }
     if (!outcome.result) {
       if (outcome.spawnError) {
         // The CLI could not even LAUNCH on this machine (missing binary/cwd).
@@ -420,7 +478,8 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
       conversation_id: outcome.conversationId ?? run.conversation_id,
       files: harvested.changes,
       summary: outcome.result.response.slice(0, 4000),
-      usage: outcome.result.usage,
+      // agent_ms: wall-clock time agy spent on this round, retries included.
+      usage: { ...outcome.result.usage, agent_ms: Date.now() - startedAt },
       output_tail: tail.slice(-TAIL_MAX_CHARS),
     });
     if (!owned) {

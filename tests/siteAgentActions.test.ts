@@ -66,6 +66,7 @@ const adminState = vi.hoisted(() => {
     select: (...a: unknown[]) => Chain;
     eq: (f: string, v: unknown) => Chain;
     in: (f: string, vs: unknown[]) => Chain;
+    limit: (n: number) => Chain;
     update: (values: Row) => Chain;
     insert: (values: Row) => Chain;
     maybeSingle: () => Promise<Result>;
@@ -79,6 +80,8 @@ const adminState = vi.hoisted(() => {
     items: [] as Row[],
     ticketRow: null as Row | null,
     leadRow: null as Row | null,
+    /** app_settings singleton — the worker's model list and the team defaults. */
+    settings: null as Row | null,
     /** Fired right after a lead_tickets READ is served — lets a test change
      *  the row between the helper's status check and its CAS update, i.e.
      *  the exact TOCTOU window the status filter exists for. */
@@ -91,7 +94,7 @@ const adminState = vi.hoisted(() => {
     client: null as unknown,
     reset() {
       state.dbRun = null;
-      state.items = []; state.ticketRow = null; state.leadRow = null; state.onTicketRead = null;
+      state.items = []; state.ticketRow = null; state.leadRow = null; state.onTicketRead = null; state.settings = null;
       state.downloadBlob = { arrayBuffer: async () => new Uint8Array([80, 75, 3, 4]).buffer as ArrayBuffer };
       state.downloads = []; state.removes = []; state.inserts = []; state.updates = [];
     },
@@ -125,6 +128,7 @@ const adminState = vi.hoisted(() => {
       select: () => q,
       eq: (f, v) => { filters.push([f, v]); return q; },
       in: (f, vs) => { inFilters.push([f, vs]); return q; },
+      limit: () => q,
       update: (values) => { updateValues = values; return q; },
       insert: (values) => { state.inserts.push({ table, values }); return q; },
       maybeSingle: async () => {
@@ -146,6 +150,7 @@ const adminState = vi.hoisted(() => {
           state.onTicketRead?.();
           return { data: row, error: null };
         }
+        if (table === "app_settings" && !updateValues) return { data: state.settings, error: null };
         if (table === "leads" && !updateValues) {
           const row = state.leadRow && rowMatches(state.leadRow) ? { ...state.leadRow } : null;
           return { data: row, error: null };
@@ -536,6 +541,70 @@ describe("POST /api/site-agent/runs/[id]/revise", () => {
     const res = await revisePOST(post({ instructions: "tweak the hero" }), ctx());
     expect(res.status).toBe(200);
     expect(adminState.dbRun).toMatchObject({ status: "queued", conversation_id: "conv-9" });
+  });
+});
+
+describe("POST /api/site-agent/runs/[id]/revise — run controls", () => {
+  const MODELS = [
+    { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" },
+    { id: "claude-sonnet-5-5-low", label: "Claude Sonnet 5.5 (Low)" },
+  ];
+  const published = (defaults: Record<string, unknown> | null = null) => {
+    adminState.settings = {
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: MODELS },
+      agent_defaults: defaults,
+    };
+  };
+
+  it("a follow-up can switch model and change its controls, merged over the run's own", async () => {
+    published();
+    seedRun("review", { model: "gemini-3.8-flash-low", options: { speed: "balanced", time_limit_min: 15, retries: 3, site_map: true } });
+    const res = await revisePOST(
+      post({ instructions: "bigger button", model: "claude-sonnet-5-5-low", options: { speed: "quick", time_limit_min: 8 } }),
+      ctx(),
+    );
+    expect(res.status).toBe(200);
+    expect(adminState.dbRun).toMatchObject({
+      status: "queued",
+      model: "claude-sonnet-5-5-low",
+      options: { speed: "quick", time_limit_min: 8, retries: 3, site_map: true },
+    });
+    const log = adminState.inserts.find((i) => i.values.action === "site_agent.run.revised");
+    expect(log?.values.new_value).toMatchObject({ model: "claude-sonnet-5-5-low", speed: "quick" });
+  });
+
+  it("an untouched follow-up keeps the run's model and controls", async () => {
+    published();
+    seedRun("review", { model: "gemini-3.8-flash-low", options: { speed: "balanced" } });
+    await revisePOST(post({ instructions: "bigger button" }), ctx());
+    expect(adminState.dbRun).toMatchObject({ model: "gemini-3.8-flash-low", options: { speed: "balanced" } });
+    const upd = adminState.updates.find((u) => u.table === "site_agent_runs");
+    expect(upd?.values).not.toHaveProperty("options");
+  });
+
+  it("a run on a WITHDRAWN model moves to the team default instead of failing (Gemini 3.7, 2026-10-13)", async () => {
+    published({ model: "gemini-3.8-flash-low" });
+    seedRun("review", { model: "gemini-3.7-flash-high" });
+    await revisePOST(post({ instructions: "fix the header" }), ctx());
+    expect(adminState.dbRun).toMatchObject({ model: "gemini-3.8-flash-low" });
+
+    // …or to Antigravity's own default when the team has none.
+    published(null);
+    seedRun("review", { model: "gemini-3.7-flash-high" });
+    await revisePOST(post({ instructions: "fix the header" }), ctx());
+    expect(adminState.dbRun).toMatchObject({ model: null });
+  });
+
+  it("422s bad controls and an unknown model without touching the run", async () => {
+    published();
+    for (const body of [
+      { instructions: "x", options: { time_limit_min: 500 } },
+      { instructions: "x", options: { speed: "warp" } },
+      { instructions: "x", model: "gpt-nope" },
+    ]) {
+      expect((await revisePOST(post(body), ctx())).status).toBe(422);
+    }
+    expect(adminState.updates).toHaveLength(0);
   });
 });
 

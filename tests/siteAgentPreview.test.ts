@@ -24,6 +24,19 @@ const zipStore = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
+    // The signed-token path reads only the run's version (updated_at).
+    from: () => {
+      let id = "";
+      const q = {
+        select: () => q,
+        eq: (_col: string, v: string) => ((id = v), q),
+        maybeSingle: async () => ({
+          data: accessState.run.id === id ? { updated_at: accessState.run.updated_at } : null,
+          error: null,
+        }),
+      };
+      return q;
+    },
     storage: {
       from: () => ({
         download: async (path: string) => {
@@ -39,6 +52,9 @@ vi.mock("@/lib/supabase/admin", () => ({
 
 import { GET as previewGET } from "@/app/api/site-agent/runs/[id]/preview/[[...path]]/route";
 import { GET as filesGET } from "@/app/api/site-agent/runs/[id]/files/[...path]/route";
+import { mintPreviewToken } from "@/lib/preview/signedPreview";
+
+process.env.PREVIEW_TOKEN_SECRET = "test-preview-secret";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 // 0x9F/0x92/0x96 are continuation bytes with no lead byte — a fatal UTF-8 decoder throws.
@@ -64,6 +80,23 @@ zipStore.objects["run-1/original.zip"] = zipFromMap(ORIGINAL_FILES);
 // "run-queued" deliberately has NO zips in the store (run still queued/running).
 
 const previewCtx = (id: string, path?: string[]) => ({ params: Promise.resolve({ id, path }) });
+
+/** Follows the session -> signed-address redirect the way a browser would:
+ *  the Location's path segments become the route's params. */
+async function openPreview(id: string, path?: string[], query = ""): Promise<{ res: Response; location: string | null }> {
+  const first = await previewGET(
+    new Request(`http://x/api/site-agent/runs/${id}/preview/${(path ?? []).join("/")}${query}`),
+    previewCtx(id, path),
+  );
+  if (first.status !== 302) return { res: first, location: null };
+  const location = first.headers.get("Location")!;
+  const rest = location.replace(`/api/site-agent/runs/${id}/preview/`, "").split("?")[0];
+  const res = await previewGET(new Request(`http://x${location}`), previewCtx(id, rest.split("/")));
+  return { res, location };
+}
+const noSession = () => {
+  accessState.denial = { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }), status: 401 };
+};
 const filesCtx = (id: string, path: string[]) => ({ params: Promise.resolve({ id, path }) });
 
 // ttlCached is a module-level cache shared across tests — every test gets a
@@ -80,16 +113,70 @@ beforeEach(() => {
 
 describe("GET /api/site-agent/runs/[id]/preview/[[...path]]", () => {
   it("serves index.html by default, base-injected, under a no-same-origin script sandbox", async () => {
-    const res = await previewGET(new Request("http://x/api/site-agent/runs/run-1/preview"), previewCtx("run-1"));
+    const { res, location } = await openPreview("run-1");
+    const token = mintPreviewToken("site-agent-run:run-1")!;
+    // The session request is sent on to the page's signed address...
+    expect(location).toBe(`/api/site-agent/runs/run-1/preview/~${token}/index.html`);
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/html");
     const csp = res.headers.get("Content-Security-Policy") ?? "";
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).not.toContain("allow-same-origin");
     const body = await res.text();
-    expect(body).toContain('<base href="/api/site-agent/runs/run-1/preview/">');
+    // ...whose relative references inherit the signed segment.
+    expect(body).toContain(`<base href="/api/site-agent/runs/run-1/preview/~${token}/index.html">`);
     // Root-absolute ref to a known result file is routed back through the preview.
-    expect(body).toContain("/api/site-agent/runs/run-1/preview/about.html");
+    expect(body).toContain(`/api/site-agent/runs/run-1/preview/~${token}/about.html`);
+  });
+
+  it("the sandboxed page's own requests carry no cookie: the signed segment authenticates them", async () => {
+    const token = mintPreviewToken("site-agent-run:run-1")!;
+    noSession();
+    const css = await previewGET(
+      new Request(`http://x/api/site-agent/runs/run-1/preview/~${token}/css/styles.css`),
+      previewCtx("run-1", [`~${token}`, "css", "styles.css"]),
+    );
+    expect(css.status).toBe(200);
+    expect(css.headers.get("Content-Type")).toContain("text/css");
+    expect(await css.text()).toBe("body{}");
+    const js = await previewGET(
+      new Request(`http://x/api/site-agent/runs/run-1/preview/~${token}/app.js`),
+      previewCtx("run-1", [`~${token}`, "app.js"]),
+    );
+    expect(js.status).toBe(200);
+    expect(js.headers.get("Content-Type")).toMatch(/javascript/);
+    // A click to another page inside the preview, same story.
+    const page = await previewGET(
+      new Request(`http://x/api/site-agent/runs/run-1/preview/~${token}/about.html`),
+      previewCtx("run-1", [`~${token}`, "about.html"]),
+    );
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain(`<base href="/api/site-agent/runs/run-1/preview/~${token}/about.html">`);
+  });
+
+  it("a token for another run, or a forged one, gets no further than the session gate", async () => {
+    noSession();
+    const other = mintPreviewToken("site-agent-run:run-2")!;
+    const forged = `${other.split(".")[0]}.${"A".repeat(32)}`;
+    for (const t of [other, forged]) {
+      const res = await previewGET(
+        new Request(`http://x/api/site-agent/runs/run-1/preview/~${t}/css/styles.css`),
+        previewCtx("run-1", [`~${t}`, "css", "styles.css"]),
+      );
+      expect(res.status).toBe(401);
+    }
+  });
+
+  it("a stale signed address opened with the session is re-signed", async () => {
+    const stale = "1.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const res = await previewGET(
+      new Request(`http://x/api/site-agent/runs/run-1/preview/~${stale}/about.html`),
+      previewCtx("run-1", [`~${stale}`, "about.html"]),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toBe(
+      `/api/site-agent/runs/run-1/preview/~${mintPreviewToken("site-agent-run:run-1")}/about.html`,
+    );
   });
 
   it("serves a nested asset with its content type", async () => {
@@ -206,7 +293,7 @@ describe("resultCache keying — one live entry per (run, side)", () => {
     });
     accessState.run = { ...accessState.run, id: "run-hit", updated_at: "2026-09-01T13:00:00Z" };
     for (let i = 0; i < 2; i++) {
-      const res = await previewGET(new Request("http://x/api/site-agent/runs/run-hit/preview"), previewCtx("run-hit"));
+      const { res } = await openPreview("run-hit");
       expect(res.status).toBe(200);
       expect(await res.text()).toContain("cached hero");
     }
@@ -219,7 +306,7 @@ describe("resultCache keying — one live entry per (run, side)", () => {
       "index.html": enc("<html><head></head><body><h1>v1 hero</h1></body></html>"),
     });
     accessState.run = { ...accessState.run, id: "run-revise", updated_at: "2026-09-01T14:00:00Z" };
-    const v1 = await previewGET(new Request("http://x/api/site-agent/runs/run-revise/preview"), previewCtx("run-revise"));
+    const { res: v1 } = await openPreview("run-revise");
     expect(await v1.text()).toContain("v1 hero");
     expect(countDownloads(zipPath)).toBe(1);
 
@@ -229,7 +316,7 @@ describe("resultCache keying — one live entry per (run, side)", () => {
       "index.html": enc("<html><head></head><body><h1>v2 hero</h1></body></html>"),
     });
     accessState.run = { ...accessState.run, updated_at: "2026-09-01T14:05:00Z" };
-    const v2 = await previewGET(new Request("http://x/api/site-agent/runs/run-revise/preview"), previewCtx("run-revise"));
+    const { res: v2 } = await openPreview("run-revise");
     expect(await v2.text()).toContain("v2 hero");
     expect(countDownloads(zipPath)).toBe(2);
 
@@ -239,7 +326,7 @@ describe("resultCache keying — one live entry per (run, side)", () => {
     // third download, orphaning a multi-MB map per transition for the life of
     // the process).
     accessState.run = { ...accessState.run, updated_at: "2026-09-01T14:00:00Z" };
-    const v1Again = await previewGET(new Request("http://x/api/site-agent/runs/run-revise/preview"), previewCtx("run-revise"));
+    const { res: v1Again } = await openPreview("run-revise");
     expect(v1Again.status).toBe(200);
     expect(countDownloads(zipPath)).toBe(3);
   });

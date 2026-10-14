@@ -387,6 +387,53 @@ describe("GET /api/site-builder/runs/[id]/preview/[[...path]]", () => {
   });
 });
 
+describe("GET /api/site-builder/runs/[id]/preview — signed addresses", () => {
+  // The sandboxed page sends no cookie with its own requests, so its assets
+  // authenticate with the signed segment the session request is sent on to.
+  beforeEach(() => {
+    process.env.PREVIEW_TOKEN_SECRET = "test-preview-secret";
+  });
+  afterEach(() => {
+    delete process.env.PREVIEW_TOKEN_SECRET;
+  });
+
+  it("a session request is redirected to the page's signed address, keeping ?v=", async () => {
+    const res = await previewGet(
+      new Request("http://test.local/api/site-builder/runs/run-1/preview/index.html?v=7"),
+      ctx(["index.html"]),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toMatch(/^\/api\/site-builder\/runs\/run-1\/preview\/~[^/]+\/index\.html\?v=7$/);
+  });
+
+  it("the signed page and its assets load without any session", async () => {
+    const first = await previewGet(new Request("http://test.local/api/site-builder/runs/run-1/preview"), ctx(undefined));
+    const location = first.headers.get("location")!;
+    const signed = location.split("/preview/")[1].split("/")[0];
+    guardHolder.result = { error: 401 };
+    const page = await previewGet(new Request(`http://test.local${location}`), ctx([signed, "index.html"]));
+    expect(page.status).toBe(200);
+    const body = await page.text();
+    expect(body).toContain(`<base href="/api/site-builder/runs/run-1/preview/${signed}/index.html">`);
+    expect(body).toContain(`href="/api/site-builder/runs/run-1/preview/${signed}/style.css"`);
+    const css = await previewGet(new Request("http://test.local/x"), ctx([signed, "style.css"]));
+    expect(css.status).toBe(200);
+    expect(await css.text()).toBe("body{color:red}");
+    const js = await previewGet(new Request("http://test.local/x"), ctx([signed, "components.js"]));
+    expect(await js.text()).toBe("// REWRITTEN components");
+  });
+
+  it("a signed address for another run is no pass", async () => {
+    const other = await previewGet(new Request("http://test.local/x"), {
+      params: Promise.resolve({ id: "run-2", path: ["index.html"] }),
+    });
+    const foreign = other.headers.get("location")!.split("/preview/")[1].split("/")[0];
+    guardHolder.result = { error: 401 };
+    const res = await previewGet(new Request("http://test.local/x"), ctx([foreign, "style.css"]));
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("GET /api/site-builder/runs/[id]/download", () => {
   it("streams the stored zip as an attachment named after the business", async () => {
     const res = await downloadGet(new Request("http://test.local/api/site-builder/runs/run-1/download"), {

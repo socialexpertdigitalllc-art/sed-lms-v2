@@ -4,7 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { agentRunAccess } from "@/lib/site-agent/access";
 import { contentTypeFor } from "@/lib/site-studio/service/contentType";
 import { isSafeAssetPath } from "@/lib/site-studio/preview/assetPath";
-import { rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
+import { encodePathSegments, rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
+import { planPreviewPage, previewRedirect, splitPreviewToken, verifyPreviewToken } from "@/lib/preview/signedPreview";
 import { loadRunMap } from "@/lib/site-agent/resultCache";
 
 export const runtime = "nodejs";
@@ -47,19 +48,35 @@ function previewHeaders(contentType: string): HeadersInit {
  *   /preview/about.html -> that page
  *   /preview/css/x.css  -> an asset
  *
- * Relative links inside a page resolve against the preview URL and land back
- * on this route naturally; root-absolute references get rewritten (see
+ * A page opened with the session (the review iframe, "Open in a new tab") is
+ * redirected to its SIGNED address, /preview/~<token>/index.html: the opaque-
+ * origin page sends no cookie with its own requests, so its CSS, JS and links
+ * authenticate with the token its relative URLs inherit (lib/preview/
+ * signedPreview.ts). Root-absolute references get rewritten (see
  * `rewriteAssetRefs`), so "open in a new tab" gives a fully navigable site.
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { id, path } = await ctx.params;
   const admin = createAdminClient();
-  const access = await agentRunAccess(admin, id);
-  if ("error" in access) return access.error;
+  const scope = `site-agent-run:${id}`;
+  const split = splitPreviewToken((path ?? []).map((s) => decodeURIComponent(s)));
+  const token = split.token !== null && verifyPreviewToken(scope, split.token) ? split.token : null;
+
+  // A valid token stands in for the session (the sandboxed page has none to
+  // send); anything else goes through the full access gate.
+  let version: string;
+  if (token) {
+    const { data: row } = await admin.from("site_agent_runs").select("updated_at").eq("id", id).maybeSingle();
+    if (!row) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+    version = String((row as { updated_at: string }).updated_at);
+  } else {
+    const access = await agentRunAccess(admin, id);
+    if ("error" in access) return access.error;
+    version = access.run.updated_at;
+  }
 
   const url = new URL(req.url);
-  const segments = (path ?? []).map((s) => decodeURIComponent(s));
-  const requested = segments.join("/");
+  const requested = split.rest.join("/");
   if (requested && !isSafeAssetPath(requested)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
@@ -67,7 +84,7 @@ export async function GET(req: Request, ctx: Ctx) {
   // Result zip only exists once the worker harvested — before that the review
   // screen has nothing to show (updated_at in the key means a transition is
   // picked up immediately despite the 60s TTL).
-  const map = await loadRunMap(admin, id, "result", access.run.updated_at);
+  const map = await loadRunMap(admin, id, "result", version);
   if (!map) {
     return NextResponse.json({ error: "This run has no edited files yet." }, { status: 409 });
   }
@@ -99,12 +116,20 @@ export async function GET(req: Request, ctx: Ctx) {
     return new NextResponse(new Uint8Array(bytes), { headers: previewHeaders(contentType) });
   }
 
-  const previewBase = `/api/site-agent/runs/${id}/preview/`;
-  const rewritten = rewriteAssetRefs(new TextDecoder().decode(bytes), Object.keys(map), previewBase);
+  const plan = planPreviewPage({
+    root: `/api/site-agent/runs/${id}/preview/`,
+    scope,
+    token,
+    requested,
+    encodedTarget: encodePathSegments(target),
+    search: url.search,
+  });
+  if ("redirect" in plan) return previewRedirect(plan.redirect);
+  const rewritten = rewriteAssetRefs(new TextDecoder().decode(bytes), Object.keys(map), plan.assetRoot);
   // A `<base>` makes RELATIVE references (including ones a script inserts at
-  // runtime, which rewriteAssetRefs can't see) resolve against the preview
-  // directory no matter which URL this page was opened at. Injected right
+  // runtime, which rewriteAssetRefs can't see) resolve against this page's
+  // signed address no matter which URL it was opened at. Injected right
   // after <head> so it precedes any script or asset.
-  const withBase = injectBase(rewritten, previewBase);
+  const withBase = injectBase(rewritten, plan.base);
   return new NextResponse(withBase, { headers: previewHeaders(contentType) });
 }

@@ -4,7 +4,8 @@ import { guardAny, guardError } from "@/lib/site-studio/service/guard";
 import { contentTypeFor } from "@/lib/site-studio/service/contentType";
 import { isSafeAssetPath } from "@/lib/site-studio/preview/assetPath";
 import { loadTemplateBundle, TEMPLATE_CATALOGUE_PERMS } from "@/lib/site-builder/templates";
-import { rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
+import { encodePathSegments, rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
+import { planPreviewPage, previewRedirect, splitPreviewToken, verifyPreviewToken } from "@/lib/preview/signedPreview";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -47,15 +48,23 @@ function previewHeaders(contentType: string): HeadersInit {
  * This is what "Preview in new tab" opens, for the operator on the templates
  * board and for the salesperson choosing one with a client on the phone.
  * Relative links inside the pages resolve back onto this route naturally, so
- * the whole template is navigable rather than one flat page.
+ * the whole template is navigable rather than one flat page. A page opened
+ * with the session is redirected to its SIGNED address (/preview/~<token>/…)
+ * so the sandboxed page's own CSS/JS requests, which carry no cookie, still
+ * authenticate — see lib/preview/signedPreview.ts.
  */
-export async function GET(_req: Request, ctx: Ctx) {
-  // A read the lead form's picker needs — open to sales, see TEMPLATE_CATALOGUE_PERMS.
-  const auth = await guardAny(TEMPLATE_CATALOGUE_PERMS);
-  if ("error" in auth) return guardError(auth.error);
+export async function GET(req: Request, ctx: Ctx) {
   const { id, path } = await ctx.params;
+  const scope = `site-builder-template:${id}`;
+  const split = splitPreviewToken((path ?? []).map((s) => decodeURIComponent(s)));
+  const token = split.token !== null && verifyPreviewToken(scope, split.token) ? split.token : null;
+  if (!token) {
+    // A read the lead form's picker needs — open to sales, see TEMPLATE_CATALOGUE_PERMS.
+    const auth = await guardAny(TEMPLATE_CATALOGUE_PERMS);
+    if ("error" in auth) return guardError(auth.error);
+  }
 
-  const requested = (path ?? []).map((s) => decodeURIComponent(s)).join("/");
+  const requested = split.rest.join("/");
   if (requested && !isSafeAssetPath(requested)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
@@ -77,9 +86,17 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   const html = bundle.pages[target];
   if (html !== undefined) {
-    const previewBase = `/api/site-builder/templates/${id}/preview/`;
+    const plan = planPreviewPage({
+      root: `/api/site-builder/templates/${id}/preview/`,
+      scope,
+      token,
+      requested,
+      encodedTarget: encodePathSegments(target),
+      search: new URL(req.url).search,
+    });
+    if ("redirect" in plan) return previewRedirect(plan.redirect);
     const known = [...bundle.assetFiles, ...bundle.pageFiles];
-    const withBase = injectBase(rewriteAssetRefs(html, known, previewBase), previewBase);
+    const withBase = injectBase(rewriteAssetRefs(html, known, plan.assetRoot), plan.base);
     return new NextResponse(withBase, { headers: previewHeaders(contentTypeFor(target)) });
   }
 

@@ -178,8 +178,9 @@ async function main(): Promise<void> {
   process.on("SIGTERM", onSignal);
   process.on("exit", releaseLock);
 
-  // The engine heartbeats once per poll; a single run can take 15 minutes,
-  // longer than the dashboard's 5-minute staleness window — keep it fresh.
+  // The engine heartbeats once per poll; a single run can take up to its time
+  // limit (60 minutes at most), far longer than the dashboard's 5-minute
+  // staleness window — keep it fresh.
   setInterval(() => {
     if (!busy) return;
     Promise.resolve(admin.from("app_settings").update({ agent_worker_seen_at: new Date().toISOString() }).eq("singleton", true))

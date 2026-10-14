@@ -4,7 +4,8 @@ import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { contentTypeFor } from "@/lib/site-studio/service/contentType";
 import { isSafeAssetPath } from "@/lib/site-studio/preview/assetPath";
 import { loadTemplateBundle } from "@/lib/site-builder/templates";
-import { rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
+import { encodePathSegments, rewriteAssetRefs, injectBase } from "@/lib/site-builder/preview";
+import { planPreviewPage, previewRedirect, splitPreviewToken, verifyPreviewToken } from "@/lib/preview/signedPreview";
 import type { PageState } from "@/lib/site-builder/run";
 
 export const runtime = "nodejs";
@@ -61,17 +62,26 @@ function previewHeaders(contentType: string): HeadersInit {
  *
  * The old `?file=`/`?asset=` query mode is still accepted on the bare
  * /preview path for anything that linked it.
+ *
+ * A page opened with the session is redirected to its SIGNED address,
+ * /preview/~<token>/about.html: the sandboxed page sends no cookie with its
+ * own requests, so its CSS, JS and links authenticate with the token its
+ * relative URLs inherit (see lib/preview/signedPreview.ts).
  */
 export async function GET(req: Request, ctx: Ctx) {
-  const auth = await guard();
-  if ("error" in auth) return guardError(auth.error);
   const { id, path } = await ctx.params;
+  const scope = `site-builder-run:${id}`;
+  const split = splitPreviewToken((path ?? []).map((s) => decodeURIComponent(s)));
+  const token = split.token !== null && verifyPreviewToken(scope, split.token) ? split.token : null;
+  if (!token) {
+    const auth = await guard();
+    if ("error" in auth) return guardError(auth.error);
+  }
 
   const url = new URL(req.url);
   const legacyFile = url.searchParams.get("file");
   const legacyAsset = url.searchParams.get("asset");
-  const segments = (path ?? []).map((s) => decodeURIComponent(s));
-  const requested = segments.join("/") || legacyFile || legacyAsset || "";
+  const requested = split.rest.join("/") || legacyFile || legacyAsset || "";
 
   if (requested && !isSafeAssetPath(requested)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
@@ -127,17 +137,30 @@ export async function GET(req: Request, ctx: Ctx) {
     if (!/\.html?$/i.test(target)) {
       return new NextResponse(page.html, { headers: previewHeaders(contentType) });
     }
-    const previewBase = `/api/site-builder/runs/${id}/preview/`;
+    // The legacy ?file=/?asset= form names its page in the query, which the
+    // signed address replaces with a path — drop those two from the redirect.
+    const search = new URLSearchParams(url.search);
+    search.delete("file");
+    search.delete("asset");
+    const plan = planPreviewPage({
+      root: `/api/site-builder/runs/${id}/preview/`,
+      scope,
+      token,
+      requested: split.rest.join("/"),
+      encodedTarget: encodePathSegments(target),
+      search: search.size ? `?${search}` : "",
+    });
+    if ("redirect" in plan) return previewRedirect(plan.redirect);
     const known = [...bundle.assetFiles, ...Object.keys(pages)];
-    const rewritten = rewriteAssetRefs(page.html, known, previewBase);
-    // A `<base>` makes RELATIVE references resolve against the preview
-    // directory no matter which URL this page was opened at — critically the
-    // nav/footer links that `components.js` inserts at RUNTIME (rewriteAssetRefs
-    // can't see those, they aren't in the served HTML). Without it, "Open
-    // preview" (opened at `.../preview/`) works but the whole-site navigation
-    // breaks the moment a script-inserted link resolves against the wrong base.
+    const rewritten = rewriteAssetRefs(page.html, known, plan.assetRoot);
+    // A `<base>` makes RELATIVE references resolve against this page's signed
+    // address no matter which URL it was opened at — critically the nav/footer
+    // links that `components.js` inserts at RUNTIME (rewriteAssetRefs can't see
+    // those, they aren't in the served HTML). Without it, "Open preview"
+    // (opened at `.../preview/`) works but the whole-site navigation breaks
+    // the moment a script-inserted link resolves against the wrong base.
     // Injected right after <head> so it precedes any script or asset.
-    const withBase = injectBase(rewritten, previewBase);
+    const withBase = injectBase(rewritten, plan.base);
     return new NextResponse(withBase, {
       headers: previewHeaders("text/html"),
     });

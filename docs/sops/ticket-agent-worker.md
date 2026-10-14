@@ -132,6 +132,57 @@ dialog. An empty model selector means the worker hasn't published a list
 yet — check the heartbeat before assuming agy is broken. Either way the run
 still works: with no model chosen it uses Antigravity's default.
 
+## Run controls and team settings (added 2026-10-14)
+
+After Antigravity dropped Gemini 3.7, minor edits on Gemini 3.8 Flash (High)
+took 10–17 minutes per round, up from 2–9. The new model thinks about twice as
+long, and the agent spent 40–80 slow tool calls surveying each site. Every run now has:
+
+- **Model** with its thinking level (Low is the fastest, High the most careful).
+  The dropdown shows each model's typical round time over the last 30 days.
+- **Speed**: Quick, Balanced or Thorough. This sets the step budget the agent
+  is told to stay within (about 10, 25 or 60 tool calls) and a default time limit.
+- **Time limit**: 5–60 minutes (old fixed cap: 15).
+- **Retries**: how often to pick the task back up after the AI service drops (0–3).
+- **Site map**: a generated map of the site's files, each page's sections with
+  line numbers, what components.js builds at runtime, and the colour
+  variables. With it the agent goes straight to the lines it needs.
+
+Every prompt also tells the agent not to use PowerShell for searching or
+reading, and not to run git/python, download images, or open a browser. Those
+were most of the wasted steps.
+
+The gear on the AI developer panel opens the **team settings**: the defaults
+every send starts from (operators and admins can change them), the team's
+standing rules (added to every run), and the per-model timing table. A
+follow-up ("Request changes") can switch model, speed and time limit. A run
+whose model Antigravity has withdrawn moves to the team default instead of
+failing.
+
+Database: migration `0086_site_agent_options.sql` adds
+`site_agent_runs.options` and `app_settings.agent_defaults`. Until it is
+applied, runs are still created, just without their controls, and the settings
+dialog says saving needs the update.
+
+## Updating the worker kit
+
+The speed changes (site map, rules, time limits, retries, model fallback)
+live in the WORKER, so they only take effect once the worker device runs the
+new kit. The dashboard parts (controls, settings, the preview fix) deploy with
+the LMS.
+
+1. `npm run build:agent-worker` (no `--with-env`: the device keeps its own
+   `agent-worker.env`), then zip `dist/agent-worker/`.
+2. On the worker device, unzip it anywhere and run `install-windows.ps1`. It
+   copies the new `agent-worker.mjs` over the old one and keeps the existing
+   `agent-worker.env`.
+3. Restart the worker so the new code loads. Either sign out of Windows and back
+   in, or end the `node.exe` running `agent-worker.mjs` in Task Manager; the
+   scheduled task starts the new one within 3 minutes. If a run is in progress,
+   wait for it to finish first. A killed run is reclaimed and restarted after 20
+   minutes.
+4. Check `%LOCALAPPDATA%\sed-agent-worker\worker.log` for `agy healthy … taking runs`.
+
 ## Ticketless edits
 
 The lead screen's "AI edit site" button runs the same edit → review →

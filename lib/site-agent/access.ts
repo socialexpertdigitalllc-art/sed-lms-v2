@@ -19,8 +19,13 @@ import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { allowedTicketScope, canActOnTicket } from "@/lib/tickets/scope";
 import type { AgentRunRow } from "./types";
+import { isMissingColumn } from "./settings";
 
 const ALLOWED_PERMS = ["studio.manage", "tickets.resolve"];
+
+const RUN_COLUMNS =
+  "id, ticket_id, lead_id, site_host, status, claim_id, conversation_id, instructions, files, output_tail, summary, usage, error, created_by, created_at, updated_at, item_ids, task_text, model";
+let optionsMissingUntil = 0;
 
 export type AgentRunAccess =
   | { run: AgentRunRow; userId: string; perms: Set<string> }
@@ -35,14 +40,19 @@ export async function agentRunAccess(admin: SupabaseClient, runId: string): Prom
     return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }), status: 403 };
   }
 
-  const { data: run } = await admin
-    .from("site_agent_runs")
-    .select("id, ticket_id, lead_id, site_host, status, claim_id, conversation_id, instructions, files, output_tail, summary, usage, error, created_by, created_at, updated_at, item_ids, task_text, model")
-    .eq("id", runId)
-    .maybeSingle();
+  const read = (columns: string) => admin.from("site_agent_runs").select(columns).eq("id", runId).maybeSingle();
+  // Before migration 0086 there is no options column: the run reads without
+  // it, and this process stops asking for a while (the panel polls every 2s).
+  let run: unknown = null;
+  if (Date.now() >= optionsMissingUntil) {
+    const first = await read(`${RUN_COLUMNS}, options`);
+    if (first.error && isMissingColumn(first.error, "options")) optionsMissingUntil = Date.now() + 10 * 60_000;
+    else run = first.data;
+  }
+  if (Date.now() < optionsMissingUntil) run = (await read(RUN_COLUMNS)).data;
   if (!run) return { error: NextResponse.json({ error: "Run not found" }, { status: 404 }), status: 404 };
 
-  const ticketId = (run as AgentRunRow).ticket_id;
+  const ticketId = (run as unknown as AgentRunRow).ticket_id;
   // Object-level scope rides the ticket — a null-ticket run (ticketless
   // direct edit, F5) has none, and any ALLOWED_PERMS holder may act on it.
   if (!perms.has("studio.manage") && ticketId) {
@@ -58,5 +68,5 @@ export async function agentRunAccess(admin: SupabaseClient, runId: string): Prom
     }
   }
 
-  return { run: run as AgentRunRow, userId: user.id, perms };
+  return { run: run as unknown as AgentRunRow, userId: user.id, perms };
 }

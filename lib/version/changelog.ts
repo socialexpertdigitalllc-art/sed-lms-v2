@@ -29,6 +29,37 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.25.0",
+    date: "2026-10-14",
+    title: "A faster AI developer you can tune, and previews that show the real site",
+    changes: [
+      {
+        kind: "fix",
+        text: "The preview of an AI edit, in the review box and in a new tab, shows the whole site again: styles, header, footer and scripts. It had been showing bare HTML. The browser wasn't sending the login with the site's own CSS and JS requests. Site Builder and template previews had the same problem and are fixed too.",
+      },
+      {
+        kind: "feature",
+        text: "Every AI developer run can now be tuned before you send it. Pick the model and its thinking level (the list shows each model's typical time), the speed (Quick for small edits, Balanced, or Thorough for big changes), a time limit from 5 to 60 minutes, how many times to retry when the AI service drops, and whether the AI gets a map of the site.",
+      },
+      {
+        kind: "feature",
+        text: "Team settings for the AI developer (the gear on the panel): the defaults every send starts from, standing rules added to every run (for example \"never change prices\"), and how long each model has actually been taking over the last 30 days.",
+      },
+      {
+        kind: "improvement",
+        text: "Request changes can switch the model, speed and time limit for the follow-up, so a quick fix after a big first pass doesn't wait like a big one.",
+      },
+      {
+        kind: "improvement",
+        text: "The AI developer goes straight to the change. It gets a map of the site's files, page sections and colours, and is told to skip the slow steps that made small edits take 10–17 minutes. This takes effect once the worker computer runs the updated worker.",
+      },
+      {
+        kind: "fix",
+        text: "A run on a model Antigravity has retired (all of Gemini 3.7) moves to the team's default model instead of failing when you request changes.",
+      },
+    ],
+  },
+  {
     version: "2.24.1",
     date: "2026-10-12",
     title: "Domains bought from Hostinger go live on their own",

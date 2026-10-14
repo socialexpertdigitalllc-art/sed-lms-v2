@@ -19,6 +19,14 @@ macOS / Linux
   sh start-worker.sh        (the log is worker.log in this folder)
   For auto-start, add the two cron lines shown at the top of start-worker.sh.
 
+Updating a device that already runs the worker (Windows)
+  1. Right-click install-windows.ps1 in this new kit > Run with PowerShell.
+     It replaces agent-worker.mjs and keeps your existing agent-worker.env.
+  2. Wait until no AI run is in progress, then sign out of Windows and back in
+     (or end the node.exe running agent-worker.mjs in Task Manager). The new
+     version starts within 3 minutes.
+  3. worker.log should show "agy healthy ... taking runs" again.
+
 Check a new device first (read-only, never starts agy or takes a run)
   node agent-worker.mjs --check
 

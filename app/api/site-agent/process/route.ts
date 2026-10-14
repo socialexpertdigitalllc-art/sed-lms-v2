@@ -8,8 +8,9 @@ import { runAgy, listAgyModels } from "@/lib/site-agent/agy";
 import { notify } from "@/lib/notifications/notify";
 
 export const runtime = "nodejs";
-// One agy run can legitimately take up to its 15-minute cap.
-export const maxDuration = 1200;
+// One agy run can legitimately take up to its time limit (60 minutes at most,
+// lib/site-agent/options.ts), plus the download/harvest around it.
+export const maxDuration = 3900;
 
 /**
  * The Ticket Agent processor — the ONLY instance that may run it is the

@@ -55,6 +55,8 @@ const adminState = vi.hoisted(() => {
     activeRun: null as Row, // site_agent_runs ....in().maybeSingle() (active-run check)
     insertedRun: { id: "run-9" } as Row,
     insertError: null as { message: string; code?: string } | null,
+    /** Per-call insert errors, consumed first (null = that call succeeds). */
+    insertErrorQueue: [] as ({ message: string; code?: string } | null)[],
     /** lead_tickets .update().select().single() — the auto-start mirror */
     ticketUpdateError: null as { message: string } | null,
     runsList: [] as unknown[],
@@ -70,7 +72,7 @@ const adminState = vi.hoisted(() => {
     client: null as unknown,
     reset() {
       state.ticket = null; state.lead = null; state.run = null; state.activeRun = null;
-      state.insertedRun = { id: "run-9" }; state.insertError = null; state.ticketUpdateError = null;
+      state.insertedRun = { id: "run-9" }; state.insertError = null; state.insertErrorQueue = []; state.ticketUpdateError = null;
       state.runsList = []; state.itemsList = []; state.settings = null; state.uploadError = null;
       state.inserts = []; state.updates = []; state.uploads = [];
       state.removes = []; state.ops = [];
@@ -110,8 +112,10 @@ const adminState = vi.hoisted(() => {
         if (table === "app_settings") return { data: state.settings, error: null };
         return { data: null, error: null };
       },
-      single: async () =>
-        state.insertError ? { data: null, error: state.insertError } : { data: state.insertedRun, error: null },
+      single: async () => {
+        const error = state.insertErrorQueue.length ? state.insertErrorQueue.shift()! : state.insertError;
+        return error ? { data: null, error } : { data: state.insertedRun, error: null };
+      },
       then: (resolve) => {
         if (!usedUpdate && table === "site_agent_runs") return resolve({ data: state.runsList, error: null });
         if (!usedUpdate && table === "ticket_items") return resolve({ data: state.itemsList, error: null });
@@ -243,6 +247,40 @@ describe("agentRunAccess", () => {
   it("admits the ticket's assignee holding tickets.resolve", async () => {
     const out = await agentRunAccess(accessAdmin(), "run-1");
     expect("run" in out && out.run.id).toBe("run-1");
+  });
+
+  it("before migration 0086 reads the run without options, and stops asking for 10 minutes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      let migrated = false;
+      const selects: boolean[] = [];
+      const admin = {
+        from: (table: string) => ({
+          select: (cols: string) => ({ eq: () => ({ maybeSingle: async () => {
+            if (table !== "site_agent_runs") return { data: accessState.ticket, error: null };
+            selects.push(cols.includes("options"));
+            if (cols.includes("options") && !migrated) {
+              return { data: null, error: { code: "42703", message: "column site_agent_runs.options does not exist" } };
+            }
+            return { data: { ...accessState.run, ...(cols.includes("options") ? { options: { speed: "quick" } } : {}) }, error: null };
+          } }) }),
+        }),
+      } as never;
+      const first = await agentRunAccess(admin, "run-1");
+      expect("run" in first && first.run.id).toBe("run-1");
+      expect(selects).toEqual([true, false]);
+      // The panel's next polls skip the doomed read.
+      await agentRunAccess(admin, "run-1");
+      expect(selects).toEqual([true, false, false]);
+      // Once the window passes, a now-migrated database is read in full.
+      migrated = true;
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      const later = await agentRunAccess(admin, "run-1");
+      expect(selects).toEqual([true, false, false, true]);
+      expect("run" in later && later.run.options).toEqual({ speed: "quick" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("401s a signed-out caller and 403s one with neither permission", async () => {
@@ -520,6 +558,81 @@ describe("POST /api/tickets/[id]/agent-runs — v2 scope/task/model intake", () 
   });
 });
 
+describe("POST /api/tickets/[id]/agent-runs — run controls (0086)", () => {
+  const MODELS = [
+    { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" },
+    { id: "claude-sonnet-5-5-low", label: "Claude Sonnet 5.5 (Low)" },
+  ];
+  beforeEach(() => {
+    seedTicketCreate();
+  });
+  const inserted = () => adminState.inserts.find((i) => i.table === "site_agent_runs")?.values;
+
+  it("a plain create is sent with the built-in controls, written out in full", async () => {
+    expect((await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx())).status).toBe(201);
+    expect(inserted()?.options).toEqual({ speed: "balanced", time_limit_min: 15, retries: 3, site_map: true });
+  });
+
+  it("the team defaults fill whatever the sender didn't choose — model, controls and the standing rules", async () => {
+    adminState.settings = {
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: MODELS },
+      agent_defaults: { model: "gemini-3.8-flash-low", speed: "quick", time_limit_min: 6, retries: 1, house_rules: "No price changes." },
+    };
+    expect((await createRunPOST(postJson({ options: { retries: 0 } }), ticketCtx())).status).toBe(201);
+    expect(inserted()).toMatchObject({
+      model: "gemini-3.8-flash-low",
+      options: { speed: "quick", time_limit_min: 6, retries: 0, site_map: true, house_rules: "No price changes." },
+    });
+    const log = adminState.inserts.find((i) => i.table === "activity_log");
+    expect(log?.values.new_value).toMatchObject({ model: "gemini-3.8-flash-low", speed: "quick" });
+  });
+
+  it("an explicit null model is Antigravity's own default, team default or not", async () => {
+    adminState.settings = {
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: MODELS },
+      agent_defaults: { model: "gemini-3.8-flash-low" },
+    };
+    await createRunPOST(postJson({ model: null }), ticketCtx());
+    expect(inserted()?.model).toBeNull();
+  });
+
+  it("a team default the worker no longer offers is skipped, not sent to fail", async () => {
+    adminState.settings = {
+      agent_worker_models: { fetched_at: new Date().toISOString(), models: MODELS },
+      agent_defaults: { model: "gemini-3.7-flash-high" },
+    };
+    await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(inserted()?.model).toBeNull();
+  });
+
+  it("422s bad controls before any fetch", async () => {
+    for (const options of [{ speed: "warp" }, { time_limit_min: 1 }, { retries: 9 }, "fast"]) {
+      const res = await createRunPOST(postJson({ options }), ticketCtx());
+      expect(res.status).toBe(422);
+    }
+    expect(liveMock.fetchLiveSiteZip).not.toHaveBeenCalled();
+  });
+
+  it("before migration 0086 the run is still created — just without its controls", async () => {
+    adminState.insertErrorQueue = [
+      { code: "PGRST204", message: "Could not find the 'options' column of 'site_agent_runs' in the schema cache" },
+    ];
+    const res = await createRunPOST(postJson({ options: { speed: "quick" } }), ticketCtx());
+    expect(res.status).toBe(201);
+    const runInserts = adminState.inserts.filter((i) => i.table === "site_agent_runs");
+    expect(runInserts).toHaveLength(2);
+    expect(runInserts[0].values).toHaveProperty("options");
+    expect(runInserts[1].values).not.toHaveProperty("options");
+  });
+
+  it("a real insert failure is not retried", async () => {
+    adminState.insertError = { code: "23505", message: "duplicate key" };
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(409);
+    expect(adminState.inserts.filter((i) => i.table === "site_agent_runs")).toHaveLength(1);
+  });
+});
+
 describe("POST /api/tickets/[id]/agent-runs — F3 auto-start", () => {
   beforeEach(() => {
     seedTicketCreate();
@@ -740,6 +853,16 @@ describe("GET /api/tickets/[id]/agent-runs (run history)", () => {
     const body = await (await listRunsGET(new Request("http://x"), ticketCtx())).json();
     expect(body.workerOnline).toBe(true);
     expect(body.models).toEqual([{ id: "m-1", label: "One" }]);
+  });
+
+  it("ships the team defaults the send dialog starts from, and who may change them", async () => {
+    accessState.perms = new Set(["studio.manage"]);
+    adminState.settings = { agent_defaults: { speed: "quick", model: "m-1" } };
+    const body = await (await listRunsGET(new Request("http://x"), ticketCtx())).json();
+    expect(body.defaults).toEqual({ speed: "quick", model: "m-1" });
+    expect(body.canConfigure).toBe(true);
+    expect(body.settingsAvailable).toBe(true);
+    expect(Array.isArray(body.stats)).toBe(true);
   });
 });
 

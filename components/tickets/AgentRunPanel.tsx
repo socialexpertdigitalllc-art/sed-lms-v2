@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -9,17 +9,29 @@ import {
   Loader2,
   RefreshCw,
   Send,
+  Settings2,
   StopCircle,
   Trash2,
   UploadCloud,
 } from "lucide-react";
 import { Pill, type PillTone } from "@/components/common/Panel";
-import { btnGhostSm, btnPrimary, btnSecondarySm } from "@/components/common/buttons";
+import { btnGhostSm, btnPrimary, btnSecondarySm, iconBtn } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
 import { formatDateTime } from "@/lib/leads/format";
 import { lineDiff, type DiffOp } from "@/lib/site-agent/diff";
 import { composeTicketTask } from "@/lib/site-agent/task";
 import { isActiveStatus, type AgentFileChange, type AgentRunStatus, type AgyModel } from "@/lib/site-agent/types";
+import { describeRunOptions, readRunOptions, type AgentDefaults } from "@/lib/site-agent/options";
+import type { AgentModelStat } from "@/lib/site-agent/settings";
+import {
+  AgentSettingsDialog,
+  FollowUpControls,
+  RunControls,
+  changedControls,
+  controlsFromDefaults,
+  controlsFromRun,
+  type ControlsValue,
+} from "./AgentRunControls";
 import { encodePathSegments } from "@/lib/site-builder/preview";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +54,8 @@ interface PanelRun {
   task_text?: string | null;
   /** v2: agy model id; null = Antigravity default. */
   model?: string | null;
+  /** 0086: speed, time limit, retries, site map, team rules (lib/site-agent/options.ts). */
+  options?: unknown;
 }
 
 /** A ticket change item as TicketDetail holds it — only what the dialog needs. */
@@ -59,8 +73,10 @@ interface DialogState {
   selected: string[];
   task: string;
   edited: boolean;
-  /** "" = Antigravity default (no model sent). */
-  model: string;
+  /** Model, speed, time limit, retries, site map — and where they started,
+   *  so only what the sender changed is sent. */
+  controls: ControlsValue;
+  start: ControlsValue;
 }
 
 type FileDiff =
@@ -140,10 +156,12 @@ function RunMeta({ run, models, totalItems }: { run: PanelRun; models: AgyModel[
     totalItems !== null && Array.isArray(run.item_ids)
       ? `Scope: ${run.item_ids.length} of ${totalItems} changes`
       : null;
-  if (!modelLabel && !scope) return null;
+  const controls = describeRunOptions(run.options);
+  if (!modelLabel && !scope && !controls) return null;
   return (
     <p data-testid="sa-run-meta" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-faint">
       {modelLabel ? <span>Model: {modelLabel}</span> : null}
+      {controls ? <span>{controls}</span> : null}
       {scope ? <span>{scope}</span> : null}
     </p>
   );
@@ -207,12 +225,18 @@ export function AgentRunPanel({
   const [run, setRun] = useState<PanelRun | null>(null);
   const [workerOnline, setWorkerOnline] = useState(true);
   const [models, setModels] = useState<AgyModel[]>([]);
+  // The team defaults every send starts from, and recent per-model timing.
+  const [defaults, setDefaults] = useState<AgentDefaults>({});
+  const [stats, setStats] = useState<AgentModelStat[]>([]);
+  const [showSettings, setShowSettings] = useState(false);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [sending, setSending] = useState(false);
   const [approving, setApproving] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [revising, setRevising] = useState(false);
   const [instructions, setInstructions] = useState("");
+  // The follow-up's controls, keyed to the review round they were set on.
+  const [followUp, setFollowUp] = useState<{ key: string; value: ControlsValue } | null>(null);
   // Diff/preview selections are KEYED to the run version they were made on
   // and IGNORED — never cleared by an effect — once a revise round moves
   // updated_at: the same derived-not-stored rule as BuilderRun's selectedFile.
@@ -236,6 +260,8 @@ export function AgentRunPanel({
         setRuns(list);
         setRun(list.find((r) => isActiveStatus(r.status)) ?? list[0] ?? null);
         if (Array.isArray(body.models)) setModels(body.models as AgyModel[]);
+        if (body.defaults && typeof body.defaults === "object") setDefaults(body.defaults as AgentDefaults);
+        if (Array.isArray(body.stats)) setStats(body.stats as AgentModelStat[]);
       } catch (e) {
         if (!cancelled) toast({ kind: "error", title: e instanceof Error ? e.message : "Could not load the AI runs" });
       } finally {
@@ -287,6 +313,9 @@ export function AgentRunPanel({
     };
   }, [canViewAgentRuns, runId, pollMs, toast]);
 
+  // Stable, so the settings dialog's load effect doesn't re-run per render.
+  const closeSettings = useCallback(() => setShowSettings(false), []);
+
   // Coarse clock for elapsed-time and the wedged-deploy check — the lint
   // (correctly) forbids Date.now() in render.
   const [now, setNow] = useState(() => Date.now());
@@ -317,13 +346,16 @@ export function AgentRunPanel({
   /** The default task for a selection — exactly what the worker composes. */
   const compose = (selected: string[]) =>
     composeTicketTask(title, undone.filter((i) => selected.includes(i.id)).map((i) => i.body));
-  /** A seeded model id is only preselected while the worker still publishes it. */
-  const knownModel = (id: string | null | undefined) => (id && models.some((m) => m.id === id) ? id : "");
+  /** Where a send's controls start: the team defaults. A retry's own controls
+   *  differ from these only where it was sent differently. */
+  const freshControls = () => controlsFromDefaults(defaults, models);
 
   /** One review round = one result-zip version; the diff cache and both
    *  selections hang off this key, so a revise round starts clean while the
    *  stale entries are simply never read again. */
   const versionKey = run ? `${run.id}:${run.updated_at}` : "";
+  const followUpStart = run ? controlsFromRun(run, defaults, models) : controlsFromDefaults(defaults, models);
+  const followUpValue = followUp && followUp.key === versionKey ? followUp.value : followUpStart;
   const openFile = picked && picked.key === versionKey ? picked.path : null;
   const selectedPage =
     pickedPage && pickedPage.key === versionKey && htmlPages.includes(pickedPage.page)
@@ -338,8 +370,10 @@ export function AgentRunPanel({
    * new run, and after "quota exhausted" switching model is the whole point.
    */
   function openDialog(seed: PanelRun | null) {
+    const start = freshControls();
+    const controls = seed ? controlsFromRun(seed, defaults, models) : start;
     if (leadMode) {
-      setDialog({ selected: [], task: seed?.task_text ?? "", edited: false, model: knownModel(seed?.model) });
+      setDialog({ selected: [], task: seed?.task_text ?? "", edited: false, controls, start });
       return;
     }
     const seedIds = seed?.item_ids;
@@ -352,7 +386,8 @@ export function AgentRunPanel({
       selected,
       task: custom ?? compose(selected),
       edited: custom !== null,
-      model: knownModel(seed?.model),
+      controls,
+      start,
     });
   }
 
@@ -383,7 +418,8 @@ export function AgentRunPanel({
       if (undone.length > 0 && dialog.selected.length !== undone.length) body.item_ids = dialog.selected;
       if (dialog.edited) body.task_text = dialog.task;
     }
-    if (dialog.model) body.model = dialog.model;
+    // Only what differs from the team defaults: the routes apply those.
+    Object.assign(body, changedControls(dialog.controls, dialog.start));
     setSending(true);
     try {
       const res = await fetch(listUrl, {
@@ -469,11 +505,13 @@ export function AgentRunPanel({
     const text = instructions.trim();
     if (!text) return;
     setRevising(true);
+    // Only what the follow-up changes; the run keeps the rest.
+    const changes = changedControls(followUpValue, followUpStart);
     try {
       const res = await fetch(`/api/site-agent/runs/${run.id}/revise`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instructions: text }),
+        body: JSON.stringify({ instructions: text, ...changes }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -481,7 +519,8 @@ export function AgentRunPanel({
         return;
       }
       setInstructions("");
-      setRun((r) => (r ? { ...r, status: "queued" } : r));
+      setFollowUp(null);
+      setRun((r) => (r ? { ...r, status: "queued", ...("model" in changes ? { model: changes.model } : {}) } : r));
     } catch (e) {
       toast({ kind: "error", title: e instanceof Error ? e.message : "Could not send the changes back" });
     } finally {
@@ -581,6 +620,16 @@ export function AgentRunPanel({
           <Bot className="h-4 w-4 text-accent-ink" /> AI developer
         </h2>
         {run ? <Pill tone={STATUS_PILL[run.status].tone}>{STATUS_PILL[run.status].label}</Pill> : null}
+        <button
+          type="button"
+          data-testid="sa-settings"
+          className={cn(iconBtn, "ml-auto")}
+          onClick={() => setShowSettings(true)}
+          title="AI developer settings — team defaults and model timing"
+          aria-label="AI developer settings"
+        >
+          <Settings2 className="h-4 w-4" />
+        </button>
       </div>
 
       {!run ? sendBlock : null}
@@ -608,6 +657,9 @@ export function AgentRunPanel({
             <Loader2 className="h-4 w-4 animate-spin" /> The AI is editing the site…
             <span className="text-xs text-text-faint">
               running for {fmtElapsed(now - new Date(run.created_at).getTime())}
+              {readRunOptions(run.options).time_limit_min
+                ? ` · ${readRunOptions(run.options).time_limit_min} min limit`
+                : ""}
             </span>
           </p>
           <RunMeta run={run} models={models} totalItems={totalItems} />
@@ -750,6 +802,13 @@ export function AgentRunPanel({
                   onChange={(e) => setInstructions(e.target.value)}
                   placeholder="e.g. keep the new phone number, but also update it on the contact page"
                 />
+                <FollowUpControls
+                  value={followUpValue}
+                  onChange={(value) => setFollowUp({ key: versionKey, value })}
+                  models={models}
+                  stats={stats}
+                  teamDefault={defaults.model ?? undefined}
+                />
                 <button
                   type="button"
                   data-testid="sa-revise"
@@ -864,7 +923,7 @@ export function AgentRunPanel({
             <p className="mt-1 text-sm text-text-muted">
               {leadMode
                 ? "Describe the change for this site. You review every edit before it goes live."
-                : "Choose what to send, adjust the task if needed, and pick a model."}
+                : "Choose what to send, adjust the task if needed, and set how the AI should work."}
             </p>
 
             {!leadMode && undone.length > 0 ? (
@@ -916,29 +975,19 @@ export function AgentRunPanel({
               ) : null}
             </div>
 
-            <div className="mt-4">
-              <label htmlFor="sa-model" className={labelCls}>
-                Model
-              </label>
-              <select
-                id="sa-model"
-                data-testid="sa-model"
-                className={fieldCls}
-                value={dialog.model}
-                onChange={(e) => {
-                  const model = e.target.value;
-                  setDialog((d) => (d ? { ...d, model } : d));
-                }}
-              >
-                <option value="">Antigravity default</option>
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-              {models.length === 0 ? (
-                <p className="mt-1 text-xs text-text-faint">Model list appears once the worker publishes it.</p>
+            <div className="mt-4 border-t border-border pt-4">
+              <RunControls
+                prefix="sa"
+                value={dialog.controls}
+                onChange={(controls) => setDialog((d) => (d ? { ...d, controls } : d))}
+                models={models}
+                stats={stats}
+                teamDefault={defaults.model ?? undefined}
+              />
+              {defaults.house_rules ? (
+                <p className="mt-3 text-xs text-text-faint" title={defaults.house_rules}>
+                  The team&rsquo;s standing rules are added to this run.
+                </p>
               ) : null}
             </div>
 
@@ -965,6 +1014,10 @@ export function AgentRunPanel({
             </div>
           </div>
         </div>
+      ) : null}
+
+      {showSettings ? (
+        <AgentSettingsDialog onClose={closeSettings} onSaved={(d) => setDefaults(d)} />
       ) : null}
     </div>
   );

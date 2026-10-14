@@ -8,6 +8,8 @@ import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
 import { subFromWebsiteLink } from "@/lib/template-engine/directadmin";
 import { AGENT_SITES_BUCKET, originalZipPath } from "@/lib/site-agent/types";
 import { resolveModelChoice, workerStatus } from "@/lib/site-agent/workerStatus";
+import { composeRunOptions, parseRunOptions } from "@/lib/site-agent/options";
+import { agentPanelContext, defaultModelFrom, getAgentDefaults, insertAgentRun } from "@/lib/site-agent/settings";
 
 export const runtime = "nodejs";
 // fetchLiveSiteZip can take a while on a slow DA archive.
@@ -17,7 +19,7 @@ const ALLOWED_PERMS = ["studio.manage", "tickets.resolve"];
 
 type Ctx = { params: Promise<{ id: string }> };
 
-type CreateBody = { task_text?: unknown; model?: unknown };
+type CreateBody = { task_text?: unknown; model?: unknown; options?: unknown };
 
 /**
  * POST — v2 F5 "AI edit site": a TICKETLESS direct edit on a lead's live
@@ -70,7 +72,14 @@ export async function POST(req: Request, ctx: Ctx) {
   if (taskText.length > 4000) {
     return NextResponse.json({ error: "The task text is too long (4000 characters max)." }, { status: 422 });
   }
-  const modelChoice = await resolveModelChoice(admin, body.model);
+  // Run controls over the team defaults; a request naming no model gets the
+  // team's default model.
+  const choice = parseRunOptions(body.options);
+  if (!choice.ok) return NextResponse.json({ error: choice.message }, { status: 422 });
+  const { defaults } = await getAgentDefaults(admin);
+  const options = composeRunOptions(choice.value, defaults);
+  const { models } = await workerStatus(admin);
+  const modelChoice = await resolveModelChoice(admin, body.model, defaultModelFrom(defaults, models));
   if (!modelChoice.ok) return NextResponse.json({ error: modelChoice.message }, { status: 422 });
 
   const fetched = await fetchLiveSiteZip(link!);
@@ -85,14 +94,10 @@ export async function POST(req: Request, ctx: Ctx) {
     .upload(originalZipPath(runId), prepared.zip, { upsert: true, contentType: "application/zip" });
   if (upErr) return NextResponse.json({ error: `Could not store the site copy: ${upErr.message}` }, { status: 502 });
 
-  const { data: run, error: insErr } = await admin
-    .from("site_agent_runs")
-    .insert({
-      id: runId, ticket_id: null, lead_id: leadId, site_host: fetched.host,
-      task_text: taskText, model: modelChoice.model, created_by: user.id,
-    })
-    .select()
-    .single();
+  const { data: run, error: insErr } = await insertAgentRun(admin, {
+    id: runId, ticket_id: null, lead_id: leadId, site_host: fetched.host,
+    task_text: taskText, model: modelChoice.model, created_by: user.id, options,
+  });
   if (insErr || !run) {
     // The zip is orphaned if we stop here — remove it best-effort (the
     // one-active-run-per-lead unique-index race lands here).
@@ -106,7 +111,7 @@ export async function POST(req: Request, ctx: Ctx) {
 
   await admin.from("activity_log").insert({
     user_id: user.id, action: "site_agent.run.created", entity_type: "lead", entity_id: leadId,
-    new_value: { run_id: run.id, site_host: fetched.host },
+    new_value: { run_id: run.id, site_host: fetched.host, model: modelChoice.model, speed: options.speed },
   });
   return NextResponse.json({ run }, { status: 201 });
 }
@@ -132,6 +137,5 @@ export async function GET(_req: Request, ctx: Ctx) {
     .order("created_at", { ascending: false })
     .limit(20);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  const status = await workerStatus(admin);
-  return NextResponse.json({ runs: data ?? [], workerOnline: status.workerOnline, models: status.models });
+  return NextResponse.json({ runs: data ?? [], ...(await agentPanelContext(admin, perms)) });
 }

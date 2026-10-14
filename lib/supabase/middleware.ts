@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { SIGNED_PREVIEW_PATH } from "@/lib/preview/signedPath";
 
 /** Reject rather than let a stalled auth call hold the request open forever. */
 function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T> {
@@ -105,7 +106,13 @@ export async function updateSession(request: NextRequest) {
     // Website CMS public content API: read-only, served to the agency
     // website server-to-server, gated by website_settings.api_key
     // (see lib/website-cms/public.ts). No session ever exists here.
-    path.startsWith("/api/public/");
+    path.startsWith("/api/public/") ||
+    // Signed site previews: the sandboxed preview page has no cookie to send
+    // with its own page and asset requests, so they carry a signed path
+    // segment instead, which the preview route verifies (lib/preview/
+    // signedPreview.ts). A login redirect here would put the LMS login page
+    // inside the preview frame.
+    SIGNED_PREVIEW_PATH.test(path);
 
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));

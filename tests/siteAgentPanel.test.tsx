@@ -794,3 +794,171 @@ describe("AgentRunPanel — pre-send dialog (v2)", () => {
     expect(within(screen.getByRole("dialog")).getByTestId("sa-dialog-send")).toBeEnabled();
   });
 });
+
+/**
+ * Run controls (2026-10-14): every send starts from the TEAM defaults and
+ * only what the sender changes is sent; a follow-up can switch model, speed
+ * and time limit; the gear opens the team settings with real model timing.
+ */
+describe("AgentRunPanel — run controls and team settings", () => {
+  const TICKET_POST = /\/api\/tickets\/tk-1\/agent-runs$/;
+  const TEAM = { model: "claude-sonnet-4-6", speed: "quick", time_limit_min: 8, retries: 2, site_map: true, house_rules: "Never change prices." };
+  const STATS = [
+    { model: "claude-sonnet-4-6", rounds: 9, failed: 0, medianMin: 2.4 },
+    { model: "gemini-3.7-flash", rounds: 14, failed: 2, medianMin: 12.6 },
+  ];
+
+  function routes(extra?: (url: string, init?: RequestInit) => Reply | null) {
+    const queued = runRow({ status: "queued" });
+    return (url: string, init?: RequestInit): Reply | null => {
+      const hit = extra?.(url, init);
+      if (hit) return hit;
+      if (url === LIST_URL && method(init) === "GET")
+        return { body: { runs: [], workerOnline: true, models: MODELS, defaults: TEAM, stats: STATS, canConfigure: true } };
+      if (url === LIST_URL && method(init) === "POST") return { status: 201, body: { run: queued } };
+      if (url === detailUrl("run-1")) return { body: { run: queued, workerOnline: true, models: MODELS } };
+      return null;
+    };
+  }
+
+  it("the dialog starts from the team defaults, shows each model's typical time, and an untouched send adds nothing", async () => {
+    const fetchMock = stubFetchRoutes(routes());
+    mount();
+    const dialog = await openDialog();
+
+    const model = within(dialog).getByTestId("sa-model");
+    expect(model).toHaveValue("claude-sonnet-4-6");
+    expect(within(model).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Antigravity default",
+      "Gemini 3.7 Flash · ~13 min",
+      "Claude Sonnet 4.6 — team default · ~2 min",
+    ]);
+    expect(within(dialog).getByTestId("sa-speed-quick")).toBeChecked();
+    expect(within(dialog).getByTestId("sa-limit")).toHaveValue("8");
+    expect(within(dialog).getByTestId("sa-retries")).toHaveValue("2");
+    expect(within(dialog).getByTestId("sa-sitemap")).toBeChecked();
+    expect(within(dialog).getByText(/typical round on this model: ~2 min \(9 in the last 30 days\)/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/standing rules are added to this run/i)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByTestId("sa-dialog-send"));
+    await waitFor(() => expect(countCalls(fetchMock, TICKET_POST, "POST")).toBe(1));
+    expect(postBody(fetchMock, TICKET_POST)).toEqual({});
+  });
+
+  it("sends only what changed: a new speed brings its own time limit; Antigravity's default is an explicit null", async () => {
+    const fetchMock = stubFetchRoutes(routes());
+    mount();
+    const dialog = await openDialog();
+
+    fireEvent.click(within(dialog).getByTestId("sa-speed-thorough"));
+    expect(within(dialog).getByTestId("sa-limit")).toHaveValue("30");
+    fireEvent.change(within(dialog).getByTestId("sa-model"), { target: { value: "" } });
+    fireEvent.change(within(dialog).getByTestId("sa-retries"), { target: { value: "0" } });
+    fireEvent.click(within(dialog).getByTestId("sa-sitemap"));
+    fireEvent.click(within(dialog).getByTestId("sa-dialog-send"));
+
+    await waitFor(() => expect(countCalls(fetchMock, TICKET_POST, "POST")).toBe(1));
+    expect(postBody(fetchMock, TICKET_POST)).toEqual({
+      model: null,
+      options: { speed: "thorough", time_limit_min: 30, retries: 0, site_map: false },
+    });
+  });
+
+  it("a time limit picked by hand survives a later speed change", async () => {
+    const fetchMock = stubFetchRoutes(routes());
+    mount();
+    const dialog = await openDialog();
+    fireEvent.change(within(dialog).getByTestId("sa-limit"), { target: { value: "45" } });
+    fireEvent.click(within(dialog).getByTestId("sa-speed-balanced"));
+    expect(within(dialog).getByTestId("sa-limit")).toHaveValue("45");
+    fireEvent.click(within(dialog).getByTestId("sa-dialog-send"));
+    await waitFor(() => expect(countCalls(fetchMock, TICKET_POST, "POST")).toBe(1));
+    expect(postBody(fetchMock, TICKET_POST)).toEqual({ options: { speed: "balanced", time_limit_min: 45 } });
+  });
+
+  it("review: the run's controls show in its header, and a follow-up can switch model and speed", async () => {
+    let status: Status = "review";
+    const review = runRow({ model: "gemini-3.7-flash", options: { speed: "balanced", time_limit_min: 15, retries: 3 } });
+    const fetchMock = stubFetchRoutes(routes((url, init) => {
+      if (url === LIST_URL && method(init) === "GET")
+        return { body: { runs: [review], workerOnline: true, models: MODELS, defaults: TEAM, stats: STATS } };
+      if (url === detailUrl("run-1") && method(init) === "GET")
+        return { body: { run: runRow({ ...review, status }), workerOnline: true, models: MODELS } };
+      if (url === "/api/site-agent/runs/run-1/revise" && method(init) === "POST") {
+        status = "queued";
+        return { body: { ok: true } };
+      }
+      return null;
+    }));
+    mount();
+
+    expect(await screen.findByTestId("sa-run-meta")).toHaveTextContent("Model: Gemini 3.7 Flash");
+    expect(screen.getByTestId("sa-run-meta")).toHaveTextContent("Balanced · 15 min limit · 3 retries");
+
+    const options = screen.getByTestId("sa-followup-options");
+    expect(options).toHaveTextContent("Gemini 3.7 Flash · Balanced · 15 min");
+    fireEvent.click(within(options).getByText(/options for this follow-up/i));
+    fireEvent.change(await screen.findByTestId("sa-followup-model"), { target: { value: "claude-sonnet-4-6" } });
+    fireEvent.change(screen.getByTestId("sa-followup-speed"), { target: { value: "quick" } });
+
+    fireEvent.change(screen.getByLabelText(/request changes/i), { target: { value: "Make the button bigger" } });
+    fireEvent.click(screen.getByTestId("sa-revise"));
+    await waitFor(() => expect(countCalls(fetchMock, /\/revise$/, "POST")).toBe(1));
+    expect(postBody(fetchMock, /\/revise$/)).toEqual({
+      instructions: "Make the button bigger",
+      model: "claude-sonnet-4-6",
+      options: { speed: "quick", time_limit_min: 8 },
+    });
+  });
+
+  it("the gear opens the team settings: defaults, rules, model timing — and saves them", async () => {
+    const fetchMock = stubFetchRoutes(routes((url, init) => {
+      if (url === "/api/site-agent/settings" && method(init) === "GET")
+        return { body: { defaults: TEAM, models: MODELS, stats: STATS, settingsAvailable: true, canConfigure: true } };
+      if (url === "/api/site-agent/settings" && method(init) === "PUT")
+        return { body: { defaults: { ...TEAM, speed: "balanced", time_limit_min: 15 } } };
+      return null;
+    }));
+    mount();
+
+    fireEvent.click(await screen.findByTestId("sa-settings"));
+    const dialog = await screen.findByRole("dialog", { name: /ai developer settings/i });
+    expect(await within(dialog).findByTestId("sa-settings-model")).toHaveValue("claude-sonnet-4-6");
+    expect(within(dialog).getByTestId("sa-settings-rules")).toHaveValue("Never change prices.");
+    const table = within(dialog).getByTestId("sa-settings-stats");
+    expect(within(table).getAllByRole("row").map((r) => r.textContent)).toEqual([
+      "ModelRoundsTypical timeFailed",
+      "Claude Sonnet 4.69~2 min0",
+      "Gemini 3.7 Flash14~13 min2",
+    ]);
+
+    fireEvent.click(within(dialog).getByTestId("sa-settings-speed-balanced"));
+    fireEvent.click(within(dialog).getByTestId("sa-settings-save"));
+    await waitFor(() => expect(countCalls(fetchMock, /\/api\/site-agent\/settings$/, "PUT")).toBe(1));
+    const put = fetchMock.mock.calls.find(([u, i]) => /settings$/.test(String(u)) && method(i as RequestInit) === "PUT");
+    expect(JSON.parse(String((put?.[1] as RequestInit).body))).toEqual({
+      model: "claude-sonnet-4-6", speed: "balanced", time_limit_min: 15, retries: 2, site_map: true,
+      house_rules: "Never change prices.",
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /ai developer settings/i })).not.toBeInTheDocument());
+
+    // The next send starts from the saved defaults.
+    const send = await openDialog();
+    expect(within(send).getByTestId("sa-speed-balanced")).toBeChecked();
+  });
+
+  it("someone who can't change the defaults sees them read-only", async () => {
+    stubFetchRoutes(routes((url, init) => {
+      if (url === "/api/site-agent/settings" && method(init) === "GET")
+        return { body: { defaults: {}, models: MODELS, stats: [], settingsAvailable: true, canConfigure: false } };
+      return null;
+    }));
+    mount();
+    fireEvent.click(await screen.findByTestId("sa-settings"));
+    const dialog = await screen.findByRole("dialog", { name: /ai developer settings/i });
+    expect(await within(dialog).findByText(/only operators and admins can change these/i)).toBeInTheDocument();
+    expect(within(dialog).getByTestId("sa-settings-model")).toBeDisabled();
+    expect(within(dialog).queryByTestId("sa-settings-save")).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/no finished runs in the last 30 days/i)).toBeInTheDocument();
+  });
+});

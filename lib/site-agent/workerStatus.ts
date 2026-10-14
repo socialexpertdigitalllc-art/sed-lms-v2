@@ -42,13 +42,17 @@ export async function workerStatus(admin: SupabaseClient): Promise<WorkerStatus>
  * authority on model ids: when it has published a list, the choice must be
  * on it (422 otherwise); when no list exists yet (the worker never managed
  * an `agy models` run) any sane id is accepted and agy itself refuses a bad
- * one at run time. Empty/whitespace means "Antigravity default" → null.
+ * one at run time. null/empty/whitespace means "Antigravity default" → null.
+ * An ABSENT model (`undefined`, a client that predates the team default)
+ * gets `whenAbsent` — the caller passes the team's default model.
  */
 export async function resolveModelChoice(
   admin: SupabaseClient,
   raw: unknown,
+  whenAbsent: string | null = null,
 ): Promise<{ ok: true; model: string | null } | { ok: false; message: string }> {
-  if (raw === undefined || raw === null) return { ok: true, model: null };
+  if (raw === undefined) return { ok: true, model: whenAbsent };
+  if (raw === null) return { ok: true, model: null };
   if (typeof raw !== "string") return { ok: false, message: "model must be a string" };
   const model = raw.trim();
   if (!model) return { ok: true, model: null };

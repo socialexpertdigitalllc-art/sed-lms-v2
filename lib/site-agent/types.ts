@@ -43,6 +43,8 @@ export interface AgentRunRow {
   item_ids: string[] | null;
   task_text: string | null;
   model: string | null;
+  /** 0086: the run's controls (lib/site-agent/options.ts); absent before it. */
+  options?: unknown;
 }
 
 /** A single agy-published model choice (`agy models` TSV: id\tlabel). */
@@ -66,17 +68,18 @@ export const MODELS_REFRESH_MS = 10 * 60_000;
  *  but never write per-chunk. */
 export const PROGRESS_THROTTLE_MS = 2500;
 /** A `running` run whose row hasn't moved for this long is reclaimable — the
- *  worker died mid-run (box rebooted, process killed). MUST exceed
- *  AGY_TIMEOUT_MS (15m) plus scheduling overhead: a LIVE run may legitimately
- *  go the full agy wall-clock without a terminal write, and it must never
- *  look stale merely because agy is slow. (The keepalive below keeps a live
- *  row far fresher than this in practice; this wall is the backstop.) */
+ *  worker died mid-run (box rebooted, process killed). A LIVE run never gets
+ *  here however long its time limit (up to 60 minutes since 0086): the
+ *  keepalive below moves its row every 30s. This wall is the backstop for a
+ *  worker that is gone, and must stay well above KEEPALIVE_MS. */
 export const STALE_RUNNING_MS = 20 * 60_000;
 /** Cadence of the worker's guarded keepalive patch while agy runs — keeps a
  *  live run's updated_at moving (so it can't be reclaimed as stale) and
  *  notices a dashboard discard even when agy emits no events for minutes. */
 export const KEEPALIVE_MS = 30_000;
-/** Hard wall-clock cap on one run's agy work — ALL attempts below share it. */
+/** The time limit of a run that names none (the Balanced speed's): ALL
+ *  attempts below share it. Runs choose their own since 0086
+ *  (lib/site-agent/options.ts). */
 export const AGY_TIMEOUT_MS = 15 * 60_000;
 /** Google's Cloud Code API drops streams and 500s in bursts; agy retries a
  *  failed request itself, but a stream cut MID-turn ends a headless run with
