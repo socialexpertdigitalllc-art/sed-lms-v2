@@ -167,7 +167,9 @@ async function route(msg: InboundMessage, deps: ChannelDeps, reply: Reply): Prom
     if (cmd.kind === "code") return linkChat(msg, cmd.code, deps, reply);
     return reply(MESSAGES.notLinked);
   }
-  await updateLink(deps.admin, link.id, { last_seen_at: deps.now().toISOString() }).catch(() => {});
+  // A renamed Telegram account shows under its new @username in the app.
+  const relabel = msg.label && msg.label !== link.label ? { label: msg.label } : {};
+  await updateLink(deps.admin, link.id, { last_seen_at: deps.now().toISOString(), ...relabel }).catch(() => {});
   if (msg.text === null) return reply(MESSAGES.textOnly);
   if (!text) return;
   return serveLinked(msg, link, text, cmd, deps, reply);

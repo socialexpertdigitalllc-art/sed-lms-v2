@@ -104,7 +104,9 @@ const MAX_ITEMS = 15;
 export function howToAnswer(card: Pick<ActionCard, "risk" | "confirmPhrase" | "approval">, n?: number | null): string {
   const num = n ? ` ${n}` : "";
   if (card.approval) return `Reply YES${num} to send it to an admin for approval, or NO${num} to cancel.`;
-  if (card.risk === "critical" && card.confirmPhrase) return `Type "${card.confirmPhrase}" to confirm, or NO${num} to cancel.`;
+  if (card.risk === "critical") {
+    return card.confirmPhrase ? `Type "${card.confirmPhrase}" to confirm, or NO${num} to cancel.` : `Confirm it in SED AI, or reply NO${num} to cancel.`;
+  }
   return `Reply YES${num} to confirm or NO${num} to cancel.`;
 }
 

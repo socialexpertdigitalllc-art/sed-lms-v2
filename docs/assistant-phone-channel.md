@@ -27,8 +27,8 @@ the same answers, the same proposals, the same checks as in the app.
    platforms refuse anything else.
 
 Set the variables in the server environment (`.env.local` on the box), then
-restart the app. A channel appears in the app only when **all** of its
-variables are set.
+restart the app. People can link a channel only when **all** of its variables
+are set. Until then, its Link button is greyed out.
 
 ## Telegram
 

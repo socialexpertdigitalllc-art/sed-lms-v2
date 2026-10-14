@@ -94,7 +94,6 @@ vi.mock("@/lib/assistant/http", async (orig) => ({
   assistantGuard: async () => h.guard,
 }));
 
-import { ActAsError } from "@/lib/auth/actAs";
 import { runTurn } from "@/lib/assistant/engine";
 import { cancelAction, confirmAction, requestApproval } from "@/lib/assistant/actions/run";
 import { bell } from "@/lib/assistant/actions/people";
@@ -282,6 +281,9 @@ function configureAll() {
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  // Proposals expire against the real clock: pin it to the fixtures' "now".
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
   for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
   for (const k of ENV_KEYS) delete process.env[k];
   h.after = [];
@@ -306,6 +308,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const k of ENV_KEYS) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
@@ -860,7 +863,6 @@ describe("a message from a phone", () => {
     await handleInbound(msg("hello"), deps);
     expect(sent).toEqual([MESSAGES.deactivated]);
     expect(db.tables.assistant_channel_links[0].active).toBe(false);
-    expect(ActAsError).toBeDefined();
   });
 
   it("keeps the link when signing in only failed for now", async () => {
