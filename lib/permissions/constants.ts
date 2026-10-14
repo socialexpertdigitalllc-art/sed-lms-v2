@@ -96,6 +96,8 @@ export const PERMISSIONS = [
   { key: "website.view", name: "View Website CMS", category: "website" },
   { key: "website.manage", name: "Manage Website CMS", category: "website", is_sensitive: true },
   { key: "assistant.use", name: "Use SED Assistant", category: "assistant" },
+  { key: "assistant.act", name: "Use SED AI Action Mode", category: "assistant", is_sensitive: true },
+  { key: "assistant.actions.manage", name: "Manage SED AI Actions", category: "assistant", is_sensitive: true },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];

@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDown, Brain, Eye, PanelLeft, Pencil, SquarePen, X } from "lucide-react";
-import type { AssistantMemory } from "@/lib/assistant/types";
+import Link from "next/link";
+import { ArrowDown, Brain, Eye, ListChecks, PanelLeft, Pencil, SquarePen, X } from "lucide-react";
+import type { ActionCard } from "@/lib/assistant/actions/card";
+import type { AssistantMemory, AssistantMode, MessageAttachment } from "@/lib/assistant/types";
 import type { ClientConversation, UiMessage } from "@/lib/assistant/view";
 import { useAssistant } from "@/providers/AssistantProvider";
 import { iconBtn } from "@/components/common/buttons";
@@ -13,6 +15,8 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ConversationList } from "./ConversationList";
 import { MemoryPanel } from "./MemoryPanel";
 import { NameAssistant } from "./NameAssistant";
+import { ProactiveSuggestions } from "./ProactiveSuggestions";
+import { SaveShortcutDialog } from "./SaveShortcutDialog";
 import { SedAiAvatar } from "./SedAiMark";
 import { Suggestions } from "./Suggestions";
 import { TurnView } from "./TurnView";
@@ -35,7 +39,10 @@ export interface AssistantAppProps {
   initialMemories: AssistantMemory[];
   initialConversationId: string | null;
   initialMessages: UiMessage[];
+  initialActions?: ActionCard[];
   initialRunning: boolean;
+  /** Act mode is available to this person (assistant.act). */
+  canAct?: boolean;
 }
 
 function upsert(list: ClientConversation[], c: ClientConversation): ClientConversation[] {
@@ -57,11 +64,14 @@ export function AssistantApp(props: AssistantAppProps) {
   const [renaming, setRenaming] = useState(false);
   const [listOpen, setListOpen] = useState(false);
   const [deleting, setDeleting] = useState<ClientConversation | null>(null);
+  const [shortcut, setShortcut] = useState<string | null>(null);
+  const canAct = Boolean(props.canAct);
   const { scrollRef, contentRef, onScroll, onClickCapture, atBottom, scrollToBottom } = useStickToBottom();
 
   const chat = useAssistantChat({
     initialConversationId: props.initialConversationId,
     initialMessages: props.initialMessages,
+    initialActions: props.initialActions,
     initialRunning: props.initialRunning,
     onActiveChange: setUrl,
     onConversation: (c) => setConversations((prev) => upsert(prev, c)),
@@ -92,9 +102,9 @@ export function AssistantApp(props: AssistantAppProps) {
   }, [newChat]);
 
   const ask = useCallback(
-    (text: string) => {
+    (text: string, extras?: { attachments?: MessageAttachment[]; mode?: AssistantMode }) => {
       scrollToBottom(false);
-      void send(text);
+      void send(text, { attachments: extras?.attachments, mode: extras?.mode });
     },
     [send, scrollToBottom],
   );
@@ -203,6 +213,12 @@ export function AssistantApp(props: AssistantAppProps) {
           >
             <Eye className="h-4 w-4" />
           </button>
+          {canAct ? (
+            <Link href="/assistant/actions" className={cn(iconBtn, "w-auto gap-1 px-2 text-xs")} aria-label="Actions" title="What SED AI did for you">
+              <ListChecks className="h-4 w-4" />
+              <span className="hidden sm:inline">Actions</span>
+            </Link>
+          ) : null}
           <button type="button" className={cn(iconBtn, "w-auto gap-1 px-2 text-xs")} onClick={() => setMemoryOpen(true)} aria-label="Memory" title="Memory">
             <Brain className="h-4 w-4" />
             <span className="tabular-nums">{memories.length}</span>
@@ -249,10 +265,25 @@ export function AssistantApp(props: AssistantAppProps) {
                   </p>
                 </div>
                 {notice}
-                <Composer assistantName={name} onSend={ask} onStop={() => void chat.stop()} running={chat.running} autoFocus />
+                <Composer
+                  assistantName={name}
+                  onSend={ask}
+                  onStop={() => void chat.stop()}
+                  running={chat.running}
+                  autoFocus
+                  canAct={canAct}
+                  mode={chat.mode}
+                  onModeChange={chat.setMode}
+                  conversationId={chat.activeId}
+                />
+                {canAct ? (
+                  <div className="mt-6">
+                    <ProactiveSuggestions onPick={(prompt) => ask(prompt, { mode: "act" })} />
+                  </div>
+                ) : null}
                 {props.suggestions.length ? (
                   <div className="mt-6">
-                    <Suggestions items={props.suggestions} onPick={ask} layout="grid" />
+                    <Suggestions items={props.suggestions} onPick={(t) => ask(t)} layout="grid" />
                   </div>
                 ) : null}
               </div>
@@ -283,6 +314,9 @@ export function AssistantApp(props: AssistantAppProps) {
                           onRegenerate={latest && idle && t.status !== "error" ? () => chat.regenerate(t) : undefined}
                           onEdit={latest && idle ? (text) => chat.edit(t, text) : undefined}
                           onRate={(id, value) => void chat.rate(id, value)}
+                          onCardOp={chat.actOn}
+                          onRunPlan={chat.runPlan}
+                          onSaveShortcut={setShortcut}
                         />
                       );
                     })
@@ -311,6 +345,10 @@ export function AssistantApp(props: AssistantAppProps) {
                 running={chat.running}
                 placeholder={`Reply to ${name}…`}
                 autoFocus
+                canAct={canAct}
+                mode={chat.mode}
+                onModeChange={chat.setMode}
+                conversationId={chat.activeId}
               />
             </div>
           </>
@@ -325,6 +363,18 @@ export function AssistantApp(props: AssistantAppProps) {
             <NameAssistant mode="rename" compact onDone={() => setRenaming(false)} />
           </div>
         </div>
+      ) : null}
+
+      {shortcut !== null ? (
+        <SaveShortcutDialog
+          prompt={shortcut}
+          canAct={canAct}
+          onClose={() => setShortcut(null)}
+          onSaved={(command) => {
+            setShortcut(null);
+            toast({ kind: "success", title: `Saved as /${command}`, body: "Type / in the message box to use it." });
+          }}
+        />
       ) : null}
 
       {deleting ? (

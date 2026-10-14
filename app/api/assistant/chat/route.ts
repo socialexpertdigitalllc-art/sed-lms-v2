@@ -4,9 +4,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { assistantGuard, storeError } from "@/lib/assistant/http";
 import { createConversation, deleteTurn, getConversation, latestQuestion, updateConversation } from "@/lib/assistant/store";
 import { endRun, startRun } from "@/lib/assistant/runs";
+import { cancelTurnActions } from "@/lib/assistant/actions/store";
 import { runTurn } from "@/lib/assistant/engine";
 import { titleFromMessage } from "@/lib/assistant/prompt";
-import type { AssistantStreamEvent } from "@/lib/assistant/types";
+import type { AssistantStreamEvent, MessageAttachment } from "@/lib/assistant/types";
 
 export const runtime = "nodejs";
 // A deep question can take several tool rounds; the stream's own idle and
@@ -30,6 +31,12 @@ const bodySchema = z
     conversationId: z.string().uuid().nullish(),
     message: z.string().trim().min(1, "Type a message first.").max(8000, "Keep a message under 8,000 characters."),
     replaceTurnId: z.string().uuid().nullish(),
+    /** Ask (default) or Act — Act needs the assistant.act permission. */
+    mode: z.enum(["ask", "act"]).optional(),
+    /** Where the person is in the app (the floating chat). */
+    page: z.object({ path: z.string().max(500), title: z.string().max(200).optional() }).nullish(),
+    /** Files attached in the chat (ids from POST /api/assistant/uploads). */
+    attachments: z.array(z.string().uuid()).max(6, "Attach at most 6 files to one message.").optional(),
   })
   .refine((b) => !b.replaceTurnId || b.conversationId, { message: "Pick the chat to answer again." });
 
@@ -54,6 +61,18 @@ export async function POST(req: Request) {
   }
 
   const admin = createAdminClient();
+
+  // Attachments must be the caller's own files.
+  let attachments: MessageAttachment[] = [];
+  if (parsed.data.attachments?.length) {
+    const ids = [...new Set(parsed.data.attachments)];
+    const { data: files, error } = await admin.from("assistant_uploads").select("id, name, mime").eq("user_id", caller.user.id).in("id", ids);
+    if (error) return storeError(error, "Could not read the attached files.");
+    if ((files ?? []).length !== ids.length) return NextResponse.json({ error: "An attached file is missing. Attach it again." }, { status: 422 });
+    attachments = ids.map((id) => (files ?? []).find((f) => f.id === id)!).map((f) => ({ id: f.id as string, name: f.name as string, mime: f.mime as string }));
+  }
+  const mode = parsed.data.mode === "act" && caller.perms.has("assistant.act") ? "act" : "ask";
+
   let conversation;
   try {
     conversation = parsed.data.conversationId
@@ -80,6 +99,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Only the latest question can be asked again." }, { status: 409 });
       }
       await deleteTurn(admin, caller.user.id, conversation.id, replace);
+      // Cards the old answer prepared would otherwise stay confirmable with no
+      // answer around them.
+      await cancelTurnActions(admin, caller.user.id, replace);
       // A chat still named after the question being edited follows the edit.
       if (conversation.title === titleFromMessage(latest.content) && latest.content !== parsed.data.message) {
         const retitled = await updateConversation(admin, caller.user.id, conversation.id, { title: titleFromMessage(parsed.data.message) });
@@ -115,6 +137,10 @@ export async function POST(req: Request) {
         text: parsed.data.message,
         emit,
         signal: claim.controller.signal,
+        mode,
+        page: parsed.data.page ?? null,
+        attachments,
+        source: "chat",
       })
         .catch((e) => {
           console.error("[assistant] turn crashed:", e);

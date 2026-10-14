@@ -1,5 +1,7 @@
 import { CalcError, evaluate } from "../calc";
 import type { ToolDefinition } from "../llm";
+import type { AssistantMode } from "../types";
+import { ACTION_TOOLS } from "./actions";
 import { forgetMemoryTool, saveMemoryTool } from "./memory";
 import { analyzeFollowUpsTool } from "./followups";
 import { breakdownLeadsTool, leadDetailsTool, pipelineSummaryTool, searchLeadsTool } from "./leads";
@@ -54,10 +56,16 @@ export const ALL_TOOLS: AssistantTool[] = [
   calculateTool,
   saveMemoryTool,
   forgetMemoryTool,
+  ...ACTION_TOOLS,
 ];
 
-export function toolsFor(perms: Set<string>): AssistantTool[] {
-  return ALL_TOOLS.filter((t) => t.available(perms));
+/** Is this tool offered in this mode? (Act-mode tools only in Act mode; the switch only in Ask.) */
+export function inMode(t: AssistantTool, mode: AssistantMode): boolean {
+  return !t.modes || t.modes.includes(mode);
+}
+
+export function toolsFor(perms: Set<string>, mode: AssistantMode = "ask"): AssistantTool[] {
+  return ALL_TOOLS.filter((t) => t.available(perms) && inMode(t, mode));
 }
 
 export function toolDefinitions(tools: AssistantTool[]): ToolDefinition[] {
@@ -109,7 +117,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolContext): 
     return { ok, content, summary, label: tool?.label ?? name, args: args ?? {}, durationMs: Date.now() - started };
   };
 
-  if (!tool || !tool.available(ctx.perms)) {
+  if (!tool || !tool.available(ctx.perms) || !inMode(tool, ctx.act?.mode ?? "ask")) {
     return finish(false, { error: `There is no tool called "${name}" available to this user.` }, "Unavailable tool");
   }
   if (args === null) {

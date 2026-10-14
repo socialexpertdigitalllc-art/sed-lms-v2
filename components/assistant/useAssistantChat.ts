@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AnswerFeedback, AssistantMemory, AssistantStreamEvent } from "@/lib/assistant/types";
+import type { ActionCard } from "@/lib/assistant/actions/card";
+import type { AnswerFeedback, AssistantMemory, AssistantMode, AssistantStreamEvent, MessageAttachment, PageContext } from "@/lib/assistant/types";
 import type { ClientConversation, UiMessage } from "@/lib/assistant/view";
-import { applyEvent, liveTurn, PENDING_PREFIX, turnsFromMessages, type TurnModel } from "@/lib/assistant/turns";
+import { applyEvent, liveTurn, PENDING_PREFIX, turnsFromMessages, withCard, type TurnModel } from "@/lib/assistant/turns";
 
 /**
  * One open chat with the assistant: which conversation is open, its turns,
@@ -26,17 +27,33 @@ export async function fetchConversation(
   const body = (await res.json().catch(() => ({}))) as {
     conversation?: ClientConversation;
     messages?: UiMessage[];
+    actions?: ActionCard[];
     running?: boolean;
     error?: string;
   };
   if (!res.ok || !body.conversation) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status });
-  return { conversation: body.conversation, turns: turnsFromMessages(body.messages ?? []), running: Boolean(body.running) };
+  return { conversation: body.conversation, turns: turnsFromMessages(body.messages ?? [], body.actions ?? []), running: Boolean(body.running) };
 }
+
+/** What a card button sends, and what comes back. */
+export type CardOp = "confirm" | "cancel" | "undo" | "request";
+export interface CardOpBody {
+  edits?: Record<string, unknown>;
+  selected?: string[];
+  phrase?: string;
+  note?: string;
+}
+export type CardOpResult = { ok: true; card: ActionCard } | { ok: false; error: string; problems?: { field: string; message: string }[] };
 
 export interface AssistantChatOptions {
   initialConversationId?: string | null;
   initialMessages?: UiMessage[];
+  initialActions?: ActionCard[];
   initialRunning?: boolean;
+  /** Where the person is right now (the floating chat), read when a question is sent. */
+  getPage?: () => PageContext | null;
+  /** The assistant switched itself to Act mode for a request. */
+  onModeSwitch?: (task: string) => void;
   /** The open conversation changed: created, switched to, or cleared. */
   onActiveChange?: (id: string | null) => void;
   /** A conversation was created, opened, or touched by an answer. */
@@ -55,7 +72,9 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
   });
 
   const [activeId, setActiveIdState] = useState<string | null>(opts.initialConversationId ?? null);
-  const [turns, setTurns] = useState<TurnModel[]>(() => turnsFromMessages(opts.initialMessages ?? []));
+  const [turns, setTurns] = useState<TurnModel[]>(() => turnsFromMessages(opts.initialMessages ?? [], opts.initialActions ?? []));
+  /** Ask or Act for the next question (Act only matters to people who have it). */
+  const [mode, setMode] = useState<AssistantMode>("ask");
   const [live, setLive] = useState<TurnModel | null>(null);
   const [remoteRunning, setRemoteRunning] = useState(Boolean(opts.initialRunning));
   const [loading, setLoading] = useState(false);
@@ -139,10 +158,12 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
   // Read inside the actions without making them depend on every change.
   const turnsRef = useRef(turns);
   const liveRef = useRef(live);
+  const modeRef = useRef(mode);
   useEffect(() => {
     turnsRef.current = turns;
     liveRef.current = live;
-  }, [turns, live]);
+    modeRef.current = mode;
+  }, [turns, live, mode]);
 
   /**
    * Ask something. With `replaceTurnId` the chat's latest question is asked
@@ -150,7 +171,7 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
    * thread at once, and comes back if the server turns the request down.
    */
   const send = useCallback(
-    async (text: string, opts: { replaceTurnId?: string } = {}) => {
+    async (text: string, opts: { replaceTurnId?: string; attachments?: MessageAttachment[]; mode?: AssistantMode } = {}) => {
       if (streamRef.current || remoteRunning) return;
       const controller = new AbortController();
       const startedIn = activeRef.current;
@@ -158,9 +179,12 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
       streamRef.current = { controller, conversationId };
       const before = turnsRef.current;
       const liveBefore = liveRef.current;
+      const askMode = opts.mode ?? modeRef.current;
+      const attachments = opts.attachments ?? [];
       if (opts.replaceTurnId) setTurns(before.filter((t) => t.id !== opts.replaceTurnId));
       setNotice(null);
-      setLive(liveTurn(`${PENDING_PREFIX}${Date.now()}`, text));
+      setLive(liveTurn(`${PENDING_PREFIX}${Date.now()}`, text, Date.now(), { attachments, mode: askMode }));
+      const page = optsRef.current.getPage?.() ?? null;
 
       let finished = false;
       // Did the server take the question in? Until it has, there is no answer
@@ -170,9 +194,15 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
         const res = await fetch("/api/assistant/chat", {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify(
-            opts.replaceTurnId ? { conversationId: startedIn, message: text, replaceTurnId: opts.replaceTurnId } : { conversationId: startedIn, message: text },
-          ),
+          body: JSON.stringify({
+            conversationId: startedIn,
+            message: text,
+            ...(opts.replaceTurnId ? { replaceTurnId: opts.replaceTurnId } : {}),
+            // Ask is the default: only Act is said out loud.
+            ...(askMode === "act" ? { mode: "act" } : {}),
+            ...(attachments.length ? { attachments: attachments.map((a) => a.id) } : {}),
+            ...(page ? { page } : {}),
+          }),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
@@ -219,6 +249,10 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
             if (event.type === "memory") {
               optsRef.current.onMemory?.(event.action, event.memory);
               continue;
+            }
+            if (event.type === "mode" && event.mode === "act") {
+              setMode("act");
+              optsRef.current.onModeSwitch?.(event.reason);
             }
             if (event.type === "done" || event.type === "error") finished = true;
             setLive((t) => t && applyEvent(t, event));
@@ -273,12 +307,52 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     (turn: TurnModel, text = turn.question) => {
       const question = text.trim();
       if (!question) return;
+      const again = { attachments: turn.attachments, ...(turn.mode ? { mode: turn.mode } : {}) };
       if (turn.id.startsWith(PENDING_PREFIX)) {
         setLive(null);
-        void send(question);
-      } else void send(question, { replaceTurnId: turn.id });
+        void send(question, again);
+      } else void send(question, { ...again, replaceTurnId: turn.id });
     },
     [send],
+  );
+
+  /** Show a card's latest state wherever it is. */
+  const updateCard = useCallback((card: ActionCard) => {
+    setTurns((list) => list.map((t) => withCard(t, card)));
+    setLive((t) => (t ? withCard(t, card) : t));
+  }, []);
+
+  /** Confirm, cancel, undo, or send for approval — the card's buttons. */
+  const actOn = useCallback(
+    async (card: ActionCard, op: CardOp, body: CardOpBody = {}): Promise<CardOpResult> => {
+      try {
+        const res = await fetch(`/api/assistant/actions/${card.id}/${op}`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) });
+        const json = (await res.json().catch(() => ({}))) as { card?: ActionCard; error?: string; problems?: { field: string; message: string }[] };
+        if (json.card) updateCard(json.card);
+        if (!res.ok || !json.card) return { ok: false, error: json.error ?? `That did not work (HTTP ${res.status}).`, problems: json.problems };
+        return { ok: true, card: json.card };
+      } catch {
+        return { ok: false, error: "Could not reach the server. Check your connection and try again." };
+      }
+    },
+    [updateCard],
+  );
+
+  /** "Run all" on a plan: its steps in order. */
+  const runPlan = useCallback(
+    async (planId: string): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const res = await fetch(`/api/assistant/actions/plan/${planId}/confirm`, { method: "POST", headers: JSON_HEADERS, body: "{}" });
+        const json = (await res.json().catch(() => ({}))) as { cards?: ActionCard[]; error?: string };
+        for (const c of json.cards ?? []) updateCard(c);
+        if (!res.ok) return { ok: false, error: json.error ?? `HTTP ${res.status}` };
+        const failed = (json.cards ?? []).find((c) => c.status === "failed" || c.error);
+        return failed ? { ok: false, error: failed.error ?? "A step failed." } : { ok: true };
+      } catch {
+        return { ok: false, error: "Could not reach the server." };
+      }
+    },
+    [updateCard],
   );
 
   /** Answer the latest question again, replacing its answer. */
@@ -346,5 +420,10 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     retry,
     rate,
     stop,
+    mode,
+    setMode,
+    actOn,
+    runPlan,
+    updateCard,
   };
 }

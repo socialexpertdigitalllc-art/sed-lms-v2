@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { ActionCard } from "../actions/card";
+import type { StoredAction } from "../actions/types";
 import type { TurnData } from "./data";
-import type { AssistantMemory } from "../types";
+import type { AssistantMemory, AssistantMode } from "../types";
 
 /**
  * Everything a tool needs, built once per user message.
@@ -26,9 +28,28 @@ export interface ToolContext {
   data: TurnData;
   /** Side effects the UI should hear about immediately (a memory saved). */
   emit?: (event: ToolSideEvent) => void;
+  /** Act mode: present when this person may use it (assistant.act). */
+  act?: ActState;
 }
 
-export type ToolSideEvent = { type: "memory"; action: "saved" | "forgotten"; memory: AssistantMemory };
+/** What the action tools need to know about this turn. */
+export interface ActState {
+  mode: AssistantMode;
+  /** The question's turn id — proposals are filed under it. */
+  turnId: string;
+  source: StoredAction["source"];
+  /** Admin-department member (several endpoints check it). */
+  isAdmin: boolean;
+  /** Set by switch_to_action_mode: the engine switches after this round. */
+  switchRequested?: string | null;
+  /** The tool call being run (set by the engine per call). */
+  callId?: string | null;
+}
+
+export type ToolSideEvent =
+  | { type: "memory"; action: "saved" | "forgotten"; memory: AssistantMemory }
+  | { type: "action"; card: ActionCard }
+  | { type: "mode"; mode: AssistantMode; reason: string };
 
 export interface ToolResult {
   /** JSON-serialisable; what the model reads. */
@@ -55,6 +76,10 @@ export interface AssistantTool {
   parameters: ToolParameters;
   /** Checked when offering tools to the model AND again before every run. */
   available: (perms: Set<string>) => boolean;
+  /** Which modes offer it (default: both). */
+  modes?: AssistantMode[];
+  /** Runs alone, in call order — never alongside other calls (changes, proposals). */
+  sequential?: boolean;
   run: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
 }
 

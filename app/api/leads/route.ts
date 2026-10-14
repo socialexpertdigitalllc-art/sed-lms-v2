@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { notify } from "@/lib/notifications/notify";
 import { createLeadSchema } from "@/lib/leads/schema";
+import { leadPayloadErrors, leadPayloadMessage } from "@/lib/leads/serverRules";
 import { catSetKey } from "@/lib/leads/categories";
 import { isAllowedClosedBy, CLOSED_BY_MESSAGE } from "@/lib/leads/closedBy";
 import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
@@ -54,6 +55,15 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json(
       { error: "Invalid input", issues: parsed.error.flatten() },
+      { status: 422 }
+    );
+  }
+  // The New Lead form's own rules, server-side: a lead is complete or it is
+  // not created, whoever (or whatever) submits it. See lib/leads/serverRules.ts.
+  const ruleErrors = leadPayloadErrors(body ?? {});
+  if (Object.keys(ruleErrors).length) {
+    return NextResponse.json(
+      { error: leadPayloadMessage(ruleErrors), issues: { formErrors: [], fieldErrors: Object.fromEntries(Object.entries(ruleErrors).map(([k, v]) => [k, [v]])) } },
       { status: 422 }
     );
   }

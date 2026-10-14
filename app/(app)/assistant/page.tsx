@@ -12,6 +12,8 @@ import { toClientConversation, toUiMessage, type ClientConversation, type UiMess
 import { DEFAULT_ASSISTANT_NAME } from "@/lib/assistant/name";
 import { isRunning } from "@/lib/assistant/runs";
 import type { AssistantMemory } from "@/lib/assistant/types";
+import { listConversationActions, toCard } from "@/lib/assistant/actions/store";
+import type { ActionCard } from "@/lib/assistant/actions/card";
 import { AssistantApp } from "@/components/assistant/AssistantApp";
 
 export const metadata = { title: DEFAULT_ASSISTANT_NAME };
@@ -56,6 +58,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
   let conversations: ClientConversation[] = [];
   let memories: AssistantMemory[] = [];
   let messages: UiMessage[] = [];
+  let actions: ActionCard[] = [];
   let activeId: string | null = null;
   try {
     const [list, mem] = await Promise.all([listConversations(admin, user.id), listMemories(admin, user.id)]);
@@ -64,6 +67,8 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
     if (c && UUID_RE.test(c) && (await getConversation(admin, user.id, c))) {
       activeId = c;
       messages = (await listMessages(admin, user.id, c)).map(toUiMessage);
+      // Action cards (none until migration 0087 is applied).
+      actions = (await listConversationActions(admin, user.id, c).catch(() => [])).map((a) => toCard(a));
     }
   } catch (e) {
     if (isMissingTableError(e)) return <Notice title={`${DEFAULT_ASSISTANT_NAME} — almost ready`} body={MIGRATION_MESSAGE} />;
@@ -80,7 +85,9 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
       initialMemories={memories}
       initialConversationId={activeId}
       initialMessages={messages}
+      initialActions={actions}
       initialRunning={activeId ? isRunning(activeId) : false}
+      canAct={perms.has("assistant.act")}
     />
   );
 }

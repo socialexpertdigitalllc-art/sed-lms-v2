@@ -255,7 +255,8 @@ export type AiTaskKey =
   | "content_write"
   | "site_build"
   | "image_rank"
-  | "assistant_chat";
+  | "assistant_chat"
+  | "assistant_act";
 
 export interface AiTaskDescriptor {
   key: AiTaskKey;
@@ -411,6 +412,18 @@ const assistantChat: AiTaskDescriptor = {
   routable: true,
 };
 
+const assistantAct: AiTaskDescriptor = {
+  key: "assistant_act",
+  label: "SED Assistant — Act mode",
+  description:
+    "The same assistant when someone asks it to DO something — create a lead, log a call, open a ticket. It gathers every required field, checks it, and proposes the change for the person to confirm, so a model that follows instructions to the letter matters more here than speed. FUNCTION CALLING IS MANDATORY. Pick the strongest tool-calling model you have; it falls back to its own default (not the chat model) when unset.",
+  where: "lib/assistant/engine.ts",
+  requires: { vision: false, minOutputTokens: 8000, toolCalling: true },
+  defaultProvider: "minimax",
+  defaultModel: "MiniMax-M3",
+  routable: true,
+};
+
 export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
   contentPlan,
   fileRegen,
@@ -421,6 +434,7 @@ export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
   siteBuild,
   imageRank,
   assistantChat,
+  assistantAct,
 ];
 
 export function getTask(key: string): AiTaskDescriptor | undefined {

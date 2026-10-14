@@ -38,9 +38,12 @@ export interface WireAssistantMessage {
   reasoning_content?: string;
 }
 
+/** A user message's parts when it carries images (models with vision only). */
+export type UserContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 export type WireMessage =
   | { role: "system"; content: string }
-  | { role: "user"; content: string }
+  | { role: "user"; content: string | UserContentPart[] }
   | WireAssistantMessage
   | { role: "tool"; tool_call_id: string; name?: string; content: string };
 
@@ -96,7 +99,10 @@ export const CHAT_MAX_ATTEMPTS = 3;
 export function estimateMessageTokens(messages: WireMessage[], tools?: ToolDefinition[]): number {
   let chars = 0;
   for (const m of messages) {
-    chars += (m.content ?? "").length + 8;
+    // An image is billed as roughly a thousand tokens whatever its size.
+    chars += Array.isArray(m.content)
+      ? m.content.reduce((n, p) => n + (p.type === "text" ? p.text.length : 1000 * CHARS_PER_TOKEN), 0) + 8
+      : (m.content ?? "").length + 8;
     if (m.role === "assistant" && m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
   }
   if (tools?.length) chars += JSON.stringify(tools).length;

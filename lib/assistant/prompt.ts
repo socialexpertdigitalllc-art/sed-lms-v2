@@ -1,7 +1,7 @@
 import { visibleStatuses } from "@/lib/leads/categories";
 import { AI_BRAND, DEFAULT_ASSISTANT_NAME } from "./name";
 import { memoryHandle } from "./store";
-import type { AssistantMemory } from "./types";
+import type { AssistantMemory, AssistantMode } from "./types";
 
 /**
  * The assistant's system prompt: who it is talking to, what that person's
@@ -47,6 +47,15 @@ export function describeScope({ perms, teamSize }: ScopeFacts): string[] {
   return lines;
 }
 
+export interface ActPromptFacts {
+  /** "ask" offers the switch; "act" offers the action tools. */
+  mode: AssistantMode;
+  /** The action list (Act mode only). */
+  catalogue?: string;
+  /** This chat's actions and where each stands, newest last. */
+  history?: string[];
+}
+
 export interface PromptInput {
   companyName: string;
   /** What this user named their assistant. */
@@ -57,6 +66,47 @@ export interface PromptInput {
   now: Date;
   scope: string[];
   memories: AssistantMemory[];
+  /** Present when this person may use Act mode. */
+  act?: ActPromptFacts | null;
+  /** Where they are in the app ("the lead “Jumbo's Pizza” (/leads/…)"). */
+  page?: string | null;
+}
+
+/** The Act-mode part of the prompt. PURE. */
+export function actSection(a: ActPromptFacts | null | undefined, tz: string): string {
+  if (!a) {
+    return `\n\n## Making changes\nYou cannot change anything in the app for this person: SED AI's Act mode is not enabled for their account (an admin can enable it). If they ask you to do something, say so in one sentence and tell them where in the app to do it.`;
+  }
+  const history = a.history?.length ? `\n\n## Actions in this chat\nWhat happened to the changes you prepared (newest last). Only these outcomes are real — never claim one that is not here:\n${a.history.join("\n")}` : "";
+  if (a.mode === "ask") {
+    return `\n\n## Making changes\nYou can also make changes in the app for this person — create and update leads, log calls, open tickets, start website builds, send emails and more — always with their confirmation. When they ask you to DO something (not to look something up), call switch_to_action_mode first; you then get the tools to prepare it. Never say you cannot make changes.${history}`;
+  }
+  return `\n\n## Act mode
+Act mode is on: besides answering, you make changes in the app for this person — but ONLY by preparing them for confirmation. You never change anything yourself: prepare_action stores a proposal and shows the person a card, and the change happens only when THEY press its button.
+
+How to do a task:
+1. Pick the action from the list below. If you have not used it in this chat, call describe_action first to learn its fields.
+2. Fill fields ONLY from what the person said, what they pasted, or what your lookups returned. Never invent, assume or "fill in" a value — no made-up phones, emails, prices, dates, colours or names. A field they did not give is missing, not guessable.
+3. Call prepare_action with everything you have, even if incomplete: it checks every value with the app's own rules and says what is missing or wrong.
+4. If anything is missing or wrong, ask for ALL of it in ONE short message: a numbered list, each item with its options or format. Then call prepare_action again with the complete set (earlier values included).
+5. When it returns "proposed", a card is shown under your message. Say in one or two sentences what will happen and that it happens when they press the button. NEVER say it is done — it is not done until they confirm, and you will see the outcome under "Actions in this chat".
+6. If they want something changed on a card, call prepare_action again with the correction and replaces = that card's action_id. Small edits they can also make on the card itself.
+7. Several changes that belong together (create a lead, then open a ticket on it): use propose_plan. A later step can use an earlier step's record as "@1", "@2"…
+8. Name records by what the person calls them (or by an id a lookup returned). If a name matches several, ask which one — never pick.
+9. Times: YYYY-MM-DDTHH:mm in company time (${tz}), converting "tomorrow 10am" yourself. If they give another timezone ("10am his time, Texas"), include its offset: 2026-10-15T10:00-05:00.
+10. A pasted Google Maps / Yelp link: read_business_link reads what the listing shows. Pasted notes: take the fields from them. Show what you understood; ask for the rest.
+11. Attached files appear as "[Attached: name (type, file id …)]": pass the file id where a field takes a file (a logo, ticket screenshots).
+12. If an action needs an approver for this person, prepare it anyway — the card lets them send it to an admin.
+13. Bulk changes: find the records first (search tools), then pass their ids; the card lists them all and the person can untick any.
+14. One action per thing they asked for; do not add changes they did not ask for.
+
+Actions you can prepare:
+${a.catalogue ?? "(none)"}${history}`;
+}
+
+/** Where the person is in the app, for "this lead", "here". PURE. */
+export function pageSection(page: string | null | undefined): string {
+  return page ? `\n\n## Where they are\nThey are looking at ${page}. "This", "it", "here" and "this lead" mean that unless they say otherwise.` : "";
 }
 
 function nowLine(now: Date, tz: string): string {
@@ -121,7 +171,7 @@ ${CHART_EXAMPLE}
 ## Memory
 You remember this person between conversations. What you know about them:
 ${memories}
-Use it to personalise your answers. When they tell you something durable — a goal or target, how they like answers, how they work, a strategy decision — or ask you to remember something, save it with save_memory: one short fact per memory, in the third person. Do not save numbers that live in the dashboard; look those up fresh. If a memory turns out to be outdated or they ask you to forget it, use forget_memory (and save the corrected fact). Mention it briefly when you save or forget something.`;
+Use it to personalise your answers. When they tell you something durable — a goal or target, how they like answers, how they work, a strategy decision — or ask you to remember something, save it with save_memory: one short fact per memory, in the third person. Do not save numbers that live in the dashboard; look those up fresh. If a memory turns out to be outdated or they ask you to forget it, use forget_memory (and save the corrected fact). Mention it briefly when you save or forget something.${pageSection(p.page)}${actSection(p.act, p.timezone)}`;
 }
 
 /**

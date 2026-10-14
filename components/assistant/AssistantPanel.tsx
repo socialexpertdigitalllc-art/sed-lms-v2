@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, ArrowLeft, History, Loader2, Maximize2, MessageSquare, Pencil, SquarePen, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, History, ListChecks, Loader2, Maximize2, MessageSquare, Pencil, SquarePen, X } from "lucide-react";
 import { useAssistant } from "@/providers/AssistantProvider";
 import { usePermissions } from "@/hooks/usePermissions";
 import { suggestionsFor } from "@/lib/assistant/suggestions";
@@ -12,11 +12,14 @@ import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
 import { Composer } from "./Composer";
 import { NameAssistant } from "./NameAssistant";
+import { ProactiveSuggestions } from "./ProactiveSuggestions";
+import { SaveShortcutDialog } from "./SaveShortcutDialog";
 import { SedAiAvatar } from "./SedAiMark";
 import { Suggestions } from "./Suggestions";
 import { TurnView } from "./TurnView";
 import { useAssistantChat } from "./useAssistantChat";
 import { useStickToBottom } from "./useStickToBottom";
+import type { AssistantMode, MessageAttachment } from "@/lib/assistant/types";
 
 /**
  * The floating chat: the assistant in front of whatever page the user is on.
@@ -65,10 +68,14 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
   const { toast } = useToast();
   const [view, setView] = useState<"chat" | "history" | "rename">("chat");
   const [history, setHistory] = useState<ClientConversation[] | null>(null);
+  const [shortcut, setShortcut] = useState<string | null>(null);
+  const canAct = perms.has("assistant.act");
   const panelRef = useRef<HTMLElement>(null);
   const { scrollRef, contentRef, onScroll, onClickCapture: pauseOnDisclosure, atBottom, scrollToBottom } = useStickToBottom();
 
   const chat = useAssistantChat({
+    // The page behind the chat: "this lead" means the lead that is open.
+    getPage: () => (typeof window === "undefined" ? null : { path: window.location.pathname, title: document.title }),
     onActiveChange: (id) => writeStored(userId, id),
     onConversation: (c) => setHistory((prev) => (prev ? sortConversations([c, ...prev.filter((x) => x.id !== c.id)]) : prev)),
     onOpenError: (_id, e) => {
@@ -99,9 +106,9 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
   }, [hidden, view]);
 
   const ask = useCallback(
-    (text: string) => {
+    (text: string, extras?: { attachments?: MessageAttachment[]; mode?: AssistantMode }) => {
       scrollToBottom(false);
-      void send(text);
+      void send(text, { attachments: extras?.attachments, mode: extras?.mode });
     },
     [send, scrollToBottom],
   );
@@ -178,6 +185,11 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
             <button type="button" className={iconBtn} onClick={chat.newChat} aria-label="New chat" title="New chat">
               <SquarePen className="h-4 w-4" />
             </button>
+            {canAct ? (
+              <Link href="/assistant/actions" className={iconBtn} onClick={onClose} aria-label="Actions history" title="What SED AI did for you">
+                <ListChecks className="h-4 w-4" />
+              </Link>
+            ) : null}
             <Link href={expandHref} className={iconBtn} onClick={onClose} aria-label="Open full screen" title="Open full screen">
               <Maximize2 className="h-4 w-4" />
             </Link>
@@ -263,7 +275,8 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
                               Ask me about your leads, calls, team or strategy — I look up the real numbers and tell you what to do.
                             </p>
                           </div>
-                          <Suggestions items={suggestions} onPick={ask} layout="list" />
+                          {canAct ? <ProactiveSuggestions compact onPick={(prompt) => ask(prompt, { mode: "act" })} /> : null}
+                          <Suggestions items={suggestions} onPick={(t) => ask(t)} layout="list" />
                         </>
                       )}
                     </div>
@@ -283,6 +296,9 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
                           onRegenerate={latest && idle && t.status !== "error" ? () => chat.regenerate(t) : undefined}
                           onEdit={latest && idle ? (text) => chat.edit(t, text) : undefined}
                           onRate={(id, value) => void chat.rate(id, value)}
+                          onCardOp={chat.actOn}
+                          onRunPlan={chat.runPlan}
+                          onSaveShortcut={setShortcut}
                         />
                       );
                     })}
@@ -319,10 +335,25 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
               placeholder={shown.length ? `Reply to ${name}…` : undefined}
               autoFocus
               compact
+              canAct={canAct}
+              mode={chat.mode}
+              onModeChange={chat.setMode}
+              conversationId={chat.activeId}
             />
           </div>
         </>
       )}
+      {shortcut !== null ? (
+        <SaveShortcutDialog
+          prompt={shortcut}
+          canAct={canAct}
+          onClose={() => setShortcut(null)}
+          onSaved={(command) => {
+            setShortcut(null);
+            toast({ kind: "success", title: `Saved as /${command}`, body: "Type / in the message box to use it." });
+          }}
+        />
+      ) : null}
     </section>
   );
 }

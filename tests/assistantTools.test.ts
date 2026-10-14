@@ -2,6 +2,7 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ALL_TOOLS, MAX_TOOL_RESULT_CHARS, runTool, toolsFor } from "@/lib/assistant/tools";
+import { ACTION_TOOLS } from "@/lib/assistant/tools/actions";
 import type { ToolContext } from "@/lib/assistant/tools/types";
 import type { TurnData } from "@/lib/assistant/tools/data";
 import type { FollowUpRow } from "@/lib/assistant/analytics";
@@ -134,8 +135,21 @@ describe("which tools a user's assistant is given", () => {
     expect(names).not.toContain("get_team_activity");
   });
 
-  it("gives an admin every tool", () => {
-    expect(toolsFor(ADMIN_PERMS).map((t) => t.name).sort()).toEqual(ALL_TOOLS.map((t) => t.name).sort());
+  it("gives an admin every data tool (the action tools come with Act mode)", () => {
+    const actionTools = new Set(ACTION_TOOLS.map((t) => t.name));
+    expect(toolsFor(ADMIN_PERMS).map((t) => t.name).sort()).toEqual(ALL_TOOLS.filter((t) => !actionTools.has(t.name)).map((t) => t.name).sort());
+  });
+
+  it("offers Act mode only to people with assistant.act — the switch in Ask, the action tools in Act", () => {
+    const perms = new Set([...AGENT_PERMS, "assistant.act"]);
+    const ask = toolsFor(perms, "ask").map((t) => t.name);
+    expect(ask).toContain("switch_to_action_mode");
+    expect(ask).not.toContain("prepare_action");
+    const act = toolsFor(perms, "act").map((t) => t.name);
+    expect(act).toEqual(expect.arrayContaining(["prepare_action", "describe_action", "propose_plan", "find_records", "read_business_link"]));
+    expect(act).not.toContain("switch_to_action_mode");
+    expect(act).toContain("search_leads");
+    expect(toolsFor(AGENT_PERMS, "act").map((t) => t.name)).not.toContain("prepare_action");
   });
 
   it("leaves someone with no data permissions only the calculator and their memory", () => {

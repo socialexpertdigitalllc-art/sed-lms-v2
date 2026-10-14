@@ -1,4 +1,5 @@
-import type { AnswerFeedback, AssistantStreamEvent } from "./types";
+import type { ActionCard } from "./actions/card";
+import type { AnswerFeedback, AssistantMode, AssistantStreamEvent, MessageAttachment } from "./types";
 import type { UiMessage } from "./view";
 
 /**
@@ -37,6 +38,14 @@ export interface TurnModel {
    *  "Worked for 12s". Null when unknown. */
   startedAt: number | null;
   endedAt: number | null;
+  /** Changes prepared in this turn, as confirmation cards. */
+  actions: ActionCard[];
+  /** Files attached to the question. */
+  attachments: MessageAttachment[];
+  /** The mode the question was asked in (people with Act mode). */
+  mode: AssistantMode | null;
+  /** The assistant switched itself to Act mode for this: the task, in its words. */
+  switchedToAct: string | null;
 }
 
 /** A turn still waiting for the server to accept it has this id prefix. */
@@ -47,12 +56,14 @@ const stamp = (iso: string): number | null => {
   return Number.isFinite(t) ? t : null;
 };
 
-/** Saved rows → turns. Rows arrive in insertion order. */
-export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
+/** Saved rows (and the chat's action cards) → turns. Rows arrive in insertion order. */
+export function turnsFromMessages(rows: UiMessage[], actions: ActionCard[] = []): TurnModel[] {
   const turns: TurnModel[] = [];
+  const byTurn = new Map<string, TurnModel>();
+  const byCall = new Map<string, TurnModel>();
   for (const row of rows) {
     if (row.role === "user") {
-      turns.push({
+      const turn: TurnModel = {
         id: row.id,
         question: row.content,
         segments: [],
@@ -62,7 +73,13 @@ export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
         feedback: null,
         startedAt: stamp(row.created_at),
         endedAt: null,
-      });
+        actions: [],
+        attachments: row.meta?.attachments ?? [],
+        mode: row.meta?.mode ?? null,
+        switchedToAct: null,
+      };
+      turns.push(turn);
+      byTurn.set(row.turn_id ?? row.id, turn);
       continue;
     }
     const turn = turns[turns.length - 1];
@@ -91,12 +108,46 @@ export function turnsFromMessages(rows: UiMessage[]): TurnModel[] {
       summary: row.meta?.summary ?? null,
       args: row.meta?.args ?? null,
     });
+    if (row.tool_call_id) byCall.set(row.tool_call_id, turn);
+    if (row.tool_name === "switch_to_action_mode" && row.meta?.ok !== false) {
+      turn.switchedToAct = typeof row.meta?.args?.task === "string" ? row.meta.args.task : "this task";
+    }
+  }
+  // Cards go with the turn that prepared them (by turn, else by tool call).
+  for (const card of actions) {
+    const turn = (card.callId ? byCall.get(card.callId) : undefined) ?? (card.turnId ? byTurn.get(card.turnId) : undefined);
+    if (turn && !turn.actions.some((a) => a.id === card.id)) turn.actions.push(card);
   }
   return turns;
 }
 
-export function liveTurn(id: string, question: string, now = Date.now()): TurnModel {
-  return { id, question, segments: [], status: "running", error: null, answerId: null, feedback: null, startedAt: now, endedAt: null };
+export function liveTurn(
+  id: string,
+  question: string,
+  now = Date.now(),
+  extras: { attachments?: MessageAttachment[]; mode?: AssistantMode | null } = {},
+): TurnModel {
+  return {
+    id,
+    question,
+    segments: [],
+    status: "running",
+    error: null,
+    answerId: null,
+    feedback: null,
+    startedAt: now,
+    endedAt: null,
+    actions: [],
+    attachments: extras.attachments ?? [],
+    mode: extras.mode ?? null,
+    switchedToAct: null,
+  };
+}
+
+/** Put a card's latest state wherever it is shown. */
+export function withCard(turn: TurnModel, card: ActionCard): TurnModel {
+  if (!turn.actions.some((a) => a.id === card.id)) return turn;
+  return { ...turn, actions: turn.actions.map((a) => (a.id === card.id ? card : a)) };
 }
 
 /** Fold one stream event into the live turn. */
@@ -130,6 +181,12 @@ export function applyEvent(turn: TurnModel, e: AssistantStreamEvent): TurnModel 
           s.kind === "tool" && s.callId === e.callId ? { ...s, status: e.ok ? "ok" : "error", summary: e.summary } : s,
         ),
       };
+    case "action":
+      return turn.actions.some((a) => a.id === e.card.id)
+        ? withCard(turn, e.card)
+        : { ...turn, actions: [...turn.actions, e.card] };
+    case "mode":
+      return { ...turn, mode: e.mode, switchedToAct: e.mode === "act" ? e.reason || "this task" : turn.switchedToAct };
     case "done":
       return { ...turn, status: e.stopped ? "stopped" : "done", answerId: e.stopped ? null : e.messageId, endedAt: Date.now() };
     case "error":

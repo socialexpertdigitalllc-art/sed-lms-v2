@@ -69,7 +69,9 @@ function turnMessages(turn: AssistantMessageRow[], opts: HistoryOptions, isLates
   const kept = new Set<string>();
   for (const row of turn) {
     if (row.role === "user") {
-      if (row.content.trim()) out.push({ role: "user", content: row.content });
+      const files = row.meta?.attachments ?? [];
+      const note = files.length ? `\n\n[Attached: ${files.map((f) => `${f.name} (${f.mime}, file id ${f.id})`).join("; ")}]` : "";
+      if (row.content.trim() || note) out.push({ role: "user", content: `${row.content}${note}` });
       continue;
     }
     if (row.role === "assistant") {
@@ -117,8 +119,9 @@ export function buildHistory(rows: AssistantMessageRow[], opts: HistoryOptions):
   const merged: WireMessage[] = [];
   for (const m of flat) {
     const prev = merged[merged.length - 1];
-    if (prev && prev.role === "user" && m.role === "user") prev.content = `${prev.content}\n\n${m.content}`;
-    else merged.push({ ...m });
+    if (prev && prev.role === "user" && m.role === "user" && typeof prev.content === "string" && typeof m.content === "string") {
+      prev.content = `${prev.content}\n\n${m.content}`;
+    } else merged.push({ ...m });
   }
   return merged;
 }

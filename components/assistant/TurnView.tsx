@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, CircleAlert, Copy, Loader2, Pencil, RefreshCw, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Bookmark, Check, ChevronRight, CircleAlert, Copy, FileText, Loader2, Pencil, RefreshCw, ThumbsDown, ThumbsUp, Zap } from "lucide-react";
+import type { ActionCard } from "@/lib/assistant/actions/card";
 import { answerText, formatDuration, type Segment, type TurnModel } from "@/lib/assistant/turns";
-import type { AnswerFeedback } from "@/lib/assistant/types";
+import type { AnswerFeedback, MessageAttachment } from "@/lib/assistant/types";
 import { cn } from "@/lib/utils";
+import { ActionCardView, PlanBar } from "./ActionCard";
 import { Markdown } from "./Markdown";
 import { SedAiAvatar } from "./SedAiMark";
+import type { CardOp, CardOpBody, CardOpResult } from "./useAssistantChat";
 import { useSmoothText } from "./useSmoothText";
 
 /**
@@ -118,6 +121,66 @@ function Activity({ label, working, reasoning, tools }: { label: string; working
   );
 }
 
+/** The files attached to a question: pictures as thumbnails, the rest as chips. */
+export function AttachmentChips({ files, align = "end" }: { files: MessageAttachment[]; align?: "start" | "end" }) {
+  if (!files.length) return null;
+  return (
+    <div className={cn("flex max-w-[85%] flex-wrap gap-1.5", align === "end" ? "justify-end" : "justify-start")}>
+      {files.map((f) =>
+        f.mime.startsWith("image/") ? (
+          <a key={f.id} href={`/api/assistant/uploads/${f.id}`} target="_blank" rel="noreferrer" title={f.name} className="block overflow-hidden rounded-lg border border-border">
+            {/* eslint-disable-next-line @next/next/no-img-element -- a private, short-lived link: not for next/image */}
+            <img src={`/api/assistant/uploads/${f.id}`} alt={f.name} className="h-16 w-16 object-cover" loading="lazy" />
+          </a>
+        ) : (
+          <a
+            key={f.id}
+            href={`/api/assistant/uploads/${f.id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text-muted hover:text-text"
+          >
+            <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="truncate">{f.name}</span>
+          </a>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** A turn's cards, a plan's steps grouped under their Run-all bar. */
+function Cards({
+  cards,
+  compact,
+  onCardOp,
+  onRunPlan,
+}: {
+  cards: ActionCard[];
+  compact: boolean;
+  onCardOp: (card: ActionCard, op: CardOp, body?: CardOpBody) => Promise<CardOpResult>;
+  onRunPlan?: (planId: string) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const groups: ActionCard[][] = [];
+  for (const c of cards) {
+    const last = groups[groups.length - 1];
+    if (last && c.plan && last[0].plan?.id === c.plan.id) last.push(c);
+    else groups.push([c]);
+  }
+  return (
+    <div className="space-y-2.5">
+      {groups.map((g) => (
+        <div key={g[0].id} className="space-y-2">
+          {g[0].plan && g.length > 1 && onRunPlan ? <PlanBar cards={g} compact={compact} onRunAll={() => onRunPlan(g[0].plan!.id)} /> : null}
+          {g.map((c) => (
+            <ActionCardView key={c.id} card={c} onOp={onCardOp} compact={compact} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function EditQuestion({ initial, onCancel, onSave }: { initial: string; onCancel: () => void; onSave: (text: string) => void }) {
   const [draft, setDraft] = useState(initial);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -186,6 +249,9 @@ export function TurnView({
   onRegenerate,
   onEdit,
   onRate,
+  onCardOp,
+  onRunPlan,
+  onSaveShortcut,
 }: {
   turn: TurnModel;
   /** What this user calls their assistant — shown on its replies. */
@@ -201,6 +267,11 @@ export function TurnView({
   /** Offered on the newest question when nothing is running. */
   onEdit?: (text: string) => void;
   onRate?: (answerId: string, feedback: AnswerFeedback | null) => void;
+  /** The action cards' buttons. Without it, cards are shown read-only. */
+  onCardOp?: (card: ActionCard, op: CardOp, body?: CardOpBody) => Promise<CardOpResult>;
+  onRunPlan?: (planId: string) => Promise<{ ok: boolean; error?: string }>;
+  /** "Save as shortcut" on a question (recipes). */
+  onSaveShortcut?: (text: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const live = turn.status === "running";
@@ -251,13 +322,24 @@ export function TurnView({
           />
         ) : (
           <>
+            <AttachmentChips files={turn.attachments} />
             <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-3xl bg-surface-2 px-4 py-2.5 leading-relaxed text-text">
+              {turn.mode === "act" && !turn.switchedToAct ? (
+                <span className="mr-1.5 inline-flex translate-y-[-1px] items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-px align-middle text-[10px] font-semibold uppercase tracking-wide text-accent-ink">
+                  <Zap className="h-2.5 w-2.5" aria-hidden /> Act
+                </span>
+              ) : null}
               {turn.question}
             </div>
             <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/q:opacity-100">
               <Action label={questionCopied ? "Copied" : "Copy question"} onClick={copyQuestion}>
                 {questionCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
               </Action>
+              {onSaveShortcut ? (
+                <Action label="Save as a shortcut" onClick={() => onSaveShortcut(turn.question)}>
+                  <Bookmark className="h-3.5 w-3.5" aria-hidden />
+                </Action>
+              ) : null}
               {onEdit ? (
                 <Action label="Edit question" onClick={() => setEditing(true)}>
                   <Pencil className="h-3.5 w-3.5" aria-hidden />
@@ -274,9 +356,25 @@ export function TurnView({
         <div className="min-w-0 flex-1 space-y-2">
           <p className="pt-1.5 text-[13px] font-semibold leading-none text-text">{assistantName}</p>
 
+          {turn.switchedToAct ? (
+            <p className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-accent/30 bg-accent-soft/60 px-2.5 py-0.5 text-xs text-accent-ink">
+              <Zap className="h-3 w-3 shrink-0" aria-hidden />
+              <span className="truncate">Switched to Act mode — {turn.switchedToAct}. Nothing changes until you confirm.</span>
+            </p>
+          ) : null}
+
           {activity ? <Activity label={activity.label} working={activity.working} reasoning={reasoning} tools={tools} /> : null}
 
           {shownText ? <Markdown text={shownText} streaming={live} caret={live} className={size} /> : null}
+
+          {turn.actions.length ? (
+            <Cards
+              cards={turn.actions}
+              compact={compact}
+              onCardOp={onCardOp ?? (async () => ({ ok: false, error: "Open this chat to act on it." }))}
+              onRunPlan={onRunPlan}
+            />
+          ) : null}
 
           {turn.status === "error" ? (
             <div className="rounded-xl border border-dropped-bg bg-dropped-bg/30 px-3.5 py-3 text-[13px]">

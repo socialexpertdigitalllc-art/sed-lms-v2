@@ -204,6 +204,38 @@ describe("runTurn", () => {
     expect(call.extra_content).toEqual({ google: { thought_signature: "SIG" } });
   });
 
+  it("switches itself to Act mode for a task, then offers the action tools and the Act prompt", async () => {
+    const names = (body: { tools: { function: { name: string } }[] }) => body.tools.map((t) => t.function.name);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(toolReply({ id: "call_s", type: "function", function: { name: "switch_to_action_mode", arguments: '{"task":"create a lead"}' } }))
+      .mockResolvedValueOnce(textReply("What is the business's phone number?"));
+
+    const events = await ask("create a lead for Jumbo's Pizza", new Set(["assistant.use", "assistant.act", "leads.create"]));
+
+    const first = bodyOf(fetchMock, 0);
+    expect(names(first)).toContain("switch_to_action_mode");
+    expect(names(first)).not.toContain("prepare_action");
+    expect(first.messages[0].content).toMatch(/call switch_to_action_mode first/);
+
+    const second = bodyOf(fetchMock, 1);
+    expect(names(second)).toEqual(expect.arrayContaining(["prepare_action", "describe_action", "propose_plan"]));
+    expect(names(second)).not.toContain("switch_to_action_mode");
+    expect(second.messages[0].content).toMatch(/Act mode is on/);
+    expect(second.messages[0].content).toMatch(/lead\.create: Create a lead/);
+
+    expect(events).toContainEqual({ type: "mode", mode: "act", reason: "create a lead" });
+    expect(rows[0].meta).toMatchObject({ mode: "ask" });
+  });
+
+  it("never offers Act mode to someone without it", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(textReply("I can't change things for you."));
+    await ask("create a lead for Jumbo's Pizza", new Set(["assistant.use", "leads.create"]));
+    const body = bodyOf(fetchMock, 0);
+    expect(body.tools.map((t: { function: { name: string } }) => t.function.name)).not.toContain("switch_to_action_mode");
+    expect(body.messages[0].content).toMatch(/not enabled for their account/);
+  });
+
   it("offers the model only the tools this user's permissions allow", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(textReply("Hi."));
     await ask("hello", new Set(["assistant.use", "leads.view"]));

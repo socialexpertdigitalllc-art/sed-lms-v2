@@ -1,3 +1,5 @@
+import type { ActionCard } from "./actions/card";
+
 /**
  * Shapes shared by the assistant's server code, its API, and its UI.
  * Pure types and constants — safe to import from client components.
@@ -40,10 +42,29 @@ export interface ToolCallMeta {
 /** The user's rating of an answer (thumbs up / down). */
 export type AnswerFeedback = "up" | "down";
 
-/** `meta` on a message row: a tool call's display facts (tool rows), or the
- *  user's rating of the answer (the final assistant row of a turn). */
+/** A file attached to a question (kept in the assistant's private bucket). */
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  mime: string;
+}
+
+/** Where the person was in the app when they asked (the floating chat). */
+export interface PageContext {
+  path: string;
+  title?: string;
+}
+
+export type AssistantMode = "ask" | "act";
+
+/** `meta` on a message row: a tool call's display facts (tool rows), the
+ *  user's rating of the answer (the final assistant row of a turn), or — on a
+ *  question — its attachments, mode and page. */
 export interface MessageMeta extends Partial<ToolCallMeta> {
   feedback?: AnswerFeedback;
+  attachments?: MessageAttachment[];
+  mode?: AssistantMode;
+  page?: PageContext;
 }
 
 export interface AssistantMessageRow {
@@ -88,6 +109,10 @@ export type AssistantStreamEvent =
   | { type: "tool_start"; callId: string; name: string; label: string; args: Record<string, unknown> }
   | { type: "tool_end"; callId: string; name: string; ok: boolean; summary: string; durationMs: number }
   | { type: "memory"; action: "saved" | "forgotten"; memory: AssistantMemory }
+  /** A change was prepared for the person to confirm (or one changed state). */
+  | { type: "action"; card: ActionCard }
+  /** The assistant switched itself into Act mode for this request. */
+  | { type: "mode"; mode: AssistantMode; reason: string }
   | { type: "title"; title: string }
   | { type: "done"; messageId: string | null; stopped: boolean }
   | { type: "error"; message: string }

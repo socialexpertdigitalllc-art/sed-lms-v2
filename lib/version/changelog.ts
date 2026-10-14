@@ -29,6 +29,53 @@ export interface ChangelogEntry {
 /** Release history, NEWEST FIRST. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.27.0",
+    date: "2026-10-14",
+    title: "SED AI Act mode: tell it what to do, check the card, confirm",
+    changes: [
+      {
+        kind: "feature",
+        text: "SED AI can now make changes for you. Switch the message box to Act, or just ask (\"create a lead for Jumbo's Pizza\") and it switches itself. It prepares the change and shows a card with every value. Nothing changes until you press Confirm, and the change is made as you, with your permissions. It starts with the Tech department; admins can give the new \"Use SED AI Action Mode\" permission to more departments or people, or as a trial until a date.",
+      },
+      {
+        kind: "feature",
+        text: "Over 50 things it can do: leads (create, edit, change status, log a call, reschedule, tag, assign, bulk changes, archive), pre-leads (add, edit, convert to a lead), tickets (open with screenshots, assign, tick off changes, resolve, reopen), the AI developer (send, ask for changes, discard, approve), Site Builder (start, regenerate a page, deploy, bulk builds, delete), websites and domains (check and buy a domain, health check, link, restore a version, transfer, DNS, take down, auto-renew), receipts and contracts, email, the agency website (enquiries, coupons, offers, testimonials, portfolio, services), client contact forms, feedback, notifications, lead imports, users, permissions and settings.",
+      },
+      {
+        kind: "improvement",
+        text: "Required fields first. Every value is checked with the app's own rules, and anything missing is asked for in one message. SED AI never guesses a value. A new lead must have everything the New Lead form requires. Duplicates are caught before you confirm, and emails that can't receive mail, profile links that don't open, and look-alike colours are flagged.",
+      },
+      {
+        kind: "feature",
+        text: "Built-in care. Changes that affect others ask for an \"I've checked\" tick. High-impact ones (buying a domain, taking a site down, permissions) ask you to type the name. Bulk changes list every record so you can untick any. Most changes can be undone for 10 minutes, and the Actions page keeps the history.",
+      },
+      {
+        kind: "feature",
+        text: "Ask an admin. If your account can't do something, send it for approval from the card. An admin approves it (it then runs as them) or turns it down with a note, and you're notified either way.",
+      },
+      {
+        kind: "feature",
+        text: "It takes in more than typing: paste a Google Maps or Yelp link (or the agent's notes) to fill a lead, attach a logo or screenshots, or speak instead of typing. It also knows the page you're on, so \"mark this lead closed\" works. Several steps at once (\"create the lead, open a ticket on it, remind me Friday\") come as a plan with Run all.",
+      },
+      {
+        kind: "feature",
+        text: "Reminders (\"remind me tomorrow at 10 to call Jumbo's\"), standing rules (\"after 3 no-pickups, move the lead to Long Term\", \"every morning, tell me my overdue follow-ups\"), and holiday handovers that give your leads back on the day. Manage them under SED AI actions → Reminders & automations.",
+      },
+      {
+        kind: "feature",
+        text: "Shortcuts: save any question you ask often (the bookmark on your message), then type / to run it. SED AI also suggests things it can take off your hands: overdue follow-ups, Ready leads without a website build, closed deals without a receipt, and tickets waiting on you.",
+      },
+      {
+        kind: "feature",
+        text: "For admins, the new SED AI actions page has three tabs: Approvals, a Report (what SED AI did, for whom, roughly how much time it saved, and what failed), and Settings (switch any single action off, or make it always need approval). Act mode can run on its own AI model, set under Admin → AI Models.",
+      },
+      {
+        kind: "improvement",
+        text: "The server now enforces the New Lead form's required fields too, so no lead can arrive half-filled, however it is submitted.",
+      },
+    ],
+  },
+  {
     version: "2.26.0",
     date: "2026-10-14",
     title: "Site Builder follows the lead's colours, keeps text readable, and shows the logo big",
