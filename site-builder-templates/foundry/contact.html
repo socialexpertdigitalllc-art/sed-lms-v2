@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contact | Harlow &amp; Reed Property Care</title>
+<meta name="description" content="Call or send a message to get a quote from Harlow &amp; Reed Property Care.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Contact | Harlow &amp; Reed Property Care">
+<meta property="og:description" content="Call or send a message to get a quote from Harlow &amp; Reed Property Care.">
+<link rel="stylesheet" href="style.css">
+<script src="components.js"></script>
+<script src="script.js" defer></script>
+</head>
+<body>
+<app-header></app-header>
+
+<main id="main">
+
+  <section class="page-hero">
+    <div class="wrap">
+      <div class="sec-top"><span class="label"><a href="index.html">Home</a> / Contact</span><span class="label">06 / 06</span></div>
+      <h1 data-split>Let's <mark>talk</mark></h1>
+      <div class="page-hero__row">
+        <p class="lead">Call us or send a message. We will get back to you with a clear next step.</p>
+        <p class="page-hero__meta label"><span>Quote on request</span><span>Serving Eastside and nearby</span></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="contact-grid">
+        <div class="ticket reveal">
+          <div class="ticket__head label"><span>Job request</span><span>No. 001</span></div>
+          <form class="form" id="contact-form" action="https://api.web3forms.com/submit" method="POST" data-sb-form>
+            <input type="hidden" name="access_key" value="YOUR_ACCESS_KEY_HERE">
+            <input type="hidden" name="subject" value="New enquiry from the website">
+            <input type="hidden" name="from_name" value="Website enquiry">
+            <input type="checkbox" name="botcheck" class="hp" style="display:none" tabindex="-1" autocomplete="off">
+            <div class="field-row">
+              <div class="field"><label for="f-name">Your name</label><input id="f-name" name="name" type="text" autocomplete="name" required></div>
+              <div class="field"><label for="f-phone">Phone (optional)</label><input id="f-phone" name="phone" type="tel" autocomplete="tel"></div>
+            </div>
+            <div class="field"><label for="f-email">Email</label><input id="f-email" name="email" type="email" autocomplete="email" required></div>
+            <div class="field">
+              <label for="f-service">What do you need help with?</label>
+              <select id="f-service" name="service">
+                <option value="">Choose a service</option>
+                <option>Repairs</option>
+                <option>Installations</option>
+                <option>Renovations</option>
+                <option>Inspections</option>
+                <option>Urgent call-outs</option>
+                <option>Seasonal upkeep</option>
+                <option>Something else</option>
+              </select>
+            </div>
+            <div class="field"><label for="f-message">Your message</label><textarea id="f-message" name="message" placeholder="A few details about the job" required></textarea></div>
+            <button class="btn btn--primary btn--block" type="submit">Send request <i data-i="send"></i></button>
+            <p class="form-status" role="status" aria-live="polite"></p>
+          </form>
+        </div>
+        <aside class="reach reveal-group" aria-label="Contact details">
+          <div class="reach__item reveal"><span class="label">Call us</span><a href="tel:5550100148">(555) 010-0148</a></div>
+          <div class="reach__item reveal"><span class="label">Email us</span><a href="mailto:hello@harlowreed.example">hello@harlowreed.example</a></div>
+          <div class="reach__item reveal"><span class="label">Where we work</span><span class="val">Eastside and nearby</span></div>
+          <div class="map reveal"><iframe title="Map of our service area" src="https://www.google.com/maps?q=Eastside&amp;output=embed" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<app-footer></app-footer>
+</body>
+</html>
