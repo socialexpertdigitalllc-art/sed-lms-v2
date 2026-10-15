@@ -72,3 +72,6 @@ backups/
 
 # Generated extension download (built by `npm run build:extension`)
 /public/downloads/
+
+# built Site Builder template zips + covers (npm run build:site-template)
+/site-builder-templates/dist/

@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "npm run build:extension && (next build || next build --webpack)",
     "build:extension": "node scripts/build-extension.mjs",
+    "build:site-template": "node scripts/build-site-template.mjs",
     "build:agent-worker": "node scripts/build-agent-worker.mjs",
     "start": "next start",
     "lint": "eslint",

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Static sites shipped to clients' browsers, not app code (see site-builder-templates/README.md).
+    "site-builder-templates/**",
   ]),
 ]);
 
