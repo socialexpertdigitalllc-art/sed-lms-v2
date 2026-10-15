@@ -119,9 +119,12 @@ export function modelLabel(r: Pick<ResolvedTaskModel, "providerKey" | "model">):
 
 const taskFor = (mode: AssistantMode): AiTaskKey => (mode === "act" ? "assistant_act" : "assistant_chat");
 
+/** How many of a chat's latest actions the model is told about. */
+const HISTORY_ACTIONS = 20;
+
 /** How each of this chat's actions stands, for the model (newest last). */
 export function actionHistoryLines(actions: StoredAction[], now = Date.now()): string[] {
-  return actions.slice(-20).map((a) => {
+  return actions.slice(-HISTORY_ACTIONS).map((a) => {
     const open = a.status === "proposed" || a.status === "awaiting_approval";
     const status = open && Date.parse(a.expires_at) < now ? "expired" : a.status;
     const link = a.result?.link?.href ? ` (${a.result.link.href})` : "";
@@ -215,7 +218,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
     listMessages(admin, userId, conversation.id),
     canAct ? isAdminMember(admin, userId).catch(() => false) : Promise.resolve(false),
     // Missing tables (migration 0087 not applied) simply mean no actions yet.
-    canAct ? listConversationActions(admin, userId, conversation.id).catch(() => [] as StoredAction[]) : Promise.resolve([] as StoredAction[]),
+    canAct ? listConversationActions(admin, userId, conversation.id, HISTORY_ACTIONS).catch(() => [] as StoredAction[]) : Promise.resolve([] as StoredAction[]),
     canAct ? getActionSettings(admin) : Promise.resolve(new Map()),
   ]);
   const timezone = settings.work_timezone || "Asia/Karachi";
@@ -254,6 +257,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
       memories,
       act,
       page,
+      channel: input.source === "telegram" || input.source === "whatsapp" ? input.source : null,
     });
     return { tools, definitions: toolDefinitions(tools), system };
   };

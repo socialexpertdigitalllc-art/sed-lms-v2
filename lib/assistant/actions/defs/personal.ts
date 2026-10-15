@@ -65,6 +65,8 @@ const reminderCreate: ActionDef = {
   confirmLabel: "Set reminder",
   risk: "standard",
   allowed: () => null,
+  // Only ever about the person's own reminders: never run by an approver in their place.
+  selfOnly: true,
   fields: [
     { name: "text", label: "Remind me to", type: "text", required: true, max: 500, help: "What to be reminded of, in their words: \"call Jumbo's about the logo\"." },
     { name: "remind_at", label: "When", type: "datetime", required: true, future: true, help: "When the reminder goes off. Ask if they gave no time." },
@@ -136,6 +138,8 @@ const reminderCancel: ActionDef = {
   confirmLabel: "Cancel reminder",
   risk: "standard",
   allowed: () => null,
+  // Only ever about the person's own reminders: never run by an approver in their place.
+  selfOnly: true,
   fields: [{ name: "reminder", label: "Reminder", type: "ref", ref: "reminder", required: true, editable: false, help: "Which reminder, by what it says (or its id)." }],
   label: (v) => str(v.__name),
   minutesSaved: 1,
@@ -214,6 +218,8 @@ const notificationRead: ActionDef = {
   confirmLabel: "Mark read",
   risk: "standard",
   allowed: () => null,
+  // Only ever about the person's own notifications: never run by an approver in their place.
+  selfOnly: true,
   fields: [
     { name: "all", label: "All unread", type: "boolean", default: false, help: "true for \"mark all as read\"; otherwise name the notifications." },
     { name: "bell", label: "Bell", type: "enum", options: BELLS, showIf: (v) => v.all === true, help: "Optional with all: only the general bell or only the website bell. Leave out for both." },
@@ -295,6 +301,8 @@ const feedbackSubmit: ActionDef = {
   confirmLabel: "Send feedback",
   risk: "standard",
   allowed: (ctx) => need(ctx, "feedback.submit"),
+  // Feedback in the person's own name: never sent by an approver in their place.
+  selfOnly: true,
   fields: [
     { name: "type", label: "Type", type: "enum", options: FEEDBACK_TYPES, required: true, help: "Bug = something is broken; Feature request = an idea or wish; Other = anything else." },
     { name: "title", label: "Title", type: "text", required: true, max: 200, help: "A one-line summary." },

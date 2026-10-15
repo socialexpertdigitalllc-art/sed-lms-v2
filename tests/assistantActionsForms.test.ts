@@ -209,8 +209,9 @@ describe("form.resend", () => {
   it("refuses spam and submissions outside the person's leads, as the endpoint does", async () => {
     const spam = await propose(d, { submission: SPAM }, ctxFor());
     expect(spam.problems).toEqual([{ field: "submission", message: "It is marked as spam — mark it as not spam first (that also delivers it)." }]);
+    // Outside the Forms scope it can't even be named.
     const theirs = await propose(d, { submission: OTHERS_SUB }, ctxFor());
-    expect(theirs.problems).toEqual([{ field: "submission", message: "That submission is not visible to you." }]);
+    expect(theirs.problems).toEqual([{ field: "submission", message: "No form submission with that id is visible to you." }]);
   });
 
   it("re-sends through the resend endpoint and reads its result", async () => {

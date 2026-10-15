@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { looksLikeTask } from "@/lib/assistant/intent";
 import { describeSchedule, nextRunAt } from "@/lib/assistant/rules";
-import { actSection, pageSection } from "@/lib/assistant/prompt";
+import { actSection, channelSection, pageSection } from "@/lib/assistant/prompt";
 import { actionHistoryLines } from "@/lib/assistant/engine";
 import { applyEvent, liveTurn, turnsFromMessages } from "@/lib/assistant/turns";
 import type { ActionCard } from "@/lib/assistant/actions/card";
@@ -52,6 +52,14 @@ describe("Act-mode prompt", () => {
     expect(act).toMatch(/NEVER say it is done/);
     expect(act).toMatch(/lead\.create/);
     expect(act).toMatch(/Actions in this chat/);
+  });
+  it("on the phone: no cards to press — reply YES — and short plain text", () => {
+    const tg = channelSection("telegram");
+    expect(tg).toMatch(/on Telegram/);
+    expect(tg).toMatch(/reply YES/);
+    expect(tg).toMatch(/no tables, charts/);
+    expect(channelSection("whatsapp")).toMatch(/on WhatsApp/);
+    expect(channelSection(null)).toBe("");
   });
   it("names the page the person is on", () => {
     expect(pageSection("the lead “Jumbo's” (/leads/1)")).toMatch(/They are looking at the lead/);

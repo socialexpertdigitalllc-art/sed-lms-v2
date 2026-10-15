@@ -103,6 +103,14 @@ export async function updateSession(request: NextRequest) {
     // header auth, called by the instrumentation poller with no session.
     path === "/api/domains/process" ||
     path === "/api/domains/sweep" ||
+    // SED AI's scheduler (reminders, handover returns, standing rules):
+    // x-wge-secret auth, called by the instrumentation poller every minute.
+    path === "/api/assistant/scheduler" ||
+    // SED AI on the phone: Telegram and Meta call these with no session. Each
+    // proves itself — Telegram's secret token header, WhatsApp's HMAC
+    // signature (see lib/assistant/channels/verify.ts) — before anything runs.
+    path === "/api/assistant/channels/telegram" ||
+    path === "/api/assistant/channels/whatsapp" ||
     // Website CMS public content API: read-only, served to the agency
     // website server-to-server, gated by website_settings.api_key
     // (see lib/website-cms/public.ts). No session ever exists here.

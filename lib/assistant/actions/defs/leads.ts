@@ -7,6 +7,7 @@ import { leadPayloadErrors } from "@/lib/leads/serverRules";
 import { FRESH_OPTIONS, LEAD_STATUSES, SITE_TYPES, type AddOn, type SocialProfile } from "@/lib/leads/types";
 import { attachmentUrl } from "../../uploads";
 import type { CardItem } from "../card";
+import { ActionFailure } from "../errors";
 import { checkColors, checkEmail, checkProfileLink, merge } from "../checks";
 import { formatDateTime, money } from "../fields";
 import { changesOf, displayValue, isStepRef, movedOn, need, needAdmin, plural, str, visibleLead } from "../helpers";
@@ -292,12 +293,12 @@ const leadCreate: ActionDef = {
     minutes: 10,
     async run(stored, ctx) {
       const id = stored.result?.data?.id;
-      if (typeof id !== "string") throw new Error("Nothing to undo.");
+      if (typeof id !== "string") throw new ActionFailure("Nothing to undo.", 409);
       // Removing a lead you created minutes ago does not need the delete
       // permission: the lead is soft-deleted (restorable by an admin) and logged.
       const { data: lead } = await ctx.admin.from("leads").select("id, created_by, deleted_at").eq("id", id).maybeSingle();
       if (!lead || lead.deleted_at) return "The lead was already removed.";
-      if (lead.created_by !== stored.user_id) throw new Error("Only the lead's creator can undo creating it.");
+      if (lead.created_by !== stored.user_id) throw new ActionFailure("Only the lead's creator can undo creating it.", 403);
       await ctx.admin.from("leads").update({ deleted_at: new Date().toISOString() }).eq("id", id);
       await ctx.admin.from("activity_log").insert({ user_id: ctx.userId, action: "lead.deleted", entity_type: "lead", entity_id: id, new_value: { via: "assistant_undo" } });
       return "the lead was removed again.";
@@ -589,6 +590,8 @@ const leadTags: ActionDef = {
   confirmLabel: "Update tags",
   risk: "standard",
   allowed: (ctx) => need(ctx, "leads.tags.manage"),
+  // Tags are each person's own: never applied by an approver in their place.
+  selfOnly: true,
   fields: [
     { name: "lead", label: "Lead", type: "ref", ref: "lead", required: true, editable: false },
     { name: "add", label: "Add tags", type: "list", max: 20 },
@@ -788,6 +791,9 @@ const leadBulk: ActionDef = {
       const before = (stored.before_state ?? {}) as { statuses?: Record<string, string>; links?: { lead_id: string; tag_id: string }[] };
       const op = stored.input.operation;
       if (op === "Archive") {
+        // Bringing archived leads back is what the delete permission covers — whoever clicks Undo.
+        const blocked = need(ctx, "leads.delete");
+        if (blocked) throw new ActionFailure(blocked, 403);
         await ctx.admin.from("leads").update({ deleted_at: null }).in("id", ids);
         await ctx.admin.from("activity_log").insert({ user_id: ctx.userId, action: "lead.restored", entity_type: "lead", new_value: { ids, via: "assistant_undo" } });
         return `${plural(ids.length, "lead")} restored.`;
@@ -842,6 +848,9 @@ const leadArchive: ActionDef = {
   },
   undo: {
     async run(stored, ctx) {
+      // Bringing an archived lead back is what the delete permission covers — whoever clicks Undo.
+      const blocked = need(ctx, "leads.delete");
+      if (blocked) throw new ActionFailure(blocked, 403);
       await ctx.admin.from("leads").update({ deleted_at: null }).eq("id", str(stored.input.lead));
       await ctx.admin.from("activity_log").insert({ user_id: ctx.userId, action: "lead.restored", entity_type: "lead", entity_id: str(stored.input.lead), new_value: { via: "assistant_undo" } });
       return "the lead is back.";

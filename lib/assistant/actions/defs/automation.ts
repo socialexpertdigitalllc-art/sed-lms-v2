@@ -42,6 +42,8 @@ const ruleCreate: ActionDef = {
   confirmLabel: "Turn on rule",
   risk: (v) => (templateOf(v)?.key === "no_pickup_move" ? "sensitive" : "standard"),
   allowed: () => null,
+  // The person's own standing rules: never set up by an approver in their place.
+  selfOnly: true,
   fields: [
     { name: "rule", label: "Rule", type: "enum", options: TEMPLATE_TITLES, required: true },
     { name: "streak", label: "No-pickups in a row", type: "integer", min: 2, max: 20, default: 3, showIf: (v) => templateOf(v)?.key === "no_pickup_move" },

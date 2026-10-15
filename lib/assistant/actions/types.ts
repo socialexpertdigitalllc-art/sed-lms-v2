@@ -253,6 +253,12 @@ export interface ActionDef {
    * Always on for critical actions (money, deletion, access).
    */
   strictCheck?: boolean;
+  /**
+   * Only ever done by the person for themselves (their notifications, tags,
+   * reminders, mail): never sent to an approver, who would run it as — and
+   * on — themselves.
+   */
+  selfOnly?: boolean;
 }
 
 export interface ExecInfo {

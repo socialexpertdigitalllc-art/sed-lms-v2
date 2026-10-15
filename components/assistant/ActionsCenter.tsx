@@ -9,6 +9,7 @@ import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
 import { ActionCardView } from "./ActionCard";
 import { Automations } from "./Automations";
+import { PhoneLink } from "./PhoneLink";
 import { JSON_HEADERS, type CardOp, type CardOpBody, type CardOpResult } from "./useAssistantChat";
 
 type Row = ActionCard & {
@@ -136,15 +137,20 @@ function Mine() {
   );
 }
 
-function Approvals() {
+function Approvals({ userId }: { userId: string }) {
   const { toast } = useToast();
   const list = useList("approvals", true);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [phrases, setPhrases] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   async function decide(r: Row, approve: boolean) {
     setBusy(r.id + approve);
     try {
-      const res = await fetch(`/api/assistant/actions/${r.id}/decide`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ approve, note: notes[r.id] || undefined }) });
+      const res = await fetch(`/api/assistant/actions/${r.id}/decide`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ approve, note: notes[r.id] || undefined, ...(approve && r.risk === "critical" ? { phrase: phrases[r.id] ?? "" } : {}) }),
+      });
       const body = (await res.json().catch(() => ({}))) as { card?: ActionCard; error?: string };
       if (!res.ok || !body.card) throw new Error(body.error ?? `HTTP ${res.status}`);
       list.replace(body.card);
@@ -164,32 +170,54 @@ function Approvals() {
   if (!list.rows.length) return <Empty text="No requests are waiting for approval." />;
   return (
     <div className="space-y-4">
-      {list.rows.map((r) => (
-        <div key={r.id} className="space-y-2">
-          <p className="text-xs text-text-muted">
-            <span className="font-medium text-text">{r.requester.name}</span> asked {when(r.createdAt)}
-            {r.approval?.note ? ` — “${r.approval.note}”` : ""}
-          </p>
-          <ActionCardView card={r} onOp={async () => ({ ok: false, error: "Use Approve or Reject below." })} />
-          {r.status === "awaiting_approval" ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                value={notes[r.id] ?? ""}
-                onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value.slice(0, 500) }))}
-                placeholder="Note to the requester (optional)"
-                className="min-w-[200px] flex-1 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-text focus:border-accent focus:outline-none"
-                aria-label="Note to the requester"
-              />
-              <button type="button" className={btnGhostSm} disabled={busy !== null} onClick={() => void decide(r, false)}>
-                {busy === r.id + "false" ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <X className="h-3.5 w-3.5" aria-hidden />} Reject
-              </button>
-              <button type="button" className={btnPrimary} disabled={busy !== null} onClick={() => void decide(r, true)}>
-                {busy === r.id + "true" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Check className="h-4 w-4" aria-hidden />} Approve &amp; run as me
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ))}
+      {list.rows.map((r) => {
+        const own = r.requester.id === userId;
+        // A high-impact change: the approver types its name too.
+        const phraseOk = r.risk !== "critical" || (r.confirmPhrase ?? "").trim().toLowerCase() === (phrases[r.id] ?? "").trim().toLowerCase();
+        return (
+          <div key={r.id} className="space-y-2">
+            <p className="text-xs text-text-muted">
+              <span className="font-medium text-text">{own ? "You" : r.requester.name}</span> asked {when(r.createdAt)}
+              {r.approval?.note ? ` — “${r.approval.note}”` : ""}
+            </p>
+            <ActionCardView card={r} onOp={async () => ({ ok: false, error: "Use Approve or Reject below." })} />
+            {r.status === "awaiting_approval" && own ? (
+              <p className="text-xs text-text-faint">This is your own request — another admin has to approve it. You can withdraw it from My actions.</p>
+            ) : r.status === "awaiting_approval" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {r.risk === "critical" && r.confirmPhrase ? (
+                  <label className="w-full space-y-1 text-sm">
+                    <span className="text-text-muted">
+                      High impact. To approve, type <span className="rounded bg-surface-2 px-1 font-mono text-[12px] text-text">{r.confirmPhrase}</span>
+                    </span>
+                    <input
+                      value={phrases[r.id] ?? ""}
+                      onChange={(e) => setPhrases((p) => ({ ...p, [r.id]: e.target.value }))}
+                      className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-text focus:border-accent focus:outline-none"
+                      aria-label="Confirmation words"
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </label>
+                ) : null}
+                <input
+                  value={notes[r.id] ?? ""}
+                  onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value.slice(0, 500) }))}
+                  placeholder="Note to the requester (optional)"
+                  className="min-w-[200px] flex-1 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-text focus:border-accent focus:outline-none"
+                  aria-label="Note to the requester"
+                />
+                <button type="button" className={btnGhostSm} disabled={busy !== null} onClick={() => void decide(r, false)}>
+                  {busy === r.id + "false" ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <X className="h-3.5 w-3.5" aria-hidden />} Reject
+                </button>
+                <button type="button" className={btnPrimary} disabled={busy !== null || !phraseOk} onClick={() => void decide(r, true)}>
+                  {busy === r.id + "true" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Check className="h-4 w-4" aria-hidden />} Approve &amp; run as me
+                </button>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -388,7 +416,7 @@ const Loading = () => (
 );
 const Empty = ({ text }: { text: string }) => <p className="py-10 text-center text-sm text-text-faint">{text}</p>;
 
-export function ActionsCenter({ canAct, canManage, initialTab }: { canAct: boolean; canManage: boolean; initialTab: string }) {
+export function ActionsCenter({ userId, canAct, canManage, initialTab }: { userId: string; canAct: boolean; canManage: boolean; initialTab: string }) {
   const tabs = [
     ...(canAct ? [{ key: "mine", label: "My actions" }, { key: "automations", label: "Reminders & automations" }] : []),
     ...(canManage ? [{ key: "approvals", label: "Approvals" }, { key: "report", label: "Report" }, { key: "settings", label: "Settings" }] : []),
@@ -426,7 +454,7 @@ export function ActionsCenter({ canAct, canManage, initialTab }: { canAct: boole
           </button>
         ))}
       </nav>
-      {tab === "mine" ? <Mine /> : tab === "automations" ? <Automations /> : tab === "approvals" ? <Approvals /> : tab === "report" ? <ReportView /> : <SettingsView />}
+      {tab === "mine" ? <Mine /> : tab === "automations" ? <Automations phone={<PhoneLink />} /> : tab === "approvals" ? <Approvals userId={userId} /> : tab === "report" ? <ReportView /> : <SettingsView />}
     </div>
   );
 }

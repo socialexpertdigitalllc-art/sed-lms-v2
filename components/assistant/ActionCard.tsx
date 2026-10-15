@@ -22,7 +22,7 @@ import {
 import { canUndo, isOpen, RISK_LABEL, STATUS_LABEL, type ActionCard as Card, type CardField, type EditSpec } from "@/lib/assistant/actions/card";
 import { btnGhostSm, btnPrimary, btnSecondarySm } from "@/components/common/buttons";
 import { cn } from "@/lib/utils";
-import type { CardOp, CardOpBody, CardOpResult } from "./useAssistantChat";
+import type { CardDraft, CardOp, CardOpBody, CardOpResult } from "./useAssistantChat";
 
 /**
  * A change SED AI prepared, as the person sees it before (and after) it
@@ -189,14 +189,29 @@ export function ActionCardView({
   card,
   onOp,
   compact = false,
+  onDraft,
 }: {
   card: Card;
   onOp: (card: Card, op: CardOp, body?: CardOpBody) => Promise<CardOpResult>;
   compact?: boolean;
+  /** Told whenever the edits or ticks change — "Run all" sends them with the step. */
+  onDraft?: (cardId: string, draft: CardDraft) => void;
 }) {
   const open = isOpen(card);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Set<string>>(() => new Set((card.items ?? []).filter((i) => i.selected).map((i) => i.id)));
+  const hasItems = (card.items ?? []).length > 0;
+  const report = (nextEdits: Record<string, string>, nextSelected: Set<string>) =>
+    onDraft?.(card.id, { edits: Object.keys(nextEdits).length ? nextEdits : undefined, selected: hasItems ? [...nextSelected] : undefined });
+  const changeEdits = (fn: (prev: Record<string, string>) => Record<string, string>) => {
+    const next = fn(edits);
+    setEdits(next);
+    report(next, selected);
+  };
+  const changeSelected = (next: Set<string>) => {
+    setSelected(next);
+    report(edits, next);
+  };
   const [checked, setChecked] = useState(false);
   const [phrase, setPhrase] = useState("");
   const [note, setNote] = useState("");
@@ -232,6 +247,7 @@ export function ActionCardView({
       setProblems(res.problems ?? []);
     } else {
       setEdits({});
+      report({}, selected);
       setNow(Date.now());
     }
   }
@@ -293,11 +309,11 @@ export function ActionCardView({
               <FieldRow
                 key={f.name}
                 field={f}
-                editable={open && !needsApproval && card.risk !== "critical"}
+                editable={open && card.risk !== "critical"}
                 edited={edits[f.name]}
                 problem={problemFor.get(f.name)}
                 onEdit={(v) =>
-                  setEdits((prev) => {
+                  changeEdits((prev) => {
                     const next = { ...prev };
                     if (v === undefined) delete next[f.name];
                     else next[f.name] = v;
@@ -332,10 +348,10 @@ export function ActionCardView({
               </span>
               {open ? (
                 <span className="flex gap-2">
-                  <button type="button" className="hover:text-text" onClick={() => setSelected(new Set(items.map((i) => i.id)))}>
+                  <button type="button" className="hover:text-text" onClick={() => changeSelected(new Set(items.map((i) => i.id)))}>
                     All
                   </button>
-                  <button type="button" className="hover:text-text" onClick={() => setSelected(new Set())}>
+                  <button type="button" className="hover:text-text" onClick={() => changeSelected(new Set())}>
                     None
                   </button>
                 </span>
@@ -350,14 +366,12 @@ export function ActionCardView({
                         type="checkbox"
                         className="mt-1 accent-[var(--color-accent)]"
                         checked={selected.has(i.id)}
-                        onChange={(e) =>
-                          setSelected((prev) => {
-                            const next = new Set(prev);
-                            if (e.target.checked) next.add(i.id);
-                            else next.delete(i.id);
-                            return next;
-                          })
-                        }
+                        onChange={(e) => {
+                          const next = new Set(selected);
+                          if (e.target.checked) next.add(i.id);
+                          else next.delete(i.id);
+                          changeSelected(next);
+                        }}
                       />
                     ) : null}
                     <span className="min-w-0 flex-1">
@@ -494,7 +508,18 @@ export function ActionCardView({
               </button>
             ) : null}
             {needsApproval ? (
-              <button type="button" className={cn(btnPrimary, "px-3 py-1.5 text-[13px]")} onClick={() => void run("request", { note: note.trim() || undefined })} disabled={busy !== null}>
+              <button
+                type="button"
+                className={cn(btnPrimary, "px-3 py-1.5 text-[13px]")}
+                onClick={() =>
+                  void run("request", {
+                    note: note.trim() || undefined,
+                    ...(edited ? { edits } : {}),
+                    ...(items.length ? { selected: [...selected] } : {}),
+                  })
+                }
+                disabled={busy !== null || (items.length > 0 && selected.size === 0)}
+              >
                 {busy === "request" ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <UserCheck className="h-3.5 w-3.5" aria-hidden />}
                 Ask an admin
               </button>

@@ -36,16 +36,17 @@ export async function getOwnAction(admin: Admin, userId: string, id: string): Pr
   return row && row.user_id === userId ? row : null;
 }
 
-export async function listConversationActions(admin: Admin, userId: string, conversationId: string): Promise<StoredAction[]> {
+/** A chat's latest actions (up to `limit`), oldest first. */
+export async function listConversationActions(admin: Admin, userId: string, conversationId: string, limit = 500): Promise<StoredAction[]> {
   const { data, error } = await admin
     .from("assistant_actions")
     .select(COLUMNS)
     .eq("conversation_id", conversationId)
     .eq("user_id", userId)
-    .order("created_at", { ascending: true })
-    .limit(500);
+    .order("created_at", { ascending: false })
+    .limit(limit);
   if (error) throw new Error(error.message);
-  return (data ?? []) as StoredAction[];
+  return ((data ?? []) as StoredAction[]).reverse();
 }
 
 export async function listPlan(admin: Admin, planId: string): Promise<StoredAction[]> {

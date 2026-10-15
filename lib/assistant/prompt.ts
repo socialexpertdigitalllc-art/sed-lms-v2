@@ -70,6 +70,8 @@ export interface PromptInput {
   act?: ActPromptFacts | null;
   /** Where they are in the app ("the lead “Jumbo's Pizza” (/leads/…)"). */
   page?: string | null;
+  /** A conversation on the phone (Telegram / WhatsApp) rather than the app. */
+  channel?: "telegram" | "whatsapp" | null;
 }
 
 /** The Act-mode part of the prompt. PURE. */
@@ -102,6 +104,14 @@ How to do a task:
 
 Actions you can prepare:
 ${a.catalogue ?? "(none)"}${history}`;
+}
+
+/** On the phone: no cards, no charts, short plain text. PURE. */
+export function channelSection(channel: PromptInput["channel"]): string {
+  if (channel !== "telegram" && channel !== "whatsapp") return "";
+  const app = channel === "telegram" ? "Telegram" : "WhatsApp";
+  return `\n\n## On ${app}
+This conversation is on ${app}, on their phone. Keep answers short — a few lines of plain text: no tables, charts or headings (they cannot be shown here); a short list at most. There are no cards or buttons: a change you prepare reaches them as text with how to confirm it — reply YES (NO cancels); a high-impact change is confirmed by typing its name. So wherever these instructions say "card" or "button", tell them to reply instead. Anything that needs a big screen (a long list, a chart) is in SED AI on the computer — say so.`;
 }
 
 /** Where the person is in the app, for "this lead", "here". PURE. */
@@ -171,7 +181,7 @@ ${CHART_EXAMPLE}
 ## Memory
 You remember this person between conversations. What you know about them:
 ${memories}
-Use it to personalise your answers. When they tell you something durable — a goal or target, how they like answers, how they work, a strategy decision — or ask you to remember something, save it with save_memory: one short fact per memory, in the third person. Do not save numbers that live in the dashboard; look those up fresh. If a memory turns out to be outdated or they ask you to forget it, use forget_memory (and save the corrected fact). Mention it briefly when you save or forget something.${pageSection(p.page)}${actSection(p.act, p.timezone)}`;
+Use it to personalise your answers. When they tell you something durable — a goal or target, how they like answers, how they work, a strategy decision — or ask you to remember something, save it with save_memory: one short fact per memory, in the third person. Do not save numbers that live in the dashboard; look those up fresh. If a memory turns out to be outdated or they ask you to forget it, use forget_memory (and save the corrected fact). Mention it briefly when you save or forget something.${pageSection(p.page)}${actSection(p.act, p.timezone)}${channelSection(p.channel)}`;
 }
 
 /**

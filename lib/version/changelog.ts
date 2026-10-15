@@ -47,11 +47,11 @@ export const CHANGELOG: ChangelogEntry[] = [
       },
       {
         kind: "feature",
-        text: "Built-in care. Changes that affect others ask for an \"I've checked\" tick. High-impact ones (buying a domain, taking a site down, permissions) ask you to type the name. Bulk changes list every record so you can untick any. Most changes can be undone for 10 minutes, and the Actions page keeps the history.",
+        text: "Built-in care. Changes that affect others ask for an \"I've checked\" tick. High-impact ones (buying a domain, taking a site down, permissions) ask you to type the name. Bulk changes list every record so you can untick any. Most changes can be undone for 10 minutes, and the Actions page keeps the history. SED AI only finds the records you could open in the app yourself.",
       },
       {
         kind: "feature",
-        text: "Ask an admin. If your account can't do something, send it for approval from the card. An admin approves it (it then runs as them) or turns it down with a note, and you're notified either way.",
+        text: "Ask an admin. If your account can't do something, fix the details on the card and send it for approval. An admin approves it (it then runs as them) or turns it down with a note, and you're notified either way. Nobody approves their own request, and a high-impact change needs the approver to type its name too. Things that only concern you (your reminders, tags, rules, email from your mailbox) are never run by someone else.",
       },
       {
         kind: "feature",

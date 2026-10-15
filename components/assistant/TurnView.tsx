@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { ActionCardView, PlanBar } from "./ActionCard";
 import { Markdown } from "./Markdown";
 import { SedAiAvatar } from "./SedAiMark";
-import type { CardOp, CardOpBody, CardOpResult } from "./useAssistantChat";
+import type { CardDraft, CardOp, CardOpBody, CardOpResult } from "./useAssistantChat";
 import { useSmoothText } from "./useSmoothText";
 
 /**
@@ -159,8 +159,10 @@ function Cards({
   cards: ActionCard[];
   compact: boolean;
   onCardOp: (card: ActionCard, op: CardOp, body?: CardOpBody) => Promise<CardOpResult>;
-  onRunPlan?: (planId: string) => Promise<{ ok: boolean; error?: string }>;
+  onRunPlan?: (planId: string, steps?: Record<string, CardDraft>) => Promise<{ ok: boolean; error?: string }>;
 }) {
+  // What each card was changed to before "Run all" — sent with its step.
+  const drafts = useRef(new Map<string, CardDraft>());
   const groups: ActionCard[][] = [];
   for (const c of cards) {
     const last = groups[groups.length - 1];
@@ -171,9 +173,17 @@ function Cards({
     <div className="space-y-2.5">
       {groups.map((g) => (
         <div key={g[0].id} className="space-y-2">
-          {g[0].plan && g.length > 1 && onRunPlan ? <PlanBar cards={g} compact={compact} onRunAll={() => onRunPlan(g[0].plan!.id)} /> : null}
+          {g[0].plan && g.length > 1 && onRunPlan ? (
+            <PlanBar
+              cards={g}
+              compact={compact}
+              onRunAll={() =>
+                onRunPlan(g[0].plan!.id, Object.fromEntries(g.flatMap((c) => (drafts.current.has(c.id) ? [[c.id, drafts.current.get(c.id)!]] : []))))
+              }
+            />
+          ) : null}
           {g.map((c) => (
-            <ActionCardView key={c.id} card={c} onOp={onCardOp} compact={compact} />
+            <ActionCardView key={c.id} card={c} onOp={onCardOp} compact={compact} onDraft={(id, d) => drafts.current.set(id, d)} />
           ))}
         </div>
       ))}
@@ -269,7 +279,7 @@ export function TurnView({
   onRate?: (answerId: string, feedback: AnswerFeedback | null) => void;
   /** The action cards' buttons. Without it, cards are shown read-only. */
   onCardOp?: (card: ActionCard, op: CardOp, body?: CardOpBody) => Promise<CardOpResult>;
-  onRunPlan?: (planId: string) => Promise<{ ok: boolean; error?: string }>;
+  onRunPlan?: (planId: string, steps?: Record<string, CardDraft>) => Promise<{ ok: boolean; error?: string }>;
   /** "Save as shortcut" on a question (recipes). */
   onSaveShortcut?: (text: string) => void;
 }) {

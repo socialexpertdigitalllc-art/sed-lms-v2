@@ -22,5 +22,5 @@ export default async function AssistantActionsPage({ searchParams }: { searchPar
   const canManage = perms.has("assistant.actions.manage");
   if (!canAct && !canManage) redirect("/assistant");
   const { tab } = await searchParams;
-  return <ActionsCenter canAct={canAct} canManage={canManage} initialTab={tab ?? (canAct ? "mine" : "approvals")} />;
+  return <ActionsCenter userId={user.id} canAct={canAct} canManage={canManage} initialTab={tab ?? (canAct ? "mine" : "approvals")} />;
 }

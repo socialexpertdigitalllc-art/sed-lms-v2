@@ -53,7 +53,7 @@ function labelOf(def: ActionDef, v: Values): string {
 /** What stands between this person and doing it themselves: null, or the reason an approver is needed. */
 export async function approvalReason(def: ActionDef, ctx: ActionContext): Promise<string | null> {
   const settings = await getActionSettings(ctx.admin);
-  if (settings.get(def.key)?.require_approval) return "An admin has asked that this action is approved before it runs.";
+  if (settings.get(def.key)?.require_approval && !def.selfOnly) return "An admin has asked that this action is approved before it runs.";
   return def.allowed(ctx);
 }
 
@@ -119,6 +119,10 @@ export async function prepareAction(input: PrepareInput): Promise<PrepareOutcome
   const settings = await getActionSettings(ctx.admin);
   if (settings.get(def.key)?.enabled === false) {
     return { kind: "disabled", message: `An admin has switched off "${def.title}" for SED AI. The person can still do it in the app.` };
+  }
+  if (def.selfOnly) {
+    const blocked = def.allowed(ctx);
+    if (blocked) return { kind: "disabled", message: `${blocked} This one only changes the person's own things, so it can't be sent to an admin for approval either.` };
   }
 
   const n = await normalizeFields(def, input.fields ?? {}, ctx, { stepRefs: Boolean(input.plan) });
@@ -267,6 +271,10 @@ export async function confirmAction(input: ConfirmInput): Promise<ActionCard> {
   if (settings.get(def.key)?.enabled === false) throw new ActionFailure(`An admin has switched off "${def.title}" for SED AI.`, 403);
 
   if (input.asApprover) {
+    // Approval means a second person: nobody approves their own request, and
+    // what only concerns the requester's own things is never run by someone else.
+    if (row.user_id === input.ctx.userId) throw new ActionFailure("You can't approve your own request — another admin has to.", 403);
+    if (def.selfOnly) throw new ActionFailure("This only changes the requester's own things, so it can't be approved for them.", 403);
     const own = def.allowed(ctx);
     if (own) throw new ActionFailure(`You can't approve this: ${own}`, 403);
   } else {
@@ -308,7 +316,8 @@ export async function confirmAction(input: ConfirmInput): Promise<ActionCard> {
     }
   }
 
-  if (row.risk === "critical" && !input.asApprover) {
+  // High impact: whoever runs it — the requester or the approver — types its name.
+  if (row.risk === "critical") {
     const typed = (input.phrase ?? "").trim().toLowerCase();
     if (!row.confirm_phrase || typed !== row.confirm_phrase.trim().toLowerCase()) {
       throw new ActionFailure(`Type "${row.confirm_phrase}" to confirm.`, 422);
@@ -415,14 +424,61 @@ export async function undoAction(id: string, actor: ActionContext): Promise<Acti
 
 /* -------------------------------------------------------------- approvals */
 
-export async function requestApproval(id: string, ctx: ActionContext, note: string | null): Promise<ActionCard> {
+export interface Draft {
+  /** Values changed on the card. */
+  edits?: Record<string, unknown>;
+  /** Bulk: the records still ticked. */
+  selected?: string[];
+}
+
+/**
+ * The card as the person left it — their edits and unticks applied to the
+ * stored values and re-checked — for what is sent on (to an approver).
+ */
+async function applyDraft(def: ActionDef, row: StoredAction, ctx: ActionContext, draft: Draft) {
+  let raw: Values = { ...(row.input ?? {}) };
+  const edited = Object.keys(draft.edits ?? {}).length > 0;
+  if (edited && row.risk === "critical") throw new ActionFailure("A high-impact change can't be edited on its card. Ask SED AI to prepare it again with the change.", 422);
+  for (const [k, v] of Object.entries(draft.edits ?? {})) {
+    const spec = def.fields.find((f) => f.name === k);
+    if (spec && isCardEditable(spec)) raw[k] = v;
+  }
+  let items = row.card?.items;
+  if (def.bulkField && draft.selected) {
+    const all = Array.isArray(raw[def.bulkField]) ? (raw[def.bulkField] as string[]) : [];
+    const keep = all.filter((id) => draft.selected!.includes(id));
+    if (!keep.length) throw new ActionFailure("Tick at least one record, or cancel.", 422);
+    raw = { ...raw, [def.bulkField]: keep };
+    items = items?.map((i) => ({ ...i, selected: keep.includes(i.id) })).filter((i) => i.selected);
+  }
+  const n = await normalizeFields(def, raw, ctx);
+  const missing = missingFields(def, n.values, n.problems);
+  const problems = [...n.problems, ...missing.map((f) => ({ field: f.name, message: `${f.label} is required.` }))];
+  if (problems.length) throw new ActionFailure(problems.map((p) => p.message).join(" "), 422, problems);
+  if (edited && RISK_RANK[riskOf(def, n.values)] > RISK_RANK[row.risk]) {
+    throw new ActionFailure("That edit makes this a bigger change than the one proposed. Ask SED AI to prepare it again so you can review it.", 409);
+  }
+  // Scratch values (__name…) the proposal worked out stay with it.
+  const values: Values = { ...Object.fromEntries(Object.entries(row.input ?? {}).filter(([k]) => k.startsWith("__"))), ...n.values };
+  const fields = edited ? await cardFields(def, n, ctx) : row.card?.fields;
+  return { values, card: { ...row.card, fields, items } };
+}
+
+export async function requestApproval(id: string, ctx: ActionContext, note: string | null, draft: Draft = {}): Promise<ActionCard> {
   const row = await getAction(ctx.admin, id);
   if (!row || row.user_id !== ctx.userId) throw new ActionFailure("That action was not found.", 404);
+  const def = getActionDef(row.action_key);
+  if (!def) throw new ActionFailure("This action no longer exists.", 410);
+  if (def.selfOnly) throw new ActionFailure("This only changes your own things, so it can't be sent for approval.", 403);
+  if (row.status !== "proposed") throw new ActionFailure(alreadyMessage(row), 409);
+  // What the admin approves is the card as the person left it.
+  const applied = await applyDraft(def, row, ctx, draft);
   const next = await transition(ctx.admin, id, ["proposed"], {
     status: "awaiting_approval",
     approval_note: note,
+    input: applied.values,
     expires_at: new Date(ctx.now.getTime() + APPROVAL_TTL_MS).toISOString(),
-    card: { ...row.card, approval: { reason: row.card?.approval?.reason ?? "Sent for approval.", note } },
+    card: { ...applied.card, approval: { reason: row.card?.approval?.reason ?? "Sent for approval.", note } },
   });
   if (!next) throw new ActionFailure(alreadyMessage(row), 409);
   const approvers = (await usersWithPermission(ctx.admin, "assistant.actions.manage")).filter((u) => u !== ctx.userId);
@@ -546,7 +602,7 @@ export async function preparePlan(
  * "Run all": confirm a plan's open steps in order, stopping at the first that
  * fails (later steps may depend on it).
  */
-export async function confirmPlan(planId: string, ctx: ActionContext, origin: string): Promise<ActionCard[]> {
+export async function confirmPlan(planId: string, ctx: ActionContext, origin: string, drafts: Record<string, Draft> = {}): Promise<ActionCard[]> {
   const steps = await listPlan(ctx.admin, planId);
   if (!steps.length || steps.some((s) => s.user_id !== ctx.userId)) throw new ActionFailure("That plan was not found.", 404);
   const out: ActionCard[] = [];
@@ -563,7 +619,9 @@ export async function confirmPlan(planId: string, ctx: ActionContext, origin: st
       continue;
     }
     try {
-      const card = await confirmAction({ id: step.id, ctx, origin });
+      // Each step as its card was left: edits, unticked records.
+      const draft = drafts[step.id] ?? {};
+      const card = await confirmAction({ id: step.id, ctx, origin, edits: draft.edits, selected: draft.selected });
       out.push(card);
       if (card.status !== "done") stopped = true;
     } catch (e) {

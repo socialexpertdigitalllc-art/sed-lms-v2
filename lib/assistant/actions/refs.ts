@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { allowedFormScope, endpointInScope, submissionInScope } from "@/lib/forms/access";
 import { allowedTicketScope, canActOnTicket } from "@/lib/tickets/scope";
+import { ActionFailure } from "./errors";
 import type { ActionContext, RefKind } from "./types";
 
 /**
@@ -14,10 +16,12 @@ import type { ActionContext, RefKind } from "./types";
  *
  * VISIBILITY. Leads, pre-leads, tags and notifications are read through the
  * person's own client, so a record they cannot open cannot be named either.
- * Tickets follow the Tickets page's own scope rule. Everything else is read
- * with the service role, behind the action's own permission check — the
- * screens for those records (domains, mailboxes, deployments…) are admin-
- * client reads already.
+ * Everything else is read with the service role — as the screens for those
+ * records (domains, mailboxes, deployments…) do — behind the same rules those
+ * screens apply: `gate` is the permission(s) that open the screen at all, and
+ * `visible` the row rule (Tickets' scope, Forms' lead scope, own mailbox).
+ * Without them a record can't be named or found, so nobody learns through
+ * SED AI what the app would not show them.
  */
 
 export interface RefHit {
@@ -55,7 +59,32 @@ interface KindSpec {
   name: (row: Row) => string;
   /** Can this person use this record at all (beyond what the query enforces)? */
   visible?: (row: Row, ctx: ActionContext) => Promise<boolean>;
+  /** Permissions that open these records' screen — one is needed to look them up at all. */
+  gate?: readonly string[];
 }
+
+/** The scope rules, worked out once per context object. */
+const ticketScopes = new WeakMap<ActionContext, ReturnType<typeof allowedTicketScope>>();
+function ticketScope(ctx: ActionContext) {
+  let s = ticketScopes.get(ctx);
+  if (!s) ticketScopes.set(ctx, (s = allowedTicketScope(ctx.admin, ctx.userId, ctx.perms)));
+  return s;
+}
+const formScopes = new WeakMap<ActionContext, ReturnType<typeof allowedFormScope>>();
+function formScope(ctx: ActionContext) {
+  let s = formScopes.get(ctx);
+  if (!s) formScopes.set(ctx, (s = allowedFormScope(ctx.admin, ctx.userId, ctx.perms)));
+  return s;
+}
+
+type TicketRow = { created_by: string | null; lead_id: string; assigned_to: string | null };
+async function ticketVisible(ticket: Row | null, ctx: ActionContext): Promise<boolean> {
+  return Boolean(ticket) && canActOnTicket(ticket as TicketRow, ctx.userId, await ticketScope(ctx));
+}
+
+const TICKETS = ["tickets.view", "tickets.view_all"] as const;
+const WEBSITE = ["website.view", "website.manage"] as const;
+const FORMS = ["forms.view", "forms.manage"] as const;
 
 async function one(q: PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<Row | null> {
   const { data, error } = await q;
@@ -147,10 +176,8 @@ const KINDS: Record<RefKind, KindSpec> = {
       return [...byTitle, ...byLead].filter((r) => !seen.has(str(r.id)) && seen.add(str(r.id)));
     },
     name: (r) => str(r.title),
-    visible: async (r, ctx) => {
-      const scope = await allowedTicketScope(ctx.admin, ctx.userId, ctx.perms);
-      return canActOnTicket(r as { created_by: string | null; lead_id: string; assigned_to: string | null }, ctx.userId, scope);
-    },
+    gate: TICKETS,
+    visible: (r, ctx) => ticketVisible(r, ctx),
     hit: (r) => {
       const lead = r.leads as { business_name?: string } | { business_name?: string }[] | null;
       const business = Array.isArray(lead) ? lead[0]?.business_name : lead?.business_name;
@@ -162,6 +189,9 @@ const KINDS: Record<RefKind, KindSpec> = {
     byId: (ctx, id) => one(ctx.admin.from("ticket_items").select("id, body, ticket_id, is_done").eq("id", id).maybeSingle()),
     search: async () => [],
     name: (r) => str(r.body),
+    gate: TICKETS,
+    // An item is as visible as its ticket.
+    visible: async (r, ctx) => ticketVisible(await one(ctx.admin.from("lead_tickets").select("id, created_by, lead_id, assigned_to").eq("id", str(r.ticket_id)).maybeSingle()), ctx),
     hit: (r) => ({ id: str(r.id), label: str(r.body).slice(0, 80), detail: r.is_done ? "Done" : "Open", href: `/tickets/${r.ticket_id}` }),
   },
   user: {
@@ -189,7 +219,12 @@ const KINDS: Record<RefKind, KindSpec> = {
       return rows;
     },
     name: (r) => str(r.display_name || r.email),
-    hit: (r) => ({ id: str(r.id), label: str(r.display_name || r.email), detail: [r.email, r.is_active === false ? "deactivated" : null].filter(Boolean).join(" · ") }),
+    // Colleagues' names are on every screen; their email addresses only on the user admin's.
+    hit: (r, ctx) => ({
+      id: str(r.id),
+      label: str(r.display_name || r.email),
+      detail: [ctx.perms.has("admin.users.view") ? r.email : null, r.is_active === false ? "deactivated" : null].filter(Boolean).join(" · "),
+    }),
   },
   department: {
     noun: "department",
@@ -210,6 +245,8 @@ const KINDS: Record<RefKind, KindSpec> = {
     byId: (ctx, id) => one(ctx.admin.from("builder_templates").select("id, name").eq("id", id).maybeSingle()),
     search: (ctx, q) => many(ctx.admin.from("builder_templates").select("id, name").ilike("name", `%${likeTerm(q)}%`).limit(8)),
     name: (r) => str(r.name),
+    // The catalogue is picked from on the lead form as well as in the Studio.
+    gate: ["studio.manage", "leads.create", "leads.edit"],
     hit: (r) => ({ id: str(r.id), label: str(r.name) }),
   },
   site_run: {
@@ -228,6 +265,7 @@ const KINDS: Record<RefKind, KindSpec> = {
       );
     },
     name: (r) => joinedName(r),
+    gate: ["studio.manage"],
     hit: (r) => ({ id: str(r.id), label: `${joinedName(r) || "Run"} — ${str(r.status)}`, detail: shortDate(r.created_at), href: `/ai-tools/site-builder/runs/${r.id}` }),
   },
   agent_run: {
@@ -257,6 +295,13 @@ const KINDS: Record<RefKind, KindSpec> = {
       );
     },
     name: (r) => joinedName(r) || str(r.site_host),
+    // lib/site-agent/access.ts: Studio managers reach every run; others a
+    // run on a ticket within their reach, or one with no ticket.
+    gate: ["studio.manage", "tickets.resolve"],
+    visible: async (r, ctx) =>
+      ctx.perms.has("studio.manage") ||
+      !r.ticket_id ||
+      ticketVisible(await one(ctx.admin.from("lead_tickets").select("id, created_by, lead_id, assigned_to").eq("id", str(r.ticket_id)).maybeSingle()), ctx),
     hit: (r) => ({
       id: str(r.id),
       label: `${joinedName(r) || str(r.site_host)} — ${str(r.status)}`,
@@ -279,6 +324,8 @@ const KINDS: Record<RefKind, KindSpec> = {
         : [];
     },
     name: (r) => str(r.subdomain),
+    // The Deployments board's file tools also serve tech users resolving tickets.
+    gate: ["studio.manage", "tickets.resolve"],
     hit: (r) => ({ id: str(r.id), label: str(r.url || r.subdomain), detail: [joinedName(r), r.status].filter(Boolean).join(" · ") }),
   },
   domain: {
@@ -293,6 +340,7 @@ const KINDS: Record<RefKind, KindSpec> = {
           .limit(8),
       ),
     name: (r) => str(r.domain),
+    gate: ["domains.view", "domains.manage", "domains.purchase"],
     hit: (r) => ({ id: str(r.id), label: str(r.domain), detail: [joinedName(r), r.status].filter(Boolean).join(" · "), href: `/domains/${r.id}` }),
   },
   mailbox: {
@@ -329,6 +377,7 @@ const KINDS: Record<RefKind, KindSpec> = {
         : [];
     },
     name: (r) => str(r.receipt_no),
+    gate: ["receipts.send", "payments.view", "payments.manage"],
     hit: (r) => ({
       id: str(r.id),
       label: `${str(r.receipt_no)} — ${joinedName(r)}`,
@@ -342,6 +391,7 @@ const KINDS: Record<RefKind, KindSpec> = {
     search: (ctx, q) =>
       many(ctx.admin.from("contracts").select("id, business_name, status, lead_id, created_at").ilike("business_name", `%${likeTerm(q)}%`).order("created_at", { ascending: false }).limit(8)),
     name: (r) => str(r.business_name),
+    gate: ["contracts.view", "contracts.send"],
     hit: (r) => ({ id: str(r.id), label: `Contract — ${str(r.business_name)}`, detail: [str(r.status), shortDate(r.created_at)].join(" · "), href: `/contracts` }),
   },
   form_endpoint: {
@@ -349,21 +399,26 @@ const KINDS: Record<RefKind, KindSpec> = {
     byId: (ctx, id) => one(ctx.admin.from("form_endpoints").select("id, name, status, lead_id").eq("id", id).maybeSingle()),
     search: (ctx, q) => many(ctx.admin.from("form_endpoints").select("id, name, status, lead_id").ilike("name", `%${likeTerm(q)}%`).limit(8)),
     name: (r) => str(r.name),
+    gate: FORMS,
+    visible: async (r, ctx) => endpointInScope(r as { lead_id: string | null }, await formScope(ctx)),
     hit: (r) => ({ id: str(r.id), label: str(r.name), detail: str(r.status), href: `/forms/endpoints/${r.id}` }),
   },
   form_submission: {
     noun: "form submission",
-    byId: (ctx, id) => one(ctx.admin.from("form_submissions").select("id, subject, submitter_name, submitter_email, delivery_status, created_at").eq("id", id).maybeSingle()),
+    byId: (ctx, id) =>
+      one(ctx.admin.from("form_submissions").select("id, subject, submitter_name, submitter_email, delivery_status, created_at, lead_id").eq("id", id).maybeSingle()),
     search: (ctx, q) =>
       many(
         ctx.admin
           .from("form_submissions")
-          .select("id, subject, submitter_name, submitter_email, delivery_status, created_at")
+          .select("id, subject, submitter_name, submitter_email, delivery_status, created_at, lead_id")
           .or(`submitter_name.ilike.%${likeTerm(q)}%,submitter_email.ilike.%${likeTerm(q)}%,subject.ilike.%${likeTerm(q)}%`)
           .order("created_at", { ascending: false })
           .limit(8),
       ),
     name: (r) => str(r.submitter_name || r.subject),
+    gate: FORMS,
+    visible: async (r, ctx) => submissionInScope(r as { lead_id: string | null }, await formScope(ctx)),
     hit: (r) => ({
       id: str(r.id),
       label: `${str(r.submitter_name || r.submitter_email || "Submission")} — ${str(r.subject)}`.slice(0, 120),
@@ -384,6 +439,7 @@ const KINDS: Record<RefKind, KindSpec> = {
           .limit(8),
       ),
     name: (r) => str(r.name),
+    gate: WEBSITE,
     hit: (r) => ({ id: str(r.id), label: str(r.name), detail: [str(r.email), str(r.status)].join(" · "), href: `/website/leads` }),
   },
   coupon: {
@@ -391,6 +447,7 @@ const KINDS: Record<RefKind, KindSpec> = {
     byId: (ctx, id) => one(ctx.admin.from("website_coupons").select("id, code, label, active").eq("id", id).maybeSingle()),
     search: (ctx, q) => many(ctx.admin.from("website_coupons").select("id, code, label, active").ilike("code", `%${likeTerm(q)}%`).limit(8)),
     name: (r) => str(r.code),
+    gate: WEBSITE,
     hit: (r) => ({ id: str(r.id), label: str(r.code), detail: [str(r.label), r.active ? "active" : "inactive"].filter(Boolean).join(" · "), href: `/website/coupons` }),
   },
   notification: {
@@ -455,6 +512,13 @@ export function refNoun(kind: RefKind): string {
   return KINDS[kind].noun;
 }
 
+/** Why this person can't look these records up at all, or null when they can. */
+export function refBlocked(kind: RefKind, ctx: ActionContext): string | null {
+  const spec = KINDS[kind];
+  if (!spec.gate || spec.gate.some((p) => ctx.perms.has(p))) return null;
+  return `Your account can't see ${spec.noun}s in the app, so SED AI can't look them up for you.`;
+}
+
 /**
  * The record `input` names: an id, a name, or {id}/{name}. "me" names the
  * person themselves for user fields.
@@ -468,6 +532,8 @@ export async function resolveRef(kind: RefKind, input: unknown, ctx: ActionConte
     q = typeof o.id === "string" ? o.id : typeof o.name === "string" ? o.name : typeof o.label === "string" ? o.label : null;
   }
   if (!q) return { ok: false, message: `Say which ${spec.noun}.` };
+  const blocked = refBlocked(kind, ctx);
+  if (blocked) return { ok: false, message: blocked };
 
   if (kind === "user" && /^(me|myself|i|mine|my)$/i.test(q)) q = ctx.userId;
 
@@ -511,6 +577,8 @@ export async function resolveRef(kind: RefKind, input: unknown, ctx: ActionConte
 /** Search for the find_records tool: up to `limit` matches, labelled. */
 export async function searchRefs(kind: RefKind, q: string, ctx: ActionContext, limit = 8): Promise<RefHit[]> {
   const spec = KINDS[kind];
+  const blocked = refBlocked(kind, ctx);
+  if (blocked) throw new ActionFailure(blocked, 403);
   if (isUuid(q)) {
     const row = await spec.byId(ctx, q.trim().toLowerCase());
     if (!row || (spec.visible && !(await spec.visible(row, ctx)))) return [];

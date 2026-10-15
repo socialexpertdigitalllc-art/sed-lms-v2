@@ -3,6 +3,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ActionCard } from "@/lib/assistant/actions/card";
 import { ActionCardView, PlanBar } from "@/components/assistant/ActionCard";
+import { TurnView } from "@/components/assistant/TurnView";
+import type { TurnModel } from "@/lib/assistant/turns";
 import type { CardOpResult } from "@/components/assistant/useAssistantChat";
 
 /**
@@ -110,6 +112,20 @@ describe("ActionCardView", () => {
     expect(onOp).toHaveBeenCalledWith(expect.anything(), "request", { note: "Customer is waiting" });
   });
 
+  it("lets the details be fixed before asking an admin, and sends the card as left", async () => {
+    const onOp = vi.fn(async () => ok({ ...base, status: "awaiting_approval" }));
+    const onDraft = vi.fn();
+    render(<ActionCardView card={{ ...base, approval: { reason: "Your account doesn't have “Create Lead”." } }} onOp={onOp} onDraft={onDraft} />);
+    await userEvent.click(screen.getByRole("button", { name: "Change Business name" }));
+    const input = screen.getByRole("textbox", { name: "Business name" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "Jumbo's Grill");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onDraft).toHaveBeenLastCalledWith("a1", { edits: { business_name: "Jumbo's Grill" }, selected: undefined });
+    await userEvent.click(screen.getByRole("button", { name: /Ask an admin/ }));
+    expect(onOp).toHaveBeenCalledWith(expect.anything(), "request", { edits: { business_name: "Jumbo's Grill" } });
+  });
+
   it("shows the endpoint's refusal next to the field it is about", async () => {
     const onOp = vi.fn(async (): Promise<CardOpResult> => ({ ok: false, error: "Business name is required.", problems: [{ field: "business_name", message: "Business name is required." }] }));
     render(<ActionCardView card={base} onOp={onOp} />);
@@ -134,5 +150,44 @@ describe("ActionCardView", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: /checked every step/ }));
     await userEvent.click(run);
     expect(onRunAll).toHaveBeenCalled();
+  });
+
+  it("Run all sends each step's changes made on its card", async () => {
+    const plan = { id: "p1", index: 1, total: 2, title: "New client" };
+    const items = [
+      { id: "l1", label: "Jumbo's", selected: true },
+      { id: "l2", label: "Old Town", selected: true },
+    ];
+    const turn: TurnModel = {
+      id: "q1",
+      question: "Set up the new client",
+      segments: [],
+      status: "done",
+      error: null,
+      answerId: "ans1",
+      feedback: null,
+      startedAt: null,
+      endedAt: null,
+      actions: [
+        { ...base, plan },
+        { ...base, id: "a2", key: "lead.bulk", title: "Change status — 2 leads", fields: [], items, plan: { ...plan, index: 2 } },
+      ],
+      attachments: [],
+      mode: "act",
+      switchedToAct: null,
+    };
+    const onRunPlan = vi.fn(async () => ({ ok: true }));
+    render(<TurnView turn={turn} assistantName="SED AI" onCardOp={vi.fn(async () => ok(base))} onRunPlan={onRunPlan} />);
+    await userEvent.click(screen.getByRole("button", { name: "Change Business name" }));
+    const input = screen.getByRole("textbox", { name: "Business name" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "Jumbo's Grill");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Old Town/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Run all 2 steps/ }));
+    expect(onRunPlan).toHaveBeenCalledWith("p1", {
+      a1: { edits: { business_name: "Jumbo's Grill" }, selected: undefined },
+      a2: { edits: undefined, selected: ["l1"] },
+    });
   });
 });

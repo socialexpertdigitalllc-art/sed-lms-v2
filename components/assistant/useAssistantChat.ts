@@ -44,6 +44,11 @@ export interface CardOpBody {
   note?: string;
 }
 export type CardOpResult = { ok: true; card: ActionCard } | { ok: false; error: string; problems?: { field: string; message: string }[] };
+/** What the person has changed on a card but not sent yet. */
+export interface CardDraft {
+  edits?: Record<string, string>;
+  selected?: string[];
+}
 
 export interface AssistantChatOptions {
   initialConversationId?: string | null;
@@ -338,11 +343,12 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     [updateCard],
   );
 
-  /** "Run all" on a plan: its steps in order. */
+  /** "Run all" on a plan: its steps in order, each as its card was left. */
   const runPlan = useCallback(
-    async (planId: string): Promise<{ ok: boolean; error?: string }> => {
+    async (planId: string, steps: Record<string, CardDraft> = {}): Promise<{ ok: boolean; error?: string }> => {
       try {
-        const res = await fetch(`/api/assistant/actions/plan/${planId}/confirm`, { method: "POST", headers: JSON_HEADERS, body: "{}" });
+        const body = JSON.stringify(Object.keys(steps).length ? { steps } : {});
+        const res = await fetch(`/api/assistant/actions/plan/${planId}/confirm`, { method: "POST", headers: JSON_HEADERS, body });
         const json = (await res.json().catch(() => ({}))) as { cards?: ActionCard[]; error?: string };
         for (const c of json.cards ?? []) updateCard(c);
         if (!res.ok) return { ok: false, error: json.error ?? `HTTP ${res.status}` };

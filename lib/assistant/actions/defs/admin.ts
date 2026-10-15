@@ -186,6 +186,8 @@ const importSheet: ActionDef = {
   confirmLabel: "Import leads",
   risk: "sensitive",
   allowed: (ctx) => need(ctx, "admin.import"),
+  // A whole sheet of leads the approver never opened: only someone who may import runs one, never on another's behalf.
+  selfOnly: true,
   fields: [
     { name: "sheet", label: "Spreadsheet", type: "text", max: 500, editable: false, help: "The Google Sheet's link or ID. Leave out for the sheet saved on the Import page." },
     { name: "tab", label: "Tab", type: "text", max: 100, editable: false, help: "The tab (worksheet) name. Leave out for the saved tab." },
@@ -236,7 +238,15 @@ const importSheet: ActionDef = {
     const fields: CardField[] = [
       { name: "sheet", label: "Spreadsheet", value: sheet },
       { name: "tab", label: "Tab", value: tab },
-      { name: "mapping", label: "Columns", value: `${Object.values(mapping).filter((f) => f && f !== "(ignore)").length} mapped` },
+      // Exactly which column fills which lead field — a wrong mapping is the usual bad import.
+      {
+        name: "mapping",
+        label: "Columns",
+        value: Object.entries(mapping)
+          .filter(([, f]) => f && f !== "(ignore)")
+          .map(([col, f]) => `${col} → ${f}`)
+          .join(", "),
+      },
     ];
     const warnings: string[] = [];
     let title = `Import leads from “${tab}”`;

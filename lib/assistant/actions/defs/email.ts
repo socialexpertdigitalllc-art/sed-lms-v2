@@ -107,6 +107,8 @@ const emailSend: ActionDef = {
   // No permission key: anyone with a verified mailbox of their own may send.
   // That is data, not a permission, so check() is where it is said.
   allowed: () => null,
+  // Mail goes from the person's own mailbox: never sent by an approver in their place.
+  selfOnly: true,
   fields: [
     { name: "to", label: "To", type: "email", required: true, help: "The recipient's email address (one). Ask if it is not clear." },
     { name: "cc", label: "Cc", type: "list", max: 20, editable: true, help: "Other addresses to copy (optional)." },

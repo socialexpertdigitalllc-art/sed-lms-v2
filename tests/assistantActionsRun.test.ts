@@ -74,6 +74,21 @@ const testDefs: ActionDef[] = [
     },
   },
   {
+    key: "test.mine",
+    group: "Leads",
+    title: "Tag my thing",
+    description: "",
+    confirmLabel: "Tag",
+    risk: "standard",
+    allowed: (ctx) => (ctx.perms.has("things.tag") ? null : "Your account doesn't have “Tag Things”."),
+    selfOnly: true,
+    fields: [{ name: "tag", label: "Tag", type: "text", required: true }],
+    async execute(v, ctx) {
+      executed.push({ key: "test.mine", values: v, as: ctx.userId });
+      return { message: "Tagged" };
+    },
+  },
+  {
     key: "test.child",
     group: "Tickets",
     title: "Attach to a lead",
@@ -278,6 +293,61 @@ describe("approvals", () => {
     await expect(run.confirmAction({ id: card.id, ctx: ctxFor("boss", []), origin: "", asApprover: {} })).rejects.toMatchObject({ status: 403 });
   });
 
+  it("nobody approves their own request — another approver has to", async () => {
+    mem.tables.assistant_action_settings = [{ action_key: "test.create", enabled: true, require_approval: true }];
+    const card = await propose("test.create", { name: "J", phone: "2524012775", kind: "A" }, ctxFor("boss"));
+    expect(card.approval?.reason).toMatch(/approved before it runs/);
+    await run.requestApproval(card.id, ctxFor("boss"), null);
+    await expect(run.confirmAction({ id: card.id, ctx: ctxFor("boss"), origin: "", asApprover: {} })).rejects.toMatchObject({ status: 403, message: expect.stringMatching(/own request/) });
+    expect(executed).toHaveLength(0);
+    const done = await run.confirmAction({ id: card.id, ctx: ctxFor("boss-2"), origin: "", asApprover: {} });
+    expect(done.status).toBe("done");
+  });
+
+  it("the approver types the name of a high-impact change too", async () => {
+    mem.tables.assistant_action_settings = [{ action_key: "test.critical", enabled: true, require_approval: true }];
+    const card = await propose("test.critical", { domain: "jumbospizza.com" });
+    await run.requestApproval(card.id, ctxFor("sam"), null);
+    await expect(run.confirmAction({ id: card.id, ctx: ctxFor("boss"), origin: "", asApprover: {} })).rejects.toMatchObject({ status: 422 });
+    expect(executed).toHaveLength(0);
+    const done = await run.confirmAction({ id: card.id, ctx: ctxFor("boss"), origin: "", asApprover: {}, phrase: "jumbospizza.com" });
+    expect(done.status).toBe("done");
+  });
+
+  it("sends the card as the person left it: their edits and unticked records", async () => {
+    const card = await propose("test.create", { name: "J", phone: "2524012775", kind: "A" }, ctxFor("sam", []));
+    // A wrong edit is refused and the proposal stays open.
+    await expect(run.requestApproval(card.id, ctxFor("sam", []), null, { edits: { phone: "555" } })).rejects.toMatchObject({ status: 422 });
+    expect(mem.tables.assistant_actions[0].status).toBe("proposed");
+    const sent = await run.requestApproval(card.id, ctxFor("sam", []), null, { edits: { name: "Jumbo's Pizza" } });
+    expect(sent.fields.find((f) => f.name === "name")?.value).toBe("Jumbo's Pizza");
+    await run.confirmAction({ id: card.id, ctx: ctxFor("boss"), origin: "", asApprover: {} });
+    expect(executed[0].values).toMatchObject({ name: "Jumbo's Pizza" });
+
+    mem.tables.assistant_action_settings = [{ action_key: "test.bulk", enabled: true, require_approval: true }];
+    clearActionSettingsCache();
+    const bulk = await propose("test.bulk", { ids: ["a", "b", "c"] });
+    const waiting = await run.requestApproval(bulk.id, ctxFor("sam"), null, { selected: ["a", "c"] });
+    expect(waiting.items?.map((i) => i.id)).toEqual(["a", "c"]);
+    await run.confirmAction({ id: bulk.id, ctx: ctxFor("boss"), origin: "", asApprover: {} });
+    expect(executed[1].values.ids).toEqual(["a", "c"]);
+  });
+
+  it("what only concerns the person's own things is never sent to, or run by, an approver", async () => {
+    const out = await run.prepareAction({ ...base, key: "test.mine", fields: { tag: "hot" }, ctx: ctxFor("sam") });
+    expect(out.kind).toBe("disabled");
+    expect(out.kind === "disabled" && out.message).toMatch(/Tag Things/);
+
+    // Even when an admin asked for approvals on it, it stays the person's own call.
+    mem.tables.assistant_action_settings = [{ action_key: "test.mine", enabled: true, require_approval: true }];
+    const card = await propose("test.mine", { tag: "hot" }, ctxFor("sam", ["things.tag"]));
+    expect(card.approval).toBeFalsy();
+    await expect(run.requestApproval(card.id, ctxFor("sam", ["things.tag"]), null)).rejects.toMatchObject({ status: 403 });
+    mem.tables.assistant_actions[0].status = "awaiting_approval";
+    await expect(run.confirmAction({ id: card.id, ctx: ctxFor("boss", ["things.tag"]), origin: "", asApprover: {} })).rejects.toMatchObject({ status: 403 });
+    expect(executed).toHaveLength(0);
+  });
+
   it("a rejection closes it and tells the requester", async () => {
     const card = await propose("test.create", { name: "J", phone: "2524012775", kind: "A" }, ctxFor("sam", []));
     await run.requestApproval(card.id, ctxFor("sam", []), null);
@@ -329,6 +399,24 @@ describe("plans", () => {
     const cards = await run.confirmPlan(out.planId, ctxFor("sam"), "");
     expect(cards.map((c) => c.status)).toEqual(["done", "done"]);
     expect(executed.find((e) => e.key === "test.child")?.values.lead).toBe("00000000-0000-4000-8000-000000000123");
+  });
+
+  it("Run all runs each step as its card was left", async () => {
+    const out = await run.preparePlan(
+      "New client",
+      [
+        { action: "test.create", fields: { name: "Jumbos", phone: "2524012775", kind: "A" } },
+        { action: "test.child", fields: { lead: "@1", note: "Logo attached" } },
+      ],
+      { ...base, ctx: ctxFor("sam") },
+    );
+    if (out.kind !== "proposed") throw new Error(out.kind);
+    const cards = await run.confirmPlan(out.planId, ctxFor("sam"), "", { [out.cards[0].id]: { edits: { name: "Jumbo's Grill" } }, [out.cards[1].id]: { edits: { note: "Logo + photos" } } });
+    expect(cards.map((c) => c.status)).toEqual(["done", "done"]);
+    expect(executed.map((e) => [e.key, e.values.name ?? e.values.note])).toEqual([
+      ["test.create", "Jumbo's Grill"],
+      ["test.child", "Logo + photos"],
+    ]);
   });
 
   it("a later step may not point at itself or a later one", async () => {

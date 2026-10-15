@@ -260,8 +260,8 @@ describe("agent.revise", () => {
     expect((await prepared(revise, { run: R1, instructions: "Bigger logo" }, ctx)).problems).toEqual([
       { field: "run", message: "This run is running — only a run waiting for review can be sent back." },
     ]);
-    // A tech without View All, not on that ticket: the endpoint's scope rule says no…
-    expect((await prepared(revise, { run: R_OTHER, instructions: "Bigger logo" }, ctx)).problems).toEqual([{ field: "run", message: "That run is on a ticket you cannot act on." }]);
+    // A tech without View All, not on that ticket: the endpoint's scope rule hides it…
+    expect((await prepared(revise, { run: R_OTHER, instructions: "Bigger logo" }, ctx)).problems).toEqual([{ field: "run", message: "No AI developer run with that id is visible to you." }]);
     // …while Site Studio reaches every run.
     expect((await prepared(revise, { run: R_OTHER, instructions: "Bigger logo" }, setup(["studio.manage"], tables).ctx)).problems).toEqual([]);
   });

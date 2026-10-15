@@ -120,7 +120,8 @@ function setup(perms: string[], over: Record<string, Row[]> = {}) {
   const ctx: ActionContext = {
     userId: ME,
     displayName: "Me",
-    perms: new Set(perms),
+    // Everyone who works tickets can open the Tickets pages (tickets.view).
+    perms: new Set(["tickets.view", ...perms]),
     db: db.client,
     admin: db.client,
     timezone: "Asia/Karachi",

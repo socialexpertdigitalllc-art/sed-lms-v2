@@ -253,8 +253,12 @@ describe("who may", () => {
   });
 
   it("site.link checks the permission of the path the person picked", async () => {
+    // Without any domain permission the domain can't even be named…
     const p = await prepare("site.link", { lead: LEAD, domain: D1 }, ctxWith(["studio.manage"]));
-    expect(p.problems).toContainEqual({ field: "what", message: "Your account doesn't have “Manage Domains”." });
+    expect(p.problems).toContainEqual({ field: "domain", message: "Your account can't see domains in the app, so SED AI can't look them up for you." });
+    // …and seeing domains is not managing them.
+    const viewer = await prepare("site.link", { lead: LEAD, domain: D1 }, ctxWith(["studio.manage", "domains.view"]));
+    expect(viewer.problems).toContainEqual({ field: "what", message: "Your account doesn't have “Manage Domains”." });
   });
 });
 
