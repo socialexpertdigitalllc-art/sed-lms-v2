@@ -71,6 +71,13 @@ export async function register() {
     fetch(`${origin}/api/site-builder/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 180_000);
 
+  // AI developer, MiniMax engine: runs start from the route that created them;
+  // this only recovers one whose start was lost (a restart mid-run). Cheap
+  // when idle — one narrow select.
+  setInterval(() => {
+    fetch(`${origin}/api/site-agent/minimax/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 120_000);
+
   // Form Relay retry sweep: re-attempts pending/failed email deliveries.
   // Primary delivery is the submit route's after(); this only catches
   // SMTP outages and restarts mid-delivery.

@@ -8,7 +8,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ttlCached, ttlInvalidate } from "@/lib/cache/ttl";
-import { readDefaults, type AgentDefaults } from "./options";
+import { minimaxModels, readDefaults, type AgentDefaults } from "./options";
 import type { AgyModel } from "./types";
 import { workerStatus } from "./workerStatus";
 
@@ -163,10 +163,13 @@ export async function agentModelStats(admin: SupabaseClient): Promise<AgentModel
  *  worker's status and models, the team defaults the send dialog starts from,
  *  recent per-model timing, and whether this viewer may change the defaults. */
 export async function agentPanelContext(admin: SupabaseClient, perms: Set<string>) {
-  const [status, settings, stats] = await Promise.all([
+  // Lazy: the runner pulls in the AI provider config (server-only secrets).
+  const { minimaxAvailability } = await import("./minimaxRunner");
+  const [status, settings, stats, minimax] = await Promise.all([
     workerStatus(admin),
     getAgentDefaults(admin),
     agentModelStats(admin),
+    minimaxAvailability(),
   ]);
   return {
     workerOnline: status.workerOnline,
@@ -175,5 +178,7 @@ export async function agentPanelContext(admin: SupabaseClient, perms: Set<string
     settingsAvailable: settings.available,
     canConfigure: canConfigureAgent(perms),
     stats,
+    /** The MiniMax engine: whether its API key is set up, and its models. */
+    minimax: { ...minimax, models: minimaxModels() },
   };
 }

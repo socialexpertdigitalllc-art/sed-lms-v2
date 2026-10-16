@@ -994,3 +994,114 @@ describe("run controls", () => {
     expect(calls[0].model).toBe("claude-sonnet-5-5-low");
   });
 });
+
+describe("engines: the office worker and the MiniMax engine never share a run", () => {
+  const minimaxOptions = { engine: "minimax", speed: "quick", minimax: { temperature: 0.4, service_tier: "priority" } };
+
+  it("the office worker (Antigravity) never claims a MiniMax run — not queued, not stale", async () => {
+    const fake = makeFakeAdmin({
+      ...seedRun({ id: "run-1", options: minimaxOptions }),
+      "run-2": { ...seedRun()["run-1"], id: "run-2", status: "running", updated_at: "2026-09-01T10:00:00Z", options: minimaxOptions },
+    });
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(h.deps(neverDriver));
+    expect(out).toEqual({ picked: false });
+    expect(fake.runs["run-1"].status).toBe("queued");
+    expect(fake.runs["run-2"].claim_id ?? null).toBeNull();
+  });
+
+  it("…and still takes the Antigravity run queued behind it", async () => {
+    const fake = makeFakeAdmin({
+      ...seedRun({ id: "run-1", options: minimaxOptions, created_at: "2026-09-01T11:00:00Z" }),
+      "run-2": { ...seedRun()["run-1"], id: "run-2", created_at: "2026-09-01T11:30:00Z" },
+    });
+    fake.storage["run-2/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const out = await processNextAgentRun(h.deps(async (_o, onEvent) => {
+      h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+      const result = successResult("done");
+      onEvent(result);
+      return { exitCode: 0, result, conversationId: "c", killed: false };
+    }));
+    expect(out).toMatchObject({ picked: true, runId: "run-2" });
+    expect(fake.runs["run-1"].status).toBe("queued");
+  });
+
+  it("a MiniMax run goes through the same pipeline: MiniMax prompt, its settings, its model kept", async () => {
+    const fake = makeFakeAdmin(
+      seedRun({ status: "running", claim_id: "claim-mm", model: "MiniMax-M2.7", options: minimaxOptions }),
+      // Antigravity's catalogue does not list MiniMax models — the model must survive anyway.
+      { agent_worker_models: { fetched_at: "2026-09-01T11:59:00Z", models: [{ id: "gemini-3.8-flash", label: "Gemini" }] } },
+    );
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    let seen: Parameters<AgyDriver>[0] | null = null;
+    const { processClaimedRun } = await import("@/lib/site-agent/worker");
+    const out = await processClaimedRun(
+      { ...h.deps(async (opts, onEvent) => {
+        seen = opts;
+        h.mutate((f) => { f["index.html"] = enc("<h1>new</h1>"); });
+        const result = successResult("Changed the heading.");
+        onEvent(result);
+        return { exitCode: 0, result, conversationId: "minimax", killed: false };
+      }), engine: "minimax" },
+      fake.runs["run-1"] as never,
+      "claim-mm",
+    );
+    expect(out).toMatchObject({ outcome: "review" });
+    expect(seen!.model).toBe("MiniMax-M2.7");
+    expect(seen!.minimax).toMatchObject({ temperature: 0.4, service_tier: "priority", max_steps: 30 });
+    expect(seen!.prompt).toMatch(/available through your file tools/);
+    expect(seen!.prompt).not.toMatch(/run_command/);
+    // The marker lets "Request changes" start from this result.
+    expect(fake.runs["run-1"]).toMatchObject({ status: "review", conversation_id: "minimax", summary: "Changed the heading." });
+    expect(String(fake.runs["run-1"].output_tail ?? "")).not.toMatch(/no longer offered by Antigravity/);
+  });
+
+  it("a permanent MiniMax error fails at once — no retry pauses", async () => {
+    const fake = makeFakeAdmin(seedRun({ status: "running", claim_id: "claim-mm", model: "MiniMax-M3", options: minimaxOptions }));
+    fake.storage["run-1/original.zip"] = zipFromMap(SITE);
+    const h = makeHarness(fake);
+    const driver = vi.fn<AgyDriver>(async () => ({
+      exitCode: null, conversationId: null, killed: false, permanent: true,
+      result: errorResult("insufficient balance"),
+    }));
+    const { processClaimedRun } = await import("@/lib/site-agent/worker");
+    const out = await processClaimedRun({ ...h.deps(driver), engine: "minimax" }, fake.runs["run-1"] as never, "claim-mm");
+    expect(out).toMatchObject({ outcome: "failed" });
+    expect(driver).toHaveBeenCalledTimes(1);
+    expect(h.sleep).not.toHaveBeenCalled();
+    expect(fake.runs["run-1"].error).toBe("MiniMax reported an error: insufficient balance");
+  });
+});
+
+describe("sweepMinimaxRuns (the LMS server's recovery sweep)", () => {
+  const mm = { engine: "minimax" };
+  const now = Date.parse("2026-09-01T12:00:00Z");
+
+  it("reclaims a MiniMax run whose keepalive stopped, and leaves live and Antigravity runs alone", async () => {
+    const base = seedRun()["run-1"];
+    const fake = makeFakeAdmin({
+      live: { ...base, id: "live", status: "running", claim_id: "c-live", options: mm, updated_at: "2026-09-01T11:59:30Z", created_at: "2026-09-01T11:00:00Z" },
+      agy: { ...base, id: "agy", status: "queued", options: null, created_at: "2026-09-01T11:01:00Z" },
+      dead: {
+        ...base, id: "dead", status: "running", claim_id: "c-dead", options: mm, ticket_id: null, task_text: "fix it",
+        updated_at: "2026-09-01T11:50:00Z", created_at: "2026-09-01T11:02:00Z",
+      },
+    });
+    const { sweepMinimaxRuns } = await import("@/lib/site-agent/minimaxRunner");
+    // No original.zip in storage: the reclaimed run fails fast — enough to see WHICH run was taken.
+    const out = await sweepMinimaxRuns(fake.admin, now);
+    expect(out).toMatchObject({ picked: true, runId: "dead", outcome: "failed" });
+    expect(fake.runs.dead.claim_id).not.toBe("c-dead");
+    expect(fake.runs.live).toMatchObject({ status: "running", claim_id: "c-live" });
+    expect(fake.runs.agy).toMatchObject({ status: "queued" });
+  });
+
+  it("does nothing when no MiniMax run needs it", async () => {
+    const fake = makeFakeAdmin(seedRun());
+    const { sweepMinimaxRuns } = await import("@/lib/site-agent/minimaxRunner");
+    expect(await sweepMinimaxRuns(fake.admin, now)).toEqual({ picked: false });
+    expect(fake.runs["run-1"].status).toBe("queued");
+  });
+});

@@ -10,6 +10,22 @@ const accessState = vi.hoisted(() => ({
   errorStatus: null as 401 | 403 | 404 | null,
   run: {} as Record<string, unknown>,
 }));
+// MiniMax: model intake and the server-side start are the runner's; here we
+// only pin what the revise route writes and that it starts the run.
+const mmMock = vi.hoisted(() => ({
+  resolve: vi.fn(async (raw: unknown) => ({ ok: true as const, model: typeof raw === "string" ? raw : "MiniMax-M3" })),
+  run: vi.fn(async () => {}),
+  afters: [] as (() => unknown)[],
+}));
+vi.mock("@/lib/site-agent/minimaxRunner", async (orig) => ({
+  ...(await orig<object>()),
+  resolveMinimaxChoice: mmMock.resolve,
+  runClaimedMinimax: mmMock.run,
+}));
+vi.mock("next/server", async (orig) => ({
+  ...(await orig<object>()),
+  after: (cb: () => unknown) => { mmMock.afters.push(cb); },
+}));
 vi.mock("@/lib/site-agent/access", async () => {
   const { NextResponse } = await import("next/server");
   return {
@@ -666,5 +682,56 @@ describe("the shared access gate fronts all three routes", () => {
     expect((await discardPOST(post(), ctx())).status).toBe(403);
     expect(adminState.updates).toHaveLength(0);
     expect(deployMock.overrideLiveSite).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("POST /api/site-agent/runs/[id]/revise — MiniMax", () => {
+  beforeEach(() => {
+    mmMock.afters.length = 0;
+    mmMock.run.mockClear();
+    mmMock.resolve.mockClear();
+  });
+
+  it("a follow-up on a MiniMax run is claimed by the server and started — never queued", async () => {
+    seedRun("review", { model: "MiniMax-M2.7", conversation_id: "minimax", options: { engine: "minimax", speed: "quick", minimax: { temperature: 0.4 } } });
+    const res = await revisePOST(post({ instructions: "also the footer", options: { engine: "minimax", minimax: { top_p: 0.8 } } }), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.dbRun).toMatchObject({
+      status: "running",
+      model: "MiniMax-M2.7",
+      instructions: "also the footer",
+      options: { engine: "minimax", speed: "quick", minimax: { temperature: 0.4, top_p: 0.8 } },
+    });
+    const claimId = adminState.dbRun?.claim_id as string;
+    expect(claimId).toMatch(/^[0-9a-f-]{36}$/);
+    for (const cb of mmMock.afters) await cb();
+    expect(mmMock.run).toHaveBeenCalledWith("run-1", claimId);
+  });
+
+  it("an Antigravity run can move to MiniMax mid-review (its quota ran out)", async () => {
+    seedRun("review", { model: "gemini-3.8-flash-low", conversation_id: "conv-9", options: { speed: "balanced" } });
+    const res = await revisePOST(post({ instructions: "finish it", model: "MiniMax-M3", options: { engine: "minimax" } }), ctx());
+    expect(res.status).toBe(200);
+    expect(adminState.dbRun).toMatchObject({ status: "running", model: "MiniMax-M3", options: { engine: "minimax", speed: "balanced" } });
+    // The conversation stays set, so MiniMax starts from Antigravity's result.
+    expect(adminState.dbRun?.conversation_id).toBe("conv-9");
+  });
+
+  it("refuses to move MiniMax's edits back to Antigravity", async () => {
+    seedRun("review", { model: "MiniMax-M3", conversation_id: "minimax", options: { engine: "minimax" } });
+    const res = await revisePOST(post({ instructions: "x", options: { engine: "antigravity" } }), ctx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/made by MiniMax/);
+    expect(adminState.dbRun).toMatchObject({ status: "review" });
+    expect(mmMock.afters).toHaveLength(0);
+  });
+
+  it("422s when MiniMax isn't set up, leaving the run in review", async () => {
+    mmMock.resolve.mockResolvedValueOnce({ ok: false, message: "MiniMax isn't ready (no key)." } as never);
+    seedRun("review", { model: "MiniMax-M3", conversation_id: "minimax", options: { engine: "minimax" } });
+    const res = await revisePOST(post({ instructions: "x" }), ctx());
+    expect(res.status).toBe(422);
+    expect(adminState.dbRun).toMatchObject({ status: "review" });
   });
 });

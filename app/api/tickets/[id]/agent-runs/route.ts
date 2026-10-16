@@ -1,5 +1,5 @@
 // app/api/tickets/[id]/agent-runs/route.ts
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
@@ -11,6 +11,7 @@ import { AGENT_SITES_BUCKET, AGENT_RUN_ACTIVE_STATUSES, originalZipPath } from "
 import { resolveModelChoice, workerStatus } from "@/lib/site-agent/workerStatus";
 import { composeRunOptions, parseRunOptions } from "@/lib/site-agent/options";
 import { agentPanelContext, defaultModelFrom, getAgentDefaults, insertAgentRun } from "@/lib/site-agent/settings";
+import { minimaxClaim, resolveMinimaxChoice, runClaimedMinimax } from "@/lib/site-agent/minimaxRunner";
 
 export const runtime = "nodejs";
 // fetchLiveSiteZip can take a while on a slow DA archive.
@@ -129,11 +130,16 @@ export async function POST(req: Request, ctx: Ctx) {
   const { defaults } = await getAgentDefaults(admin);
   const options = composeRunOptions(choice.value, defaults);
 
-  // F2 — model choice, validated against the worker's live-published list; a
-  // request that names none gets the team's default model.
-  const { models } = await workerStatus(admin);
-  const modelChoice = await resolveModelChoice(admin, body.model, defaultModelFrom(defaults, models));
+  // F2 — model choice. Antigravity: validated against the worker's
+  // live-published list, a request naming none gets the team's default model.
+  // MiniMax: a model MiniMax offers, and MiniMax must be set up to take it.
+  const modelChoice =
+    options.engine === "minimax"
+      ? await resolveMinimaxChoice(body.model, defaults)
+      : await resolveModelChoice(admin, body.model, defaultModelFrom(defaults, (await workerStatus(admin)).models));
   if (!modelChoice.ok) return NextResponse.json({ error: modelChoice.message }, { status: 422 });
+  // A MiniMax run starts claimed by this server, never queued (minimaxRunner.ts).
+  const claim = options.engine === "minimax" ? minimaxClaim() : null;
 
   const { data: active } = await admin
     .from("site_agent_runs")
@@ -158,6 +164,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const { data: run, error: insErr } = await insertAgentRun(admin, {
     id: runId, ticket_id: ticketId, lead_id: ticket.lead_id, site_host: fetched.host,
     created_by: user.id, item_ids: itemIds, task_text: taskText, model: modelChoice.model, options,
+    ...(claim ?? {}),
   });
   if (insErr || !run) {
     // The zip is orphaned if we stop here — remove it best-effort (the
@@ -168,8 +175,9 @@ export async function POST(req: Request, ctx: Ctx) {
 
   await admin.from("activity_log").insert({
     user_id: user.id, action: "site_agent.run.created", entity_type: "ticket", entity_id: ticketId,
-    new_value: { run_id: run.id, site_host: fetched.host, model: modelChoice.model, speed: options.speed },
+    new_value: { run_id: run.id, site_host: fetched.host, model: modelChoice.model, speed: options.speed, engine: options.engine ?? "antigravity" },
   });
+  if (claim) after(() => runClaimedMinimax(runId, claim.claim_id));
 
   // F3 — auto-start: sending work to the AI IS starting the ticket. This
   // mirrors the manual PATCH "start" action's writes EXACTLY (the same

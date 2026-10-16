@@ -939,6 +939,9 @@ describe("AgentRunPanel — run controls and team settings", () => {
     expect(JSON.parse(String((put?.[1] as RequestInit).body))).toEqual({
       model: "claude-sonnet-4-6", speed: "balanced", time_limit_min: 15, retries: 2, site_map: true,
       house_rules: "Never change prices.",
+      // The engine defaults ride along (MiniMax settings are kept even while
+      // Antigravity is the default).
+      engine: "antigravity", minimax_model: "MiniMax-M3", minimax: {},
     });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /ai developer settings/i })).not.toBeInTheDocument());
 

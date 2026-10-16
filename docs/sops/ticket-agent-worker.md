@@ -1,8 +1,32 @@
 # Ticket Agent worker — operator runbook
 
 The Ticket Agent ("Send to AI" on tickets) runs Antigravity's `agy` CLI on a
-worker device signed in to Antigravity. Prod never runs the agent; it only
-creates runs and deploys approved results.
+worker device signed in to Antigravity. Prod never runs the Antigravity agent;
+it only creates runs and deploys approved results.
+
+## MiniMax engine (added 2026-10-16)
+
+Every send dialog, "Request changes" and the team settings offer a second
+engine, **MiniMax**, for when Antigravity's quota runs out. It needs no worker
+device: prod runs it (`lib/site-agent/minimax.ts`, a tool-calling agent over
+MiniMax's chat API with the Site Builder's MiniMax key, Admin → AI providers)
+and the result goes through the same review → deploy flow.
+
+- A MiniMax run is created **already claimed** (`status: running` + a
+  `claim_id`) and started in the create/revise route's `after()`. It is never
+  `queued`, because a worker that predates MiniMax claims any queued run and
+  would run it on Antigravity. Workers built from this commit on also skip
+  MiniMax runs outright (`runEngine(options)`); updating the kit is optional.
+- Recovery: prod polls `/api/site-agent/minimax/process` every 2 min and
+  reclaims a MiniMax run whose keepalive stopped for 3 min (a restart mid-run),
+  well before a worker's 20-minute stale reclaim.
+- Settings ride `site_agent_runs.options` (`engine`, `minimax`: temperature,
+  top_p, max_tokens per step, thinking, reasoning_effort (M3.1 only),
+  service_tier, max_steps); the model is the `model` column. No migration.
+- A follow-up may move an Antigravity run to MiniMax (it continues from the
+  last result); MiniMax → Antigravity is refused — start a new run instead.
+- "MiniMax isn't ready" on send = the MiniMax provider row is disabled or has
+  no key. A run failing with "MiniMax reported an error: …" quotes MiniMax.
 
 ## Standalone worker kit — any device (added 2026-09-22, preferred)
 

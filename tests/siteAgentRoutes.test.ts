@@ -3,6 +3,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const processMock = vi.hoisted(() => vi.fn());
+const mmMock = vi.hoisted(() => ({
+  resolve: vi.fn(async (raw: unknown) => ({ ok: true as const, model: typeof raw === "string" ? raw : "MiniMax-M3" })),
+  run: vi.fn(async () => {}),
+  afters: [] as (() => unknown)[],
+}));
+vi.mock("@/lib/site-agent/minimaxRunner", async (orig) => ({
+  ...(await orig<object>()),
+  resolveMinimaxChoice: mmMock.resolve,
+  runClaimedMinimax: mmMock.run,
+  minimaxAvailability: async () => ({ available: true, reason: null }),
+}));
+vi.mock("next/server", async (orig) => ({
+  ...(await orig<object>()),
+  after: (cb: () => unknown) => { mmMock.afters.push(cb); },
+}));
 vi.mock("@/lib/site-agent/worker", () => ({ processNextAgentRun: processMock }));
 vi.mock("@/lib/site-agent/workspaceFs", () => ({ fsWorkspace: {} }));
 vi.mock("@/lib/site-agent/agy", () => ({ runAgy: vi.fn() }));
@@ -925,5 +940,64 @@ describe("notification events registry", () => {
     expect(ready?.availableRoles).toEqual(["ticket_assignee", "ticket_creator"]);
     expect(failed?.bell).toBe("website");
     expect(failed?.availableRoles).toEqual(["ticket_assignee"]);
+  });
+});
+
+
+describe("MiniMax engine — create, recovery route, wiring", () => {
+  beforeEach(() => {
+    seedLeadCreate();
+    mmMock.afters.length = 0;
+    mmMock.run.mockClear();
+    mmMock.resolve.mockClear();
+  });
+
+  it("a MiniMax send is created CLAIMED by the server (running + claim_id) and started after the response", async () => {
+    const res = await leadCreatePOST(
+      postJson({ task_text: "Change the phone", model: "MiniMax-M2.7", options: { engine: "minimax", minimax: { temperature: 0.3 } } }),
+      leadCtx(),
+    );
+    expect(res.status).toBe(201);
+    const ins = adminState.inserts.find((i) => i.table === "site_agent_runs");
+    expect(ins?.values).toMatchObject({
+      status: "running", model: "MiniMax-M2.7", options: { engine: "minimax", minimax: { temperature: 0.3 } },
+    });
+    const claimId = ins?.values.claim_id as string;
+    expect(claimId).toMatch(/^[0-9a-f-]{36}$/);
+    // The zip is still stored before the row exists.
+    expect(adminState.ops.indexOf("upload")).toBeLessThan(adminState.ops.indexOf("insert:site_agent_runs"));
+    expect(mmMock.run).not.toHaveBeenCalled();
+    for (const cb of mmMock.afters) await cb();
+    expect(mmMock.run).toHaveBeenCalledWith(ins?.values.id, claimId);
+    const log = adminState.inserts.find((i) => i.table === "activity_log");
+    expect(log?.values.new_value).toMatchObject({ engine: "minimax", model: "MiniMax-M2.7" });
+  });
+
+  it("an Antigravity send is unchanged: queued (no status/claim written), nothing started here", async () => {
+    const res = await leadCreatePOST(postJson({ task_text: "Change the phone" }), leadCtx());
+    expect(res.status).toBe(201);
+    const ins = adminState.inserts.find((i) => i.table === "site_agent_runs");
+    expect(ins?.values).not.toHaveProperty("status");
+    expect(ins?.values).not.toHaveProperty("claim_id");
+    expect(mmMock.afters).toHaveLength(0);
+  });
+
+  it("422s before fetching the site when MiniMax isn't set up", async () => {
+    mmMock.resolve.mockResolvedValueOnce({ ok: false, message: "MiniMax isn't ready (no key)." } as never);
+    const res = await leadCreatePOST(postJson({ task_text: "t", options: { engine: "minimax" } }), leadCtx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/MiniMax isn't ready/);
+    expect(liveMock.fetchLiveSiteZip).not.toHaveBeenCalled();
+  });
+
+  it("the recovery route is secret-guarded, public to middleware, and polled on prod", async () => {
+    const { POST } = await import("@/app/api/site-agent/minimax/process/route");
+    process.env.WGE_PROCESSOR_SECRET = "s3cret";
+    expect((await POST(new Request("http://x", { method: "POST" }))).status).toBe(401);
+    const fs = await import("node:fs/promises");
+    expect(await fs.readFile("lib/supabase/middleware.ts", "utf8")).toContain('"/api/site-agent/minimax/process"');
+    const inst = await fs.readFile("instrumentation.ts", "utf8");
+    // A prod poller (after the WGE_POLLERS_DISABLED return), not the worker box's.
+    expect(inst.indexOf("/api/site-agent/minimax/process")).toBeGreaterThan(inst.indexOf('WGE_POLLERS_DISABLED === "1"'));
   });
 });

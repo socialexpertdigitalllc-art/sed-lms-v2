@@ -78,9 +78,17 @@ export function buildTaskPrompt(args: {
    *  dashboard's admins, so — unlike ticket text — they ARE instructions,
    *  below the contract. */
   houseRules?: string | null;
+  /** Which AI runs it. MiniMax works through the LMS's own file tools (same
+   *  names as agy's, no shell), on the server — not the slow office box. */
+  engine?: "antigravity" | "minimax";
 }): string {
   const custom = typeof args.taskText === "string" && args.taskText.trim() !== "" ? args.taskText : null;
-  const where = args.workspaceDir?.trim() ? `this exact folder: ${args.workspaceDir.trim()}` : "the current directory";
+  const minimax = args.engine === "minimax";
+  const where = minimax
+    ? "your file tools — every path is relative to the site's root folder"
+    : args.workspaceDir?.trim()
+      ? `this exact folder: ${args.workspaceDir.trim()}`
+      : "the current directory";
   const brief = args.siteBrief?.trim() ? asTicketData(args.siteBrief.trim()) : null;
   const rules = args.houseRules?.trim() ? asTicketData(args.houseRules.trim()) : null;
 
@@ -94,23 +102,38 @@ export function buildTaskPrompt(args: {
 
   return [
     `You are editing the live website of the client "${asTicketData(args.businessName)}" to fulfil a change-request ticket.`,
-    `The complete copy of the site's files is in ${where} — it is also your current working directory. Work ONLY inside that folder:`,
+    minimax
+      ? `The complete copy of the site's files is available through ${where}. Work ONLY on those files:`
+      : `The complete copy of the site's files is in ${where} — it is also your current working directory. Work ONLY inside that folder:`,
     brief
       ? `- the SITE MAP at the end lists every file in that folder, each page's sections with line numbers, and the colour variables — address files by that folder's path;`
       : `- FIRST list that folder to see the site's files, and address them by that folder's path;`,
     `- edit, create, or delete site files as the ticket requires;`,
-    `- never touch files outside that folder — if you find what looks like another copy of a website anywhere else on this machine, it is NOT this site; ignore it;`,
+    ...(minimax
+      ? []
+      : [`- never touch files outside that folder — if you find what looks like another copy of a website anywhere else on this machine, it is NOT this site; ignore it;`]),
     `- keep index.html present at the root — the site must remain deployable;`,
     `- do not access the internet, run package managers, or add build tooling — this is a static site, edit its files directly;`,
     `- make the smallest change that fulfils the ticket; do not redesign, reformat, or "improve" anything not asked for.`,
     ``,
-    `Work fast — this machine is slow at running commands, and every extra step keeps the client waiting:`,
+    minimax
+      ? `Work fast — every extra step keeps the client waiting:`
+      : `Work fast — this machine is slow at running commands, and every extra step keeps the client waiting:`,
     brief
       ? `- Go straight to the change: pick the file and lines from the SITE MAP. Do not list folders, survey the site, or read pages the ticket does not touch.`
       : `- Go straight to the change: search directly for the exact text or file the ticket names. Do not survey the site or read pages the ticket does not touch.`,
-    `- Search with your search tool (grep_search) and read only the lines around a match (view_file with a line range). Do NOT search or read files through run_command (PowerShell, Select-String, Get-Content, dir) — it is many times slower here.`,
-    `- Never run git, python, node, or any other program; do not download, open, or analyse images; do not open a browser or start a server to check your work. Use run_command only to delete a file the ticket asks you to remove.`,
-    `- Make each edit with replace_file_content; never rewrite a whole file to change part of it. Do not re-read a file to check an edit you just made.`,
+    ...(minimax
+      ? [
+          `- Search with grep_search and read only the lines around a match (view_file with a line range).`,
+          `- You cannot run programs, open images, or browse — and you do not need to. Delete a file only with delete_file, and only when the ticket asks.`,
+          `- Make each edit with replace_file_content (exact text in, new text out); never rewrite a whole file with write_to_file to change part of it. Do not re-read a file to check an edit you just made.`,
+          `- When the work is done, call finish with your summary.`,
+        ]
+      : [
+          `- Search with your search tool (grep_search) and read only the lines around a match (view_file with a line range). Do NOT search or read files through run_command (PowerShell, Select-String, Get-Content, dir) — it is many times slower here.`,
+          `- Never run git, python, node, or any other program; do not download, open, or analyse images; do not open a browser or start a server to check your work. Use run_command only to delete a file the ticket asks you to remove.`,
+          `- Make each edit with replace_file_content; never rewrite a whole file to change part of it. Do not re-read a file to check an edit you just made.`,
+        ]),
     `- Where the site defines its colours as variables, change the variables rather than hunting down every use.`,
     PACE[args.speed ?? "balanced"],
     ``,

@@ -179,6 +179,17 @@ const minimax: AiProviderDescriptor = {
   outputTokenParam: "max_completion_tokens",
   models: [
     {
+      // Re-read 2026-10-16: the chat-completions schema now lists M3.1 Flash
+      // (preview) and a "-highspeed" twin of each M2.x model. Image input is
+      // still documented for M3 alone, so only M3 is flagged vision.
+      id: "MiniMax-M3.1-Flash-Preview",
+      vision: false,
+      toolCalling: true,
+      maxOutputTokens: 524288,
+      recommendedOutputTokens: 131072,
+      note: "Preview. Up to 512K output; the only model with a tunable reasoning effort.",
+    },
+    {
       id: "MiniMax-M3",
       vision: true,
       toolCalling: true,
@@ -188,8 +199,11 @@ const minimax: AiProviderDescriptor = {
       note: "1M context, up to 512K output. The only MiniMax model documented to accept image input.",
     },
     { id: "MiniMax-M2.7", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2.7-highspeed", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "M2.7, served faster. Text only. 200K context." },
     { id: "MiniMax-M2.5", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2.5-highspeed", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "M2.5, served faster. Text only. 200K context." },
     { id: "MiniMax-M2.1", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
+    { id: "MiniMax-M2.1-highspeed", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "M2.1, served faster. Text only. 200K context." },
     { id: "MiniMax-M2", vision: false, toolCalling: true, maxOutputTokens: 204800, recommendedOutputTokens: 65536, contextWindow: 204800, note: "Text only. 200K context." },
   ],
   credentialFields: [{ key: "api_key", label: "API key", type: "password" }],

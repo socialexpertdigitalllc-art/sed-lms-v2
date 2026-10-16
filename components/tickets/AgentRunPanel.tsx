@@ -21,7 +21,7 @@ import { formatDateTime } from "@/lib/leads/format";
 import { lineDiff, type DiffOp } from "@/lib/site-agent/diff";
 import { composeTicketTask } from "@/lib/site-agent/task";
 import { isActiveStatus, type AgentFileChange, type AgentRunStatus, type AgyModel } from "@/lib/site-agent/types";
-import { describeRunOptions, readRunOptions, type AgentDefaults } from "@/lib/site-agent/options";
+import { describeRunOptions, readRunOptions, runEngine, type AgentDefaults } from "@/lib/site-agent/options";
 import type { AgentModelStat } from "@/lib/site-agent/settings";
 import {
   AgentSettingsDialog,
@@ -30,7 +30,9 @@ import {
   changedControls,
   controlsFromDefaults,
   controlsFromRun,
+  MINIMAX_UNKNOWN,
   type ControlsValue,
+  type MinimaxInfo,
 } from "./AgentRunControls";
 import { encodePathSegments } from "@/lib/site-builder/preview";
 import { cn } from "@/lib/utils";
@@ -225,6 +227,8 @@ export function AgentRunPanel({
   const [run, setRun] = useState<PanelRun | null>(null);
   const [workerOnline, setWorkerOnline] = useState(true);
   const [models, setModels] = useState<AgyModel[]>([]);
+  // The MiniMax engine: set up or not, and its models (from the list response).
+  const [minimax, setMinimax] = useState<MinimaxInfo>(MINIMAX_UNKNOWN);
   // The team defaults every send starts from, and recent per-model timing.
   const [defaults, setDefaults] = useState<AgentDefaults>({});
   const [stats, setStats] = useState<AgentModelStat[]>([]);
@@ -262,6 +266,9 @@ export function AgentRunPanel({
         if (Array.isArray(body.models)) setModels(body.models as AgyModel[]);
         if (body.defaults && typeof body.defaults === "object") setDefaults(body.defaults as AgentDefaults);
         if (Array.isArray(body.stats)) setStats(body.stats as AgentModelStat[]);
+        if (body.minimax && typeof body.minimax === "object" && Array.isArray(body.minimax.models)) {
+          setMinimax(body.minimax as MinimaxInfo);
+        }
       } catch (e) {
         if (!cancelled) toast({ kind: "error", title: e instanceof Error ? e.message : "Could not load the AI runs" });
       } finally {
@@ -637,9 +644,10 @@ export function AgentRunPanel({
       {run?.status === "queued" ? (
         <div className="mt-3 space-y-2 text-sm text-text-muted">
           <p className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" /> Waiting for the agent worker…
+            <Loader2 className="h-4 w-4 animate-spin" />{" "}
+            {runEngine(run.options) === "minimax" ? "Starting MiniMax…" : "Waiting for the agent worker…"}
           </p>
-          {!workerOnline ? (
+          {!workerOnline && runEngine(run.options) === "antigravity" ? (
             <p
               data-testid="sa-offline"
               className="rounded-md border border-notready-bg bg-notready-bg/40 px-2.5 py-1.5 text-xs text-notready-fg"
@@ -792,7 +800,7 @@ export function AgentRunPanel({
               </div>
               <div>
                 <label htmlFor="sa-instructions" className={labelCls}>
-                  Request changes — sent back to the same AI conversation
+                  Request changes — the AI continues from these edits
                 </label>
                 <textarea
                   id="sa-instructions"
@@ -808,6 +816,8 @@ export function AgentRunPanel({
                   models={models}
                   stats={stats}
                   teamDefault={defaults.model ?? undefined}
+                  minimax={minimax}
+                  runEngine={runEngine(run.options)}
                 />
                 <button
                   type="button"
@@ -983,6 +993,8 @@ export function AgentRunPanel({
                 models={models}
                 stats={stats}
                 teamDefault={defaults.model ?? undefined}
+                minimax={minimax}
+                teamMinimaxDefault={defaults.minimax_model ?? null}
               />
               {defaults.house_rules ? (
                 <p className="mt-3 text-xs text-text-faint" title={defaults.house_rules}>

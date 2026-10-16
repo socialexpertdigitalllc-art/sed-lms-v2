@@ -80,6 +80,7 @@ function narrateTool(name: string, params: string | null): string {
     case "replace_file_content": return params ? `Editing ${params}` : "Editing a file";
     case "write_to_file": return params ? `Creating ${params}` : "Creating a file";
     case "run_command": return params ? `Running: ${params}` : "Running a command";
+    case "delete_file": return params ? `Deleting ${params}` : "Deleting a file";
     case "manage_task": return "Planning the work";
     default: return `${name}${params ? ` (${params})` : ""}`;
   }
@@ -181,6 +182,9 @@ export interface AgyRunOutcome {
    *  indistinguishable from "agy ran and printed nothing" — which cost a
    *  live debugging session on 2026-09-01. */
   spawnError?: string;
+  /** The driver knows another try cannot help (MiniMax: a bad key, an empty
+   *  balance, a refused request) — skip the worker's retry pauses. */
+  permanent?: boolean;
 }
 
 export interface AgyRunOptions {
@@ -193,6 +197,9 @@ export interface AgyRunOptions {
   /** Poll this between events; when it returns true the child is killed. */
   shouldCancel?: () => boolean;
   agyBin?: string; // default "agy" on PATH
+  /** MiniMax runs only (lib/site-agent/minimax.ts): the API settings and the
+   *  step budget. agy ignores it. */
+  minimax?: import("./options").MinimaxSettings & { max_steps: number };
 }
 
 /** Pure arg construction for runAgy — split out so tests never spawn. */

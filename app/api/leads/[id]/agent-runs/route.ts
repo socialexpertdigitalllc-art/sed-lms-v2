@@ -1,5 +1,5 @@
 // app/api/leads/[id]/agent-runs/route.ts
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
@@ -10,6 +10,7 @@ import { AGENT_SITES_BUCKET, originalZipPath } from "@/lib/site-agent/types";
 import { resolveModelChoice, workerStatus } from "@/lib/site-agent/workerStatus";
 import { composeRunOptions, parseRunOptions } from "@/lib/site-agent/options";
 import { agentPanelContext, defaultModelFrom, getAgentDefaults, insertAgentRun } from "@/lib/site-agent/settings";
+import { minimaxClaim, resolveMinimaxChoice, runClaimedMinimax } from "@/lib/site-agent/minimaxRunner";
 
 export const runtime = "nodejs";
 // fetchLiveSiteZip can take a while on a slow DA archive.
@@ -78,9 +79,16 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!choice.ok) return NextResponse.json({ error: choice.message }, { status: 422 });
   const { defaults } = await getAgentDefaults(admin);
   const options = composeRunOptions(choice.value, defaults);
-  const { models } = await workerStatus(admin);
-  const modelChoice = await resolveModelChoice(admin, body.model, defaultModelFrom(defaults, models));
+  // Model choice. Antigravity: validated against the worker's
+  // live-published list, a request naming none gets the team's default model.
+  // MiniMax: a model MiniMax offers, and MiniMax must be set up to take it.
+  const modelChoice =
+    options.engine === "minimax"
+      ? await resolveMinimaxChoice(body.model, defaults)
+      : await resolveModelChoice(admin, body.model, defaultModelFrom(defaults, (await workerStatus(admin)).models));
   if (!modelChoice.ok) return NextResponse.json({ error: modelChoice.message }, { status: 422 });
+  // A MiniMax run starts claimed by this server, never queued (minimaxRunner.ts).
+  const claim = options.engine === "minimax" ? minimaxClaim() : null;
 
   const fetched = await fetchLiveSiteZip(link!);
   if (!fetched.ok) return NextResponse.json({ error: `Could not fetch the live site: ${fetched.error}` }, { status: fetched.status });
@@ -97,6 +105,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const { data: run, error: insErr } = await insertAgentRun(admin, {
     id: runId, ticket_id: null, lead_id: leadId, site_host: fetched.host,
     task_text: taskText, model: modelChoice.model, created_by: user.id, options,
+    ...(claim ?? {}),
   });
   if (insErr || !run) {
     // The zip is orphaned if we stop here — remove it best-effort (the
@@ -111,8 +120,9 @@ export async function POST(req: Request, ctx: Ctx) {
 
   await admin.from("activity_log").insert({
     user_id: user.id, action: "site_agent.run.created", entity_type: "lead", entity_id: leadId,
-    new_value: { run_id: run.id, site_host: fetched.host, model: modelChoice.model, speed: options.speed },
+    new_value: { run_id: run.id, site_host: fetched.host, model: modelChoice.model, speed: options.speed, engine: options.engine ?? "antigravity" },
   });
+  if (claim) after(() => runClaimedMinimax(runId, claim.claim_id));
   return NextResponse.json({ run }, { status: 201 });
 }
 

@@ -38,10 +38,14 @@ describe("run options", () => {
   });
 
   it("the worker resolves every control: run, then team, then the built-ins (the old 15-minute, 3-retry budget)", () => {
-    expect(effectiveRunOptions(null)).toEqual({ speed: "balanced", timeLimitMs: 15 * 60_000, maxAttempts: 4, siteMap: true, houseRules: null });
+    expect(effectiveRunOptions(null)).toEqual({
+      speed: "balanced", timeLimitMs: 15 * 60_000, maxAttempts: 4, siteMap: true, houseRules: null,
+      engine: "antigravity", minimax: { max_steps: 60 },
+    });
     expect(effectiveRunOptions({ speed: "quick" })).toMatchObject({ speed: "quick", timeLimitMs: 8 * 60_000 });
     expect(effectiveRunOptions({}, { time_limit_min: 20, retries: 0, site_map: false, house_rules: "R" })).toEqual({
       speed: "balanced", timeLimitMs: 20 * 60_000, maxAttempts: 1, siteMap: false, houseRules: "R",
+      engine: "antigravity", minimax: { max_steps: 60 },
     });
     // Malformed stored values are ignored, never thrown.
     expect(effectiveRunOptions({ time_limit_min: "soon" }, "nonsense")).toMatchObject({ timeLimitMs: 15 * 60_000 });

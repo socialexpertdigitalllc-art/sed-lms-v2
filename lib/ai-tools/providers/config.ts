@@ -502,6 +502,42 @@ export async function resolveTaskModel(taskKey: AiTaskKey): Promise<ResolvedTask
   throw new Error(`${descriptor?.label ?? task.defaultProvider} is not configured (missing ${descriptor?.envKey ?? "API key"}).`);
 }
 
+/**
+ * A callable spec for an explicit (provider, model) — for features where the
+ * PERSON picks the model per job (the AI developer's MiniMax engine) rather
+ * than a routed task. Same rules as task routing: the stored row wins, and the
+ * provider's env key is the last resort when the DB is unreadable.
+ */
+export async function providerSpecFor(
+  providerKey: string,
+  modelId: string,
+): Promise<{ spec: ProviderSpec; reason: null } | { spec: null; reason: string }> {
+  const configs = await getAiProviderConfigs().catch(() => [] as AiProviderConfigEntry[]);
+  const attempt = specFor(providerKey, modelId, configs);
+  if (attempt.spec) return { spec: attempt.spec, reason: null };
+  const descriptor = getProvider(providerKey);
+  const model = descriptor ? getModel(providerKey, modelId) : undefined;
+  const config = configs.find((c) => c.key === providerKey);
+  const envKey = descriptor ? (process.env[descriptor.envKey] ?? "").trim() : "";
+  // A provider switched OFF stays off: the env key is a fallback for a missing
+  // row, not a way around the operator's decision.
+  if (descriptor && model && envKey && !(config && !config.enabled)) {
+    return {
+      spec: {
+        label: `${descriptor.label} ${model.id}`,
+        endpoint: descriptor.endpoint,
+        apiKey: envKey,
+        maxOutputTokens: model.maxOutputTokens,
+        outputTokenParam: descriptor.outputTokenParam,
+        providerKey: descriptor.key,
+        rateBudget: resolveBudget(descriptor.key, null),
+      },
+      reason: null,
+    };
+  }
+  return { spec: null, reason: attempt.reason };
+}
+
 /** The registry default spec for a task, or null when it too is unusable. */
 export async function defaultSpecForTask(taskKey: AiTaskKey): Promise<ResolvedTaskModel | null> {
   const task = getTask(taskKey);

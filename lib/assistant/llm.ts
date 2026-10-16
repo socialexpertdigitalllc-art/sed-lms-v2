@@ -75,6 +75,12 @@ export interface ChatOptions {
   timeoutMs?: number;
   /** Attempts, inclusive of the first. */
   maxAttempts?: number;
+  /**
+   * Vendor parameters beyond the common ones (MiniMax's `top_p`, `thinking`,
+   * `reasoning_effort`, `service_tier`), merged into the request as given.
+   * They never replace the fields above.
+   */
+  extraBody?: Record<string, unknown>;
 }
 
 export interface ChatResult {
@@ -111,6 +117,7 @@ export function estimateMessageTokens(messages: WireMessage[], tools?: ToolDefin
 
 function requestBody(spec: ProviderSpec, model: string, messages: WireMessage[], opts: ChatOptions): string {
   return JSON.stringify({
+    ...(opts.extraBody ?? {}),
     model,
     messages,
     [spec.outputTokenParam ?? "max_tokens"]: Math.min(opts.maxTokens, spec.maxOutputTokens),

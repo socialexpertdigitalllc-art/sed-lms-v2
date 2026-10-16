@@ -24,7 +24,7 @@ import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import { buildResumePrompt, buildTaskPrompt } from "./task";
 import { buildSiteBrief } from "./brief";
 import { harvestChanges } from "./harvest";
-import { effectiveRunOptions, readDefaults } from "./options";
+import { AGENT_ENGINES, effectiveRunOptions, readDefaults, runEngine, type AgentEngine } from "./options";
 import { summarizeEventForTail, type AgyDriver, type AgyEvent, type AgyRunOutcome } from "./agy";
 import {
   AGENT_SITES_BUCKET, AGY_MIN_ATTEMPT_MS, AGY_RETRY_DELAYS_MS,
@@ -60,6 +60,10 @@ export interface WorkerDeps {
   now?: () => Date;
   /** Back-off pause between agy attempts — the test seam; a real timer by default. */
   sleep?: (ms: number) => Promise<void>;
+  /** Which engine's runs this worker claims. The office box runs Antigravity
+   *  (the default); MiniMax runs belong to the LMS server
+   *  (lib/site-agent/minimaxRunner.ts) and are never picked up here. */
+  engine?: AgentEngine;
 }
 
 /** agy errors another try cannot fix: the account, its quota, or the chosen
@@ -72,7 +76,7 @@ const PERMANENT_AGY_ERROR = /not logged in|not signed in|RESOURCE_EXHAUSTED|quot
  *  (budget spent) and a launch failure (broken worker, released below) are
  *  not; a missing result event is — that is agy dying mid-run. */
 function isRetryable(o: AgyRunOutcome): boolean {
-  if (o.killed || o.spawnError) return false;
+  if (o.killed || o.spawnError || o.permanent) return false;
   if (!o.result) return true;
   if (o.result.status === "SUCCESS") return false;
   return !PERMANENT_AGY_ERROR.test(o.result.error ?? "");
@@ -172,16 +176,17 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
   // Narrow eligibility select (disk-IO rule) — queued, or running-stale.
   const { data: rows, error: selErr } = await admin
     .from("site_agent_runs")
-    .select("id, status, updated_at, created_at")
+    .select("id, status, updated_at, created_at, options")
     .in("status", ["queued", "running"])
     .order("created_at", { ascending: true })
     .limit(20);
   if (selErr || !rows?.length) return { picked: false };
 
   const nowMs = now().getTime();
-  const candidate = (rows as Pick<AgentRunRow, "id" | "status" | "updated_at" | "created_at">[]).find(
-    (r) => r.status === "queued" ||
-      (r.status === "running" && nowMs - new Date(r.updated_at).getTime() > STALE_RUNNING_MS),
+  const engine = deps.engine ?? "antigravity";
+  const candidate = (rows as Pick<AgentRunRow, "id" | "status" | "updated_at" | "created_at" | "options">[]).find(
+    (r) => runEngine(r.options) === engine && (r.status === "queued" ||
+      (r.status === "running" && nowMs - new Date(r.updated_at).getTime() > STALE_RUNNING_MS)),
   );
   if (!candidate) return { picked: false };
 
@@ -196,7 +201,20 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     .select()
     .single();
   if (!claimed) return { picked: false }; // lost the race — next tick retries
-  const run = claimed as AgentRunRow;
+  return processClaimedRun(deps, claimed as AgentRunRow, claimId);
+}
+
+/**
+ * Everything after the claim: build the workspace and prompt, drive the
+ * engine, harvest and store the result, move the run to review (or fail it).
+ * The caller must already hold `claimId` on the row — the office worker gets
+ * it from the CAS claim above; the LMS server claims MiniMax runs itself
+ * (lib/site-agent/minimaxRunner.ts). Every write stays guarded by it.
+ */
+export async function processClaimedRun(deps: WorkerDeps, run: AgentRunRow, claimId: string): Promise<WorkerOutcome> {
+  const admin = deps.admin;
+  const now = deps.now ?? (() => new Date());
+  const iso = () => now().toISOString();
 
   /** Claim-scoped scratch key: two attempts at one run (stale reclaim racing
    *  a not-actually-dead predecessor) get DIFFERENT dirs, so neither can wipe
@@ -282,11 +300,13 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
     // column is missing and everything falls back to the built-ins.
     const settings = await teamSettings(admin);
     const opts = effectiveRunOptions(run.options, settings.defaults);
+    const engineLabel = AGENT_ENGINES[opts.engine].label;
     // A model the worker no longer offers can only fail ("invalid model"):
-    // Gemini 3.7 was withdrawn on 2026-10-13 under runs still using it.
+    // Gemini 3.7 was withdrawn on 2026-10-13 under runs still using it. The
+    // catalogue is Antigravity's — a MiniMax model is checked by its driver.
     let model = run.model ?? null;
     let modelNote: string | null = null;
-    if (model && settings.models.length && !settings.models.some((m) => m.id === model)) {
+    if (opts.engine === "antigravity" && model && settings.models.length && !settings.models.some((m) => m.id === model)) {
       const fallback = readDefaults(settings.defaults).model ?? null;
       const usable = fallback && settings.models.some((m) => m.id === fallback) ? fallback : null;
       modelNote = `Model "${model}" is no longer offered by Antigravity — using ${usable ? `"${usable}"` : "Antigravity's default"} instead.`;
@@ -334,6 +354,7 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
       // The map of the files the agent will see (a revise sees its last result).
       siteBrief: opts.siteMap ? buildSiteBrief(seedMap) : null,
       houseRules: opts.houseRules,
+      engine: opts.engine,
     });
 
     // Progress: throttled tail patches; a patch matching zero rows means we
@@ -399,6 +420,7 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
             // v2 F2: the run's chosen model (null = Antigravity default).
             model,
             shouldCancel: () => cancelled,
+            minimax: opts.engine === "minimax" ? opts.minimax : undefined,
           },
           (e) => {
             if (e.kind === "init" || e.kind === "step") started = true;
@@ -457,10 +479,14 @@ async function claimAndProcessOne(deps: WorkerDeps): Promise<WorkerOutcome> {
         await deps.workspace.cleanup(wsKey).catch(() => {});
         return { picked: true, runId: run.id, outcome: "superseded" };
       }
-      return await fail(`agy ran but produced no result event${triedNote} — check the CLI's sign-in and its log on the worker box.`);
+      return await fail(
+        opts.engine === "minimax"
+          ? `MiniMax stopped without finishing${triedNote}.`
+          : `agy ran but produced no result event${triedNote} — check the CLI's sign-in and its log on the worker box.`,
+      );
     }
     if (outcome.result.status !== "SUCCESS") {
-      return await fail(`Antigravity reported an error: ${outcome.result.error ?? "unknown"}${triedNote}`);
+      return await fail(`${engineLabel} reported an error: ${outcome.result.error ?? "unknown"}${triedNote}`);
     }
 
     const edited = await deps.workspace.collect(wsKey);

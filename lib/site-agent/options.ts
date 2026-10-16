@@ -12,6 +12,7 @@
  * care for time per run; team defaults set the starting point for everyone.
  */
 import { AGY_MAX_ATTEMPTS } from "./types";
+import { getProvider } from "@/lib/ai-tools/providers/registry";
 
 export type AgentSpeed = "quick" | "balanced" | "thorough";
 
@@ -53,6 +54,155 @@ export const MAX_TIME_LIMIT_MIN = 60;
 export const MAX_RETRIES = AGY_MAX_ATTEMPTS - 1;
 export const HOUSE_RULES_MAX = 2000;
 
+/* ------------------------------------------------------------- engines */
+
+/**
+ * Which AI does the work. Antigravity runs on the office worker box through the
+ * `agy` CLI; MiniMax runs on the LMS server itself through MiniMax's API (the
+ * same account the Site Builder uses), so it needs neither the worker nor any
+ * Antigravity quota — the reason it exists (2026-10-16: Antigravity's limit ran
+ * out under the workload and every edit stopped).
+ */
+export type AgentEngine = "antigravity" | "minimax";
+
+export const AGENT_ENGINES: Record<AgentEngine, { label: string; hint: string }> = {
+  antigravity: {
+    label: "Antigravity",
+    hint: "Google's agent, on the office worker machine. Needs the worker online and Antigravity quota.",
+  },
+  minimax: {
+    label: "MiniMax",
+    hint: "Runs on the LMS server with the MiniMax API key — no worker machine, no Antigravity quota.",
+  },
+};
+
+export const AGENT_ENGINE_ORDER: AgentEngine[] = ["antigravity", "minimax"];
+
+export function isAgentEngine(v: unknown): v is AgentEngine {
+  return v === "antigravity" || v === "minimax";
+}
+
+/** The engine a stored run (or its options) uses; anything else is Antigravity
+ *  — every run before MiniMax existed. */
+export function runEngine(rawOptions: unknown): AgentEngine {
+  const rec = rawOptions && typeof rawOptions === "object" && !Array.isArray(rawOptions) ? (rawOptions as Record<string, unknown>) : null;
+  return rec?.engine === "minimax" ? "minimax" : "antigravity";
+}
+
+/** The MiniMax models the AI developer can use — the provider registry's list,
+ *  every one of which calls tools (the agent edits files through tools). */
+export function minimaxModels(): { id: string; note: string | null; maxOutputTokens: number; recommendedOutputTokens: number }[] {
+  return (getProvider("minimax")?.models ?? [])
+    .filter((m) => m.toolCalling)
+    .map((m) => ({
+      id: m.id,
+      note: m.note ?? null,
+      maxOutputTokens: m.maxOutputTokens,
+      recommendedOutputTokens: m.recommendedOutputTokens ?? m.maxOutputTokens,
+    }));
+}
+
+/** M3 is the strongest generally-available model and what the Site Builder runs on. */
+export const DEFAULT_MINIMAX_MODEL = "MiniMax-M3";
+
+export function isMinimaxModel(id: unknown): id is string {
+  return typeof id === "string" && minimaxModels().some((m) => m.id === id);
+}
+
+/** MiniMax's `thinking.type`: adaptive (it decides) or disabled. */
+export type MinimaxThinking = "adaptive" | "disabled";
+/** MiniMax's `reasoning_effort` — honoured by M3.1 only. */
+export type MinimaxEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export const MINIMAX_EFFORTS: MinimaxEffort[] = ["low", "medium", "high", "xhigh", "max"];
+/** MiniMax's `service_tier`: priority admission costs 1.5x standard. */
+export type MinimaxTier = "standard" | "priority";
+
+/**
+ * Every knob MiniMax's chat-completions API exposes for this kind of work
+ * (platform.minimax.io/docs/api-reference/text-chat-openai, re-read
+ * 2026-10-16), plus the agent's own step budget. Absent = the vendor default.
+ */
+export interface MinimaxSettings {
+  /** 0–2; MiniMax default 1. Lower is more literal. */
+  temperature?: number;
+  /** 0–1; MiniMax default 0.95 (M3) / 0.9 (M2.x). */
+  top_p?: number;
+  /** `max_completion_tokens` per step — thinking + the step's answer. */
+  max_tokens?: number;
+  thinking?: MinimaxThinking;
+  reasoning_effort?: MinimaxEffort;
+  service_tier?: MinimaxTier;
+  /** Most model calls (steps) one round may take; default from the speed. */
+  max_steps?: number;
+}
+
+export const MINIMAX_LIMITS = {
+  temperature: { min: 0, max: 2, step: 0.05, vendorDefault: 1 },
+  top_p: { min: 0, max: 1, step: 0.01, vendorDefault: 0.95 },
+  max_tokens: { min: 1024 },
+  max_steps: { min: 3, max: 200 },
+} as const;
+
+/** What a MiniMax round gets when nobody picked a value: room for a whole
+ *  large page in one write plus thinking, without asking M2.x for its entire
+ *  shared input+output window. */
+export const MINIMAX_DEFAULT_MAX_TOKENS = 32768;
+
+/** Steps a round may take by default: the prompt's step budget for the speed,
+ *  with headroom — MiniMax reads and edits in separate calls, and running out
+ *  mid-change wastes the whole round. */
+export function defaultMinimaxSteps(speed: AgentSpeed): number {
+  return Math.min(MINIMAX_LIMITS.max_steps.max, AGENT_SPEEDS[speed].steps * 2 + 10);
+}
+
+function parseMinimax(raw: unknown): Parsed<MinimaxSettings> {
+  if (raw === undefined || raw === null) return { ok: true, value: {} };
+  const rec = asRecord(raw);
+  if (!rec) return { ok: false, message: "minimax must be an object" };
+  const out: MinimaxSettings = {};
+  const num = (k: "temperature" | "top_p", lim: { min: number; max: number }, label: string): string | null => {
+    const v = rec[k];
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "number" || !Number.isFinite(v) || v < lim.min || v > lim.max) return `${label} must be ${lim.min}–${lim.max}.`;
+    out[k] = Math.round(v * 100) / 100;
+    return null;
+  };
+  const e1 = num("temperature", MINIMAX_LIMITS.temperature, "Temperature");
+  if (e1) return { ok: false, message: e1 };
+  const e2 = num("top_p", MINIMAX_LIMITS.top_p, "Top-p");
+  if (e2) return { ok: false, message: e2 };
+  if (rec.max_tokens !== undefined && rec.max_tokens !== null) {
+    const v = rec.max_tokens;
+    const ceiling = Math.max(...minimaxModels().map((m) => m.maxOutputTokens), MINIMAX_LIMITS.max_tokens.min);
+    if (typeof v !== "number" || !Number.isInteger(v) || v < MINIMAX_LIMITS.max_tokens.min || v > ceiling) {
+      return { ok: false, message: `Max output per step must be ${MINIMAX_LIMITS.max_tokens.min}–${ceiling} tokens.` };
+    }
+    out.max_tokens = v;
+  }
+  if (rec.thinking !== undefined && rec.thinking !== null) {
+    if (rec.thinking !== "adaptive" && rec.thinking !== "disabled") return { ok: false, message: "thinking must be adaptive or disabled" };
+    out.thinking = rec.thinking;
+  }
+  if (rec.reasoning_effort !== undefined && rec.reasoning_effort !== null) {
+    if (!MINIMAX_EFFORTS.includes(rec.reasoning_effort as MinimaxEffort)) {
+      return { ok: false, message: `reasoning_effort must be one of ${MINIMAX_EFFORTS.join(", ")}` };
+    }
+    out.reasoning_effort = rec.reasoning_effort as MinimaxEffort;
+  }
+  if (rec.service_tier !== undefined && rec.service_tier !== null) {
+    if (rec.service_tier !== "standard" && rec.service_tier !== "priority") return { ok: false, message: "service_tier must be standard or priority" };
+    out.service_tier = rec.service_tier;
+  }
+  if (rec.max_steps !== undefined && rec.max_steps !== null) {
+    const v = rec.max_steps;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < MINIMAX_LIMITS.max_steps.min || v > MINIMAX_LIMITS.max_steps.max) {
+      return { ok: false, message: `Max steps must be ${MINIMAX_LIMITS.max_steps.min}–${MINIMAX_LIMITS.max_steps.max}.` };
+    }
+    out.max_steps = v;
+  }
+  return { ok: true, value: out };
+}
+
 /** One run's controls. Absent fields fall back to the team defaults, then to
  *  the built-in ones below — a run created before 0086 has none at all. */
 export interface AgentRunOptions {
@@ -64,12 +214,21 @@ export interface AgentRunOptions {
   site_map?: boolean;
   /** The team's standing instructions as they were when the run was sent. */
   house_rules?: string;
+  /** Absent = Antigravity (every run before MiniMax existed). */
+  engine?: AgentEngine;
+  /** MiniMax runs only: the API settings it was sent with. */
+  minimax?: MinimaxSettings;
 }
 
 /** The team's defaults, edited in the AI developer settings. */
 export interface AgentDefaults {
   /** agy model id; null/absent = Antigravity's own default. */
   model?: string | null;
+  /** The engine a send starts on. */
+  engine?: AgentEngine;
+  /** The MiniMax model a MiniMax send starts on. */
+  minimax_model?: string;
+  minimax?: MinimaxSettings;
   speed?: AgentSpeed;
   time_limit_min?: number;
   retries?: number;
@@ -120,6 +279,13 @@ function parseCommon(raw: Record<string, unknown>): Parsed<AgentRunOptions> {
     if (typeof raw.site_map !== "boolean") return { ok: false, message: "site_map must be true or false" };
     out.site_map = raw.site_map;
   }
+  if (raw.engine !== undefined && raw.engine !== null) {
+    if (!isAgentEngine(raw.engine)) return { ok: false, message: "engine must be antigravity or minimax" };
+    out.engine = raw.engine;
+  }
+  const mm = parseMinimax(raw.minimax);
+  if (!mm.ok) return mm;
+  if (Object.keys(mm.value).length) out.minimax = mm.value;
   return { ok: true, value: out };
 }
 
@@ -149,6 +315,10 @@ export function parseDefaults(raw: unknown): Parsed<AgentDefaults> {
       return { ok: false, message: `Team rules are too long (${HOUSE_RULES_MAX} characters max).` };
     }
     if (rules) out.house_rules = rules;
+  }
+  if (rec.minimax_model !== undefined && rec.minimax_model !== null && rec.minimax_model !== "") {
+    if (!isMinimaxModel(rec.minimax_model)) return { ok: false, message: `Unknown MiniMax model "${String(rec.minimax_model)}".` };
+    out.minimax_model = rec.minimax_model;
   }
   return { ok: true, value: out };
 }
@@ -191,6 +361,13 @@ export function composeRunOptions(choice: AgentRunOptions, defaults: AgentDefaul
     site_map: choice.site_map ?? defaults.site_map ?? BUILT_IN_DEFAULTS.site_map,
   };
   if (defaults.house_rules) out.house_rules = defaults.house_rules;
+  const engine = choice.engine ?? defaults.engine ?? "antigravity";
+  if (engine === "minimax") {
+    out.engine = "minimax";
+    // The sender's MiniMax settings over the team's, written in full.
+    const minimax = { ...(defaults.minimax ?? {}), ...(choice.minimax ?? {}) };
+    if (Object.keys(minimax).length) out.minimax = minimax;
+  }
   return out;
 }
 
@@ -203,25 +380,42 @@ export function effectiveRunOptions(raw: unknown, teamDefaults: unknown = null):
   maxAttempts: number;
   siteMap: boolean;
   houseRules: string | null;
+  engine: AgentEngine;
+  /** MiniMax runs: the API settings, steps resolved to a number. */
+  minimax: MinimaxSettings & { max_steps: number };
 } {
   const o = readRunOptions(raw);
   const d = readDefaults(teamDefaults);
   const speed = o.speed ?? d.speed ?? BUILT_IN_DEFAULTS.speed;
   const minutes = o.time_limit_min ?? (o.speed ? AGENT_SPEEDS[o.speed].minutes : d.time_limit_min ?? AGENT_SPEEDS[speed].minutes);
+  // A run carries its engine; one stored without any is Antigravity. The team
+  // default never re-routes a run that was already sent.
+  const engine = runEngine(raw);
+  const minimax = o.minimax ?? {};
   return {
     speed,
     timeLimitMs: minutes * 60_000,
     maxAttempts: 1 + (o.retries ?? d.retries ?? BUILT_IN_DEFAULTS.retries),
     siteMap: o.site_map ?? d.site_map ?? BUILT_IN_DEFAULTS.site_map,
     houseRules: o.house_rules ?? d.house_rules ?? null,
+    engine,
+    minimax: { ...minimax, max_steps: minimax.max_steps ?? defaultMinimaxSteps(speed) },
   };
 }
 
 /** "Quick · 8 min · 3 retries" — the run header's one-line summary. */
 export function describeRunOptions(raw: unknown): string | null {
   const o = readRunOptions(raw);
-  if (!o.speed && o.time_limit_min === undefined && o.retries === undefined) return null;
+  if (!o.speed && o.time_limit_min === undefined && o.retries === undefined && !o.engine) return null;
   const parts: string[] = [];
+  if (o.engine === "minimax") {
+    parts.push("MiniMax");
+    const m = o.minimax ?? {};
+    if (m.thinking === "disabled") parts.push("no thinking");
+    if (m.reasoning_effort) parts.push(`${m.reasoning_effort} effort`);
+    if (m.temperature !== undefined) parts.push(`temp ${m.temperature}`);
+    if (m.service_tier === "priority") parts.push("priority tier");
+  }
   if (o.speed) parts.push(AGENT_SPEEDS[o.speed].label);
   if (o.time_limit_min !== undefined) parts.push(`${o.time_limit_min} min limit`);
   if (o.retries !== undefined) parts.push(o.retries === 0 ? "no retries" : `${o.retries} ${o.retries === 1 ? "retry" : "retries"}`);
