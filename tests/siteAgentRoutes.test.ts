@@ -1,6 +1,7 @@
 // tests/siteAgentRoutes.test.ts
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { SiteCopy } from "@/lib/site-agent/siteCopy";
 
 const processMock = vi.hoisted(() => vi.fn());
 const mmMock = vi.hoisted(() => ({
@@ -81,6 +82,8 @@ const adminState = vi.hoisted(() => {
     inserts: [] as { table: string; values: Record<string, unknown> }[],
     updates: [] as { table: string; values: Record<string, unknown>; filters?: [string, unknown][] }[],
     uploads: [] as { bucket: string; path: string }[],
+    /** The bytes each upload() received, index-aligned with `uploads`. */
+    uploadBodies: [] as unknown[],
     removes: [] as { bucket: string; paths: string[] }[],
     /** Interleaved op log — pins the upload-BEFORE-insert ordering. */
     ops: [] as string[],
@@ -89,7 +92,7 @@ const adminState = vi.hoisted(() => {
       state.ticket = null; state.lead = null; state.run = null; state.activeRun = null;
       state.insertedRun = { id: "run-9" }; state.insertError = null; state.insertErrorQueue = []; state.ticketUpdateError = null;
       state.runsList = []; state.itemsList = []; state.settings = null; state.uploadError = null;
-      state.inserts = []; state.updates = []; state.uploads = [];
+      state.inserts = []; state.updates = []; state.uploads = []; state.uploadBodies = [];
       state.removes = []; state.ops = [];
     },
   };
@@ -143,7 +146,10 @@ const adminState = vi.hoisted(() => {
     from: (table: string) => query(table),
     storage: {
       from: (bucket: string) => ({
-        upload: async (path: string) => { state.uploads.push({ bucket, path }); state.ops.push("upload"); return { error: state.uploadError }; },
+        upload: async (path: string, body?: unknown) => {
+          state.uploads.push({ bucket, path }); state.uploadBodies.push(body); state.ops.push("upload");
+          return { error: state.uploadError };
+        },
         remove: async (paths: string[]) => { state.removes.push({ bucket, paths }); state.ops.push("remove"); return { data: null, error: null }; },
       }),
     },
@@ -161,6 +167,17 @@ vi.mock("@/lib/site-studio/deploy/liveFiles", async (importOriginal) => ({
   prepareSiteZip: liveMock.prepareSiteZip,
 }));
 vi.mock("@/lib/site-studio/deploy/protected", () => ({ isProtectedDomain: liveMock.isProtectedDomain }));
+// The real shrink is covered by siteAgentSiteCopy.test.ts; here it passes the
+// prepared zip through unless a test says otherwise.
+const copyMock = vi.hoisted(() => {
+  const passthrough = async (zip: Uint8Array): Promise<SiteCopy> => ({ ok: true, zip, totalBytes: zip.length, resized: [] });
+  return { passthrough, slimSiteCopy: vi.fn(passthrough) };
+});
+vi.mock("@/lib/site-agent/siteCopy", () => ({ slimSiteCopy: copyMock.slimSiteCopy }));
+function seedSiteCopyPassthrough() {
+  copyMock.slimSiteCopy.mockReset();
+  copyMock.slimSiteCopy.mockImplementation(copyMock.passthrough);
+}
 
 import { POST as processPOST } from "@/app/api/site-agent/process/route";
 import { agentRunAccess } from "@/lib/site-agent/access";
@@ -363,6 +380,7 @@ function seedTicketCreate() {
   process.env.DA_DOMAIN = "dmviral.com";
   liveMock.fetchLiveSiteZip.mockResolvedValue({ ok: true, zip: new Uint8Array([80, 75]), host: "acme.dmviral.com", source: "staging" });
   liveMock.prepareSiteZip.mockReturnValue({ ok: true, zip: new Uint8Array([80, 75, 3, 4]), files: 1 });
+  seedSiteCopyPassthrough();
 }
 
 describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
@@ -444,6 +462,34 @@ describe("POST /api/tickets/[id]/agent-runs (Send to AI)", () => {
     const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
     expect(res.status).toBe(502);
     expect((await res.json()).error).toContain("disk full");
+    expect(adminState.inserts).toHaveLength(0);
+    expect(adminState.updates).toHaveLength(0);
+  });
+
+  it("stores the web-sized copy, not the raw live zip, and logs how many photos were resized", async () => {
+    const slim = new Uint8Array([80, 75, 9, 9]);
+    copyMock.slimSiteCopy.mockResolvedValue({
+      ok: true, zip: slim, totalBytes: 4, resized: [{ path: "images/hero.jpg", before: 9_000_000, after: 400_000 }],
+    });
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(201);
+    expect(copyMock.slimSiteCopy).toHaveBeenCalledWith(new Uint8Array([80, 75, 3, 4]));
+    expect(adminState.uploadBodies[0]).toBe(slim);
+    const log = adminState.inserts.find((i) => i.table === "activity_log");
+    expect(log?.values.new_value).toMatchObject({ resized_images: 1 });
+  });
+
+  it("REGRESSION: 422s a site still too big after shrinking, naming its files — nothing uploaded or inserted", async () => {
+    // insideout.dmviral.com, 2026-10-16: a 111 MB copy died at the storage
+    // upload with "The object exceeded the maximum allowed size".
+    copyMock.slimSiteCopy.mockResolvedValue({
+      ok: false, totalBytes: 90_000_000,
+      message: "The site's files add up to 85.8 MB even after shrinking its photos — Largest files: media/intro.mp4 (60.0 MB).",
+    });
+    const res = await createRunPOST(new Request("http://x", { method: "POST" }), ticketCtx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain("media/intro.mp4 (60.0 MB)");
+    expect(adminState.uploads).toHaveLength(0);
     expect(adminState.inserts).toHaveLength(0);
     expect(adminState.updates).toHaveLength(0);
   });
@@ -721,6 +767,7 @@ function seedLeadCreate() {
   process.env.DA_DOMAIN = "dmviral.com";
   liveMock.fetchLiveSiteZip.mockResolvedValue({ ok: true, zip: new Uint8Array([80, 75]), host: "acme.dmviral.com", source: "staging" });
   liveMock.prepareSiteZip.mockReturnValue({ ok: true, zip: new Uint8Array([80, 75, 3, 4]), files: 1 });
+  seedSiteCopyPassthrough();
 }
 
 describe("POST /api/leads/[id]/agent-runs (AI edit site — ticketless)", () => {
@@ -756,6 +803,22 @@ describe("POST /api/leads/[id]/agent-runs (AI edit site — ticketless)", () => 
   it("422s task_text over 4000 characters", async () => {
     const res = await leadCreatePOST(postJson({ task_text: "x".repeat(4001) }), leadCtx());
     expect(res.status).toBe(422);
+  });
+
+  it("stores the web-sized copy, and 422s one still too big — same guard as the ticket route", async () => {
+    const slim = new Uint8Array([80, 75, 9, 9]);
+    copyMock.slimSiteCopy.mockResolvedValueOnce({ ok: true, zip: slim, totalBytes: 4, resized: [] });
+    let res = await leadCreatePOST(postJson({ task_text: "Swap the hero photo" }), leadCtx());
+    expect(res.status).toBe(201);
+    expect(adminState.uploadBodies[0]).toBe(slim);
+
+    seedLeadCreate();
+    copyMock.slimSiteCopy.mockResolvedValueOnce({ ok: false, totalBytes: 90_000_000, message: "Largest files: old-site.zip (70.0 MB)." });
+    res = await leadCreatePOST(postJson({ task_text: "Swap the hero photo" }), leadCtx());
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain("old-site.zip");
+    expect(adminState.uploads).toHaveLength(0);
+    expect(adminState.inserts).toHaveLength(0);
   });
 
   it("404s an unknown lead", async () => {

@@ -8,6 +8,7 @@ import { fetchLiveSiteZip, prepareSiteZip, siteHostFrom } from "@/lib/site-studi
 import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
 import { subFromWebsiteLink } from "@/lib/template-engine/directadmin";
 import { AGENT_SITES_BUCKET, AGENT_RUN_ACTIVE_STATUSES, originalZipPath } from "@/lib/site-agent/types";
+import { slimSiteCopy } from "@/lib/site-agent/siteCopy";
 import { resolveModelChoice, workerStatus } from "@/lib/site-agent/workerStatus";
 import { composeRunOptions, parseRunOptions } from "@/lib/site-agent/options";
 import { agentPanelContext, defaultModelFrom, getAgentDefaults, insertAgentRun } from "@/lib/site-agent/settings";
@@ -154,11 +155,15 @@ export async function POST(req: Request, ctx: Ctx) {
   // Normalize: DA archives nest under "public_html/", and index.html must exist.
   const prepared = prepareSiteZip(fetched.zip);
   if (!prepared.ok) return NextResponse.json({ error: `The live site is not editable: ${prepared.message}` }, { status: 422 });
+  // Camera-original photos can push a docroot far past the storage and worker
+  // limits — shrink them to web size, or refuse with the biggest files named.
+  const copy = await slimSiteCopy(prepared.zip);
+  if (!copy.ok) return NextResponse.json({ error: copy.message }, { status: 422 });
 
   const runId = crypto.randomUUID();
   const { error: upErr } = await admin.storage
     .from(AGENT_SITES_BUCKET)
-    .upload(originalZipPath(runId), prepared.zip, { upsert: true, contentType: "application/zip" });
+    .upload(originalZipPath(runId), copy.zip, { upsert: true, contentType: "application/zip" });
   if (upErr) return NextResponse.json({ error: `Could not store the site copy: ${upErr.message}` }, { status: 502 });
 
   const { data: run, error: insErr } = await insertAgentRun(admin, {
@@ -175,7 +180,10 @@ export async function POST(req: Request, ctx: Ctx) {
 
   await admin.from("activity_log").insert({
     user_id: user.id, action: "site_agent.run.created", entity_type: "ticket", entity_id: ticketId,
-    new_value: { run_id: run.id, site_host: fetched.host, model: modelChoice.model, speed: options.speed, engine: options.engine ?? "antigravity" },
+    new_value: {
+      run_id: run.id, site_host: fetched.host, model: modelChoice.model, speed: options.speed,
+      resized_images: copy.resized.length, engine: options.engine ?? "antigravity",
+    },
   });
   if (claim) after(() => runClaimedMinimax(runId, claim.claim_id));
 
