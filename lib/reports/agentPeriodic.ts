@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Lead } from "@/lib/leads/types";
 import { summarize, type SessionRow } from "@/lib/signin/analytics";
+import { companyTimezone } from "@/lib/analytics/dateScope";
 import {
   computeWindowMetrics,
   regionRows,
@@ -44,7 +45,15 @@ export async function buildAgentPeriodicReport(
   admin: SupabaseClient,
   opts: { agentId: string; from: string; to: string; includeAttendance: boolean }
 ): Promise<AgentPeriodicReport | null> {
-  const w = windowFor(opts.from, opts.to);
+  // The company's calendar (app_settings.work_timezone) decides which days —
+  // and so which closes — a "from … to" range covers.
+  const { data: settings } = await admin
+    .from("app_settings")
+    .select("work_start_time, work_timezone")
+    .limit(1)
+    .maybeSingle();
+  const tz = companyTimezone((settings as { work_timezone?: string | null } | null)?.work_timezone);
+  const w = windowFor(opts.from, opts.to, tz);
 
   const [
     { data: profile },
@@ -96,17 +105,14 @@ export async function buildAgentPeriodicReport(
 
   let attendance: AgentPeriodicReport["attendance"] = null;
   if (opts.includeAttendance) {
-    const [{ data: settings }, { data: sessions }] = await Promise.all([
-      admin.from("app_settings").select("work_start_time, work_timezone").limit(1).maybeSingle(),
-      admin
-        .from("user_sessions")
-        .select("user_id, signed_in_at, signed_out_at, last_seen_at")
-        .eq("user_id", opts.agentId)
-        .gte("signed_in_at", iso(w.fromMs))
-        .lt("signed_in_at", iso(w.toExMs)),
-    ]);
+    const { data: sessions } = await admin
+      .from("user_sessions")
+      .select("user_id, signed_in_at, signed_out_at, last_seen_at")
+      .eq("user_id", opts.agentId)
+      .gte("signed_in_at", iso(w.fromMs))
+      .lt("signed_in_at", iso(w.toExMs));
     const { perUserDay } = summarize((sessions ?? []) as SessionRow[], {
-      tz: settings?.work_timezone ?? "Asia/Karachi",
+      tz,
       workStart: (settings?.work_start_time ?? "09:00").slice(0, 5),
       now: new Date(w.toExMs),
     });

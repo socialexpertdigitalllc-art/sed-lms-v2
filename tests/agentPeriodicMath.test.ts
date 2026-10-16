@@ -60,11 +60,20 @@ function lead(p: Partial<Lead>): Lead {
   };
 }
 
-const W: ReportWindow = windowFor("2026-07-01", "2026-07-31");
+const W: ReportWindow = windowFor("2026-07-01", "2026-07-31", "UTC");
 const NO_APPROX = new Set<string>();
 
 describe("windowFor", () => {
-  it("builds a half-open UTC window and an equal-length previous window", () => {
+  it("covers whole days of the company's calendar: July in Pakistan starts at 7pm UTC on June 30th", () => {
+    const pk = windowFor("2026-07-01", "2026-07-31", "Asia/Karachi");
+    expect(pk.fromMs).toBe(Date.parse("2026-06-30T19:00:00Z"));
+    expect(pk.toExMs).toBe(Date.parse("2026-07-31T19:00:00Z"));
+    // the previous window is the 31 days just before
+    expect(pk.prev.toExMs).toBe(pk.fromMs);
+    expect(pk.prev.fromMs).toBe(Date.parse("2026-05-30T19:00:00Z"));
+  });
+
+  it("builds a half-open window and an equal-length previous window", () => {
     expect(W.fromMs).toBe(Date.parse("2026-07-01T00:00:00Z"));
     expect(W.toExMs).toBe(Date.parse("2026-08-01T00:00:00Z"));
     expect(W.prev.toExMs).toBe(W.fromMs);

@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { getBranding } from "@/lib/settings/appSettings";
+import { getAppSettings, getBranding } from "@/lib/settings/appSettings";
 import { PermissionProvider } from "@/providers/PermissionProvider";
 import { UiPrefsProvider, type Density } from "@/providers/UiPrefsProvider";
 import { ViewScopeProvider } from "@/providers/ViewScopeProvider";
+import { CompanyTimezoneProvider } from "@/providers/CompanyTimezoneProvider";
+import { companyTimezone } from "@/lib/analytics/dateScope";
 import { AppShell } from "@/components/layout/AppShell";
 import { ActivityTracker } from "@/providers/ActivityTracker";
 import { ToastProvider } from "@/components/common/Toast";
@@ -28,6 +30,8 @@ export default async function AppLayout({
 
   const perms = await getUserPermissions(user.id);
   const branding = await getBranding();
+  // Cached (60s TTL) — month filters and counts follow the company calendar.
+  const companyTz = companyTimezone(await getAppSettings().then((s) => s.work_timezone).catch(() => null));
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -48,6 +52,7 @@ export default async function AppLayout({
 
   return (
     <PermissionProvider value={[...perms]}>
+      <CompanyTimezoneProvider value={companyTz}>
       <ViewScopeProvider userId={user.id}>
         <ToastProvider>
           <ActivityTracker />
@@ -69,6 +74,7 @@ export default async function AppLayout({
           <VersionBadge />
         </ToastProvider>
       </ViewScopeProvider>
+      </CompanyTimezoneProvider>
     </PermissionProvider>
   );
 }

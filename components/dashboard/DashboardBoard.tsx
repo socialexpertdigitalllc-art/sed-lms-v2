@@ -36,6 +36,7 @@ import type { Lead } from "@/lib/leads/types";
 import { filterLeadsByRegions, type RegionFacet } from "@/lib/geo/regions";
 import { RegionFilter } from "@/components/leads/RegionFilter";
 import { useViewState } from "@/hooks/useViewState";
+import { useCompanyTimezone } from "@/providers/CompanyTimezoneProvider";
 import { MonthFilter } from "@/components/common/MonthFilter";
 import MultiSelect from "@/components/common/MultiSelect";
 import { monthOptions, inMonth } from "@/lib/analytics/dateScope";
@@ -119,8 +120,9 @@ export function DashboardBoard({
     isCloser && myTeamIds.length === agentIds.length && myTeamIds.every((id) => agentIds.includes(id));
 
   const [dashUrl, setDashUrl] = useViewState(DASH_DEFAULTS);
+  const tz = useCompanyTimezone();
   const month = canScopeMonth ? dashUrl.month : "";
-  const monthOpts = useMemo(() => monthOptions(leads), [leads]);
+  const monthOpts = useMemo(() => monthOptions(leads, tz), [leads, tz]);
   const scoping = selSet.size > 0 || month !== "" || agentIds.length > 0;
 
   // Velocity KPIs scope by closed_at/dropped_at, so they get region+agent
@@ -131,8 +133,8 @@ export function DashboardBoard({
     [leads, selSet, agentIds]
   );
   const fLeads = useMemo(
-    () => fLeadsAllTime.filter((l) => inMonth(l.created_at, month)),
-    [fLeadsAllTime, month]
+    () => fLeadsAllTime.filter((l) => inMonth(l.created_at, month, tz)),
+    [fLeadsAllTime, month, tz]
   );
   const scopedIds = useMemo(() => new Set(fLeads.map((l) => l.id)), [fLeads]);
   const fFollowUps = useMemo(
@@ -146,7 +148,7 @@ export function DashboardBoard({
 
   const kpis = computeKpis(fLeads);
   const ext = computeExtendedKpis(fLeads, fFollowUps, fTickets, new Date(now));
-  const velocity = computeVelocityKpis(fLeadsAllTime, month);
+  const velocity = computeVelocityKpis(fLeadsAllTime, month, tz);
 
   const fvf = freshVsFollowup(fLeads);
   const siteData = bySiteType(fLeads);

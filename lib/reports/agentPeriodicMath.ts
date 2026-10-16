@@ -1,5 +1,6 @@
 import type { Lead } from "@/lib/leads/types";
 import { leadRegion } from "@/lib/geo/regions";
+import { periodFor, previousPeriod } from "@/lib/assistant/dates";
 
 export const FAST_DROP_DAYS = 7;
 const DAY_MS = 86_400_000;
@@ -62,12 +63,15 @@ const num = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** "YYYY-MM-DD" × 2 → half-open UTC window plus equal-length previous window. */
-export function windowFor(from: string, to: string): ReportWindow {
-  const fromMs = Date.parse(`${from}T00:00:00Z`);
-  const toExMs = Date.parse(`${to}T00:00:00Z`) + DAY_MS;
-  const len = toExMs - fromMs;
-  return { fromMs, toExMs, prev: { fromMs: fromMs - len, toExMs: fromMs } };
+/**
+ * "YYYY-MM-DD" × 2 → the half-open window those whole days cover in the
+ * company's timezone (`tz`), plus the same number of days just before it. A
+ * deal closed at 2am Pakistan time on Nov 1st is in November's report.
+ */
+export function windowFor(from: string, to: string, tz: string): ReportWindow {
+  const period = periodFor(from, to, tz);
+  const prev = previousPeriod(period, tz);
+  return { fromMs: period.fromMs, toExMs: period.toExMs, prev: { fromMs: prev.fromMs, toExMs: prev.toExMs } };
 }
 
 const inWindow = (iso: string | null | undefined, w: { fromMs: number; toExMs: number }) =>

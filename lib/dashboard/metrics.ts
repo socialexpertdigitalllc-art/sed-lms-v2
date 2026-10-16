@@ -109,20 +109,22 @@ export interface VelocityKpis {
  * Time-aware KPIs over the lifecycle columns. Unlike the other cards, these
  * scope by closed_at/dropped_at (real exit moments) — so callers must pass
  * leads filtered by region+agent but NOT by created_at month; the month is
- * applied here to the correct timestamp per metric.
+ * applied here to the correct timestamp per metric, in the company's
+ * timezone (`tz`), so a deal closed at 2am Pakistan time on the 1st counts
+ * in the new month.
  */
-export function computeVelocityKpis(leads: Lead[], month: string): VelocityKpis {
+export function computeVelocityKpis(leads: Lead[], month: string, tz: string): VelocityKpis {
   const days = (a: string, b: string) => (new Date(a).getTime() - new Date(b).getTime()) / 86_400_000;
   const avg = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
 
-  const closed = leads.filter((l) => l.closed_at && inMonth(l.closed_at, month));
-  const dropped = leads.filter((l) => l.dropped_at && inMonth(l.dropped_at, month));
+  const closed = leads.filter((l) => l.closed_at && inMonth(l.closed_at, month, tz));
+  const dropped = leads.filter((l) => l.dropped_at && inMonth(l.dropped_at, month, tz));
   const closeDays = closed
     .map((l) => days(l.closed_at as string, l.created_at))
     .filter((d) => d >= 0);
   const decided = closed.length + dropped.length;
 
-  const touched = leads.filter((l) => l.first_touch_at && inMonth(l.created_at, month));
+  const touched = leads.filter((l) => l.first_touch_at && inMonth(l.created_at, month, tz));
   const touchHours = touched
     .map((l) => days(l.first_touch_at as string, l.created_at) * 24)
     .filter((h) => h >= 0);

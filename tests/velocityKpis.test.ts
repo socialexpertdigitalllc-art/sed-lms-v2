@@ -61,7 +61,7 @@ describe("computeVelocityKpis", () => {
       lead({ created_at: "2026-07-05T00:00:00Z", dropped_at: "2026-07-06T00:00:00Z", status: "Dropped" }),
       lead({ created_at: "2026-07-20T00:00:00Z", closed_at: "2026-08-02T00:00:00Z", status: "Closed" }), // closed in Aug
     ];
-    const k = computeVelocityKpis(leads, "2026-07");
+    const k = computeVelocityKpis(leads, "2026-07", "Asia/Karachi");
     expect(k.closedInPeriod).toBe(1);
     expect(k.droppedInPeriod).toBe(1);
     expect(k.avgTimeToCloseDays).toBeCloseTo(39, 0); // Jun 1 → Jul 10
@@ -73,7 +73,7 @@ describe("computeVelocityKpis", () => {
       lead({ closed_at: "2026-07-10T00:00:00Z", created_at: "2026-07-01T00:00:00Z" }),
       lead({ closed_at: "2026-08-10T00:00:00Z", created_at: "2026-08-01T00:00:00Z" }),
     ];
-    expect(computeVelocityKpis(leads, "").closedInPeriod).toBe(2);
+    expect(computeVelocityKpis(leads, "", "Asia/Karachi").closedInPeriod).toBe(2);
   });
 
   it("first-touch averages over the ARRIVAL cohort and is null-safe", () => {
@@ -83,10 +83,18 @@ describe("computeVelocityKpis", () => {
       lead({ created_at: "2026-06-15T00:00:00Z", first_touch_at: "2026-07-01T00:00:00Z" }), // arrived in June — excluded
       lead({ created_at: "2026-07-03T00:00:00Z" }), // untouched — excluded
     ];
-    const k = computeVelocityKpis(leads, "2026-07");
+    const k = computeVelocityKpis(leads, "2026-07", "Asia/Karachi");
     expect(k.avgFirstTouchHours).toBeCloseTo(12, 5);
-    expect(computeVelocityKpis([], "2026-07")).toEqual({
+    expect(computeVelocityKpis([], "2026-07", "Asia/Karachi")).toEqual({
       closedInPeriod: 0, droppedInPeriod: 0, avgTimeToCloseDays: null, dropRatio: null, avgFirstTouchHours: null,
     });
+  });
+
+  it("counts a close by the company's calendar: 2am Pakistan time on Aug 1st is August", () => {
+    const leads = [lead({ created_at: "2026-07-01T00:00:00Z", closed_at: "2026-07-31T21:00:00Z", status: "Closed" })];
+    expect(computeVelocityKpis(leads, "2026-07", "Asia/Karachi").closedInPeriod).toBe(0);
+    expect(computeVelocityKpis(leads, "2026-08", "Asia/Karachi").closedInPeriod).toBe(1);
+    // the old UTC reading put it in July
+    expect(computeVelocityKpis(leads, "2026-07", "UTC").closedInPeriod).toBe(1);
   });
 });

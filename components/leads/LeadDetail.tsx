@@ -15,6 +15,7 @@ import { toDateTimeLocal, formatDateTime, formatDateTimeLong, formatCurrency } f
 import { currentStatusEvent, currentStatusSince, isCountedStatus, statusSummary, type StatusHistory } from "@/lib/leads/statusHistory";
 import { monthKey, monthLabel } from "@/lib/analytics/dateScope";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useCompanyTimezone } from "@/providers/CompanyTimezoneProvider";
 import { useToast } from "@/components/common/Toast";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
@@ -124,6 +125,7 @@ export function LeadDetail({
   openReceiptOnLoad?: boolean;
 }) {
   const { has } = usePermissions();
+  const companyTz = useCompanyTimezone();
   const canEdit = has("leads.edit");
   const canAssign = has("leads.assign");
   const canDelete = has("leads.delete");
@@ -494,7 +496,7 @@ export function LeadDetail({
                     kind: "success",
                     title: `${event.to_status} date updated`,
                     body: moved
-                      ? formatDateTimeLong(moved.changed_at) + (counted ? ` — counts in ${monthLabel(monthKey(moved.changed_at))}` : "")
+                      ? formatDateTimeLong(moved.changed_at) + (counted ? ` — counts in ${monthLabel(monthKey(moved.changed_at, companyTz))}` : "")
                       : undefined,
                   });
                   router.refresh();

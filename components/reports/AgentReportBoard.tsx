@@ -6,6 +6,8 @@ import type { AgentPeriodicReport } from "@/lib/reports/agentPeriodic";
 import type { WindowMetrics } from "@/lib/reports/agentPeriodicMath";
 import { formatCompactCurrency } from "@/lib/leads/format";
 import { fmtInt, fmtPct, fmtDays, fmtHours, fmtRatio, type Fmt } from "@/lib/reports/format";
+import { localDateKey } from "@/lib/assistant/dates";
+import { useCompanyTimezone } from "@/providers/CompanyTimezoneProvider";
 
 const fmtMoney: Fmt = (v) => (v === null ? "—" : formatCompactCurrency(v));
 
@@ -63,9 +65,11 @@ const BUCKETS: { key: keyof WindowMetrics["closeBuckets"]; label: string }[] = [
   { key: "le14", label: "≤14d" }, { key: "le30", label: "≤30d" }, { key: "gt30", label: ">30d" },
 ];
 
-function monthRange(offset: number): { from: string; to: string; label: string } {
-  const d = new Date();
-  const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - offset, 1));
+/** A whole calendar month `offset` months back, counted from today in the company's timezone. */
+function monthRange(offset: number, tz: string): { from: string; to: string; label: string } {
+  const [y, m] = localDateKey(Date.now(), tz).split("-").map(Number);
+  // Plain calendar arithmetic from here: UTC is only the carrier for Y-M-D.
+  const start = new Date(Date.UTC(y, m - 1 - offset, 1));
   const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0));
   const s = (x: Date) => x.toISOString().slice(0, 10);
   return {
@@ -80,7 +84,8 @@ export function AgentReportBoard({
 }: {
   salesUsers: { id: string; display_name: string; is_active: boolean }[];
 }) {
-  const presets = useMemo(() => [monthRange(0), monthRange(1), monthRange(2)], []);
+  const tz = useCompanyTimezone();
+  const presets = useMemo(() => [monthRange(0, tz), monthRange(1, tz), monthRange(2, tz)], [tz]);
   const [agentId, setAgentId] = useState("");
   const [from, setFrom] = useState(presets[0].from);
   const [to, setTo] = useState(presets[0].to);

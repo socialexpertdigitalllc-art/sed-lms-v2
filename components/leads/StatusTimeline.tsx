@@ -14,6 +14,7 @@ import {
   type StatusHistoryEvent,
 } from "@/lib/leads/statusHistory";
 import { StatusPill } from "./StatusPill";
+import { useCompanyTimezone } from "@/providers/CompanyTimezoneProvider";
 
 const DOT: Record<string, string> = {
   Ready: "bg-ready-fg",
@@ -30,8 +31,8 @@ const lineLayout = (compact: boolean) =>
     ? "flex flex-col items-start gap-0.5"
     : "flex flex-col items-start gap-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-x-3";
 
-/** The month a report counts this date in — the dashboard's own rule. */
-const countsIn = (iso: string) => monthLabel(monthKey(iso));
+/** The month a report counts this date in — the dashboard's own rule, in the company's timezone. */
+const countsIn = (iso: string, tz: string) => monthLabel(monthKey(iso, tz));
 
 /**
  * When the lead was submitted and every status change since, oldest first.
@@ -132,6 +133,7 @@ function EventLine({
   counted: boolean;
   onEdit?: () => void;
 }) {
+  const tz = useCompanyTimezone();
   return (
     <div>
       <div className={lineLayout(compact)}>
@@ -159,7 +161,7 @@ function EventLine({
       {!compact && (
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-text-faint">
           {e.by && <span>by {e.by}</span>}
-          {counted && <span className="text-text-muted">Counts in {countsIn(e.changed_at)}</span>}
+          {counted && <span className="text-text-muted">Counts in {countsIn(e.changed_at, tz)}</span>}
           {e.source === "backfill_approx" && !e.correction && (
             <span
               title="This lead predates status tracking, so this date was estimated from its last update."
@@ -193,6 +195,7 @@ function CorrectionEditor({
   onCancel: () => void;
   onSaved: (next: StatusHistory) => void;
 }) {
+  const tz = useCompanyTimezone();
   const [draft, setDraft] = useState(() => toDateTimeLocal(event.changed_at));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -258,8 +261,8 @@ function CorrectionEditor({
       <div className="mt-2 space-y-1 text-[11px]">
         {counted && check.ok && iso && (
           <p className="text-text-muted">
-            Reports will count this lead in <span className="font-semibold text-text">{countsIn(iso)}</span>
-            {countsIn(iso) !== countsIn(event.changed_at) ? ` (now ${countsIn(event.changed_at)})` : ""}.
+            Reports will count this lead in <span className="font-semibold text-text">{countsIn(iso, tz)}</span>
+            {countsIn(iso, tz) !== countsIn(event.changed_at, tz) ? ` (now ${countsIn(event.changed_at, tz)})` : ""}.
           </p>
         )}
         {!check.ok && !unchanged && check.message && (

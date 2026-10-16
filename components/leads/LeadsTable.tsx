@@ -42,6 +42,7 @@ import { tagColor } from "@/lib/leads/tagColors";
 import { leadMatchesTags, ownTags } from "@/lib/leads/tagFilter";
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { useViewState } from "@/hooks/useViewState";
+import { useCompanyTimezone } from "@/providers/CompanyTimezoneProvider";
 import { buildQuery } from "@/lib/url/buildQuery";
 import { MonthFilter } from "@/components/common/MonthFilter";
 import { monthOptions, inMonth, inRange } from "@/lib/analytics/dateScope";
@@ -139,6 +140,7 @@ export function LeadsTable({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [urlState, setUrlState] = useViewState(LEADS_DEFAULTS);
+  const tz = useCompanyTimezone();
   const { q, status, agent, type, sort, page, size } = urlState;
   const canScopeMonth = has("analytics.view_all_agents");
   const month = canScopeMonth ? urlState.month : "";
@@ -191,7 +193,7 @@ export function LeadsTable({
   const scopedLeads = useMemo(
     () =>
       leads.filter((l) => {
-        if (!inMonth(l.created_at, month)) return false;
+        if (!inMonth(l.created_at, month, tz)) return false;
         if (!inRange(l.created_at, from, to)) return false;
         if (!isCloser) return true;
         return teamScope ? Boolean(l.agent_id && teamIds.has(l.agent_id)) : l.agent_id === currentUserId;
@@ -680,7 +682,7 @@ export function LeadsTable({
         )}
         {canScopeMonth && (
           <MonthFilter
-            options={monthOptions(leads)}
+            options={monthOptions(leads, tz)}
             value={month}
             onChange={(v) => setUrlState({ month: v, page: "0" })}
             range={{ from, to }}

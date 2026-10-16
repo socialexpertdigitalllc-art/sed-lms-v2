@@ -1,14 +1,36 @@
+import { localMonthKey } from "@/lib/assistant/dates";
+
 export const MONTH_ALL = "";
+
+/**
+ * The company's timezone when nothing else is known (app_settings.work_timezone
+ * defaults to it). Month filters and month counts use the COMPANY's calendar:
+ * a deal closed at 2am Pakistan time on November 1st is a November deal, even
+ * though it is still October 31st in UTC.
+ */
+export const DEFAULT_COMPANY_TZ = "Asia/Karachi";
+
+/** `tz` when it is a real IANA zone, else the default — a typo in settings must not break every page. */
+export function companyTimezone(tz: string | null | undefined): string {
+  if (!tz) return DEFAULT_COMPANY_TZ;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return DEFAULT_COMPANY_TZ;
+  }
+}
 
 export interface MonthOption { value: string; label: string }
 
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-/** ISO datetime → "YYYY-MM"; "" for empty/invalid. */
-export function monthKey(iso: string | null | undefined): string {
+/** Instant → "YYYY-MM" in the company timezone; "" for empty/invalid. */
+export function monthKey(iso: string | null | undefined, tz: string): string {
   if (!iso) return "";
-  const m = /^(\d{4})-(\d{2})/.exec(iso);
-  return m ? `${m[1]}-${m[2]}` : "";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  return localMonthKey(t, tz);
 }
 
 /** "2026-07" → "July 2026". */
@@ -18,16 +40,16 @@ export function monthLabel(value: string): string {
 }
 
 /** Distinct months present in rows' created_at, newest first. */
-export function monthOptions(rows: { created_at: string }[]): MonthOption[] {
+export function monthOptions(rows: { created_at: string }[], tz: string): MonthOption[] {
   const set = new Set<string>();
-  for (const r of rows) { const k = monthKey(r.created_at); if (k) set.add(k); }
+  for (const r of rows) { const k = monthKey(r.created_at, tz); if (k) set.add(k); }
   return [...set].sort().reverse().map((value) => ({ value, label: monthLabel(value) }));
 }
 
-/** True if `iso` is in `month` ("YYYY-MM"); MONTH_ALL ("") matches all. */
-export function inMonth(iso: string | null | undefined, month: string): boolean {
+/** True if `iso` falls in `month` ("YYYY-MM") of the company calendar; MONTH_ALL ("") matches all. */
+export function inMonth(iso: string | null | undefined, month: string, tz: string): boolean {
   if (!month) return true;
-  return monthKey(iso) === month;
+  return monthKey(iso, tz) === month;
 }
 
 /**
