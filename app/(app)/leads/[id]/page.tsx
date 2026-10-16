@@ -8,6 +8,7 @@ import type { Lead } from "@/lib/leads/types";
 import type { LeadFollowUp } from "@/lib/leads/followups";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
 import { getAppSettings } from "@/lib/settings/appSettings";
+import { loadStatusHistory } from "@/lib/leads/statusHistoryLoad";
 import { notFound } from "next/navigation";
 import { getActiveUsers } from "@/lib/users/directory";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
@@ -57,7 +58,9 @@ export default async function LeadDetailPage({
     .order("name");
 
   const admin = createAdminClient();
-  const settings = await getAppSettings();
+  // The status ledger is service-role only; the lead itself was already
+  // RLS-visible to this user above.
+  const [settings, statusHistory] = await Promise.all([getAppSettings(), loadStatusHistory(admin, lead)]);
 
   // Fetch this lead's tickets + their items via the admin client (mirrors
   // GET /api/leads/[id]/tickets) so the detail-page card is never RLS-scoped.
@@ -223,6 +226,7 @@ export default async function LeadDetailPage({
   return (
     <LeadDetail
       lead={lead}
+      statusHistory={statusHistory}
       agents={agents ?? []}
       followUps={followUps}
       closedByName={closedByName}

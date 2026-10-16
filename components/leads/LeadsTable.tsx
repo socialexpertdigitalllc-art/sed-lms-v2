@@ -22,10 +22,10 @@ import type { Lead, LeadTag } from "@/lib/leads/types";
 import { SITE_TYPES } from "@/lib/leads/types";
 import { visibleStatuses, settableStatuses } from "@/lib/leads/categories";
 import { formatCurrency, formatDateTime, initials } from "@/lib/leads/format";
-import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
 import { FollowUpModal } from "./FollowUpModal";
 import { FuStatusHoverChip } from "./FuStatusHoverChip";
+import { StatusHoverPill } from "./StatusHoverPill";
 import { FollowUpQuickActions } from "./FollowUpQuickActions";
 import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
 import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
@@ -287,7 +287,8 @@ export function LeadsTable({
           const link = c.row.original.website_link;
           return (
             <span className="inline-flex items-center gap-1.5">
-              <StatusPill status={c.getValue<string>()} />
+              {/* Hover: since when, the submission date and the changes between. */}
+              <StatusHoverPill leadId={c.row.original.id} status={c.getValue<string>()} version={c.row.original.updated_at} />
               {link && link.trim() && (
                 <span className="inline-flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                   <a href={link} target="_blank" rel="noopener noreferrer"

@@ -34,6 +34,20 @@ export function formatDateTime(iso: string | null | undefined): string {
   });
 }
 
+/** "Oct 30, 2026, 4:12 PM" — with the year, for dates people count by month. */
+export function formatDateTimeLong(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 /** Short relative time: "just now", "5m ago", "3h ago", "2d ago", else the date. Absolute value belongs in a title tooltip. */
 export function formatRelative(iso: string | null | undefined): string {
   if (!iso) return "—";

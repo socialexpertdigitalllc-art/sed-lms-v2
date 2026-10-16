@@ -11,11 +11,14 @@ import { Select } from "@/components/common/Select";
 import type { LeadFollowUp } from "@/lib/leads/followups";
 import type { Ticket, TicketPriority } from "@/lib/tickets/types";
 import { SITE_TYPES, FRESH_OPTIONS } from "@/lib/leads/types";
-import { toDateTimeLocal, formatDateTime, formatCurrency } from "@/lib/leads/format";
+import { toDateTimeLocal, formatDateTime, formatDateTimeLong, formatCurrency } from "@/lib/leads/format";
+import { currentStatusEvent, currentStatusSince, isCountedStatus, statusSummary, type StatusHistory } from "@/lib/leads/statusHistory";
+import { monthKey, monthLabel } from "@/lib/analytics/dateScope";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useToast } from "@/components/common/Toast";
 import { StatusPill } from "./StatusPill";
 import { StatusChangeModal } from "./StatusChangeModal";
+import { StatusTimeline } from "./StatusTimeline";
 import { DeleteLeadModal } from "./DeleteLeadModal";
 import { RecentFollowUps } from "./RecentFollowUps";
 import { TicketsCard } from "@/components/tickets/TicketsCard";
@@ -55,6 +58,7 @@ const YES_NO: SelectOption[] = [
 
 export function LeadDetail({
   lead,
+  statusHistory,
   agents,
   followUps,
   closedByName,
@@ -84,6 +88,8 @@ export function LeadDetail({
   openReceiptOnLoad = false,
 }: {
   lead: Lead;
+  /** Submission + every status change, oldest first (lead_status_events). */
+  statusHistory: StatusHistory;
   agents: Agent[];
   followUps: LeadFollowUp[];
   closedByName: string | null;
@@ -144,6 +150,11 @@ export function LeadDetail({
   };
   const needsReceipt = canSendReceipts && lead.status === "Closed" && receipts.length === 0;
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // The history a correction just returned, until the refreshed page props
+  // (a new `statusHistory` object) supersede it.
+  const [corrected, setCorrected] = useState<{ base: StatusHistory; value: StatusHistory } | null>(null);
+  const history = corrected && corrected.base === statusHistory ? corrected.value : statusHistory;
+  const statusSince = currentStatusSince(history);
   const [queueMsg, setQueueMsg] = useState<string | null>(null);
   const [queuing, setQueuing] = useState(false);
 
@@ -432,7 +443,16 @@ export function LeadDetail({
                 onSave={(v) => patch({ closed_by: v || null })}
               />
               {/* Status is read-only here — edited via the "Change status" button (respects category permissions). */}
-              <FieldRow label="Status" value={lead.status} display={<StatusPill status={lead.status} />} />
+              <FieldRow
+                label="Status"
+                value={lead.status}
+                display={
+                  <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <StatusPill status={lead.status} />
+                    <span className="text-xs text-text-muted">since {formatDateTimeLong(statusSince)}</span>
+                  </span>
+                }
+              />
               <FieldRow label="Site type" value={lead.site_type ?? ""} type="select" options={[{ value: "", label: "—" }, ...SITE_TYPES.map((s) => ({ value: s, label: s }))]} canEdit={canEdit} onSave={(v) => patch({ site_type: v || null })} />
               <FieldRow label="Platform" value={lead.platform ?? ""} canEdit={canEdit} onSave={(v) => patch({ platform: nz(v) })} />
               <FieldRow label="Price quoted" value={lead.price_quoted?.toString() ?? ""} type="number" display={lead.price_quoted != null ? formatCurrency(lead.price_quoted) : undefined} canEdit={canEdit} onSave={(v) => patch({ price_quoted: num(v) })} />
@@ -457,6 +477,34 @@ export function LeadDetail({
               )}
               <FieldRow label="Rating (1–10)" value={lead.rating?.toString() ?? ""} type="number" display={<RatingStars value={lead.rating} />} canEdit={isAdmin} onSave={(v) => patch({ rating: num(v) })} />
               <FieldRow label="Fresh or follow-up" value={lead.fresh_or_followup ?? ""} type="select" options={[{ value: "", label: "—" }, ...FRESH_OPTIONS.map((s) => ({ value: s, label: s }))]} canEdit={canEdit} onSave={(v) => patch({ fresh_or_followup: v || null })} />
+            </div>
+            <div className="mt-3 border-t border-border-subtle pt-4" data-testid="status-history">
+              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <div className="text-[10px] uppercase tracking-wide text-text-faint">Status history</div>
+                <div className="text-xs text-text-muted">{statusSummary(history, new Date())}</div>
+              </div>
+              <StatusTimeline
+                history={history}
+                canCorrect={isAdmin}
+                onCorrected={(next, event) => {
+                  setCorrected({ base: statusHistory, value: next });
+                  const moved = next.events.find((e) => e.id === event.id);
+                  const counted = !!moved && currentStatusEvent(next.events, next.status)?.id === moved.id && isCountedStatus(moved.to_status);
+                  toast({
+                    kind: "success",
+                    title: `${event.to_status} date updated`,
+                    body: moved
+                      ? formatDateTimeLong(moved.changed_at) + (counted ? ` — counts in ${monthLabel(monthKey(moved.changed_at))}` : "")
+                      : undefined,
+                  });
+                  router.refresh();
+                }}
+              />
+              {isAdmin && history.events.length > 0 && (
+                <p className="mt-3 text-[11px] text-text-faint">
+                  Admins can correct when a change happened (the pencil on each date). Closed and Dropped leads count in the month of that date.
+                </p>
+              )}
             </div>
           </SectionCard>
 

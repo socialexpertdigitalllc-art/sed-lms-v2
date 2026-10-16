@@ -1,20 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDateTime } from "@/lib/leads/format";
+import { HoverCardPanel, useHoverCard } from "@/components/common/HoverCard";
 import { FuStatusChip } from "./FuStatusChip";
 
 type LastPickup = { comments: string | null; created_at: string };
 type LoadState = "idle" | "loading" | "ready" | "error";
 
-/** Long enough that dragging the cursor down the column costs nothing. */
-const OPEN_DELAY_MS = 120;
-/** Short enough to feel instant, long enough to cross the gap into the card. */
-const CLOSE_DELAY_MS = 120;
 const CARD_WIDTH = 300;
-const GAP = 8;
-const EDGE = 8;
 
 /**
  * The follow-up pill, plus the comment behind it on hover.
@@ -39,15 +33,10 @@ export function FuStatusHoverChip({
    */
   version?: string | null;
 }) {
-  const [open, setOpen] = useState(false);
   const [pickup, setPickup] = useState<LastPickup | null>(null);
   const [state, setState] = useState<LoadState>("idle");
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** The `leadId|version` already fetched — guards the second hover. */
   const loadedKey = useRef<string | null>(null);
-  const tipId = useId();
 
   const key = `${leadId}|${version ?? ""}`;
 
@@ -59,15 +48,8 @@ export function FuStatusHoverChip({
     setPickup(null);
   }, [key]);
 
-  useEffect(
-    () => () => {
-      if (openTimer.current) clearTimeout(openTimer.current);
-      if (closeTimer.current) clearTimeout(closeTimer.current);
-    },
-    []
-  );
-
   const load = useCallback(async () => {
+    if (loadedKey.current === key) return;
     loadedKey.current = key;
     setState("loading");
     try {
@@ -82,132 +64,45 @@ export function FuStatusHoverChip({
     }
   }, [key, leadId]);
 
-  const cancelClose = useCallback(() => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    closeTimer.current = null;
-  }, []);
-
-  function show(el: HTMLElement) {
-    cancelClose();
-    setAnchor(el);
-    if (openTimer.current) clearTimeout(openTimer.current);
-    openTimer.current = setTimeout(() => {
-      setOpen(true);
-      if (loadedKey.current !== key) void load();
-    }, OPEN_DELAY_MS);
-  }
-
-  const hide = useCallback(() => {
-    if (openTimer.current) clearTimeout(openTimer.current);
-    cancelClose();
-    closeTimer.current = setTimeout(() => setOpen(false), CLOSE_DELAY_MS);
-  }, [cancelClose]);
+  const card = useHoverCard(() => void load());
 
   return (
     <>
       <span
         data-fu-chip
-        tabIndex={0}
-        aria-describedby={open ? tipId : undefined}
-        onMouseEnter={(e) => show(e.currentTarget)}
-        onMouseLeave={hide}
-        onFocus={(e) => show(e.currentTarget)}
-        onBlur={hide}
+        {...card.triggerProps}
         className="inline-flex cursor-help rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         <FuStatusChip status={status} />
       </span>
-      {open && anchor && (
-        <CommentCard
-          id={tipId}
-          anchor={anchor}
-          isPickup={status === "Pickup"}
-          state={state}
-          pickup={pickup}
-          onMouseEnter={cancelClose}
-          onMouseLeave={hide}
-        />
+      {card.open && card.anchor && (
+        <HoverCardPanel
+          id={card.id}
+          anchor={card.anchor}
+          width={CARD_WIDTH}
+          measureKey={`${state}|${pickup?.created_at ?? ""}`}
+          onMouseEnter={card.cancelClose}
+          onMouseLeave={card.hide}
+        >
+          <CommentBody isPickup={status === "Pickup"} state={state} pickup={pickup} />
+        </HoverCardPanel>
       )}
     </>
   );
 }
 
-function CommentCard({
-  id,
-  anchor,
+function CommentBody({
   isPickup,
   state,
   pickup,
-  onMouseEnter,
-  onMouseLeave,
 }: {
-  id: string;
-  anchor: HTMLElement;
   isPickup: boolean;
   state: LoadState;
   pickup: LastPickup | null;
-  onMouseEnter: () => void;
-  onMouseLeave: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{
-    top: number;
-    left: number;
-    above: boolean;
-    arrow: number;
-  } | null>(null);
-
-  // The card has to be measured before it can be placed, and it is re-measured
-  // whenever the content changes height — the comment landing under the
-  // skeleton is exactly that.
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const rect = anchor.getBoundingClientRect();
-    const h = el.offsetHeight;
-    const above = rect.top - GAP - h >= EDGE;
-    const top = above ? rect.top - GAP - h : rect.bottom + GAP;
-    const maxLeft = Math.max(EDGE, window.innerWidth - CARD_WIDTH - EDGE);
-    const left = Math.min(Math.max(rect.left + rect.width / 2 - CARD_WIDTH / 2, EDGE), maxLeft);
-    const arrow = Math.min(Math.max(rect.left + rect.width / 2 - left, 14), CARD_WIDTH - 14);
-    setPos((p) =>
-      p && p.top === top && p.left === left && p.above === above && p.arrow === arrow
-        ? p
-        : { top, left, above, arrow }
-    );
-  }, [anchor, state, pickup]);
-
   const comments = pickup?.comments?.trim();
-  const above = pos?.above ?? true;
-
-  return createPortal(
-    <div
-      ref={ref}
-      id={id}
-      role="tooltip"
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-      style={{
-        position: "fixed",
-        width: CARD_WIDTH,
-        top: pos?.top ?? -9999,
-        left: pos?.left ?? -9999,
-        visibility: pos ? "visible" : "hidden",
-      }}
-      className="z-[60] rounded-lg border border-border bg-surface shadow-xl"
-    >
-      {/* transparent bridge across the gap, so the pointer can reach the card */}
-      <span
-        aria-hidden
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          height: GAP,
-          ...(above ? { bottom: -GAP } : { top: -GAP }),
-        }}
-      />
-
+  return (
+    <>
       <div className="flex items-baseline justify-between gap-2 border-b border-border-subtle px-3 py-2">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-text-faint">
           {isPickup ? "Last follow-up" : "Last pickup comments"}
@@ -240,17 +135,6 @@ function CommentCard({
           </p>
         )}
       </div>
-
-      {/* caret, pointing back at the pill */}
-      <span
-        aria-hidden
-        style={{ left: pos?.arrow ?? 0, ...(above ? { bottom: -5 } : { top: -5 }) }}
-        className={
-          "absolute h-2.5 w-2.5 -translate-x-1/2 rotate-45 border-border bg-surface " +
-          (above ? "border-b border-r" : "border-l border-t")
-        }
-      />
-    </div>,
-    document.body
+    </>
   );
 }
