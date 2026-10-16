@@ -26,6 +26,21 @@ with Chromium, so it needs `npx playwright install chromium` on a fresh machine.
 Upload both on the Templates board (name + zip + cover). A new template is **out of service**
 until someone switches it on, so it does not reach the lead form until it has been looked at.
 
+## Previewing websites before they become templates
+
+`scripts/serve-template-sources.mjs` serves every website in a folder on its own localhost port
+(5501, 5502, …), so candidate sites can be browsed side by side. On Windows, put it next to
+`serve-template-sources.bat` and double-click the `.bat`; it serves
+`C:\My Web Sites\New templates websites` and opens each site in the browser. Elsewhere:
+
+```bash
+node scripts/serve-template-sources.mjs "<folder of websites>" --open
+```
+
+Each sub-folder is one site (a nested `site/site/index.html` or a built `dist/` is found
+automatically). Zips and unbuilt source projects are listed with what to do instead. Nothing is
+installed, built or written.
+
 ## What a template must do
 
 The Site Builder never analyses a template's HTML. It splits the zip into pages (`.html`) and
