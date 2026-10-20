@@ -268,6 +268,55 @@ describe("runTurn", () => {
     }
   });
 
+  it("an auto permission mode gets the long budget for a big job; Ask keeps the short one", async () => {
+    const { memorySupabase } = await import("./helpers/memorySupabase");
+    const calc = (i: number) => toolReply({ id: `call_${i}`, type: "function", function: { name: "calculate", arguments: `{"expression":"${i}+1"}` } });
+    const runAct = async (saved: string) => {
+      permissionState.saved = { mode: saved, allow: [] };
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      for (let i = 0; i < 14; i++) fetchMock.mockResolvedValueOnce(calc(i));
+      fetchMock.mockResolvedValueOnce(textReply("Done."));
+      await runTurn({
+        userId: "sam", displayName: "Sam Khan", assistantName: "Nova", perms: new Set(["assistant.use", "assistant.act"]),
+        db, admin: memorySupabase({}).client, conversation, text: "categorise everything", emit: () => {},
+        signal: new AbortController().signal, now: new Date("2026-10-09T10:00:00Z"), mode: "act",
+      });
+      const bodies = fetchMock.mock.calls.map((_, i) => bodyOf(fetchMock, i));
+      fetchMock.mockRestore();
+      return bodies;
+    };
+    try {
+      const asking = await runAct("ask");
+      // Ask: the 13th request (round 12) is told to answer, with no tools.
+      expect(asking[12].tool_choice).toBe("none");
+      expect(JSON.stringify(asking[12].messages.at(-1))).toMatch(/lookup budget for this answer is used up/);
+      const autonomous = await runAct("auto");
+      expect(autonomous).toHaveLength(15);
+      expect(autonomous[12].tool_choice).toBeUndefined();
+      // Older lookups were shortened as the job went on.
+      expect(JSON.stringify(autonomous[14].messages)).toMatch(/shortened to save room/);
+    } finally {
+      permissionState.saved = { mode: "ask", allow: [] };
+    }
+  });
+
+  it("after asking to switch the permission mode, the answer wraps up without more tools", async () => {
+    const { memorySupabase } = await import("./helpers/memorySupabase");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(toolReply({ id: "call_p", type: "function", function: { name: "request_permission_mode", arguments: '{"mode":"auto","reason":"802 leads"}' } }))
+      .mockResolvedValueOnce(textReply("Switch with the button and I'll carry on."));
+    await runTurn({
+      userId: "sam", displayName: "Sam Khan", assistantName: "Nova", perms: new Set(["assistant.use", "assistant.act"]),
+      db, admin: memorySupabase({ assistant_messages: [] }).client, conversation, text: "categorise everything, you have my permission",
+      emit: () => {}, signal: new AbortController().signal, now: new Date("2026-10-09T10:00:00Z"), mode: "act",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const second = bodyOf(fetchMock, 1);
+    expect(second.tool_choice).toBe("none");
+    expect(JSON.stringify(second.messages.at(-1))).toMatch(/you asked them to switch the permission mode/);
+  });
+
   it("never offers Act mode to someone without it", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(textReply("I can't change things for you."));
     await ask("create a lead for Jumbo's Pizza", new Set(["assistant.use", "leads.create"]));

@@ -46,8 +46,12 @@ export const PERMISSION_MODES: readonly { mode: PermissionMode; label: string; s
 
 export const MODE_RANK: Record<PermissionMode, number> = { ask: 0, auto_safe: 1, auto: 2 };
 
-/** At most this many changes run on their own in one answer; the rest wait on cards. */
-export const AUTO_RUNS_PER_TURN = 15;
+/**
+ * At most this many changes run on their own in one answer; the rest wait on
+ * cards. A guard against a runaway, not a work limit: bulk actions carry many
+ * records each (lead.categorize: up to 200 leads).
+ */
+export const AUTO_RUNS_PER_TURN = 60;
 export const MAX_ALWAYS_ALLOWED = 100;
 
 export function isPermissionMode(v: unknown): v is PermissionMode {

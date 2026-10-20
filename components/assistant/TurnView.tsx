@@ -10,6 +10,8 @@ import { ActionCardView, PlanBar } from "./ActionCard";
 import { Markdown } from "./Markdown";
 import { SedAiAvatar } from "./SedAiMark";
 import type { CardDraft, CardOp, CardOpBody, CardOpResult } from "./useAssistantChat";
+import { PermissionAskCard, permissionAskOf } from "./PermissionAskCard";
+import type { PermissionMode } from "@/lib/assistant/actions/permissions";
 import { useSmoothText } from "./useSmoothText";
 
 /**
@@ -262,6 +264,7 @@ export function TurnView({
   onCardOp,
   onRunPlan,
   onSaveShortcut,
+  permission = null,
 }: {
   turn: TurnModel;
   /** What this user calls their assistant — shown on its replies. */
@@ -282,6 +285,8 @@ export function TurnView({
   onRunPlan?: (planId: string, steps?: Record<string, CardDraft>) => Promise<{ ok: boolean; error?: string }>;
   /** "Save as shortcut" on a question (recipes). */
   onSaveShortcut?: (text: string) => void;
+  /** The person's permission mode, and what to do when they answer a request to raise it. */
+  permission?: { current: PermissionMode | null; onDecide?: (mode: PermissionMode | null) => Promise<void> | void } | null;
 }) {
   const [editing, setEditing] = useState(false);
   const live = turn.status === "running";
@@ -291,6 +296,7 @@ export function TurnView({
     .filter(Boolean)
     .join("\n\n");
   const tools = turn.segments.filter((s): s is ToolSeg => s.kind === "tool");
+  const permissionAsk = permissionAskOf(tools);
   const text = answerText(turn);
   const shownText = useSmoothText(text, live);
   const [copied, copy] = useCopy(text);
@@ -376,6 +382,17 @@ export function TurnView({
           {activity ? <Activity label={activity.label} working={activity.working} reasoning={reasoning} tools={tools} /> : null}
 
           {shownText ? <Markdown text={shownText} streaming={live} caret={live} className={size} /> : null}
+
+          {permissionAsk ? (
+            <PermissionAskCard
+              mode={permissionAsk.mode}
+              reason={permissionAsk.reason}
+              current={permission?.current ?? null}
+              canDecide={latest && !live}
+              onDecide={permission?.onDecide}
+              compact={compact}
+            />
+          ) : null}
 
           {turn.actions.length ? (
             <Cards

@@ -181,7 +181,10 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
    * thread at once, and comes back if the server turns the request down.
    */
   const send = useCallback(
-    async (text: string, opts: { replaceTurnId?: string; attachments?: MessageAttachment[]; mode?: AssistantMode } = {}) => {
+    async (
+      text: string,
+      opts: { replaceTurnId?: string; attachments?: MessageAttachment[]; mode?: AssistantMode; permissionMode?: PermissionMode } = {},
+    ) => {
       if (streamRef.current || remoteRunning) return;
       const controller = new AbortController();
       const startedIn = activeRef.current;
@@ -211,7 +214,8 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
             // Ask is the default: only Act is said out loud.
             ...(askMode === "act" ? { mode: "act" } : {}),
             ...(() => {
-              const pm = optsRef.current.getPermissionMode?.();
+              // Just switched (a permission request): that mode, not the one the screen showed a moment ago.
+              const pm = opts.permissionMode ?? optsRef.current.getPermissionMode?.();
               return pm ? { permissionMode: pm } : {};
             })(),
             ...(attachments.length ? { attachments: attachments.map((a) => a.id) } : {}),

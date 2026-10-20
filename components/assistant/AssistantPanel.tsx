@@ -19,7 +19,7 @@ import { Suggestions } from "./Suggestions";
 import { TurnView } from "./TurnView";
 import { useAssistantChat } from "./useAssistantChat";
 import { useActPermissions } from "./useActPermissions";
-import type { PermissionMode } from "@/lib/assistant/actions/permissions";
+import { modeInfo, type PermissionMode } from "@/lib/assistant/actions/permissions";
 import { useStickToBottom } from "./useStickToBottom";
 import type { AssistantMode, MessageAttachment } from "@/lib/assistant/types";
 
@@ -81,6 +81,7 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
   useEffect(() => {
     permissionModeRef.current = permissions.mode;
   });
+
   const chat = useAssistantChat({
     getPermissionMode: () => permissionModeRef.current,
     // The page behind the chat: "this lead" means the lead that is open.
@@ -121,6 +122,20 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
     },
     [send, scrollToBottom],
   );
+
+  /** SED AI asked to raise the permission mode: switch (or not) and carry the job on. */
+  const decidePermission = async (mode: PermissionMode | null) => {
+    if (mode) {
+      const err = await permissions.change({ mode });
+      if (err) {
+        toast({ kind: "error", title: "Could not change the permission mode", body: err });
+        return;
+      }
+      void send(`Permission mode is now “${modeInfo(mode).label}”. Carry on with the task.`, { mode: "act", permissionMode: mode });
+    } else {
+      void send("Keep my permission mode as it is — carry on with the task, with cards for me to confirm.", { mode: "act" });
+    }
+  };
 
   async function openHistory() {
     setView("history");
@@ -308,6 +323,7 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
                           onCardOp={chat.actOn}
                           onRunPlan={chat.runPlan}
                           onSaveShortcut={setShortcut}
+                          permission={canAct ? { current: permissions.mode, onDecide: latest && idle ? decidePermission : undefined } : null}
                         />
                       );
                     })}

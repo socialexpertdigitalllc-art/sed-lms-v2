@@ -41,7 +41,46 @@ import { toClientConversation } from "./view";
 export const MAX_TOOL_ROUNDS = 8;
 /** Act mode looks up, describes, prepares and re-prepares: a little more room. */
 export const MAX_ACT_ROUNDS = 12;
+/**
+ * Act with a permission mode that lets changes run on their own: a big job
+ * ("categorise the whole pipeline") is worked through batch after batch in
+ * ONE answer, so it gets far more room. Older lookups are trimmed as it goes
+ * (see compactToolResults), so the context stays small however long it runs.
+ */
+export const MAX_AUTONOMOUS_ROUNDS = 60;
+/** Lookup results from this many most recent rounds stay whole; older ones are trimmed. */
+export const KEEP_RECENT_ROUNDS = 3;
 const TOOL_CONCURRENCY = 4;
+
+/** A tool result in the running conversation, for trimming later. */
+interface ToolSlot {
+  index: number;
+  round: number;
+  summary: string;
+  trimmed: boolean;
+}
+
+/**
+ * Replace tool results older than the last KEEP_RECENT_ROUNDS rounds with
+ * their one-line summary. The calls stay paired with their results (only the
+ * content shrinks), so every vendor accepts the chain. PURE apart from the
+ * arrays it is given. Returns how many were trimmed.
+ */
+export function compactToolResults(messages: WireMessage[], slots: ToolSlot[], round: number): number {
+  let n = 0;
+  for (const slot of slots) {
+    if (slot.trimmed || slot.round >= round - KEEP_RECENT_ROUNDS) continue;
+    const m = messages[slot.index];
+    if (!m || m.role !== "tool") continue;
+    messages[slot.index] = {
+      ...m,
+      content: JSON.stringify({ trimmed: "An earlier result, shortened to save room. Call the tool again if you need its details.", summary: slot.summary }),
+    };
+    slot.trimmed = true;
+    n++;
+  }
+  return n;
+}
 /** MiniMax and Gemini 3 both recommend 1.0; lower makes them loop. */
 const TEMPERATURE = 1;
 
@@ -317,6 +356,11 @@ export async function runTurn(input: TurnInput): Promise<void> {
   );
 
   let model = resolved;
+  const toolSlots: ToolSlot[] = [];
+  // request_permission_mode was answered "asked": wrap up and wait for the click.
+  let askedPermission = false;
+  // A big job runs to the end in one answer when changes may run on their own.
+  const autonomous = Boolean(auto && (auto.mode !== "ask" || auto.allow.length > 0));
   let roundText = "";
   let emptyRetried = false;
   let anyOutput = false;
@@ -324,13 +368,20 @@ export async function runTurn(input: TurnInput): Promise<void> {
   try {
     for (let round = 0; ; round++) {
       if (signal.aborted) throw new AiCallAborted("assistant", signal.reason);
-      const lastRound = round >= (mode === "act" ? MAX_ACT_ROUNDS : MAX_TOOL_ROUNDS);
+      const maxRounds = mode === "act" ? (autonomous ? MAX_AUTONOMOUS_ROUNDS : MAX_ACT_ROUNDS) : MAX_TOOL_ROUNDS;
+      const lastRound = round >= maxRounds || askedPermission;
       if (lastRound) {
         messages.push({
           role: "user",
-          content: "[System note: the lookup budget for this answer is used up. Answer now from the results above, and do not call any more tools.]",
+          content: askedPermission
+            ? "[System note: you asked them to switch the permission mode. Do not call any more tools now. In one or two sentences say what the switch is for and that the task carries on by itself once they switch.]"
+            : mode === "act" && autonomous
+              ? "[System note: this answer's budget is used up. Do not call any more tools. Say exactly how far the job got (what was done, what is left), and that they can say \"continue\" to carry on from there.]"
+              : "[System note: the lookup budget for this answer is used up. Answer now from the results above, and do not call any more tools.]",
         });
       }
+      // A long job: keep the context small by shortening old lookups.
+      if (mode === "act" && round >= KEEP_RECENT_ROUNDS + 2) compactToolResults(messages, toolSlots, round);
 
       roundText = "";
       const call = (m: ResolvedTaskModel) =>
@@ -434,6 +485,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
         });
         const callCtx: ToolContext = toolCtx.act ? { ...toolCtx, act: { ...toolCtx.act, callId: c.id, switchRequested: null } } : toolCtx;
         const outcome = await runTool(c.function.name, c.function.arguments, callCtx);
+        if (callCtx.act?.askedPermission) askedPermission = true;
         emit({ type: "tool_end", callId: c.id, name: c.function.name, ok: outcome.ok, summary: outcome.summary, durationMs: outcome.durationMs });
         return outcome;
       });
@@ -449,6 +501,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
           meta: { label: outcome.label, ok: outcome.ok, summary: outcome.summary, duration_ms: outcome.durationMs, args: outcome.args },
         });
         messages.push({ role: "tool", tool_call_id: c.id, name: c.function.name, content: outcome.content });
+        toolSlots.push({ index: messages.length - 1, round, summary: outcome.summary, trimmed: false });
       }
 
       // The model recognised a task and switched itself to Act mode: from the
@@ -468,6 +521,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
           model = actModel;
           const saved = await listMessages(admin, userId, conversation.id);
           messages.length = 0;
+          toolSlots.length = 0; // positions refer to the old chain
           messages.push(
             ...withImages(
               [{ role: "system", content: system }, ...buildHistory(saved, { ...DEFAULT_HISTORY, provider: model.providerKey })],

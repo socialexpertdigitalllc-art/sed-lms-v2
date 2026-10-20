@@ -278,3 +278,32 @@ describe("result size", () => {
     expect(parse(out.content).truncated).toMatch(/Showing 60 of 400/);
   });
 });
+
+describe("search_leads for a clean-up job", () => {
+  const many = [
+    lead({ business_name: "Bright Painters", category: null, services: ["Interior painting", "Cabinet painting"], about_business: "Family painters since 1998." }),
+    lead({ business_name: "Spark Electric", category: "", services: ["Panel upgrades"] }),
+    lead({ business_name: "Cool Air", category: "HVAC", services: ["AC repair"] }),
+    lead({ business_name: "Mystery Co", category: null, services: [] }),
+  ];
+
+  it("lists only uncategorized leads, with their services, leaving out the ones set aside", async () => {
+    const ctx = ctxFor({ userId: "sam", perms: AGENT_PERMS, data: fakeData(many) });
+    const mystery = many[3].id;
+    const out = parse((await runTool("search_leads", JSON.stringify({ uncategorized: true, include_services: true, exclude_ids: [mystery], sort: "oldest" }), ctx)).content);
+    expect(out.total_matches).toBe(2);
+    expect(out.filters.uncategorized).toBe(true);
+    expect(out.leads.map((l: { business_name: string }) => l.business_name)).toEqual(["Bright Painters", "Spark Electric"]);
+    expect(out.leads[0]).toMatchObject({ services: ["Interior painting", "Cabinet painting"], about: "Family painters since 1998." });
+  });
+
+  it("pages through long lists, saying how many more there are", async () => {
+    const ctx = ctxFor({ userId: "sam", perms: AGENT_PERMS, data: fakeData(many) });
+    const first = parse((await runTool("search_leads", JSON.stringify({ limit: 2, sort: "oldest" }), ctx)).content);
+    expect(first).toMatchObject({ showing: 2, more: 2 });
+    expect(first.leads[0].services).toBeUndefined();
+    const next = parse((await runTool("search_leads", JSON.stringify({ limit: 2, offset: 2, sort: "oldest" }), ctx)).content);
+    expect(next.leads.map((l: { business_name: string }) => l.business_name)).toEqual(["Cool Air", "Mystery Co"]);
+    expect(next.more).toBeUndefined();
+  });
+});

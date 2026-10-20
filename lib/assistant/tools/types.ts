@@ -47,6 +47,8 @@ export interface ActState {
   callId?: string | null;
   /** The person's permission mode: which proposals run without a click. */
   auto?: AutoRunContext | null;
+  /** Set by request_permission_mode: the engine has the model wrap up. */
+  askedPermission?: boolean;
 }
 
 export type ToolSideEvent =

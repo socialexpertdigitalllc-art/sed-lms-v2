@@ -3,6 +3,7 @@ import { REF_KINDS, refNoun, searchRefs } from "../actions/refs";
 import { autoRun, autoRunPlan, describeAction, preparePlan, prepareAction, ActionFailure, DEFAULT_UNDO_MINUTES } from "../actions/run";
 import { getActionDef } from "../actions/registry";
 import type { ActionCard } from "../actions/card";
+import { clampMode, isPermissionMode, MODE_RANK, modeInfo } from "../actions/permissions";
 import { isMissingActionTables, ACTIONS_MIGRATION_MESSAGE } from "../actions/store";
 import type { ActionContext, RefKind, Values } from "../actions/types";
 import { normalizeUrl } from "../actions/fields";
@@ -404,7 +405,66 @@ export const checkDomainTool: AssistantTool = {
   },
 };
 
+/**
+ * A big job meets a permission mode that would make every change wait on a
+ * card: ask the person ONCE to switch to the mode the job needs. The chat
+ * shows a button; switching carries the job on by itself.
+ */
+export const requestPermissionModeTool: AssistantTool = {
+  name: "request_permission_mode",
+  label: "Asking to switch the permission mode",
+  description:
+    "Ask the person ONCE (per chat) to raise their permission mode, when the task means many changes and their current mode would make each one wait on a card for them to press. A button appears under your message; when they switch, the task continues by itself. After calling it, stop: no more changes in this answer.",
+  parameters: {
+    type: "object",
+    properties: {
+      mode: { type: "string", enum: ["auto_safe", "auto"], description: "auto_safe: safe changes run on their own. auto: everything but high-impact changes." },
+      reason: { type: "string", description: "Why, in a few words, e.g. \"to categorise 802 leads without a card each\"." },
+    },
+    required: ["mode", "reason"],
+  },
+  available: (perms) => perms.has("assistant.act"),
+  modes: ["act"],
+  sequential: true,
+  async run(args, ctx) {
+    const act = requireAct(ctx);
+    const auto = act.auto;
+    if (!auto) throw new ToolError("Permission modes are not available here.");
+    const want = args.mode;
+    if (!isPermissionMode(want) || want === "ask") throw new ToolError('Ask for "auto_safe" or "auto".');
+    if (act.source === "telegram" || act.source === "whatsapp") {
+      throw new ToolError("There is no button on the phone. Tell them they can switch the permission mode in SED AI on the computer (the chip next to Act), then carry on with what their mode allows.");
+    }
+    if (MODE_RANK[clampMode(auto.mode, auto.cap)] >= MODE_RANK[want]) {
+      return { data: { status: "already", next: "Their mode already lets these changes run on their own — carry on with the task." }, summary: "Already allowed" };
+    }
+    if (MODE_RANK[auto.cap] < MODE_RANK[want]) {
+      throw new ToolError(`The company's limit is "${modeInfo(auto.cap).label}" — carry on with cards they confirm, and mention that an admin can raise the limit.`);
+    }
+    const { data: prior } = await ctx.admin
+      .from("assistant_messages")
+      .select("id")
+      .eq("conversation_id", ctx.conversationId)
+      .eq("tool_name", "request_permission_mode")
+      .limit(1);
+    if (prior?.length) {
+      throw new ToolError("You already asked to switch the permission mode in this chat — don't ask again. Carry on under their current mode (changes wait on cards).");
+    }
+    const reason = String(args.reason ?? "").trim().slice(0, 200);
+    act.askedPermission = true;
+    return {
+      data: {
+        status: "asked",
+        mode: want,
+        next: "A button is shown under your message. In one or two sentences say what you need it for and that, once they switch, the task carries on by itself. Make no more changes in this answer.",
+      },
+      summary: `Asked to switch to “${modeInfo(want).label}”${reason ? ` — ${reason}` : ""}`,
+    };
+  },
+};
+
 export const ACTION_TOOLS: AssistantTool[] = [
+  requestPermissionModeTool,
   switchToActionModeTool,
   describeActionTool,
   prepareActionTool,

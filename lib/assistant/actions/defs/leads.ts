@@ -819,6 +819,171 @@ const leadBulk: ActionDef = {
   },
 };
 
+/* ------------------------------------------------------- lead.categorize */
+
+/** At most this many leads per categorize action (one card, one undo). */
+export const CATEGORIZE_MAX = 200;
+const CATEGORY_MAX_LEN = 60;
+
+type Assignment = { lead: string; category: string };
+
+function assignmentsOf(raw: unknown): { list: Assignment[]; problems: Problem[] } {
+  const problems: Problem[] = [];
+  let input = raw;
+  if (typeof input === "string") {
+    try {
+      input = JSON.parse(input);
+    } catch {
+      return { list: [], problems: [{ field: "assignments", message: "Pass the assignments as a list of {lead, category}." }] };
+    }
+  }
+  if (!Array.isArray(input) || !input.length) return { list: [], problems: [{ field: "assignments", message: "Pass at least one {lead, category}." }] };
+  if (input.length > CATEGORIZE_MAX) problems.push({ field: "assignments", message: `At most ${CATEGORIZE_MAX} leads in one go — split the rest into another action.` });
+  const seen = new Set<string>();
+  const list: Assignment[] = [];
+  for (const [i, item] of input.slice(0, CATEGORIZE_MAX).entries()) {
+    const o = (item ?? {}) as { lead?: unknown; category?: unknown };
+    const lead = typeof o.lead === "string" ? o.lead.trim() : "";
+    const category = typeof o.category === "string" ? o.category.replace(/\s+/g, " ").trim() : "";
+    if (!/^[0-9a-f-]{36}$/i.test(lead)) {
+      problems.push({ field: "assignments", message: `Entry ${i + 1}: "lead" must be a lead id (from search_leads).` });
+      continue;
+    }
+    if (!category || category.length > CATEGORY_MAX_LEN) {
+      problems.push({ field: "assignments", message: `Entry ${i + 1}: give a category of 1–${CATEGORY_MAX_LEN} characters.` });
+      continue;
+    }
+    if (seen.has(lead)) continue;
+    seen.add(lead);
+    list.push({ lead, category });
+  }
+  return { list, problems };
+}
+
+/** Run `fn` over items, a few at a time. */
+async function inBatches<T>(items: T[], size: number, fn: (item: T) => Promise<void>): Promise<void> {
+  for (let i = 0; i < items.length; i += size) await Promise.all(items.slice(i, i + size).map(fn));
+}
+
+/**
+ * Many leads, each to its own category — the clean-up a person asks for as
+ * one job ("categorise the whole pipeline"). One card lists every lead and
+ * its new category (untick any); one Undo puts every old category back. A
+ * category matching an existing one in another case ("hvac") takes the
+ * existing spelling ("HVAC"), so reports don't split.
+ */
+const leadCategorize: ActionDef = {
+  key: "lead.categorize",
+  group: "Leads",
+  title: "Set the category of many leads",
+  description: `Give many leads their business category at once — each lead its own category (up to ${CATEGORIZE_MAX} per action). Find them with search_leads (uncategorized: true, include_services: true), decide each one from its services, then pass assignments: [{lead: id, category}]. Leads you can't decide: leave them out and list them for the person.`,
+  confirmLabel: "Set categories",
+  risk: (v) => (Array.isArray(v.leads) && v.leads.length > 50 ? "sensitive" : "standard"),
+  allowed: (ctx) => need(ctx, "leads.edit"),
+  fields: [
+    {
+      name: "assignments",
+      label: "Categories",
+      type: "json",
+      required: true,
+      editable: false,
+      hidden: true,
+      help: 'A list of {"lead": "<lead id>", "category": "Painting"} — one entry per lead.',
+    },
+    { name: "leads", label: "Leads", type: "list", hidden: true, editable: false, max: CATEGORIZE_MAX, help: "Worked out from assignments — leave it out." },
+  ],
+  bulkField: "leads",
+  minutesSaved: 20,
+  async check(v, ctx) {
+    const { list, problems } = assignmentsOf(v.assignments);
+    if (!list.length) return { problems: problems.length ? problems : [{ field: "assignments", message: "Pass at least one {lead, category}." }] };
+    const ids = list.map((a) => a.lead);
+    const { data, error } = await ctx.db.from("leads").select("id").in("id", ids).is("deleted_at", null);
+    if (error) throw new Error(error.message);
+    const visible = new Set(((data ?? []) as { id: string }[]).map((r) => r.id));
+    const hidden = ids.filter((id) => !visible.has(id));
+    if (hidden.length) problems.push({ field: "assignments", message: `${plural(hidden.length, "lead")} in the list ${hidden.length === 1 ? "is" : "are"} not visible to you (or archived): ${hidden.slice(0, 5).join(", ")}${hidden.length > 5 ? "…" : ""}.` });
+    // One spelling per category: match what the pipeline already uses.
+    const { data: used } = await ctx.admin.from("leads").select("category").not("category", "is", null).is("deleted_at", null).limit(5000);
+    const canonical = new Map<string, string>();
+    for (const r of (used ?? []) as { category: string | null }[]) {
+      const c = (r.category ?? "").trim();
+      if (c && !canonical.has(c.toLowerCase())) canonical.set(c.toLowerCase(), c);
+    }
+    const categories: Record<string, string> = {};
+    for (const a of list) categories[a.lead] = canonical.get(a.category.toLowerCase()) ?? a.category;
+    const fresh = [...new Set(Object.values(categories).filter((c) => !canonical.has(c.toLowerCase())))];
+    // On confirm, `leads` holds the ones still ticked on the card: keep the untick.
+    const ticked = Array.isArray(v.leads) ? new Set(v.leads as string[]) : null;
+    return {
+      problems,
+      warnings: fresh.length ? [`New categor${fresh.length === 1 ? "y" : "ies"} not used on any lead yet: ${fresh.join(", ")}.`] : [],
+      values: { leads: ids.filter((id) => visible.has(id) && (!ticked || ticked.has(id))), __categories: categories },
+    };
+  },
+  async preview(v, ctx) {
+    const ids = (v.leads as string[]) ?? [];
+    const categories = (v.__categories ?? {}) as Record<string, string>;
+    const { data } = await ctx.db.from("leads").select("id, business_name, category").in("id", ids).is("deleted_at", null);
+    const rows = (data ?? []) as { id: string; business_name: string; category: string | null }[];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const counts = new Map<string, number>();
+    for (const id of ids) counts.set(categories[id], (counts.get(categories[id]) ?? 0) + 1);
+    return {
+      title: `Set categories — ${plural(ids.length, "lead")}`,
+      fields: [
+        {
+          name: "summary",
+          label: "Categories",
+          value: [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (${n})`).join(", "),
+        },
+      ],
+      items: ids
+        .filter((id) => byId.has(id))
+        .map((id) => {
+          const r = byId.get(id)!;
+          return { id, label: r.business_name, detail: r.category ? `${r.category} → ${categories[id]}` : `→ ${categories[id]}`, href: `/leads/${id}`, selected: true };
+        }),
+      before: { categories: Object.fromEntries(rows.map((r) => [r.id, r.category])) },
+    };
+  },
+  async execute(v) {
+    const ids = (v.leads as string[]) ?? [];
+    const categories = (v.__categories ?? {}) as Record<string, string>;
+    const done: string[] = [];
+    const failed: string[] = [];
+    // The endpoint module is loaded once, then called a few leads at a time.
+    const route = await leadRoute();
+    await inBatches(ids, 4, async (id) => {
+      try {
+        await callRoute(async () => route, "PATCH", { path: `/api/leads/${id}`, params: { id }, body: { category: categories[id] } });
+        done.push(id);
+      } catch {
+        failed.push(id);
+      }
+    });
+    if (!done.length) throw new ActionFailure("No lead could be updated — nothing was changed.", 502);
+    const counts = new Map<string, number>();
+    for (const id of done) counts.set(categories[id], (counts.get(categories[id]) ?? 0) + 1);
+    const summary = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} ${n}`).join(", ");
+    return {
+      message: `Set the category on ${plural(done.length, "lead")} (${summary}).${failed.length ? ` ${plural(failed.length, "lead")} could not be updated.` : ""}`,
+      data: { ids: done, failed },
+    };
+  },
+  undo: {
+    async run(stored) {
+      const ids = (stored.result?.data?.ids as string[] | undefined) ?? [];
+      const before = ((stored.before_state ?? {}) as { categories?: Record<string, string | null> }).categories ?? {};
+      const route = await leadRoute();
+      await inBatches(ids, 4, async (id) => {
+        await callRoute(async () => route, "PATCH", { path: `/api/leads/${id}`, params: { id }, body: { category: before[id] ?? null } });
+      });
+      return `${plural(ids.length, "lead")} have their previous category again.`;
+    },
+  },
+};
+
 /* ---------------------------------------------------------- lead.archive */
 
 const leadArchive: ActionDef = {
@@ -858,7 +1023,7 @@ const leadArchive: ActionDef = {
   },
 };
 
-export const LEAD_ACTIONS: ActionDef[] = [leadCreate, leadUpdate, leadStatus, leadFollowup, leadReschedule, leadTags, leadAssign, leadBulk, leadArchive];
+export const LEAD_ACTIONS: ActionDef[] = [leadCreate, leadUpdate, leadStatus, leadFollowup, leadReschedule, leadTags, leadAssign, leadBulk, leadCategorize, leadArchive];
 
 /** Shared with other groups (pre-lead conversion fills the same fields). */
 export { createFields as LEAD_CREATE_FIELDS, displayValue, isStepRef, money, LEAD_STATUSES };

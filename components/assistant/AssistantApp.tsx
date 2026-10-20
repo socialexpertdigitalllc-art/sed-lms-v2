@@ -22,7 +22,7 @@ import { Suggestions } from "./Suggestions";
 import { TurnView } from "./TurnView";
 import { JSON_HEADERS, useAssistantChat } from "./useAssistantChat";
 import { useActPermissions } from "./useActPermissions";
-import type { PermissionMode } from "@/lib/assistant/actions/permissions";
+import { modeInfo, type PermissionMode } from "@/lib/assistant/actions/permissions";
 import { useStickToBottom } from "./useStickToBottom";
 
 /**
@@ -76,6 +76,7 @@ export function AssistantApp(props: AssistantAppProps) {
   useEffect(() => {
     permissionModeRef.current = permissions.mode;
   });
+
   const chat = useAssistantChat({
     getPermissionMode: () => permissionModeRef.current,
     initialConversationId: props.initialConversationId,
@@ -117,6 +118,20 @@ export function AssistantApp(props: AssistantAppProps) {
     },
     [send, scrollToBottom],
   );
+
+  /** SED AI asked to raise the permission mode: switch (or not) and carry the job on. */
+  const decidePermission = async (mode: PermissionMode | null) => {
+    if (mode) {
+      const err = await permissions.change({ mode });
+      if (err) {
+        toast({ kind: "error", title: "Could not change the permission mode", body: err });
+        return;
+      }
+      void send(`Permission mode is now “${modeInfo(mode).label}”. Carry on with the task.`, { mode: "act", permissionMode: mode });
+    } else {
+      void send("Keep my permission mode as it is — carry on with the task, with cards for me to confirm.", { mode: "act" });
+    }
+  };
 
   async function patchConversation(c: ClientConversation, patch: { title?: string; pinned?: boolean }) {
     setConversations((prev) => upsert(prev, { ...c, ...patch }));
@@ -332,6 +347,7 @@ export function AssistantApp(props: AssistantAppProps) {
                           onCardOp={chat.actOn}
                           onRunPlan={chat.runPlan}
                           onSaveShortcut={setShortcut}
+                          permission={canAct ? { current: permissions.mode, onDecide: latest && idle ? decidePermission : undefined } : null}
                         />
                       );
                     })

@@ -168,7 +168,14 @@ export const searchLeadsTool: AssistantTool = {
       min_price: { type: "number", description: "Minimum quoted one-time price." },
       max_price: { type: "number", description: "Maximum quoted one-time price." },
       sort: { type: "string", enum: [...SEARCH_SORTS], description: "Order of results (default newest)." },
-      limit: { type: "integer", minimum: 1, maximum: 50, description: "Most rows to return (default 20)." },
+      limit: { type: "integer", minimum: 1, maximum: 100, description: "Most rows to return (default 20, up to 100)." },
+      offset: { type: "integer", minimum: 0, description: "Skip this many matches first — to page through a long list." },
+      uncategorized: { type: "boolean", description: "Only leads with no business category yet." },
+      include_services: {
+        type: "boolean",
+        description: "Add each lead's services and a short about-the-business line — enough to decide its category without opening every lead.",
+      },
+      exclude_ids: { type: "array", items: { type: "string" }, description: "Leave these lead ids out (e.g. ones you are leaving for the person to decide)." },
       ...LEAD_FILTER_PROPERTIES,
     },
   },
@@ -194,6 +201,11 @@ export const searchLeadsTool: AssistantTool = {
         if (which === "due_today") return t >= nowMs && day === today;
         return t >= nowMs && day <= weekOut;
       });
+    }
+    if (args.uncategorized === true) leads = leads.filter((l) => !(l.category ?? "").trim());
+    if (Array.isArray(args.exclude_ids) && args.exclude_ids.length) {
+      const skip = new Set((args.exclude_ids as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 2000));
+      leads = leads.filter((l) => !skip.has(l.id));
     }
     const minStreak = intArg(args.min_no_pickup_streak, 0, 0, 1000);
     if (minStreak > 0) leads = leads.filter((l) => (l.no_pickup_streak ?? 0) >= minStreak);
@@ -221,9 +233,11 @@ export const searchLeadsTool: AssistantTool = {
       }
     });
 
-    const limit = intArg(args.limit, 20, 1, 50);
+    const limit = intArg(args.limit, 20, 1, 100);
+    const offset = intArg(args.offset, 0, 0, 100_000);
+    const withServices = args.include_services === true;
     const agentName = await ctx.data.names();
-    const rows = sorted.slice(0, limit).map((l) => ({
+    const rows = sorted.slice(offset, offset + limit).map((l) => ({
       id: l.id,
       business_name: l.business_name,
       status: l.status,
@@ -239,12 +253,22 @@ export const searchLeadsTool: AssistantTool = {
       created: localDateKey(l.created_at, ctx.timezone),
       closed: l.closed_at ? localDateKey(l.closed_at, ctx.timezone) : null,
       link: `/leads/${l.id}`,
+      ...(withServices
+        ? { services: (l.services ?? []).slice(0, 12).map((x) => clip(x, 60)), about: clip(l.about_business, 160) }
+        : {}),
     }));
     const data: Record<string, unknown> = {
       visible_scope: await leadScopeLine(ctx),
-      filters: { ...result.applied, ...(q ? { query: q } : {}), sort },
+      filters: {
+        ...result.applied,
+        ...(q ? { query: q } : {}),
+        ...(args.uncategorized === true ? { uncategorized: true } : {}),
+        sort,
+      },
       total_matches: sorted.length,
       showing: rows.length,
+      ...(offset ? { offset } : {}),
+      ...(offset + rows.length < sorted.length ? { more: sorted.length - offset - rows.length } : {}),
       leads: rows,
     };
     if (result.notes.length) data.notes = result.notes;

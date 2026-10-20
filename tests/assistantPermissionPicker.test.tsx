@@ -43,3 +43,25 @@ describe("PermissionModePicker", () => {
     expect(screen.getByRole("link", { name: /Manage \(1 always allowed\)/ })).toHaveAttribute("href", "/assistant/actions?tab=permissions");
   });
 });
+
+describe("PermissionAskCard — SED AI asked once for a higher mode", () => {
+  it("one click switches and carries the job on; or keep asking", async () => {
+    const { PermissionAskCard } = await import("@/components/assistant/PermissionAskCard");
+    const onDecide = vi.fn();
+    const { rerender } = render(<PermissionAskCard mode="auto" reason="to categorise 802 leads" current="ask" canDecide onDecide={onDecide} />);
+    expect(screen.getByText(/to categorise 802 leads/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Switch and continue/ }));
+    expect(onDecide).toHaveBeenCalledWith("auto");
+    await userEvent.click(screen.getByRole("button", { name: /Keep asking me/ }));
+    expect(onDecide).toHaveBeenLastCalledWith(null);
+
+    // Once switched, it just says so.
+    rerender(<PermissionAskCard mode="auto" reason={null} current="auto" canDecide onDecide={onDecide} />);
+    expect(screen.getByText(/Switched — the job carries on/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Switch and continue/ })).toBeNull();
+
+    // An older turn (or while answering): no buttons.
+    rerender(<PermissionAskCard mode="auto" reason={null} current="ask" canDecide={false} onDecide={onDecide} />);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+});
