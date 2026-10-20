@@ -4,11 +4,26 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { initials } from "@/lib/leads/format";
 import { logout } from "@/app/login/actions";
+import { currentSubscription } from "@/lib/push/client";
 
 export function UserMenu({ email, displayName }: { email: string; displayName: string }) {
   const [open, setOpen] = useState(false);
+  // This browser's push address, sent with Sign out so the server stops
+  // pushing this person's notifications to a computer they've left.
+  const [pushEndpoint, setPushEndpoint] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   const name = displayName || email;
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void currentSubscription().then((s) => {
+      if (!cancelled) setPushEndpoint(s?.endpoint ?? "");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -53,6 +68,7 @@ export function UserMenu({ email, displayName }: { email: string; displayName: s
           </Link>
           <div className="border-t border-border-subtle">
             <form action={logout}>
+              <input type="hidden" name="push_endpoint" value={pushEndpoint} />
               <button className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm text-dropped-fg hover:bg-dropped-bg transition-colors text-left">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />

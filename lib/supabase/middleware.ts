@@ -80,6 +80,9 @@ export async function updateSession(request: NextRequest) {
     // user-specific, and must resolve as JS / JSON rather than an HTML redirect
     // or Chrome will neither register the worker nor offer "Install".
     path === "/sw.js" ||
+    // The push service worker: browsers re-fetch it in the background to
+    // check for updates, and a 307 to /login there would break push.
+    path === "/push-sw.js" ||
     path === "/manifest.webmanifest" ||
     path === "/api/ai-tools/wge/process" ||
     path === "/api/template-engine/process" ||
@@ -95,6 +98,8 @@ export async function updateSession(request: NextRequest) {
     // AGENT_WORKER_ENABLED=1 (the operator's worker box).
     path === "/api/site-agent/process" ||
     path === "/api/site-agent/minimax/process" ||
+    // Push dispatcher: x-wge-secret, called by the instrumentation poller.
+    path === "/api/push/dispatch" ||
     // Form Relay: the PUBLIC ingest for client websites (access_key auth +
     // CORS, see app/api/forms/submit/route.ts) and its secret-header retry
     // sweep called by the instrumentation poller. Neither has a session.

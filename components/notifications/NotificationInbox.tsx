@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { Select } from "@/components/common/Select";
 import MultiSelect from "@/components/common/MultiSelect";
 import { useToast } from "@/components/common/Toast";
+import { PushSettingsCard } from "./PushSettingsCard";
 
 function BellTag({ bell }: { bell: NotifyBell }) {
   return (
@@ -190,6 +191,7 @@ export function NotificationInbox({ initial }: { initial: AppNotification[] }) {
         </div>
       </div>
 
+      <PushSettingsCard />
       <ReminderSettingsCard />
 
       {filtered.length === 0 ? (

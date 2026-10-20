@@ -276,3 +276,18 @@ export type NotificationEventKey = (typeof NOTIFICATION_EVENTS)[number]["key"];
 export function eventDefault(key: string) {
   return NOTIFICATION_EVENTS.find((e) => e.key === key);
 }
+
+/**
+ * Events someone should act on soon. A push for one of these stays on screen
+ * until it is clicked or dismissed (and asks the push service for high
+ * urgency); every other push fades away like a normal OS notification.
+ */
+export const URGENT_EVENTS: ReadonlySet<string> = new Set<NotificationEventKey>([
+  "followup_reminder",
+  "ticket_assigned",
+  "ticket_overdue",
+  "domain_site_down",
+  "contract_send_failed",
+  "site_agent_run_failed",
+  "website_lead_received",
+]);

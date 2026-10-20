@@ -71,6 +71,13 @@ export async function register() {
     fetch(`${origin}/api/site-builder/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 180_000);
 
+  // Desktop/phone push: sends every notification that has come due (delayed
+  // reminders included). notify() kicks it at once for immediate ones; this
+  // catches the rest. Idle cost: one select on a tiny partial index.
+  setInterval(() => {
+    fetch(`${origin}/api/push/dispatch`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 30_000);
+
   // AI developer, MiniMax engine: runs start from the route that created them;
   // this only recovers one whose start was lost (a restart mid-run). Cheap
   // when idle — one narrow select.

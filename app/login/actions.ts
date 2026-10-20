@@ -50,7 +50,7 @@ export async function login(
   redirect("/dashboard");
 }
 
-export async function logout() {
+export async function logout(formData?: FormData) {
   const supabase = await createClient();
 
   try {
@@ -76,6 +76,20 @@ export async function logout() {
     }
   } catch {
     // best-effort
+  }
+
+  // Stop desktop/phone pushes to the browser being signed out of — someone
+  // else may use it next. Only the signing-out person's own row matches.
+  try {
+    const endpoint = formData?.get("push_endpoint");
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user && typeof endpoint === "string" && endpoint) {
+      await createAdminClient().from("push_subscriptions").delete().eq("endpoint", endpoint).eq("user_id", user.id);
+    }
+  } catch {
+    // best-effort; never block sign-out
   }
 
   await supabase.auth.signOut();

@@ -3,6 +3,7 @@ import { eventDefault } from "@/lib/notifications/events";
 import { getRule } from "@/lib/notifications/rules";
 import { resolveRecipients } from "@/lib/notifications/resolve";
 import type { NotifyContext } from "@/lib/notifications/types";
+import { dispatchDuePush } from "@/lib/push/dispatch";
 
 export async function notify(eventKey: string, ctx: NotifyContext,
   opts: { title: string; body: string; dedupKey: string; targetUrl?: string | null; websiteUrl?: string | null }): Promise<void> {
@@ -26,4 +27,8 @@ export async function notify(eventKey: string, ctx: NotifyContext,
     const legacy = rows.map(({ website_url: _drop, ...rest }) => rest);
     await admin.from("notifications").upsert(legacy, { onConflict: "dedup_key", ignoreDuplicates: true });
   }
+  // Desktop/phone push goes out NOW for an immediate notification instead of
+  // waiting for the next 30s poll. Fire-and-forget: the dispatcher never
+  // throws, claims each row once, and a delayed one is the poller's.
+  if (!rule.delay_minutes) void dispatchDuePush(admin);
 }

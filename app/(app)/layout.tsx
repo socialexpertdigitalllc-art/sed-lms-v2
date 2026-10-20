@@ -11,6 +11,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { ActivityTracker } from "@/providers/ActivityTracker";
 import { ToastProvider } from "@/components/common/Toast";
 import { NotificationToaster } from "@/components/layout/NotificationToaster";
+import { PushPrompt } from "@/components/layout/PushPrompt";
 import { TabBadge } from "@/components/layout/TabBadge";
 import { VersionBadge } from "@/components/layout/VersionBadge";
 import { AssistantProvider } from "@/providers/AssistantProvider";
@@ -70,6 +71,7 @@ export default async function AppLayout({
             </AssistantProvider>
           </UiPrefsProvider>
           <NotificationToaster />
+          <PushPrompt />
           <TabBadge />
           <VersionBadge />
         </ToastProvider>
