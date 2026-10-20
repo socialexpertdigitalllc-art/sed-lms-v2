@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionCard } from "../actions/card";
 import type { StoredAction } from "../actions/types";
+import type { AutoRunContext } from "../actions/run";
 import type { TurnData } from "./data";
 import type { AssistantMemory, AssistantMode } from "../types";
 
@@ -44,6 +45,8 @@ export interface ActState {
   switchRequested?: string | null;
   /** The tool call being run (set by the engine per call). */
   callId?: string | null;
+  /** The person's permission mode: which proposals run without a click. */
+  auto?: AutoRunContext | null;
 }
 
 export type ToolSideEvent =

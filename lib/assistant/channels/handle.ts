@@ -345,6 +345,7 @@ async function answer(a: AnswerInput): Promise<void> {
       page: null,
       attachments: [],
       source: a.msg.channel,
+      origin: deps.origin,
     });
   } catch (e) {
     console.error("[assistant/channels] turn crashed:", e);

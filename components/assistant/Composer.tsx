@@ -6,7 +6,10 @@ import { looksLikeTask } from "@/lib/assistant/intent";
 import { AI_BRAND } from "@/lib/assistant/name";
 import type { AssistantMode, MessageAttachment } from "@/lib/assistant/types";
 import type { Recipe } from "@/lib/assistant/recipes";
+import type { PermissionMode } from "@/lib/assistant/actions/permissions";
 import { cn } from "@/lib/utils";
+import { PermissionModePicker } from "./PermissionModePicker";
+import type { ActPermissionsView } from "./useActPermissions";
 
 const MAX = 8000;
 const MAX_FILES = 6;
@@ -62,6 +65,8 @@ export function Composer({
   mode = "ask",
   onModeChange,
   conversationId,
+  permissions = null,
+  onPermissionModeChange,
 }: {
   assistantName: string;
   onSend: (text: string, extras?: { attachments: MessageAttachment[]; mode?: AssistantMode }) => void;
@@ -78,6 +83,9 @@ export function Composer({
   onModeChange?: (mode: AssistantMode) => void;
   /** Files attached here are filed under this chat. */
   conversationId?: string | null;
+  /** Act's permission mode (how much runs without a click), when loaded. */
+  permissions?: ActPermissionsView | null;
+  onPermissionModeChange?: (mode: PermissionMode) => void;
 }) {
   const [text, setText] = useState("");
   const [files, setFiles] = useState<PendingFile[]>([]);
@@ -311,7 +319,9 @@ export function Composer({
               disabled
                 ? `${assistantName} is not available right now`
                 : mode === "act" && canAct
-                  ? `Tell ${assistantName} what to do — it prepares it for you to confirm…`
+                  ? permissions && permissions.effective !== "ask"
+                    ? `Tell ${assistantName} what to do…`
+                    : `Tell ${assistantName} what to do — it prepares it for you to confirm…`
                   : (placeholder ?? `Ask ${assistantName} anything…`)
             }
             className={cn(
@@ -364,6 +374,9 @@ export function Composer({
                 ))}
               </div>
             ) : null}
+            {canAct && mode === "act" && permissions && onPermissionModeChange ? (
+              <PermissionModePicker view={permissions} onChange={onPermissionModeChange} compact={compact} />
+            ) : null}
             {canAct ? (
               <>
                 <button type="button" className={tool} onClick={() => fileRef.current?.click()} disabled={files.length >= MAX_FILES || disabled} aria-label="Attach files" title="Attach a logo, screenshots or a file">
@@ -402,7 +415,11 @@ export function Composer({
       </div>
       <p className="mt-1.5 text-center text-[11px] text-text-faint">
         {mode === "act" && canAct
-          ? `Act mode: ${assistantName} prepares each change and nothing happens until you confirm it.`
+          ? permissions?.effective === "auto_safe"
+            ? `Act mode: safe changes happen right away; ${assistantName} asks you about the rest. Undo is on each card.`
+            : permissions?.effective === "auto"
+              ? `Act mode: changes happen right away, except high-impact ones. Undo is on each card.`
+              : `Act mode: ${assistantName} prepares each change and nothing happens until you confirm it.`
           : compact
             ? `${AI_BRAND} can make mistakes. Check important numbers.`
             : `${assistantName} only sees what your account can see. ${AI_BRAND} can make mistakes, so check important numbers.`}

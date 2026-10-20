@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { actionError, actionGuard, requestOrigin } from "@/lib/assistant/actions/http";
 import { confirmAction } from "@/lib/assistant/actions/run";
+import { updateActPermissions } from "@/lib/assistant/actions/permissionStore";
 import { UUID_RE } from "@/lib/assistant/http";
 
 export const runtime = "nodejs";
@@ -12,6 +13,7 @@ export const maxDuration = 900;
 /**
  * Confirm a proposal SED AI prepared: re-checked as of now, then made as the
  * person pressing Confirm — through the app's own endpoint for that change.
+ * With `remember`, the person also says "don't ask again" for this action.
  */
 
 const bodySchema = z.object({
@@ -21,6 +23,8 @@ const bodySchema = z.object({
   selected: z.array(z.string().uuid()).max(500).optional(),
   /** Critical actions: the typed confirmation words. */
   phrase: z.string().max(200).optional(),
+  /** "Don't ask again": once it is done, this action runs on its own next time. */
+  remember: z.boolean().optional(),
 });
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -30,9 +34,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!UUID_RE.test(id)) return NextResponse.json({ error: "That action was not found." }, { status: 404 });
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, { status: 422 });
+  const { remember, ...input } = parsed.data;
+  const { ctx } = guard.value;
   try {
-    const card = await confirmAction({ id, ctx: guard.value.ctx, origin: requestOrigin(req), ...parsed.data });
-    return NextResponse.json({ card });
+    const card = await confirmAction({ id, ctx, origin: requestOrigin(req), ...input });
+    // Only what the card offered (never high-impact, never needing an
+    // approver), and only once it really ran.
+    let remembered = false;
+    if (remember && card.status === "done" && card.allowAlways && card.risk !== "critical") {
+      await updateActPermissions(ctx.admin, ctx.userId, { allowAdd: card.key });
+      await ctx.admin.from("activity_log").insert({
+        user_id: ctx.userId,
+        action: "assistant.permission_mode_changed",
+        entity_type: "assistant_action",
+        new_value: { always_allow: card.key },
+      });
+      remembered = true;
+    }
+    return NextResponse.json({ card, remembered });
   } catch (e) {
     return actionError(e, "The change could not be made.");
   }

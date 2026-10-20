@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, Clock, ListChecks, Loader2, MessageSquare, X } from "lucide-react";
+import { ArrowLeft, Check, Clock, ListChecks, Loader2, MessageSquare, ShieldAlert, X } from "lucide-react";
+import type { PermissionMode } from "@/lib/assistant/actions/permissions";
 import type { ActionCard } from "@/lib/assistant/actions/card";
 import { btnGhostSm, btnPrimary, btnSecondarySm } from "@/components/common/buttons";
 import { useToast } from "@/components/common/Toast";
@@ -11,6 +12,8 @@ import { ActionCardView } from "./ActionCard";
 import { Automations } from "./Automations";
 import { PhoneLink } from "./PhoneLink";
 import { JSON_HEADERS, type CardOp, type CardOpBody, type CardOpResult } from "./useAssistantChat";
+import { useActPermissions } from "./useActPermissions";
+import { MODE_ICON } from "./PermissionModePicker";
 
 type Row = ActionCard & {
   conversationId: string | null;
@@ -39,6 +42,12 @@ interface SettingRow {
   risk: string;
   enabled: boolean;
   require_approval: boolean;
+  auto_run: boolean;
+}
+
+interface Policy {
+  max_mode: PermissionMode;
+  modes: { mode: PermissionMode; label: string; description: string }[];
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -290,20 +299,119 @@ function ReportView() {
   );
 }
 
+/** How much SED AI does without a click — each person's own choice. */
+function PermissionsView() {
+  const { toast } = useToast();
+  const p = useActPermissions(true);
+  if (!p.view) return p.error ? <Empty text={p.error} /> : <Loading />;
+  const v = p.view;
+  const save = async (patch: Parameters<typeof p.change>[0]) => {
+    const err = await p.change(patch);
+    if (err) toast({ kind: "error", title: "Could not save", body: err });
+  };
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-sm font-semibold text-text">Permission mode</h3>
+        <p className="mt-0.5 text-sm text-text-muted">How much SED AI does in Act mode without asking. You can also switch it from the message box.</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Permission mode">
+          {v.modes.map((m) => {
+            const Icon = MODE_ICON[m.mode];
+            const selected = v.effective === m.mode;
+            return (
+              <button
+                key={m.mode}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                disabled={!m.allowed || p.saving}
+                onClick={() => !selected && void save({ mode: m.mode })}
+                className={cn(
+                  "flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-colors",
+                  selected ? "border-accent bg-accent-soft/60" : "border-border bg-surface hover:bg-surface-2",
+                  !m.allowed && "cursor-not-allowed opacity-50 hover:bg-surface",
+                )}
+              >
+                <span className="flex w-full items-center gap-1.5 text-sm font-medium text-text">
+                  <Icon className={cn("h-4 w-4", m.mode === "ask" ? "text-text-muted" : m.mode === "auto_safe" ? "text-accent" : "text-notready-fg")} aria-hidden />
+                  <span className="flex-1">{m.label}</span>
+                  {selected ? <Check className="h-4 w-4 text-accent" aria-hidden /> : null}
+                </span>
+                <span className="text-xs leading-snug text-text-muted">{m.allowed ? m.description : "Your admin has limited SED AI below this."}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-3 flex gap-1.5 text-xs text-text-muted">
+          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-faint" aria-hidden />
+          <span>
+            Whatever you pick, high-impact changes (money, deleting, access, going live) and anything that needs an admin&apos;s approval always wait for you. Changes that ran
+            on their own show “Ran on its own” on their card, with Undo while it lasts.
+          </span>
+        </p>
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-text">Don&apos;t ask again</h3>
+            <p className="mt-0.5 text-sm text-text-muted">Actions you ticked “Don&apos;t ask again” for. They run on their own even in Ask mode.</p>
+          </div>
+          {v.allow.length > 1 ? (
+            <button type="button" className={btnGhostSm} onClick={() => void save({ allow_clear: true })} disabled={p.saving}>
+              Remove all
+            </button>
+          ) : null}
+        </div>
+        {v.allow.length ? (
+          <ul className="mt-3 divide-y divide-border rounded-xl border border-border">
+            {v.allow.map((a) => (
+              <li key={a.key} className="flex items-center gap-3 px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1">
+                  <span className="text-text">{a.title}</span>
+                  {a.group ? <span className="ml-2 text-xs text-text-faint">{a.group}</span> : null}
+                </span>
+                <button type="button" className={btnGhostSm} onClick={() => void save({ allow_remove: a.key })} disabled={p.saving}>
+                  <X className="h-3.5 w-3.5" aria-hidden /> Ask again
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 rounded-xl border border-dashed border-border px-4 py-5 text-center text-sm text-text-faint">
+            None yet. Tick “Don&apos;t ask again” on a card when you confirm it.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsView() {
   const { toast } = useToast();
   const [rows, setRows] = useState<SettingRow[] | null>(null);
+  const [policy, setPolicy] = useState<Policy | null>(null);
   const [access, setAccess] = useState<{ departments: { id: string; name: string }[]; people: { id: string; name: string; granted: boolean; until: string | null }[] } | null>(null);
   useEffect(() => {
     fetch("/api/assistant/actions/settings", { cache: "no-store" })
       .then((r) => r.json())
-      .then((b: { actions?: SettingRow[]; access?: typeof access }) => {
+      .then((b: { actions?: SettingRow[]; access?: typeof access; policy?: Policy }) => {
         setRows(b.actions ?? []);
         setAccess(b.access ?? null);
+        setPolicy(b.policy ?? null);
       })
       .catch(() => setRows([]));
   }, []);
-  async function save(key: string, patch: Partial<Pick<SettingRow, "enabled" | "require_approval">>) {
+  async function saveLimit(max_mode: PermissionMode) {
+    const before = policy;
+    setPolicy((p) => (p ? { ...p, max_mode } : p));
+    const res = await fetch("/api/assistant/actions/settings", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ max_mode }) }).catch(() => null);
+    if (!res?.ok) {
+      setPolicy(before);
+      toast({ kind: "error", title: "Could not save", body: ((await res?.json().catch(() => ({}))) as { error?: string } | undefined)?.error });
+    }
+  }
+  async function save(key: string, patch: Partial<Pick<SettingRow, "enabled" | "require_approval" | "auto_run">>) {
     const before = rows;
     setRows((prev) => prev?.map((r) => (r.key === key ? { ...r, ...patch } : r)) ?? prev);
     const res = await fetch("/api/assistant/actions/settings", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ key, ...patch }) }).catch(() => null);
@@ -335,6 +443,33 @@ function SettingsView() {
           . Each action also needs the person&apos;s own permission for that change.
         </p>
       </div>
+      {policy ? (
+        <div className="rounded-xl border border-border px-4 py-3">
+          <p className="text-sm font-medium text-text">Most SED AI may do on its own</p>
+          <p className="mt-0.5 text-sm text-text-muted">
+            Everyone picks their own permission mode (Ask first, or let changes run on their own). This caps it for the whole company. High-impact changes and
+            approvals always ask.
+          </p>
+          <div className="mt-2.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Most SED AI may do on its own">
+            {policy.modes.map((m) => (
+              <button
+                key={m.mode}
+                type="button"
+                role="radio"
+                aria-checked={policy.max_mode === m.mode}
+                title={m.description}
+                onClick={() => policy.max_mode !== m.mode && void saveLimit(m.mode)}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs transition-colors",
+                  policy.max_mode === m.mode ? "border-accent bg-accent-soft font-medium text-accent-ink" : "border-border text-text-muted hover:bg-surface-2",
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {groups.map((g) => (
         <div key={g}>
           <h3 className="mb-2 text-sm font-semibold text-text">{g}</h3>
@@ -350,6 +485,12 @@ function SettingsView() {
                   <span className={cn("rounded-full px-1.5 py-px text-[11px]", r.risk === "critical" ? "bg-dropped-bg text-dropped-fg" : r.risk === "sensitive" ? "bg-notready-bg text-notready-fg" : "bg-surface-2 text-text-muted")}>
                     {r.risk}
                   </span>
+                  {r.risk !== "critical" ? (
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs text-text-muted" title="Off: this always waits for a click, whatever a person's permission mode.">
+                      <input type="checkbox" className="accent-[var(--color-accent)]" checked={r.auto_run} onChange={(e) => void save(r.key, { auto_run: e.target.checked })} disabled={!r.enabled || r.require_approval} />
+                      Can run on its own
+                    </label>
+                  ) : null}
                   <label className="flex cursor-pointer items-center gap-1.5 text-xs text-text-muted">
                     <input type="checkbox" className="accent-[var(--color-accent)]" checked={r.require_approval} onChange={(e) => void save(r.key, { require_approval: e.target.checked })} disabled={!r.enabled} />
                     Always ask an admin
@@ -418,7 +559,7 @@ const Empty = ({ text }: { text: string }) => <p className="py-10 text-center te
 
 export function ActionsCenter({ userId, canAct, canManage, initialTab }: { userId: string; canAct: boolean; canManage: boolean; initialTab: string }) {
   const tabs = [
-    ...(canAct ? [{ key: "mine", label: "My actions" }, { key: "automations", label: "Reminders & automations" }] : []),
+    ...(canAct ? [{ key: "mine", label: "My actions" }, { key: "permissions", label: "Permissions" }, { key: "automations", label: "Reminders & automations" }] : []),
     ...(canManage ? [{ key: "approvals", label: "Approvals" }, { key: "report", label: "Report" }, { key: "settings", label: "Settings" }] : []),
   ];
   const [tab, setTab] = useState(tabs.some((t) => t.key === initialTab) ? initialTab : (tabs[0]?.key ?? "mine"));
@@ -438,7 +579,7 @@ export function ActionsCenter({ userId, canAct, canManage, initialTab }: { userI
         </span>
         <div>
           <h1 className="font-display text-xl font-semibold text-text">SED AI actions</h1>
-          <p className="text-sm text-text-muted">What SED AI prepared and did for you — each change only after someone confirmed it.</p>
+          <p className="text-sm text-text-muted">What SED AI prepared and did for you — each change confirmed by someone, or run on its own where their permission mode allows.</p>
         </div>
       </div>
       <nav className="flex flex-wrap gap-1 border-b border-border" aria-label="Sections">
@@ -454,7 +595,7 @@ export function ActionsCenter({ userId, canAct, canManage, initialTab }: { userI
           </button>
         ))}
       </nav>
-      {tab === "mine" ? <Mine /> : tab === "automations" ? <Automations phone={<PhoneLink />} /> : tab === "approvals" ? <Approvals userId={userId} /> : tab === "report" ? <ReportView /> : <SettingsView />}
+      {tab === "mine" ? <Mine /> : tab === "permissions" ? <PermissionsView /> : tab === "automations" ? <Automations phone={<PhoneLink />} /> : tab === "approvals" ? <Approvals userId={userId} /> : tab === "report" ? <ReportView /> : <SettingsView />}
     </div>
   );
 }

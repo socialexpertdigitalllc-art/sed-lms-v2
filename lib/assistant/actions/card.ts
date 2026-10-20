@@ -85,6 +85,12 @@ export interface ActionCard {
   turnId?: string | null;
   createdAt: string;
   expiresAt?: string | null;
+  /** It ran without a click: under the person's permission mode, or because they said "don't ask again". */
+  auto?: { via: "mode" | "always" } | null;
+  /** The card may offer "don't ask again" for this action (see ./permissions.ts). */
+  allowAlways?: boolean;
+  /** The action's catalogue name ("Create a lead") — what "don't ask again" covers. */
+  kind?: string;
 }
 
 export const RISK_LABEL: Record<ActionRisk, string> = {

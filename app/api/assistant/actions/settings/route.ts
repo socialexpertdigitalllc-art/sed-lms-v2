@@ -3,12 +3,15 @@ import { z } from "zod";
 import { actionError, actionGuard } from "@/lib/assistant/actions/http";
 import { ACTION_DEFS, getActionDef } from "@/lib/assistant/actions/registry";
 import { getActionSettings, saveActionSetting } from "@/lib/assistant/actions/store";
+import { PERMISSION_MODES } from "@/lib/assistant/actions/permissions";
+import { getPermissionCap, setPermissionCap } from "@/lib/assistant/actions/permissionStore";
 
 export const runtime = "nodejs";
 
 /**
- * The rollout switches: every action SED AI can take, whether it is on, and
- * whether it always needs an approver. Who may use action mode at all is the
+ * The rollout switches: every action SED AI can take, whether it is on,
+ * whether it always needs an approver, and whether it may ever run without a
+ * click — plus the most autonomy (permission mode) anyone may pick. Who may use action mode at all is the
  * assistant.act permission (granted per department or person, optionally until
  * a date, on the usual permission screens).
  */
@@ -38,17 +41,29 @@ export async function GET() {
         risk: typeof d.risk === "function" ? "varies" : d.risk,
         enabled: settings.get(d.key)?.enabled ?? true,
         require_approval: settings.get(d.key)?.require_approval ?? false,
+        auto_run: settings.get(d.key)?.auto_run ?? true,
       })),
       access: { departments, people },
+      // The most autonomy anyone may pick for Act (see lib/assistant/actions/permissions.ts).
+      policy: { max_mode: await getPermissionCap(ctx.admin), modes: PERMISSION_MODES },
     });
   } catch (e) {
     return actionError(e, "Could not load the settings.");
   }
 }
 
-const putSchema = z
-  .object({ key: z.string().min(3).max(80), enabled: z.boolean().optional(), require_approval: z.boolean().optional() })
-  .refine((b) => b.enabled !== undefined || b.require_approval !== undefined, { message: "Nothing to change." });
+const putSchema = z.union([
+  z
+    .object({
+      key: z.string().min(3).max(80),
+      enabled: z.boolean().optional(),
+      require_approval: z.boolean().optional(),
+      /** false: never runs on its own, whatever a person's permission mode. */
+      auto_run: z.boolean().optional(),
+    })
+    .refine((b) => b.enabled !== undefined || b.require_approval !== undefined || b.auto_run !== undefined, { message: "Nothing to change." }),
+  z.object({ max_mode: z.enum(["ask", "auto_safe", "auto"]) }),
+]);
 
 export async function PUT(req: Request) {
   const guard = await actionGuard({ manage: true });
@@ -56,10 +71,24 @@ export async function PUT(req: Request) {
   const { ctx } = guard.value;
   const parsed = putSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, { status: 422 });
+  if ("max_mode" in parsed.data) {
+    try {
+      await setPermissionCap(ctx.admin, parsed.data.max_mode);
+      await ctx.admin.from("activity_log").insert({ user_id: ctx.userId, action: "assistant.action_setting_changed", entity_type: "assistant_action", new_value: { max_permission_mode: parsed.data.max_mode } });
+      return NextResponse.json({ ok: true });
+    } catch (e) {
+      return actionError(e, "Could not save the limit.");
+    }
+  }
   const def = getActionDef(parsed.data.key);
   if (!def) return NextResponse.json({ error: "Unknown action." }, { status: 404 });
   try {
-    const patch = { ...(parsed.data.enabled !== undefined ? { enabled: parsed.data.enabled } : {}), ...(parsed.data.require_approval !== undefined ? { require_approval: parsed.data.require_approval } : {}) };
+    const d = parsed.data;
+    const patch = {
+      ...(d.enabled !== undefined ? { enabled: d.enabled } : {}),
+      ...(d.require_approval !== undefined ? { require_approval: d.require_approval } : {}),
+      ...(d.auto_run !== undefined ? { auto_run: d.auto_run } : {}),
+    };
     await saveActionSetting(ctx.admin, def.key, patch, ctx.userId);
     await ctx.admin.from("activity_log").insert({ user_id: ctx.userId, action: "assistant.action_setting_changed", entity_type: "assistant_action", new_value: { key: def.key, ...patch } });
     return NextResponse.json({ ok: true });

@@ -5,6 +5,7 @@ import { assistantGuard, storeError } from "@/lib/assistant/http";
 import { createConversation, deleteTurn, getConversation, latestQuestion, updateConversation } from "@/lib/assistant/store";
 import { endRun, startRun } from "@/lib/assistant/runs";
 import { cancelTurnActions } from "@/lib/assistant/actions/store";
+import { requestOrigin } from "@/lib/assistant/actions/http";
 import { runTurn } from "@/lib/assistant/engine";
 import { titleFromMessage } from "@/lib/assistant/prompt";
 import type { AssistantStreamEvent, MessageAttachment } from "@/lib/assistant/types";
@@ -33,6 +34,8 @@ const bodySchema = z
     replaceTurnId: z.string().uuid().nullish(),
     /** Ask (default) or Act — Act needs the assistant.act permission. */
     mode: z.enum(["ask", "act"]).optional(),
+    /** Act's permission mode picked in the chat (else the saved one) — never above the company limit. */
+    permissionMode: z.enum(["ask", "auto_safe", "auto"]).optional(),
     /** Where the person is in the app (the floating chat). */
     page: z.object({ path: z.string().max(500), title: z.string().max(200).optional() }).nullish(),
     /** Files attached in the chat (ids from POST /api/assistant/uploads). */
@@ -141,6 +144,8 @@ export async function POST(req: Request) {
         page: parsed.data.page ?? null,
         attachments,
         source: "chat",
+        origin: requestOrigin(req),
+        ...(parsed.data.permissionMode ? { permissionMode: parsed.data.permissionMode } : {}),
       })
         .catch((e) => {
           console.error("[assistant] turn crashed:", e);

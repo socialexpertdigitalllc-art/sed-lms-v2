@@ -191,3 +191,30 @@ describe("ActionCardView", () => {
     });
   });
 });
+
+describe("permission modes on the card", () => {
+  it("\"Don't ask again\" rides along with Confirm", async () => {
+    const card = { ...base, allowAlways: true, kind: "Create a lead" };
+    const onOp = vi.fn(async () => ok({ ...card, status: "done" }));
+    render(<ActionCardView card={card} onOp={onOp} />);
+    await userEvent.click(screen.getByRole("checkbox", { name: /Don't ask again for “Create a lead”/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Create lead/ }));
+    expect(onOp).toHaveBeenCalledWith(card, "confirm", { remember: true });
+  });
+
+  it("is not offered where it could never apply", () => {
+    render(<ActionCardView card={{ ...base, risk: "critical", confirmPhrase: "Jumbo's", allowAlways: false, kind: "Delete" }} onOp={vi.fn()} />);
+    expect(screen.queryByRole("checkbox", { name: /Don't ask again/ })).toBeNull();
+  });
+
+  it("says when a change ran on its own", () => {
+    render(
+      <ActionCardView
+        card={{ ...base, status: "done", auto: { via: "mode" }, result: { message: "Created the lead Jumbo's Pizza." }, undoUntil: new Date(Date.now() + 600_000).toISOString() }}
+        onOp={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Ran on its own")).toHaveAttribute("title", "Your permission mode let this run without a click.");
+    expect(screen.getByRole("button", { name: /Undo/ })).toBeInTheDocument();
+  });
+});

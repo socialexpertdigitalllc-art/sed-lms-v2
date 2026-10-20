@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   latest: null as { turnId: string; content: string } | null,
   calls: [] as string[],
   turnText: [] as string[],
+  turnInputs: [] as { permissionMode?: string; origin?: string }[],
   feedbackFound: true,
 }));
 
@@ -52,9 +53,10 @@ vi.mock("@/lib/assistant/store", () => ({
   },
 }));
 vi.mock("@/lib/assistant/engine", () => ({
-  runTurn: async (input: { text: string; conversation: AssistantConversation; emit: (e: unknown) => void }) => {
+  runTurn: async (input: { text: string; conversation: AssistantConversation; emit: (e: unknown) => void; permissionMode?: string; origin?: string }) => {
     h.calls.push("run");
     h.turnText.push(input.text);
+    h.turnInputs.push({ permissionMode: input.permissionMode, origin: input.origin });
     input.emit({ type: "start", conversation: input.conversation, userMessageId: "x" });
     input.emit({ type: "done", messageId: "m", stopped: false });
   },
@@ -89,7 +91,19 @@ beforeEach(() => {
   h.latest = { turnId: TURN, content: "How am I doing?" };
   h.calls = [];
   h.turnText = [];
+  h.turnInputs = [];
   h.feedbackFound = true;
+});
+
+describe("Act's permission mode", () => {
+  it("passes the mode picked in the chat, and where the app is reached, to the turn", async () => {
+    await drain(await ask({ message: "log a call", mode: "act", permissionMode: "auto_safe" }));
+    expect(h.turnInputs[0]).toEqual({ permissionMode: "auto_safe", origin: "http://test.local" });
+  });
+
+  it("refuses a mode that does not exist", async () => {
+    expect((await ask({ message: "log a call", permissionMode: "yolo" })).status).toBe(422);
+  });
 });
 
 describe("asking the latest question again", () => {

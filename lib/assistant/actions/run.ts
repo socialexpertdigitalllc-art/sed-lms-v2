@@ -6,6 +6,8 @@ import { RouteError } from "./invoke";
 import { bell, usersWithPermission } from "./people";
 import { getActionDef } from "./registry";
 import { getAction, getActionSettings, insertAction, listPlan, toCard, transition, updateAction } from "./store";
+import { canAlwaysAllow, decideAutoRun, type PermissionMode } from "./permissions";
+import { getPermissionCap } from "./permissionStore";
 import type { ActionContext, ActionDef, CheckResult, PrepareOutcome, Problem, StoredAction, Values } from "./types";
 
 /**
@@ -13,9 +15,11 @@ import type { ActionContext, ActionDef, CheckResult, PrepareOutcome, Problem, St
  * card, confirmed (or edited, cancelled, sent for approval), executed as the
  * person who confirmed it, and — for a while — undone. SERVER ONLY.
  *
- * NOTHING CHANGES WITHOUT A PERSON. The model can only PREPARE: it never
- * executes. Execution starts from a Confirm press in the app (or a reply on
- * a linked phone), on a proposal stored here, re-checked at that moment.
+ * NOTHING CHANGES WITHOUT A PERSON'S SAY-SO. The model can only PREPARE: it
+ * never executes. Execution starts from a Confirm press in the app (or a
+ * reply on a linked phone) — or, when the person chose a permission mode that
+ * lets this kind of change run on its own (./permissions.ts), right after the
+ * proposal is stored: still re-checked, still run as them, still undoable.
  */
 
 /** Unconfirmed proposals stop being confirmable after this. */
@@ -151,6 +155,13 @@ export async function prepareAction(input: PrepareInput): Promise<PrepareOutcome
   const label = labelOf(def, n.values);
   const title = (preview.title ?? `${def.title}${label ? ` — ${label}` : ""}`).slice(0, 300);
   const needsApproval = await approvalReason(def, ctx);
+  const allowAlways = canAlwaysAllow({
+    cap: await getPermissionCap(ctx.admin),
+    key: def.key,
+    risk,
+    needsApproval: Boolean(needsApproval),
+    adminAlwaysAsk: settings.get(def.key)?.auto_run === false,
+  });
   const fields = preview.fields ?? (await cardFields(def, n, ctx));
   const card: Partial<ActionCard> = {
     group: def.group,
@@ -163,6 +174,8 @@ export async function prepareAction(input: PrepareInput): Promise<PrepareOutcome
     link: preview.link ?? null,
     approval: needsApproval ? { reason: needsApproval } : null,
     plan: input.plan ? { id: input.plan.id, index: input.plan.index, total: input.plan.total, title: input.plan.title } : null,
+    allowAlways,
+    kind: def.title,
   };
   const phrase = risk === "critical" ? (preview.confirmPhrase ?? label ?? "CONFIRM").slice(0, 80) || "CONFIRM" : null;
 
@@ -225,6 +238,8 @@ export interface ConfirmInput {
   phrase?: string;
   /** An approver running someone else's request. */
   asApprover?: { note?: string | null };
+  /** Run without a click, under the person's permission mode (see autoRun below). */
+  auto?: { via: "mode" | "always" };
 }
 
 /** Earlier plan steps' records, for "@N" references. */
@@ -269,6 +284,12 @@ export async function confirmAction(input: ConfirmInput): Promise<ActionCard> {
   if (!def) throw new ActionFailure("This action no longer exists.", 410);
   const settings = await getActionSettings(ctx.admin);
   if (settings.get(def.key)?.enabled === false) throw new ActionFailure(`An admin has switched off "${def.title}" for SED AI.`, 403);
+
+  // Running on its own is only ever for the requester's own proposal, and
+  // never for a high-impact change (those are confirmed by typing a name).
+  if (input.auto && (input.asApprover || row.risk === "critical" || input.edits || input.phrase)) {
+    throw new ActionFailure("This change has to be confirmed on its card.", 409);
+  }
 
   if (input.asApprover) {
     // Approval means a second person: nobody approves their own request, and
@@ -337,7 +358,7 @@ export async function confirmAction(input: ConfirmInput): Promise<ActionCard> {
   const claimed = await transition(ctx.admin, row.id, [expectStatus], {
     status: "executing",
     input: n.values,
-    ...(fields ? { card: { ...row.card, fields } } : {}),
+    ...(fields || input.auto ? { card: { ...row.card, ...(fields ? { fields } : {}), ...(input.auto ? { auto: input.auto } : {}) } } : {}),
     ...(input.asApprover ? { approver_id: ctx.userId, decided_at: ctx.now.toISOString(), approval_note: input.asApprover.note ?? null } : {}),
   });
   if (!claimed) throw new ActionFailure("This action is already being handled.", 409);
@@ -420,6 +441,93 @@ export async function undoAction(id: string, actor: ActionContext): Promise<Acti
     if (!(e instanceof RouteError)) console.error(`[assistant] undo of ${row.action_key} failed:`, e);
     return toCard(next ?? claimed);
   }
+}
+
+/* ------------------------------------------------------- running on its own */
+
+/** What a turn knows to decide whether a proposal runs without a click. */
+export interface AutoRunContext {
+  /** The person's mode for this turn (clamped to the cap in decideAutoRun). */
+  mode: PermissionMode;
+  /** The company's limit. */
+  cap: PermissionMode;
+  /** Actions the person said "don't ask again" for. */
+  allow: string[];
+  origin: string;
+  /** Shared by every call in one answer: how many more may run on their own. */
+  budget: { left: number };
+}
+
+export type AutoRunOutcome =
+  /** It ran: the card is done (or failed while running). */
+  | { ran: true; card: ActionCard }
+  /** It waits on its card; `reason` says why it did not run on its own. */
+  | { ran: false; card: ActionCard; reason: string };
+
+/**
+ * Right after a proposal: run it now if the person's permission mode lets
+ * this change run on its own. Goes through confirmAction like a click —
+ * re-checked as of now, run as the person, undoable — and if anything stops
+ * it there, the card simply waits for them.
+ */
+export async function autoRun(
+  card: ActionCard,
+  ctx: ActionContext,
+  auto: AutoRunContext,
+  onStart?: (card: ActionCard) => void,
+): Promise<AutoRunOutcome> {
+  if (card.status !== "proposed") return { ran: false, card, reason: "It is no longer waiting." };
+  const settings = await getActionSettings(ctx.admin);
+  const decision = decideAutoRun({
+    mode: auto.mode,
+    cap: auto.cap,
+    allow: auto.allow,
+    key: card.key,
+    risk: card.risk,
+    needsApproval: Boolean(card.approval),
+    adminAlwaysAsk: settings.get(card.key)?.auto_run === false,
+  });
+  if (!decision.auto) return { ran: false, card, reason: decision.reason };
+  if (auto.budget.left <= 0) return { ran: false, card, reason: "Enough changes ran on their own in this answer — the rest wait for you." };
+  auto.budget.left--;
+  onStart?.({ ...card, status: "executing", auto: { via: decision.via } });
+  try {
+    const done = await confirmAction({ id: card.id, ctx, origin: auto.origin, auto: { via: decision.via } });
+    return { ran: true, card: done };
+  } catch (e) {
+    // Refused before anything changed (a value is no longer valid, the record
+    // moved on): it waits on its card, with the reason.
+    auto.budget.left++;
+    const fresh = await getAction(ctx.admin, card.id).catch(() => null);
+    return { ran: false, card: fresh ? toCard(fresh) : card, reason: failureMessage(e) };
+  }
+}
+
+/**
+ * A plan's steps, in order, while each may run on its own. Stops at the first
+ * that waits for the person or does not finish — later steps may need it.
+ */
+export async function autoRunPlan(
+  cards: ActionCard[],
+  ctx: ActionContext,
+  auto: AutoRunContext,
+  onStart?: (card: ActionCard) => void,
+): Promise<{ cards: ActionCard[]; ran: number; stoppedAt: { title: string; reason: string } | null }> {
+  const out: ActionCard[] = [];
+  let ran = 0;
+  let stoppedAt: { title: string; reason: string } | null = null;
+  for (const card of cards) {
+    if (stoppedAt) {
+      out.push(card);
+      continue;
+    }
+    const r = await autoRun(card, ctx, auto, onStart);
+    out.push(r.card);
+    if (r.ran) ran++;
+    if (!r.ran) stoppedAt = { title: card.title, reason: r.reason };
+    else if (r.card.status !== "done") stoppedAt = { title: card.title, reason: r.card.error ?? "It failed." };
+  }
+  return { cards: out, ran, stoppedAt };
 }
 
 /* -------------------------------------------------------------- approvals */

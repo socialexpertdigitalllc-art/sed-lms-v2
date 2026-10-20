@@ -166,6 +166,9 @@ export function toCard(row: StoredAction, now = Date.now()): ActionCard {
     turnId: row.turn_id,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
+    auto: c.auto ?? null,
+    allowAlways: Boolean(c.allowAlways),
+    kind: c.kind,
   };
   if (card.status === "done" && !canUndo(card, now)) card.undoUntil = null;
   return card;
@@ -176,17 +179,32 @@ export function toCard(row: StoredAction, now = Date.now()): ActionCard {
 export interface ActionSetting {
   enabled: boolean;
   require_approval: boolean;
+  /** False: never runs on its own, whatever a person's permission mode (migration 0090). */
+  auto_run: boolean;
 }
+
+const DEFAULT_SETTING: ActionSetting = { enabled: true, require_approval: false, auto_run: true };
 
 let settingsCache: { at: number; map: Map<string, ActionSetting> } | null = null;
 const SETTINGS_TTL_MS = 15_000;
 
-/** Per-action switches (no row = on, no approval). Cached briefly; never throws. */
+/** Per-action switches (no row = on, no approval, may auto-run). Cached briefly; never throws. */
 export async function getActionSettings(admin: Admin): Promise<Map<string, ActionSetting>> {
   if (settingsCache && Date.now() - settingsCache.at < SETTINGS_TTL_MS) return settingsCache.map;
   const map = new Map<string, ActionSetting>();
-  const { data, error } = await admin.from("assistant_action_settings").select("action_key, enabled, require_approval");
-  if (!error) for (const r of data ?? []) map.set(r.action_key as string, { enabled: Boolean(r.enabled), require_approval: Boolean(r.require_approval) });
+  let { data, error } = await admin.from("assistant_action_settings").select("action_key, enabled, require_approval, auto_run");
+  // Before migration 0090 there is no auto_run column: the other switches
+  // must still apply (an admin's "off" never silently turns back on).
+  if (error) ({ data, error } = await admin.from("assistant_action_settings").select("action_key, enabled, require_approval"));
+  if (!error) {
+    for (const r of (data ?? []) as Record<string, unknown>[]) {
+      map.set(r.action_key as string, {
+        enabled: Boolean(r.enabled),
+        require_approval: Boolean(r.require_approval),
+        auto_run: r.auto_run === undefined ? true : Boolean(r.auto_run),
+      });
+    }
+  }
   settingsCache = { at: Date.now(), map };
   return map;
 }
@@ -196,10 +214,17 @@ export function clearActionSettingsCache() {
 }
 
 export async function saveActionSetting(admin: Admin, key: string, patch: Partial<ActionSetting>, by: string): Promise<void> {
-  const current = (await getActionSettings(admin)).get(key) ?? { enabled: true, require_approval: false };
+  const current = (await getActionSettings(admin)).get(key) ?? DEFAULT_SETTING;
+  const next = { ...current, ...patch };
+  // auto_run is only written when it matters, so the other switches still
+  // save on a database without migration 0090.
+  const { auto_run, ...rest } = next;
   const { error } = await admin
     .from("assistant_action_settings")
-    .upsert({ action_key: key, ...current, ...patch, updated_by: by, updated_at: new Date().toISOString() }, { onConflict: "action_key" });
+    .upsert(
+      { action_key: key, ...rest, ...(patch.auto_run !== undefined || !auto_run ? { auto_run } : {}), updated_by: by, updated_at: new Date().toISOString() },
+      { onConflict: "action_key" },
+    );
   if (error) throw new Error(error.message);
   clearActionSettingsCache();
 }

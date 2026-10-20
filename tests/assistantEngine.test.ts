@@ -74,6 +74,11 @@ vi.mock("@/lib/users/directory", () => ({
   getUserDirectory: async () => [{ id: "sam", display_name: "Sam Khan", is_active: true }],
 }));
 vi.mock("@/lib/teams/closers", () => ({ getTeamAgentIds: async () => [] }));
+const permissionState = vi.hoisted(() => ({ saved: { mode: "ask", allow: [] as string[] }, cap: "auto" }));
+vi.mock("@/lib/assistant/actions/permissionStore", () => ({
+  getActPermissions: async () => permissionState.saved,
+  getPermissionCap: async () => permissionState.cap,
+}));
 
 const { friendlyError, runTurn } = await import("@/lib/assistant/engine");
 const { ProviderHttpError } = await import("@/lib/ai-tools/providers/errors");
@@ -226,6 +231,41 @@ describe("runTurn", () => {
 
     expect(events).toContainEqual({ type: "mode", mode: "act", reason: "create a lead" });
     expect(rows[0].meta).toMatchObject({ mode: "ask" });
+  });
+
+  it("tells the model the person's permission mode — the one picked in the chat, never above the company limit", async () => {
+    const actPrompt = async (opts: { saved: string; cap: string; picked?: "ask" | "auto_safe" | "auto" }) => {
+      permissionState.saved = { mode: opts.saved, allow: [] };
+      permissionState.cap = opts.cap;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(textReply("Which lead?"));
+      await runTurn({
+        userId: "sam",
+        displayName: "Sam Khan",
+        assistantName: "Nova",
+        perms: new Set(["assistant.use", "assistant.act"]),
+        db,
+        admin,
+        conversation,
+        text: "log a call",
+        emit: () => {},
+        signal: new AbortController().signal,
+        now: new Date("2026-10-09T10:00:00Z"),
+        mode: "act",
+        ...(opts.picked ? { permissionMode: opts.picked } : {}),
+      });
+      const system = bodyOf(fetchMock, 0).messages[0].content as string;
+      fetchMock.mockRestore();
+      return system;
+    };
+    try {
+      expect(await actPrompt({ saved: "auto_safe", cap: "auto" })).toMatch(/permission mode is "Auto-run safe changes"/);
+      expect(await actPrompt({ saved: "auto_safe", cap: "auto", picked: "ask" })).toMatch(/ONLY by preparing them for confirmation/);
+      expect(await actPrompt({ saved: "ask", cap: "auto_safe", picked: "auto" })).toMatch(/permission mode is "Auto-run safe changes"/);
+      expect(await actPrompt({ saved: "auto", cap: "ask" })).toMatch(/ONLY by preparing them for confirmation/);
+    } finally {
+      permissionState.saved = { mode: "ask", allow: [] };
+      permissionState.cap = "auto";
+    }
   });
 
   it("never offers Act mode to someone without it", async () => {

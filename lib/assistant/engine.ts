@@ -7,8 +7,11 @@ import { getModel, getProvider, type AiTaskKey } from "@/lib/ai-tools/providers/
 import { isRetryableError, ProviderHttpError, CALL_TIMEOUT_MARKER } from "@/lib/ai-tools/providers/errors";
 import { isAdminMember } from "@/lib/permissions/isAdminMember";
 import { getAppSettings } from "@/lib/settings/appSettings";
+import { AUTO_RUNS_PER_TURN, clampMode, DEFAULT_ACT_PERMISSIONS, type PermissionMode } from "./actions/permissions";
+import { getActPermissions, getPermissionCap } from "./actions/permissionStore";
 import { resolveRef } from "./actions/refs";
 import { actionCatalogue } from "./actions/registry";
+import type { AutoRunContext } from "./actions/run";
 import { getActionSettings, listConversationActions } from "./actions/store";
 import type { ActionContext, RefKind, StoredAction } from "./actions/types";
 import { buildHistory, DEFAULT_HISTORY } from "./history";
@@ -66,6 +69,11 @@ export interface TurnInput {
   attachments?: MessageAttachment[];
   /** Where the question came from — recorded on any action it prepares. */
   source?: StoredAction["source"];
+  /** The address people reach the app at — links in what an action did. */
+  origin?: string;
+  /** The permission mode picked in the chat for this question; otherwise the
+   *  person's saved one. Always clamped to the company limit. */
+  permissionMode?: PermissionMode;
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -210,7 +218,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
   emit({ type: "start", conversation: toClientConversation(conversation), userMessageId: turnId });
 
   const data = new TurnData({ db: input.db, admin, userId });
-  const [settings, memories, departments, teamIds, rows, isAdmin, chatActions, actionSettings] = await Promise.all([
+  const [settings, memories, departments, teamIds, rows, isAdmin, chatActions, actionSettings, savedPermissions, permissionCap] = await Promise.all([
     getAppSettings(),
     listMemories(admin, userId).catch(() => []),
     departmentsOf(admin, userId).catch(() => []),
@@ -220,7 +228,19 @@ export async function runTurn(input: TurnInput): Promise<void> {
     // Missing tables (migration 0087 not applied) simply mean no actions yet.
     canAct ? listConversationActions(admin, userId, conversation.id, HISTORY_ACTIONS).catch(() => [] as StoredAction[]) : Promise.resolve([] as StoredAction[]),
     canAct ? getActionSettings(admin) : Promise.resolve(new Map()),
+    canAct ? getActPermissions(admin, userId) : Promise.resolve(DEFAULT_ACT_PERMISSIONS),
+    canAct ? getPermissionCap(admin) : Promise.resolve("ask" as PermissionMode),
   ]);
+  // What may run without a click this turn (see ./actions/permissions.ts).
+  const auto: AutoRunContext | null = canAct
+    ? {
+        mode: clampMode(input.permissionMode ?? savedPermissions.mode, permissionCap),
+        cap: permissionCap,
+        allow: savedPermissions.allow,
+        origin: input.origin ?? process.env.WGE_SELF_ORIGIN ?? "http://localhost:3000",
+        budget: { left: AUTO_RUNS_PER_TURN },
+      }
+    : null;
   const timezone = settings.work_timezone || "Asia/Karachi";
 
   const toolCtx: ToolContext = {
@@ -234,7 +254,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
     conversationId: conversation.id,
     data,
     emit: (event) => emit(event),
-    ...(canAct ? { act: { mode, turnId, source: input.source ?? "chat", isAdmin } } : {}),
+    ...(canAct ? { act: { mode, turnId, source: input.source ?? "chat", isAdmin, auto } } : {}),
   };
   const actionCtx: ActionContext = { userId, displayName: input.displayName, perms: input.perms, db: input.db, admin, timezone, now, isAdmin };
   const page = await describePage(input.page, actionCtx).catch(() => null);
@@ -244,7 +264,12 @@ export async function runTurn(input: TurnInput): Promise<void> {
   const setup = (m: AssistantMode) => {
     const tools = toolsFor(input.perms, m);
     const act: ActPromptFacts | null = canAct
-      ? { mode: m, catalogue: m === "act" ? actionCatalogue(actionCtx, disabled) : undefined, history: actionHistoryLines(chatActions, now.getTime()) }
+      ? {
+          mode: m,
+          catalogue: m === "act" ? actionCatalogue(actionCtx, disabled) : undefined,
+          history: actionHistoryLines(chatActions, now.getTime()),
+          permission: auto ? { mode: auto.mode, allow: auto.allow } : null,
+        }
       : null;
     const system = buildSystemPrompt({
       companyName: settings.company_name || "the company",

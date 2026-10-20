@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActionCard } from "@/lib/assistant/actions/card";
+import type { PermissionMode } from "@/lib/assistant/actions/permissions";
 import type { AnswerFeedback, AssistantMemory, AssistantMode, AssistantStreamEvent, MessageAttachment, PageContext } from "@/lib/assistant/types";
 import type { ClientConversation, UiMessage } from "@/lib/assistant/view";
 import { applyEvent, liveTurn, PENDING_PREFIX, turnsFromMessages, withCard, type TurnModel } from "@/lib/assistant/turns";
@@ -42,6 +43,8 @@ export interface CardOpBody {
   selected?: string[];
   phrase?: string;
   note?: string;
+  /** Confirm: "don't ask again" for this action. */
+  remember?: boolean;
 }
 export type CardOpResult = { ok: true; card: ActionCard } | { ok: false; error: string; problems?: { field: string; message: string }[] };
 /** What the person has changed on a card but not sent yet. */
@@ -59,6 +62,8 @@ export interface AssistantChatOptions {
   getPage?: () => PageContext | null;
   /** The assistant switched itself to Act mode for a request. */
   onModeSwitch?: (task: string) => void;
+  /** Act's permission mode picked in the chat, sent with each question. */
+  getPermissionMode?: () => PermissionMode | null;
   /** The open conversation changed: created, switched to, or cleared. */
   onActiveChange?: (id: string | null) => void;
   /** A conversation was created, opened, or touched by an answer. */
@@ -205,6 +210,10 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
             ...(opts.replaceTurnId ? { replaceTurnId: opts.replaceTurnId } : {}),
             // Ask is the default: only Act is said out loud.
             ...(askMode === "act" ? { mode: "act" } : {}),
+            ...(() => {
+              const pm = optsRef.current.getPermissionMode?.();
+              return pm ? { permissionMode: pm } : {};
+            })(),
             ...(attachments.length ? { attachments: attachments.map((a) => a.id) } : {}),
             ...(page ? { page } : {}),
           }),

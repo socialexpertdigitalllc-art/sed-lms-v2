@@ -1,6 +1,8 @@
 import { readListing } from "../actions/checks";
 import { REF_KINDS, refNoun, searchRefs } from "../actions/refs";
-import { describeAction, preparePlan, prepareAction, ActionFailure } from "../actions/run";
+import { autoRun, autoRunPlan, describeAction, preparePlan, prepareAction, ActionFailure, DEFAULT_UNDO_MINUTES } from "../actions/run";
+import { getActionDef } from "../actions/registry";
+import type { ActionCard } from "../actions/card";
 import { isMissingActionTables, ACTIONS_MIGRATION_MESSAGE } from "../actions/store";
 import type { ActionContext, RefKind, Values } from "../actions/types";
 import { normalizeUrl } from "../actions/fields";
@@ -16,7 +18,8 @@ import { ToolError, type AssistantTool, type ToolContext } from "./types";
  * ever doing them itself. It can describe an action, PREPARE one (which only
  * stores a proposal and shows the person a card), propose a plan of several,
  * and look up the records it needs. Executing is not a tool: it happens when
- * the person presses Confirm in the app.
+ * the person presses Confirm in the app — or at once, when their permission
+ * mode lets that change run on its own (../actions/permissions.ts).
  */
 
 export function actionContext(ctx: ToolContext): ActionContext {
@@ -144,25 +147,67 @@ export const prepareActionTool: AssistantTool = {
           summary: `Needs ${n} more ${n === 1 ? "detail" : "details"}`,
         };
       }
-      case "proposed":
+      case "proposed": {
+        if (act.auto) {
+          const r = await guarded(() => autoRun(out.card, actionContext(ctx), act.auto!, (card) => ctx.emit?.({ type: "action", card })));
+          ctx.emit?.({ type: "action", card: r.card });
+          if (r.ran || r.card.status !== "proposed") return ranResult(r.card);
+          return proposedResult(r.card, out.needsApproval, r.reason);
+        }
         ctx.emit?.({ type: "action", card: out.card });
-        return {
-          data: {
-            status: "proposed",
-            action_id: out.card.id,
-            title: out.card.title,
-            risk: out.card.risk,
-            needs_approval: out.needsApproval,
-            warnings: out.card.warnings ?? [],
-            next: out.needsApproval
-              ? `A card is shown. The person cannot do this themselves: tell them briefly that they can send it to an admin for approval from the card. Nothing has changed.`
-              : `A card is shown. In one or two sentences say what will happen and that it happens only when they press "${out.card.confirmLabel}" on the card${out.card.risk === "critical" ? " (and type the confirmation words)" : ""}. Nothing has changed yet — never say it is done.`,
-          },
-          summary: `Ready to confirm: ${out.card.title}`,
-        };
+        return proposedResult(out.card, out.needsApproval, null);
+      }
     }
   },
 };
+
+/** What the model is told about a card that waits for the person. */
+function proposedResult(card: ActionCard, needsApproval: boolean, notAuto: string | null) {
+  return {
+    data: {
+      status: "proposed",
+      action_id: card.id,
+      title: card.title,
+      risk: card.risk,
+      needs_approval: needsApproval,
+      warnings: card.warnings ?? [],
+      ...(notAuto ? { why_it_waits: notAuto } : {}),
+      next: needsApproval
+        ? `A card is shown. The person cannot do this themselves: tell them briefly that they can send it to an admin for approval from the card. Nothing has changed.`
+        : `A card is shown. In one or two sentences say what will happen and that it happens only when they press "${card.confirmLabel}" on the card${card.risk === "critical" ? " (and type the confirmation words)" : ""}. Nothing has changed yet — never say it is done.`,
+    },
+    summary: `Ready to confirm: ${card.title}`,
+  };
+}
+
+/** What the model is told about a change that ran on its own. */
+function ranResult(card: ActionCard) {
+  const minutes = getActionDef(card.key)?.undo?.minutes ?? DEFAULT_UNDO_MINUTES;
+  if (card.status !== "done") {
+    return {
+      data: {
+        status: "failed",
+        action_id: card.id,
+        title: card.title,
+        error: card.error ?? "It could not be done.",
+        next: "It was tried straight away (the person's permission mode allows it) but FAILED. Tell them in one sentence what failed and why. Do not retry on your own.",
+      },
+      summary: `Failed: ${card.title}`,
+    };
+  }
+  return {
+    data: {
+      status: "done",
+      action_id: card.id,
+      title: card.title,
+      result: card.result?.message ?? "Done.",
+      ...(card.result?.link ? { link: card.result.link.href } : {}),
+      ...(card.undoUntil ? { undo: `they can undo it from its card for ${minutes} minutes` } : {}),
+      next: "It is DONE — it ran straight away because the person's permission mode allows it. Say in one sentence what was done (with the link if there is one).",
+    },
+    summary: `Done: ${card.title}`,
+  };
+}
 
 export const proposePlanTool: AssistantTool = {
   name: "propose_plan",
@@ -215,6 +260,25 @@ export const proposePlanTool: AssistantTool = {
       };
     }
     for (const card of out.cards) ctx.emit?.({ type: "action", card });
+    if (act.auto) {
+      const r = await guarded(() => autoRunPlan(out.cards, actionContext(ctx), act.auto!, (card) => ctx.emit?.({ type: "action", card })));
+      for (const card of r.cards) ctx.emit?.({ type: "action", card });
+      if (r.ran) {
+        const waiting = r.cards.filter((c) => c.status === "proposed").length;
+        return {
+          data: {
+            status: waiting ? "partly_done" : r.cards.every((c) => c.status === "done") ? "done" : "failed",
+            plan_id: out.planId,
+            steps: r.cards.map((c) => ({ action_id: c.id, title: c.title, status: c.status, ...(c.result?.message ? { result: c.result.message } : {}), ...(c.error ? { error: c.error } : {}) })),
+            ...(r.stoppedAt ? { stopped_at: r.stoppedAt } : {}),
+            next: waiting
+              ? "The first steps ran straight away (the person's permission mode allows them); the rest wait on their cards. Say what was done and what still needs their confirmation, and why it stopped."
+              : "Every step ran straight away (the person's permission mode allows it). Say in a sentence or two what was done, and any step that failed.",
+          },
+          summary: `Plan: ${r.ran} of ${r.cards.length} steps done`,
+        };
+      }
+    }
     return {
       data: {
         status: "proposed",

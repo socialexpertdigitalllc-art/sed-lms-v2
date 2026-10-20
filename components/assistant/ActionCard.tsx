@@ -18,6 +18,7 @@ import {
   Undo2,
   UserCheck,
   X,
+  Zap,
 } from "lucide-react";
 import { canUndo, isOpen, RISK_LABEL, STATUS_LABEL, type ActionCard as Card, type CardField, type EditSpec } from "@/lib/assistant/actions/card";
 import { btnGhostSm, btnPrimary, btnSecondarySm } from "@/components/common/buttons";
@@ -213,6 +214,7 @@ export function ActionCardView({
     report(edits, next);
   };
   const [checked, setChecked] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [phrase, setPhrase] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<CardOp | null>(null);
@@ -282,6 +284,18 @@ export function ActionCardView({
             )}
             <span aria-hidden>·</span>
             <span className={cn(card.status === "done" && "text-ready-fg", card.status === "failed" && "text-dropped-fg")}>{STATUS_LABEL[card.status]}</span>
+            {card.auto ? (
+              <span
+                className="inline-flex items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-px font-medium text-accent-ink"
+                title={
+                  card.auto.via === "always"
+                    ? `You said not to ask again for “${card.kind ?? card.group}”.`
+                    : "Your permission mode let this run without a click."
+                }
+              >
+                <Zap className="h-2.5 w-2.5" aria-hidden /> Ran on its own
+              </span>
+            ) : null}
             {open && card.risk !== "standard" ? (
               <span
                 className={cn(
@@ -486,6 +500,15 @@ export function ActionCardView({
           </label>
         ) : null}
 
+        {open && !needsApproval && card.allowAlways && card.risk !== "critical" ? (
+          <label className="flex cursor-pointer items-start gap-2 text-xs text-text-muted">
+            <input type="checkbox" className="mt-0.5 accent-[var(--color-accent)]" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            <span>
+              Don&apos;t ask again for “{card.kind ?? card.group}” — next time it runs on its own (you can undo it, and change this in your permissions).
+            </span>
+          </label>
+        ) : null}
+
         {error ? (
           <p className="flex gap-1.5 text-xs text-dropped-fg" role="alert">
             <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -532,6 +555,7 @@ export function ActionCardView({
                     ...(edited ? { edits } : {}),
                     ...(items.length ? { selected: [...selected] } : {}),
                     ...(card.risk === "critical" ? { phrase } : {}),
+                    ...(remember ? { remember: true } : {}),
                   })
                 }
                 disabled={!canConfirm}

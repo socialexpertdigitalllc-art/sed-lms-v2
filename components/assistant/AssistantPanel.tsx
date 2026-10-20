@@ -18,6 +18,8 @@ import { SedAiAvatar } from "./SedAiMark";
 import { Suggestions } from "./Suggestions";
 import { TurnView } from "./TurnView";
 import { useAssistantChat } from "./useAssistantChat";
+import { useActPermissions } from "./useActPermissions";
+import type { PermissionMode } from "@/lib/assistant/actions/permissions";
 import { useStickToBottom } from "./useStickToBottom";
 import type { AssistantMode, MessageAttachment } from "@/lib/assistant/types";
 
@@ -73,7 +75,14 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
   const panelRef = useRef<HTMLElement>(null);
   const { scrollRef, contentRef, onScroll, onClickCapture: pauseOnDisclosure, atBottom, scrollToBottom } = useStickToBottom();
 
+  // Act's permission mode: shown by the message box, sent with each question.
+  const permissions = useActPermissions(canAct);
+  const permissionModeRef = useRef<PermissionMode | null>(null);
+  useEffect(() => {
+    permissionModeRef.current = permissions.mode;
+  });
   const chat = useAssistantChat({
+    getPermissionMode: () => permissionModeRef.current,
     // The page behind the chat: "this lead" means the lead that is open.
     getPage: () => (typeof window === "undefined" ? null : { path: window.location.pathname, title: document.title }),
     onActiveChange: (id) => writeStored(userId, id),
@@ -338,6 +347,12 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
               canAct={canAct}
               mode={chat.mode}
               onModeChange={chat.setMode}
+                permissions={permissions.view}
+                onPermissionModeChange={(m) =>
+                  void permissions.change({ mode: m }).then((err) => {
+                    if (err) toast({ kind: "error", title: "Could not change the permission mode", body: err });
+                  })
+                }
               conversationId={chat.activeId}
             />
           </div>
