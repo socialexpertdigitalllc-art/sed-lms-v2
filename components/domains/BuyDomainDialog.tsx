@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Check, Globe, Loader2, Search, ShoppingCart } from "lucide-react";
+import { AlertTriangle, Check, CircleCheck, CircleX, Globe, Loader2, Search, ShoppingCart } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
 import { cn } from "@/lib/utils";
 import { money } from "@/components/domains/DomainBits";
-import type { DomainOffer } from "@/lib/domains/service";
+import type { DomainOffer, DomainSearch } from "@/lib/domains/service";
 import type { ClientDomainRow, DomainRegistrar } from "@/lib/domains/types";
 
 const REGISTRARS: { id: DomainRegistrar; label: string; hint: string }[] = [
@@ -14,10 +14,126 @@ const REGISTRARS: { id: DomainRegistrar; label: string; hint: string }[] = [
   { id: "hostinger", label: "Hostinger", hint: "When the client needs access to the domain" },
 ];
 
+/** The part of a suggested name that differs from the searched one:
+ *  abc[contractor] vs abc[construction]. PURE. */
+export function differingPart(searched: string, candidate: string): { pre: string; mid: string; post: string } {
+  let p = 0;
+  while (p < searched.length && p < candidate.length && searched[p] === candidate[p]) p++;
+  let q = 0;
+  while (q < searched.length - p && q < candidate.length - p && searched[searched.length - 1 - q] === candidate[candidate.length - 1 - q]) q++;
+  return { pre: candidate.slice(0, p), mid: candidate.slice(p, candidate.length - q), post: candidate.slice(candidate.length - q) };
+}
+
+/** A suggested name with what differs from the search marked, so a near-miss can't pass for the real thing. */
+function MarkedName({ domain, searched }: { domain: string; searched: string | null }) {
+  if (!searched) return <>{domain}</>;
+  const d = differingPart(searched, domain);
+  if (!d.mid) return <>{domain}</>;
+  return (
+    <>
+      {d.pre}
+      <mark className="rounded-sm bg-notready-bg px-px text-notready-fg">{d.mid}</mark>
+      {d.post}
+    </>
+  );
+}
+
+function OfferRow({
+  o,
+  picked,
+  onPick,
+  searched,
+}: {
+  o: DomainOffer;
+  picked: DomainOffer | null;
+  onPick: (o: DomainOffer) => void;
+  /** The exact name searched for — marks how this one differs. */
+  searched?: string | null;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        disabled={!o.available}
+        onClick={() => onPick(o)}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm",
+          !o.available ? "cursor-not-allowed opacity-50" : picked?.domain === o.domain ? "bg-accent-soft text-accent-ink" : "text-text hover:bg-surface-2",
+        )}
+      >
+        <Globe className="h-4 w-4 shrink-0 text-text-faint" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">
+            <MarkedName domain={o.domain} searched={searched ?? null} />
+          </span>
+          <span className="block text-xs text-text-faint">
+            {o.available ? `${money(o.registrationCents, o.currency)} first year · renews ${money(o.renewalCents, o.currency)}/yr` : o.reason}
+          </span>
+        </span>
+        {picked?.domain === o.domain ? <Check className="h-4 w-4 text-accent-ink" /> : null}
+      </button>
+    </li>
+  );
+}
+
+/** The name exactly as searched — first, on its own, available or taken. */
+function ExactMatch({ exact, picked, onPick }: { exact: NonNullable<DomainSearch["exact"]>; picked: DomainOffer | null; onPick: (o: DomainOffer) => void }) {
+  const o = exact.offer;
+  const available = Boolean(o?.available);
+  const selected = picked?.domain === exact.domain;
+  return (
+    <section aria-label="Exact match" className="p-2">
+      <p className="mb-1.5 flex flex-wrap items-baseline gap-x-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-text-faint">
+        Exact match
+        {exact.assumedTld ? <span className="font-normal normal-case tracking-normal">no ending typed, so .com was checked</span> : null}
+      </p>
+      <button
+        type="button"
+        disabled={!available}
+        onClick={() => o && onPick(o)}
+        className={cn(
+          "flex w-full items-center gap-3 rounded-lg border-2 px-3.5 py-3 text-left transition-colors",
+          available
+            ? selected
+              ? "border-accent bg-accent-soft"
+              : "border-ready-fg/40 bg-ready-bg/40 hover:border-ready-fg/70"
+            : "cursor-not-allowed border-dropped-fg/30 bg-dropped-bg/40",
+        )}
+      >
+        {available ? <CircleCheck className="h-5 w-5 shrink-0 text-ready-fg" aria-hidden /> : <CircleX className="h-5 w-5 shrink-0 text-dropped-fg" aria-hidden />}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-base font-semibold text-text">{exact.domain}</span>
+          <span className={cn("block text-xs", available ? "text-ready-fg" : "text-dropped-fg")}>
+            {!o
+              ? "Couldn't get an answer for this name — search again."
+              : available
+                ? `Available · ${money(o.registrationCents, o.currency)} first year · renews ${money(o.renewalCents, o.currency)}/yr`
+                : o.reason === "Taken"
+                  ? "Taken — someone already owns this name."
+                  : `Not available: ${o.reason ?? "can't be bought here"}`}
+          </span>
+        </span>
+        <span
+          className={cn(
+            "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold uppercase",
+            available ? "bg-ready-bg text-ready-fg" : "bg-dropped-bg text-dropped-fg",
+          )}
+        >
+          {available ? "Available" : o?.reason === "Taken" ? "Taken" : "Unavailable"}
+        </span>
+        {selected ? <Check className="h-4 w-4 shrink-0 text-accent-ink" /> : null}
+      </button>
+    </section>
+  );
+}
+
 /**
  * Find and buy a domain (Cloudflare by default, Hostinger optional), for a
- * lead or for stock. Two steps on purpose: pick, then confirm the exact
- * first-year and renewal price — the server refuses if the price moved since.
+ * lead or for stock. The exact name searched for comes first, on its own —
+ * available or taken — and anything else is listed apart from it, with how it
+ * differs marked, so a near-miss is never bought by mistake. Two steps on
+ * purpose: pick, then confirm the exact first-year and renewal price — the
+ * server refuses if the price moved since.
  */
 export function BuyDomainDialog({
   leadId,
@@ -37,12 +153,14 @@ export function BuyDomainDialog({
   const { toast } = useToast();
   const [registrar, setRegistrar] = useState<DomainRegistrar>("cloudflare");
   const [query, setQuery] = useState(initialQuery);
-  const [results, setResults] = useState<DomainOffer[] | null>(null);
+  const [results, setResults] = useState<DomainSearch | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<DomainOffer | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [buying, setBuying] = useState(false);
+  /** Buying a name other than the exact one searched for needs saying so. */
+  const [notExactOk, setNotExactOk] = useState(false);
 
   const search = useCallback(
     async (q: string, reg: DomainRegistrar) => {
@@ -51,16 +169,25 @@ export function BuyDomainDialog({
       setError(null);
       setPicked(null);
       setConfirming(false);
+      setNotExactOk(false);
+      const empty: DomainSearch = { query: q, exact: null, otherEndings: [], similar: [] };
       try {
         const res = await fetch(`/api/domains/search?q=${encodeURIComponent(q.trim())}&registrar=${reg}`);
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
           setError(j.error ?? "Search failed");
-          setResults([]);
-        } else setResults((j.results ?? []) as DomainOffer[]);
+          setResults(empty);
+        } else {
+          setResults({
+            query: q.trim(),
+            exact: (j.exact ?? null) as DomainSearch["exact"],
+            otherEndings: (j.otherEndings ?? []) as DomainOffer[],
+            similar: (j.similar ?? []) as DomainOffer[],
+          });
+        }
       } catch {
         setError("Search failed — check your connection.");
-        setResults([]);
+        setResults(empty);
       } finally {
         setSearching(false);
       }
@@ -109,6 +236,14 @@ export function BuyDomainDialog({
       setBuying(false);
     }
   }
+
+  const pick = (o: DomainOffer) => {
+    setPicked(o);
+    setNotExactOk(false);
+  };
+  const exactName = results?.exact?.domain ?? null;
+  // Anything but the exact name searched for is confirmed separately.
+  const notExact = Boolean(picked && results && picked.domain !== exactName);
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Buy a domain">
@@ -171,35 +306,35 @@ export function BuyDomainDialog({
                 <p className="p-4 text-sm text-dropped-fg">{error}</p>
               ) : !results ? (
                 <p className="p-4 text-sm text-text-faint">Search by the business name or type an exact domain.</p>
-              ) : results.length === 0 ? (
+              ) : !results.exact && !results.otherEndings.length && !results.similar.length ? (
                 <p className="p-4 text-sm text-text-faint">No names found — try a different phrase.</p>
               ) : (
-                <ul>
-                  {results.map((o) => (
-                    <li key={o.domain}>
-                      <button
-                        type="button"
-                        disabled={!o.available}
-                        onClick={() => setPicked(o)}
-                        className={cn(
-                          "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm",
-                          !o.available ? "cursor-not-allowed opacity-50" : picked?.domain === o.domain ? "bg-accent-soft text-accent-ink" : "text-text hover:bg-surface-2",
-                        )}
-                      >
-                        <Globe className="h-4 w-4 shrink-0 text-text-faint" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium">{o.domain}</span>
-                          <span className="block text-xs text-text-faint">
-                            {o.available
-                              ? `${money(o.registrationCents, o.currency)} first year · renews ${money(o.renewalCents, o.currency)}/yr`
-                              : o.reason}
-                          </span>
-                        </span>
-                        {picked?.domain === o.domain ? <Check className="h-4 w-4 text-accent-ink" /> : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  {results.exact ? <ExactMatch exact={results.exact} picked={picked} onPick={pick} /> : null}
+                  {results.otherEndings.length ? (
+                    <section aria-label="Same name, other endings" className="border-t border-border-subtle p-2">
+                      <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Same name, other endings</p>
+                      <ul>
+                        {results.otherEndings.map((o) => (
+                          <OfferRow key={o.domain} o={o} picked={picked} onPick={pick} />
+                        ))}
+                      </ul>
+                    </section>
+                  ) : null}
+                  {results.similar.length ? (
+                    <section aria-label="Other suggestions" className="border-t-4 border-double border-border p-2">
+                      <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Other suggestions — different names</p>
+                      <p className="mb-1.5 px-1 text-xs text-notready-fg">
+                        These are not the name you searched for. What differs is <mark className="rounded-sm bg-notready-bg px-px text-notready-fg">marked</mark> — read each one carefully.
+                      </p>
+                      <ul>
+                        {results.similar.map((o) => (
+                          <OfferRow key={o.domain} o={o} picked={picked} onPick={pick} searched={results.exact ? results.exact.domain : null} />
+                        ))}
+                      </ul>
+                    </section>
+                  ) : null}
+                </>
               )}
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-border-subtle p-4">
@@ -217,9 +352,14 @@ export function BuyDomainDialog({
         ) : picked ? (
           <>
             <div className="space-y-3 p-5 text-sm">
-              <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
                 <dt className="text-text-muted">Domain</dt>
-                <dd className="font-semibold text-text">{picked.domain}</dd>
+                <dd className="font-semibold text-text">
+                  {picked.domain}
+                  {exactName === picked.domain ? (
+                    <span className="ml-2 rounded-full bg-ready-bg px-1.5 py-0.5 text-[10px] font-bold uppercase text-ready-fg">Exact match</span>
+                  ) : null}
+                </dd>
                 <dt className="text-text-muted">Registrar</dt>
                 <dd className="text-text">{picked.registrar === "cloudflare" ? "Cloudflare" : "Hostinger"}</dd>
                 <dt className="text-text-muted">First year</dt>
@@ -229,6 +369,35 @@ export function BuyDomainDialog({
                 <dt className="text-text-muted">For</dt>
                 <dd className="text-text">{leadName ?? "No lead yet (stock domain)"}</dd>
               </dl>
+              {notExact ? (
+                <div className="space-y-2 rounded-md border-2 border-dropped-fg/40 bg-dropped-bg/50 p-3 text-xs text-dropped-fg">
+                  <p className="flex items-start gap-2 font-semibold">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
+                      This is not the name you searched for. You searched “{results?.query}”
+                      {exactName ? (
+                        <>
+                          {" "}— the exact name is <span className="font-mono">{exactName}</span>
+                          {results?.exact?.offer?.available ? " (available)" : " (not available)"}
+                        </>
+                      ) : null}
+                      .
+                    </span>
+                  </p>
+                  <label className="flex cursor-pointer items-start gap-2 pl-6 text-text">
+                    <input type="checkbox" className="mt-0.5 accent-[var(--color-danger)]" checked={notExactOk} onChange={(e) => setNotExactOk(e.target.checked)} />
+                    <span>
+                      Yes, I want <span className="font-mono font-semibold">{picked.domain}</span>
+                      {exactName ? (
+                        <>
+                          , not <span className="font-mono">{exactName}</span>
+                        </>
+                      ) : null}
+                      .
+                    </span>
+                  </label>
+                </div>
+              ) : null}
               <p className="flex items-start gap-2 rounded-md border border-notready-fg/30 bg-notready-bg p-3 text-xs text-notready-fg">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
@@ -243,7 +412,13 @@ export function BuyDomainDialog({
               <button type="button" onClick={() => setConfirming(false)} disabled={buying} className="rounded-md border border-border px-3 py-2 text-sm text-text-muted hover:text-text disabled:opacity-50">
                 Back
               </button>
-              <button type="button" onClick={buy} disabled={buying} className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-ink disabled:opacity-60">
+              <button
+                type="button"
+                onClick={buy}
+                disabled={buying || (notExact && !notExactOk)}
+                title={notExact && !notExactOk ? "Tick the box above to confirm this is the name you want" : undefined}
+                className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-ink disabled:opacity-60"
+              >
                 {buying ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
                 {buying ? "Buying…" : `Buy for ${money(picked.registrationCents, picked.currency)}`}
               </button>

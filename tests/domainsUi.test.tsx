@@ -27,7 +27,9 @@ describe("BuyDomainDialog", () => {
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-        if (url.startsWith("/api/domains/search")) return Response.json({ results: offers });
+        if (url.startsWith("/api/domains/search")) {
+          return Response.json({ exact: { domain: "acmeroofing.com", assumedTld: true, offer: offers[0] }, otherEndings: [offers[1]], similar: [], results: offers });
+        }
         if (url === "/api/domains/purchase") return Response.json({ domain: { id: "d1", domain: "acmeroofing.com", status: "purchasing" } });
         throw new Error(`unexpected ${url}`);
       }),
@@ -41,11 +43,15 @@ describe("BuyDomainDialog", () => {
 
     await screen.findByText("acmeroofing.com");
     expect(calls[0].url).toBe("/api/domains/search?q=acme%20roofing&registrar=cloudflare");
+    expect(screen.getByRole("region", { name: "Exact match" })).toHaveTextContent(/Available/);
     // a taken name can't be picked
     expect(screen.getByText("acmeroofing.net").closest("button")).toBeDisabled();
 
     fireEvent.click(screen.getByText("acmeroofing.com"));
     fireEvent.click(screen.getByRole("button", { name: /Continue with acmeroofing.com/ }));
+    // the exact name: no extra "not what you searched" step
+    expect(screen.getByText("Exact match")).toBeInTheDocument();
+    expect(screen.queryByText(/not the name you searched for/)).toBeNull();
     // confirmation shows both prices and the refund warning
     expect(screen.getByText("$10.46 / year, automatically")).toBeInTheDocument();
     expect(screen.getByText(/can't be refunded/)).toBeInTheDocument();
@@ -58,6 +64,59 @@ describe("BuyDomainDialog", () => {
       leadId: "lead-1",
       expectedCents: 1046,
     });
+  });
+
+  it("the exact name comes first — taken here — and different names sit apart with what differs marked", async () => {
+    const cfOffer = (domain: string, available: boolean) => ({
+      domain, registrar: "cloudflare", available, reason: available ? null : "Taken",
+      registrationCents: available ? 1046 : null, renewalCents: available ? 1046 : null, currency: "USD",
+    });
+    const calls: { url: string; body?: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.startsWith("/api/domains/search")) {
+          return Response.json({
+            exact: { domain: "abcconstruction.com", assumedTld: true, offer: cfOffer("abcconstruction.com", false) },
+            otherEndings: [cfOffer("abcconstruction.net", true)],
+            similar: [cfOffer("abccontractor.com", true)],
+          });
+        }
+        if (url === "/api/domains/purchase") return Response.json({ domain: { id: "d1", domain: "abccontractor.com", status: "purchasing" } });
+        throw new Error(`unexpected ${url}`);
+      }),
+    );
+    render(
+      <ToastProvider>
+        <BuyDomainDialog leadId="lead-1" leadName="ABC Construction" initialQuery="ABC Construction" sandbox={false} onClose={() => {}} onBought={() => {}} />
+      </ToastProvider>,
+    );
+
+    const exact = await screen.findByRole("region", { name: "Exact match" });
+    expect(exact).toHaveTextContent("abcconstruction.com");
+    expect(exact).toHaveTextContent(/Taken/);
+    expect(exact).toHaveTextContent(/no ending typed, so .com was checked/);
+    expect(exact.querySelector("button")).toBeDisabled();
+
+    const others = screen.getByRole("region", { name: "Other suggestions" });
+    expect(others).toHaveTextContent(/not the name you searched for/);
+    // "contractor" vs "construction": the differing part is marked
+    expect([...others.querySelectorAll("li mark")].map((m) => m.textContent)).toEqual(["tractor"]);
+    expect(screen.getByRole("region", { name: "Same name, other endings" })).toHaveTextContent("abcconstruction.net");
+
+    // Picking a different name: buying needs a second, explicit yes.
+    fireEvent.click(screen.getByText("tractor").closest("button")!);
+    fireEvent.click(screen.getByRole("button", { name: /Continue with abccontractor.com/ }));
+    expect(screen.getByText(/This is not the name you searched for/)).toBeInTheDocument();
+    const buy = screen.getByRole("button", { name: "Buy for $10.46" });
+    expect(buy).toBeDisabled();
+    const yes = screen.getByRole("checkbox");
+    expect(yes.closest("label")).toHaveTextContent("Yes, I want abccontractor.com, not abcconstruction.com.");
+    fireEvent.click(yes);
+    expect(buy).toBeEnabled();
+    fireEvent.click(buy);
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/domains/purchase")).toBe(true));
   });
 
   it("switching to Hostinger searches Hostinger", async () => {

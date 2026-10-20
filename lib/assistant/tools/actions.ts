@@ -8,7 +8,7 @@ import type { ActionContext, RefKind, Values } from "../actions/types";
 import { normalizeUrl } from "../actions/fields";
 import { UnsafeUrlError } from "../safeFetch";
 import { cloudflareConfigured } from "@/lib/cloudflare/client";
-import { searchOffers } from "@/lib/domains/service";
+import { exactDomainFor, searchDomainNames, type DomainOffer } from "@/lib/domains/service";
 import type { DomainRegistrar } from "@/lib/domains/types";
 import { hostingerConfigured } from "@/lib/hostinger/client";
 import { ToolError, type AssistantTool, type ToolContext } from "./types";
@@ -352,7 +352,7 @@ export const checkDomainTool: AssistantTool = {
   name: "check_domain",
   label: "Checking the domain",
   description:
-    "Is a domain name available, and what does it cost (first year and yearly renewal) on the company's registrars? Read-only — use it to talk prices before preparing domain.buy. Also suggests close alternatives.",
+    "Is a domain name available, and what does it cost (first year and yearly renewal) on the company's registrars? Read-only — use it to talk prices before preparing domain.buy. Checks the exact name first (.com when no ending is given), then lists alternatives, which are different names.",
   parameters: {
     type: "object",
     properties: {
@@ -375,23 +375,31 @@ export const checkDomainTool: AssistantTool = {
     const registrars = (args.registrar === "cloudflare" || args.registrar === "hostinger" ? [args.registrar] : ["cloudflare", "hostinger"]) as DomainRegistrar[];
     const usable = registrars.filter((r) => (r === "cloudflare" ? cloudflareConfigured() : hostingerConfigured()));
     if (!usable.length) throw new ToolError("No domain registrar is set up on this server.");
-    const results = await Promise.all(usable.map((r) => searchOffers(q, r).catch(() => null)));
-    const offers = results.flatMap((r) => r ?? []).slice(0, 16);
+    const results = await Promise.all(usable.map((r) => searchDomainNames(q, r).catch(() => null)));
     const money = (c: number | null, cur: string) => (c === null ? null : `${cur === "USD" ? "$" : `${cur} `}${(c / 100).toFixed(2)}`);
+    const view = (o: DomainOffer) => ({
+      domain: o.domain,
+      registrar: o.registrar,
+      available: o.available,
+      first_year: money(o.registrationCents, o.currency),
+      renewal_per_year: money(o.renewalCents, o.currency),
+      reason: o.reason,
+    });
+    const exactName = exactDomainFor(q)?.domain ?? null;
+    const exact = results.flatMap((r) => (r?.exact?.offer ? [r.exact.offer] : []));
+    const alternatives = results.flatMap((r) => (r ? [...r.otherEndings, ...r.similar] : [])).slice(0, 16);
+    const exactAvailable = exact.some((o) => o.available);
     return {
       data: {
         query: q,
-        offers: offers.map((o) => ({
-          domain: o.domain,
-          registrar: o.registrar,
-          available: o.available,
-          first_year: money(o.registrationCents, o.currency),
-          renewal_per_year: money(o.renewalCents, o.currency),
-          reason: o.reason,
-        })),
-        ...(results.some((r) => r === null) ? { note: "One registrar could not be reached; its prices are missing." } : {}),
+        // The name exactly as asked (.com when no ending was given) — say plainly
+        // whether IT is available before offering anything else.
+        exact_match: exactName ? { domain: exactName, available: exactAvailable, by_registrar: exact.map(view) } : null,
+        alternatives: alternatives.map(view),
+        note: "Alternatives are DIFFERENT names from the one asked for. Never present one as if it were the requested name; say clearly when the exact name is taken.",
+        ...(results.some((r) => r === null) ? { unreachable: "One registrar could not be reached; its prices are missing." } : {}),
       },
-      summary: offers.some((o) => o.domain === q && o.available) ? `${q} is available` : offers.length ? `${offers.filter((o) => o.available).length} available options` : "No results",
+      summary: exactName ? `${exactName} is ${exactAvailable ? "available" : "not available"}` : alternatives.length ? `${alternatives.filter((o) => o.available).length} available options` : "No results",
     };
   },
 };

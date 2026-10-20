@@ -70,43 +70,119 @@ function cfOffer(c: DomainCheck): DomainOffer {
   };
 }
 
-const looksLikeDomain = (q: string) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(q.trim());
 const HOSTINGER_TLDS = ["com", "net", "org", "co", "us"];
+/** Same name, other endings — offered under the exact match, never mixed in with it. */
+const OTHER_ENDINGS = ["net", "org", "co"];
 
-/** Availability + price for a phrase ("jj remodeling atlanta") or a full name. */
-export async function searchOffers(query: string, registrar: DomainRegistrar): Promise<DomainOffer[] | null> {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
+/**
+ * The domain a search means EXACTLY: what was typed, as one name. Spaces and
+ * punctuation go ("ABC Construction" → abcconstruction); no ending typed means
+ * .com. "abc construction.net" → abcconstruction.net. Null when nothing usable
+ * is left, or the name is longer than a domain allows (63 characters). PURE.
+ */
+export function exactDomainFor(query: string): { domain: string; label: string; tld: string; assumedTld: boolean } | null {
+  let q = query.trim().toLowerCase();
+  q = q.replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/^www\./, "").split(/[/?#]/)[0].trim();
+  // An ending is what follows the first dot, with no spaces in it: "abc.com"
+  // or "abc construction.net" have one; "Mr. Fix It" and "St. Louis Roofing" don't.
+  const dot = q.indexOf(".");
+  const typedTld = dot >= 0 ? q.slice(dot + 1).trim() : "";
+  const tldOk = /^[a-z]{2,24}(\.[a-z]{2,24})?$/.test(typedTld);
+  const labelPart = dot >= 0 && tldOk ? q.slice(0, dot) : q.replace(/\./g, " ");
+  const label = labelPart
+    .normalize("NFKD")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/^-+|-+$/g, "");
+  if (!label || label.length > 63) return null;
+  const tld = tldOk ? typedTld : "com";
+  return { domain: `${label}.${tld}`, label, tld, assumedTld: !tldOk };
+}
+
+/** One search, three groups that are never mixed: the exact name, the same
+ *  name on other endings, and different (similar) names. */
+export interface DomainSearch {
+  query: string;
+  /** Null when the search can't be read as a domain name at all. */
+  exact: {
+    domain: string;
+    /** No ending was typed — .com was assumed. */
+    assumedTld: boolean;
+    /** Null when the registrar gave no answer for it. */
+    offer: DomainOffer | null;
+  } | null;
+  otherEndings: DomainOffer[];
+  similar: DomainOffer[];
+}
+
+async function hostingerOffer(name: string): Promise<DomainOffer | null> {
+  const tld = name.slice(name.indexOf(".") + 1);
+  const [avail, price] = await Promise.all([checkHostingerAvailability(name), getHostingerDomainPrice(tld)]);
+  if (!avail) return null;
+  return {
+    domain: name,
+    registrar: "hostinger",
+    available: avail.available && Boolean(price),
+    reason: !avail.available ? "Taken" : !price ? "No Hostinger price for this extension" : null,
+    registrationCents: price?.firstCents ?? null,
+    renewalCents: price?.renewCents ?? null,
+    currency: price?.currency ?? "USD",
+  };
+}
+
+/**
+ * Search for a name: the EXACT domain first (checked authoritatively —
+ * available or taken), then the same name on other endings, then similar
+ * names the registrar suggests. Null when the registrar can't be reached for
+ * the exact check: suggestions alone, without an answer for the exact name,
+ * are exactly how a near-miss gets bought by mistake.
+ */
+export async function searchDomainNames(query: string, registrar: DomainRegistrar): Promise<DomainSearch | null> {
+  const q = query.trim();
+  if (!q) return { query: q, exact: null, otherEndings: [], similar: [] };
+  const exact = exactDomainFor(q);
+  const endings = exact ? (registrar === "hostinger" ? HOSTINGER_TLDS : ["com", ...OTHER_ENDINGS]).filter((t) => t !== exact.tld).map((t) => `${exact.label}.${t}`) : [];
+
   if (registrar === "cloudflare") {
-    if (looksLikeDomain(q)) {
-      // the exact name first (authoritative), then a few alternatives
-      const [exact, more] = await Promise.all([checkDomains([q.replace(/^www\./, "")]), searchDomains(q.split(".")[0], 8)]);
-      if (!exact) return null;
-      const seen = new Set<string>();
-      return [...exact, ...(more ?? [])].map(cfOffer).filter((o) => (seen.has(o.domain) ? false : (seen.add(o.domain), true)));
+    const [checked, found] = await Promise.all([
+      exact ? checkDomains([exact.domain, ...endings]) : Promise.resolve([] as DomainCheck[]),
+      searchDomains(exact && !exact.assumedTld ? exact.label : q, 12),
+    ]);
+    if (exact && !checked) return null;
+    if (!exact && !found) return null;
+    const offers = (checked ?? []).map(cfOffer);
+    const exactOffer = exact ? (offers.find((o) => o.domain === exact.domain) ?? null) : null;
+    const otherEndings = endings.map((d) => offers.find((o) => o.domain === d)).filter((o): o is DomainOffer => Boolean(o));
+    const shown = new Set([exact?.domain, ...endings]);
+    const similar: DomainOffer[] = [];
+    for (const o of (found ?? []).map(cfOffer)) {
+      if (shown.has(o.domain)) continue;
+      shown.add(o.domain);
+      similar.push(o);
     }
-    const found = await searchDomains(q, 12);
-    return found ? found.map(cfOffer) : null;
+    return { query: q, exact: exact ? { domain: exact.domain, assumedTld: exact.assumedTld, offer: exactOffer } : null, otherEndings, similar };
   }
 
-  // Hostinger: one label across a few popular extensions (or the exact name)
-  const names = looksLikeDomain(q) ? [q.replace(/^www\./, "")] : HOSTINGER_TLDS.map((t) => `${q.replace(/[^a-z0-9-]/g, "")}.${t}`);
-  const offers: DomainOffer[] = [];
-  for (const name of names) {
-    const tld = name.slice(name.indexOf(".") + 1);
-    const [avail, price] = await Promise.all([checkHostingerAvailability(name), getHostingerDomainPrice(tld)]);
-    if (!avail) continue;
-    offers.push({
-      domain: name,
-      registrar: "hostinger",
-      available: avail.available && Boolean(price),
-      reason: !avail.available ? "Taken" : !price ? "No Hostinger price for this extension" : null,
-      registrationCents: price?.firstCents ?? null,
-      renewalCents: price?.renewCents ?? null,
-      currency: price?.currency ?? "USD",
-    });
+  // Hostinger: no suggestion service — the exact name and its other endings.
+  if (!exact) return { query: q, exact: null, otherEndings: [], similar: [] };
+  const exactOffer = await hostingerOffer(exact.domain);
+  if (!exactOffer) return null;
+  const otherEndings: DomainOffer[] = [];
+  for (const name of endings) {
+    const o = await hostingerOffer(name);
+    if (o) otherEndings.push(o);
   }
-  return offers;
+  return { query: q, exact: { domain: exact.domain, assumedTld: exact.assumedTld, offer: exactOffer }, otherEndings, similar: [] };
+}
+
+/**
+ * Availability + price as one list: the exact name first, then the same name
+ * on other endings, then similar names. For callers that look one name up
+ * (the assistant's domain.buy check finds its own name in it).
+ */
+export async function searchOffers(query: string, registrar: DomainRegistrar): Promise<DomainOffer[] | null> {
+  const r = await searchDomainNames(query, registrar);
+  if (!r) return null;
+  return [...(r.exact?.offer ? [r.exact.offer] : []), ...r.otherEndings, ...r.similar];
 }
 
 // ---------------------------------------------------------------------------

@@ -35,7 +35,7 @@ vi.mock("@/lib/site-studio/deploy/golive", () => golive);
 // keep the transfer module (normalizeTargetDomain) away from DirectAdmin/Hostinger imports
 vi.mock("@/lib/site-studio/deploy/snapshots", () => ({ snapshotSite: vi.fn() }));
 
-import { purchaseDomain, assignDomain, setDomainAutoRenew, markDomainLive, copyStagingToDomain, nudgeWaitingDomain } from "@/lib/domains/service";
+import { purchaseDomain, assignDomain, setDomainAutoRenew, markDomainLive, copyStagingToDomain, nudgeWaitingDomain, exactDomainFor, searchDomainNames, searchOffers } from "@/lib/domains/service";
 
 type Rec = Record<string, unknown>;
 let seq = 0;
@@ -303,5 +303,78 @@ describe("closing the site step by hand (the GG Tile case)", () => {
     expect(await nudgeWaitingDomain(db.admin, "lead-1")).toBe("d1");
     expect(Date.parse(db.tables.client_domains[0].next_run_at as string)).toBeLessThanOrEqual(Date.now());
     expect(await nudgeWaitingDomain(db.admin, "lead-without-domain")).toBeNull();
+  });
+});
+
+
+describe("searching: the exact name first, everything else apart", () => {
+  const check = (name: string, registrable: boolean) => ({
+    name,
+    registrable,
+    reason: registrable ? undefined : "domain_unavailable",
+    pricing: registrable ? { currency: "USD", registration_cost: "10.46", renewal_cost: "10.46" } : undefined,
+  });
+  beforeEach(() => {
+    cf.checkDomains.mockReset();
+    cf.searchDomains.mockReset();
+    hg.checkHostingerAvailability.mockReset();
+    hg.getHostingerDomainPrice.mockReset();
+  });
+
+  it("reads a search as one exact name — .com when no ending is typed", () => {
+    expect(exactDomainFor("ABC Construction")).toEqual({ domain: "abcconstruction.com", label: "abcconstruction", tld: "com", assumedTld: true });
+    expect(exactDomainFor("abc construction.net")).toMatchObject({ domain: "abcconstruction.net", assumedTld: false });
+    expect(exactDomainFor("https://www.Jumbos-Pizza.com/menu")).toMatchObject({ domain: "jumbos-pizza.com", assumedTld: false });
+    expect(exactDomainFor("Jumbo's Pizza & Grill")?.domain).toBe("jumbospizzagrill.com");
+    expect(exactDomainFor("Mr. Fix It")?.domain).toBe("mrfixit.com");
+    expect(exactDomainFor("St. Louis Roofing")?.domain).toBe("stlouisroofing.com");
+    expect(exactDomainFor("J.J. Remodeling")?.domain).toBe("jjremodeling.com");
+    expect(exactDomainFor("acme.co.uk")?.domain).toBe("acme.co.uk");
+    expect(exactDomainFor("Café Olé")?.domain).toBe("cafeole.com");
+    expect(exactDomainFor("---")).toBeNull();
+    expect(exactDomainFor("x".repeat(64))).toBeNull();
+  });
+
+  it("checks the exact name authoritatively, and never mixes a near-miss in with it", async () => {
+    cf.checkDomains.mockResolvedValue([check("abcconstruction.com", false), check("abcconstruction.net", true), check("abcconstruction.org", false), check("abcconstruction.co", true)]);
+    cf.searchDomains.mockResolvedValue([check("abccontractor.com", true), check("abcconstruction.net", true), check("abcconstruction.com", false)]);
+    const r = await searchDomainNames("ABC Construction", "cloudflare");
+    expect(cf.checkDomains).toHaveBeenCalledWith(["abcconstruction.com", "abcconstruction.net", "abcconstruction.org", "abcconstruction.co"]);
+    expect(cf.searchDomains).toHaveBeenCalledWith("ABC Construction", 12);
+    expect(r?.exact).toMatchObject({ domain: "abcconstruction.com", assumedTld: true, offer: { available: false, reason: "Taken" } });
+    expect(r?.otherEndings.map((o) => o.domain)).toEqual(["abcconstruction.net", "abcconstruction.org", "abcconstruction.co"]);
+    // Suggestions: only the different names — never the exact one or its other endings again.
+    expect(r?.similar.map((o) => o.domain)).toEqual(["abccontractor.com"]);
+  });
+
+  it("an exact domain typed: that name first, its other endings, then names like its label", async () => {
+    cf.checkDomains.mockResolvedValue([check("abcconstruction.net", true)]);
+    cf.searchDomains.mockResolvedValue([]);
+    const r = await searchDomainNames("abcconstruction.net", "cloudflare");
+    expect(cf.checkDomains).toHaveBeenCalledWith(["abcconstruction.net", "abcconstruction.com", "abcconstruction.org", "abcconstruction.co"]);
+    expect(cf.searchDomains).toHaveBeenCalledWith("abcconstruction", 12);
+    expect(r?.exact).toMatchObject({ domain: "abcconstruction.net", assumedTld: false, offer: { available: true, registrationCents: 1046 } });
+  });
+
+  it("no answer for the exact name = no results at all (suggestions alone are how a near-miss gets bought)", async () => {
+    cf.checkDomains.mockResolvedValue(null);
+    cf.searchDomains.mockResolvedValue([check("abccontractor.com", true)]);
+    expect(await searchDomainNames("ABC Construction", "cloudflare")).toBeNull();
+    expect(await searchOffers("ABC Construction", "cloudflare")).toBeNull();
+  });
+
+  it("searchOffers lists the exact name first, then the rest", async () => {
+    cf.checkDomains.mockResolvedValue([check("abcconstruction.com", true)]);
+    cf.searchDomains.mockResolvedValue([check("abccontractor.com", true)]);
+    expect((await searchOffers("ABC Construction", "cloudflare"))?.map((o) => o.domain)).toEqual(["abcconstruction.com", "abccontractor.com"]);
+  });
+
+  it("Hostinger: the exact name, then the same name on other endings", async () => {
+    hg.checkHostingerAvailability.mockImplementation(async (d: string) => ({ available: d !== "abcconstruction.com", restriction: null }));
+    hg.getHostingerDomainPrice.mockResolvedValue({ itemId: "x", firstCents: 999, renewCents: 1599, currency: "USD" });
+    const r = await searchDomainNames("ABC Construction", "hostinger");
+    expect(r?.exact).toMatchObject({ domain: "abcconstruction.com", offer: { available: false, reason: "Taken" } });
+    expect(r?.otherEndings.map((o) => o.domain)).toEqual(["abcconstruction.net", "abcconstruction.org", "abcconstruction.co", "abcconstruction.us"]);
+    expect(r?.similar).toEqual([]);
   });
 });
