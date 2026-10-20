@@ -1,5 +1,6 @@
 import type { ContractSnapshot } from "@/lib/contracts/types";
 import { formatUsd } from "@/lib/contracts/merge";
+import { isPaidInFull, paymentTermsText } from "@/lib/contracts/payments";
 
 /**
  * Contract template registry — the scalable core of the contract system.
@@ -20,7 +21,7 @@ export type ContractText = string | ((s: ContractSnapshot) => string);
 export type ContractNode =
   | { kind: "para"; text: ContractText }      // body paragraph
   | { kind: "subhead"; text: string }          // bold inline label (e.g. "a. Website Development")
-  | { kind: "bullet"; text: ContractText };    // bulleted list item
+  | { kind: "bullet"; text: ContractText; when?: (s: ContractSnapshot) => boolean }; // bulleted list item; `when` = only for some contracts
 
 export interface ContractSection {
   heading: string;         // e.g. "1. Scope of Services"
@@ -33,6 +34,11 @@ export interface ContractTemplate {
   title: string;           // large heading on the PDF, e.g. "WEBSITE DEVELOPMENT AGREEMENT"
   agreementNoun: string;   // used in the intro sentence: This Service Agreement ("<agreementNoun>") …
   sections: ContractSection[];
+}
+
+/** Whether a node appears in this contract (conditional bullets). */
+export function nodeVisible(node: ContractNode, s: ContractSnapshot): boolean {
+  return node.kind !== "bullet" || !node.when || node.when(s);
 }
 
 /** Resolve a ContractText against the snapshot. */
@@ -63,6 +69,11 @@ const STANDARD_WEBSITE_AGREEMENT: ContractTemplate = {
         { kind: "bullet", text: (s) => `Fee: ${formatUsd(s.one_time_price)} (USD) / One Time + ${formatUsd(s.yearly_price)} (USD) / Year` },
         { kind: "subhead", text: "Payment Terms:" },
         { kind: "bullet", text: (s) => `The ${formatUsd(s.one_time_price)} one-time and ${formatUsd(s.yearly_price)} / Year fee covers website maintenance.` },
+        {
+          kind: "bullet",
+          text: (s) => paymentTermsText(s.payment_plan ?? null, s.one_time_price),
+          when: (s) => !isPaidInFull(s.payment_plan),
+        },
         { kind: "bullet", text: "Payments are non-refundable once work has commenced." },
       ],
     },

@@ -52,3 +52,34 @@ export async function replaceAllText(
   });
   if (!res.ok) throw new Error(`Docs batchUpdate failed: ${res.status} ${await res.text()}`);
 }
+
+/** A Google Doc's full structure (body content with indices) and revision. */
+export async function getDocument(docId: string): Promise<{ revisionId: string | null; body: { content?: unknown[] } }> {
+  const res = await fetch(`${DOCS}/${docId}`, { headers: await authHeaders() });
+  if (!res.ok) throw new Error(`Docs get failed: ${res.status} ${await res.text()}`);
+  const doc = (await res.json()) as { revisionId?: string; body?: { content?: unknown[] } };
+  return { revisionId: doc.revisionId ?? null, body: doc.body ?? {} };
+}
+
+/** Thrown when the doc changed since it was read (someone edited it in Docs). */
+export class DocChangedError extends Error {
+  constructor() {
+    super("The contract changed since you opened it — reload and make your edits again.");
+    this.name = "DocChangedError";
+  }
+}
+
+/** Apply raw Docs requests. With `requiredRevisionId`, Google refuses the whole
+ *  batch if the doc moved on since that revision. */
+export async function batchUpdateDoc(docId: string, requests: unknown[], requiredRevisionId?: string | null): Promise<void> {
+  if (!requests.length) return;
+  const res = await fetch(`${DOCS}/${docId}:batchUpdate`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ requests, ...(requiredRevisionId ? { writeControl: { requiredRevisionId } } : {}) }),
+  });
+  if (res.ok) return;
+  const text = await res.text();
+  if (res.status === 400 && /revision/i.test(text)) throw new DocChangedError();
+  throw new Error(`Docs batchUpdate failed: ${res.status} ${text}`);
+}

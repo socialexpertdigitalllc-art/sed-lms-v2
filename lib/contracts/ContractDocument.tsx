@@ -1,7 +1,7 @@
 import { Document, Page, Text, View, Image, StyleSheet, renderToBuffer } from "@react-pdf/renderer";
 import type { ContractSnapshot } from "@/lib/contracts/types";
 import { SERVICE_PROVIDER } from "@/lib/contracts/provider";
-import { getContractTemplate, nodeText, type ContractTemplate } from "@/lib/contracts/templates";
+import { getContractTemplate, nodeText, nodeVisible, type ContractTemplate } from "@/lib/contracts/templates";
 import { CONTRACT_HEADER_B64, CONTRACT_FOOTER_B64 } from "@/lib/contracts/assets";
 
 // Decode once at module load. react-pdf's {data, format} source is the reliable
@@ -74,7 +74,7 @@ function Sections({ template, snapshot }: { template: ContractTemplate; snapshot
       {template.sections.map((section) => (
         <View key={section.heading} style={styles.section} wrap={false}>
           <Text style={styles.h2}>{section.heading}</Text>
-          {section.nodes.map((node, i) => {
+          {section.nodes.filter((node) => nodeVisible(node, snapshot)).map((node, i) => {
             if (node.kind === "subhead") return <Text key={i} style={styles.subhead}>{node.text}</Text>;
             if (node.kind === "para") return <Text key={i} style={styles.para}>{nodeText(node.text, snapshot)}</Text>;
             return (

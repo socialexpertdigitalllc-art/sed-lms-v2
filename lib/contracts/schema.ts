@@ -9,6 +9,11 @@ export const createContractSchema = z.object({
   // Agent-editable pricing (discounts). Omitted = keep the lead's value.
   one_time_price: z.number().nonnegative().nullable().optional(),
   yearly_price: z.number().nonnegative().nullable().optional(),
+  // "upload": the agent's own PDF (sent as multipart) instead of a template.
+  source: z.enum(["template", "upload"]).default("template"),
+  // How the client pays (lib/contracts/payments.ts). Validated against the
+  // final one-time price by parsePaymentPlan, not here.
+  payment_plan: z.unknown().optional(),
 });
 export type CreateContractInput = z.infer<typeof createContractSchema>;
 

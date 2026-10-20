@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, Download, Plus, Send, FilePlus2 } from "lucide-react";
+import { FileText, Download, Plus, Send, FilePlus2, PencilLine } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmptyPanel, Pill } from "@/components/common/Panel";
 import { CollapsibleCard } from "@/components/common/CollapsibleCard";
 import { btnSecondarySm, btnGhostSm } from "@/components/common/buttons";
 import { ContractComposer } from "@/components/contracts/ContractComposer";
 import { formatDate, formatDateTime } from "@/lib/leads/format";
+import { isPaidInFull } from "@/lib/contracts/payments";
 import type { ContractRow } from "@/lib/contracts/types";
 
 type Mailbox = { id: string; email_address: string; display_name: string };
@@ -32,6 +33,7 @@ export function LeadContractsCard({
   leadYearlyPrice?: number | string | null;
 }) {
   const [composing, setComposing] = useState(false);
+  const [resuming, setResuming] = useState<ContractRow | null>(null);
   const latest = contracts[0] ?? null;
 
   return (
@@ -89,9 +91,26 @@ export function LeadContractsCard({
                       <span className="tabular font-mono text-xs text-text-muted">{formatDate(c.contract_date)}</span>
                     </div>
                     <p className="tabular mt-0.5 truncate font-mono text-[11px] text-text-faint">
-                      {c.sent_at ? `Sent ${formatDateTime(c.sent_at)}` : "Not sent"}
+                      {[
+                        c.sent_at ? `Sent ${formatDateTime(c.sent_at)}` : "Not sent",
+                        c.pdf_uploaded_name ? "Own PDF" : null,
+                        isPaidInFull(c.payment_plan) ? null : `${c.payment_plan!.payments.length} payments`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </p>
                   </div>
+
+                  {canSend && !sent && (
+                    <button
+                      type="button"
+                      onClick={() => setResuming(c)}
+                      title="Edit, replace the PDF, or send this draft"
+                      className={cn(btnGhostSm, "shrink-0")}
+                    >
+                      <PencilLine className="h-3.5 w-3.5" /> Continue
+                    </button>
+                  )}
 
                   <a
                     href={`/api/contracts/${c.id}/pdf`}
@@ -109,14 +128,19 @@ export function LeadContractsCard({
         )}
       </CollapsibleCard>
 
-      {composing && (
+      {(composing || resuming) && (
         <ContractComposer
+          key={resuming?.id ?? "new"}
           leadId={leadId}
           mailboxes={mailboxes}
           recipientEmail={recipientEmail}
           leadOneTimePrice={leadOneTimePrice}
           leadYearlyPrice={leadYearlyPrice}
-          onClose={() => setComposing(false)}
+          existing={resuming}
+          onClose={() => {
+            setComposing(false);
+            setResuming(null);
+          }}
         />
       )}
     </>

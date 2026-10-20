@@ -36,9 +36,12 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const mailbox = await getMailboxById(contract.mailbox_id);
   if (!mailbox) return NextResponse.json({ error: "Sending mailbox not found" }, { status: 409 });
 
-  // Prefer the already-stored PDF (Google-template path). Otherwise render
-  // react-pdf live from the immutable snapshot (fallback path).
+  // Prefer the already-stored PDF (Google-template path, an uploaded file).
+  // Otherwise render react-pdf live from the immutable snapshot (fallback path).
   let pdf: Buffer;
+  if (contract.template_key === "upload" && !contract.pdf_path) {
+    return NextResponse.json({ error: "Upload the contract PDF before sending" }, { status: 409 });
+  }
   if (contract.pdf_path) {
     const { data: blob } = await admin.storage.from("contracts").download(contract.pdf_path);
     if (!blob) return NextResponse.json({ error: "Stored contract PDF is missing" }, { status: 409 });
@@ -50,6 +53,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
         business_name: contract.business_name, business_phone: contract.business_phone,
         business_email: contract.business_email, one_time_price: contract.one_time_price,
         yearly_price: contract.yearly_price, agent_name: contract.agent_name, contract_date: contract.contract_date,
+        payment_plan: contract.payment_plan ?? null,
       },
       sig,
       contract.template_key
@@ -112,6 +116,10 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     .select("*")
     .single();
   if (error || !updated) return NextResponse.json({ error: "Sent, but failed to record status — check the contract" }, { status: 500 });
+  // An edited draft's PDF lived at a versioned path; the sent copy replaces it.
+  if (contract.pdf_path && contract.pdf_path !== pdfPath) {
+    await admin.storage.from("contracts").remove([contract.pdf_path]).catch(() => {});
+  }
 
   await admin.from("activity_log").insert({
     user_id: user.id, action: "contract.sent", entity_type: "contract", entity_id: contract.id,

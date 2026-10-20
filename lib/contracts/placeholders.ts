@@ -2,6 +2,7 @@ import type { ContractSnapshot } from "@/lib/contracts/types";
 import type { AddOn, Lead } from "@/lib/leads/types";
 import { formatUsd, parsePrice } from "@/lib/contracts/merge";
 import { SERVICE_PROVIDER } from "@/lib/contracts/provider";
+import { paymentReplacements, type PaymentPlan } from "@/lib/contracts/payments";
 
 export type PlaceholderGroup = "Client" | "Pricing" | "Agent" | "Provider" | "Date & time";
 
@@ -22,6 +23,11 @@ export const BUILT_IN_PLACEHOLDERS: PlaceholderDef[] = [
   { token: "{{business_email}}", label: "Client email", group: "Client" },
   { token: "{{one_time_price}}", label: "One-time price", group: "Pricing" },
   { token: "{{yearly_price}}", label: "Yearly price", group: "Pricing" },
+  { token: "{{payment_terms}}", label: "Payment terms — the full clause (in full, deposit + balance, or installments)", group: "Pricing" },
+  { token: "{{payment_schedule}}", label: "Payment schedule — the numbered payments only", group: "Pricing" },
+  { token: "{{deposit_amount}}", label: "First / upfront payment", group: "Pricing" },
+  { token: "{{balance_amount}}", label: "Remaining after the first payment", group: "Pricing" },
+  { token: "{{installment_count}}", label: "Number of payments", group: "Pricing" },
   { token: "{{date}}", label: "Contract date", group: "Date & time" },
   { token: "{{agent_name}}", label: "Agent name", group: "Agent" },
   { token: "{{provider_name}}", label: "Provider name", group: "Provider" },
@@ -93,7 +99,7 @@ function dateParts(now: Date, timeZone: string): DateParts {
  */
 export function buildReplacements(
   s: ContractSnapshot,
-  opts?: { now?: Date; timeZone?: string }
+  opts?: { now?: Date; timeZone?: string; paymentPlan?: PaymentPlan | null }
 ): { token: string; value: string }[] {
   const now = opts?.now ?? new Date();
   const tz = opts?.timeZone?.trim() || "UTC";
@@ -107,6 +113,7 @@ export function buildReplacements(
     { token: "{{business_email}}", value: s.business_email || "" },
     { token: "{{one_time_price}}", value: formatUsd(s.one_time_price) },
     { token: "{{yearly_price}}", value: formatUsd(s.yearly_price) },
+    ...paymentReplacements(opts?.paymentPlan ?? null, s.one_time_price),
     { token: "{{date}}", value: s.contract_date },
     { token: "{{agent_name}}", value: s.agent_name || "" },
     { token: "{{provider_name}}", value: SERVICE_PROVIDER.name },

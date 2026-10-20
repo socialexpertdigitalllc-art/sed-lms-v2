@@ -8,7 +8,10 @@ import { isContractTemplateKey } from "@/lib/contracts/templates";
 import { buildReplacements, formatLeadField, type ContractPlaceholderRow } from "@/lib/contracts/placeholders";
 import { getAppSettings } from "@/lib/settings/appSettings";
 import { copyDoc, exportPdf, docUrl } from "@/lib/google/drive";
-import { replaceAllText } from "@/lib/google/docs";
+import { replaceAllText, getDocument, batchUpdateDoc } from "@/lib/google/docs";
+import { parsePaymentPlan, isPaidInFull, type PaymentPlan } from "@/lib/contracts/payments";
+import { docToBlocks, buildEditRequests, placePaymentTerms } from "@/lib/contracts/docEdit";
+import { checkPdfUpload, filePart } from "@/lib/contracts/upload";
 import type { Lead } from "@/lib/leads/types";
 
 export const runtime = "nodejs";
@@ -20,12 +23,35 @@ export async function POST(req: Request) {
   const perms = await getUserPermissions(user.id);
   if (!perms.has("contracts.send")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  const parsed = createContractSchema.safeParse(await req.json());
+  // JSON for a template contract; multipart (`data` JSON + `file`) when the
+  // agent sends their own PDF, so the draft and its file arrive together.
+  let body: unknown;
+  let upload: { bytes: Uint8Array; name: string } | null = null;
+  if ((req.headers.get("content-type") ?? "").includes("multipart/form-data")) {
+    const form = await req.formData().catch(() => null);
+    if (!form) return NextResponse.json({ error: "Could not read the upload" }, { status: 400 });
+    try {
+      body = JSON.parse(String(form.get("data") ?? "{}"));
+    } catch {
+      return NextResponse.json({ error: "Invalid input" }, { status: 422 });
+    }
+    upload = await filePart(form);
+  } else {
+    body = await req.json().catch(() => null);
+  }
+  const parsed = createContractSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid input", issues: parsed.error.flatten() }, { status: 422 });
   }
   const input = parsed.data;
-  if (!isContractTemplateKey(input.template_key)) {
+  const isUpload = input.source === "upload";
+  let uploadName: string | null = null;
+  if (isUpload) {
+    if (!upload) return NextResponse.json({ error: "Choose the PDF to send" }, { status: 422 });
+    const check = checkPdfUpload(upload.bytes, upload.name);
+    if (!check.ok) return NextResponse.json({ error: check.message }, { status: 422 });
+    uploadName = check.name;
+  } else if (!isContractTemplateKey(input.template_key)) {
     return NextResponse.json({ error: "Unknown contract template" }, { status: 422 });
   }
 
@@ -50,20 +76,31 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing required fields", missing: check.missing }, { status: 422 });
   }
 
+  // The payment schedule must add up to the (possibly discounted) fee. An
+  // uploaded PDF carries its own terms, so no schedule is recorded for it.
+  let paymentPlan: PaymentPlan | null = null;
+  if (!isUpload) {
+    const plan = parsePaymentPlan(input.payment_plan, snapshot.one_time_price);
+    if (!plan.ok) return NextResponse.json({ error: plan.message }, { status: 422 });
+    paymentPlan = isPaidInFull(plan.value) ? null : plan.value;
+  }
+
   const { data: mailbox } = await admin.from("company_mailboxes").select("id, status").eq("id", input.mailbox_id).maybeSingle();
   if (!mailbox) return NextResponse.json({ error: "Mailbox not found" }, { status: 404 });
   if (mailbox.status !== "verified") return NextResponse.json({ error: "Selected mailbox is not verified" }, { status: 409 });
 
   // Resolve the Google template (if chosen).
   let googleDocId: string | null = null;
-  if (input.google_template_id) {
+  let templateTokens: string[] = [];
+  if (input.google_template_id && !isUpload) {
     const { data: tpl } = await admin
       .from("contract_templates")
-      .select("id, google_doc_id")
+      .select("id, google_doc_id, placeholders")
       .eq("id", input.google_template_id)
       .maybeSingle();
     if (!tpl) return NextResponse.json({ error: "Selected template not found" }, { status: 404 });
     googleDocId = tpl.google_doc_id;
+    templateTokens = (tpl.placeholders as string[] | null) ?? [];
   }
 
   // Insert the draft first so we own an id for the stored PDF path.
@@ -73,8 +110,8 @@ export async function POST(req: Request) {
       lead_id: input.lead_id,
       created_by: user.id,
       mailbox_id: input.mailbox_id,
-      template_key: input.template_key,
-      google_template_id: input.google_template_id ?? null,
+      template_key: isUpload ? "upload" : input.template_key,
+      google_template_id: isUpload ? null : (input.google_template_id ?? null),
       business_name: snapshot.business_name,
       business_phone: snapshot.business_phone,
       business_email: snapshot.business_email,
@@ -84,11 +121,30 @@ export async function POST(req: Request) {
       contract_date: snapshot.contract_date,
       message_body: input.message_body,
       recipient_email: snapshot.business_email,
+      payment_plan: paymentPlan,
       status: "draft",
     })
     .select("*")
     .single();
   if (error || !contract) return NextResponse.json({ error: error?.message ?? "Create failed" }, { status: 400 });
+
+  // Upload path: the agent's file is the contract.
+  if (isUpload && upload) {
+    const pdfPath = `${contract.id}.pdf`;
+    const { error: upErr } = await admin.storage
+      .from("contracts")
+      .upload(pdfPath, upload.bytes, { contentType: "application/pdf", upsert: true });
+    if (upErr) {
+      await admin.from("contracts").delete().eq("id", contract.id);
+      return NextResponse.json({ error: `Could not store the PDF: ${upErr.message}` }, { status: 502 });
+    }
+    await admin.from("contracts").update({ pdf_path: pdfPath, pdf_uploaded_name: uploadName }).eq("id", contract.id);
+    contract.pdf_path = pdfPath;
+    contract.pdf_uploaded_name = uploadName;
+  }
+
+  // What the composer should tell the agent about the payment terms.
+  let notice: string | null = null;
 
   // Google path: copy → replaceAllText → export PDF → store. On any failure,
   // delete the just-created draft so we don't leave a broken record.
@@ -108,7 +164,7 @@ export async function POST(req: Request) {
       const settings = await getAppSettings();
       const timeZone = settings.work_timezone;
       const replacements = [
-        ...buildReplacements(snapshot, { timeZone }),
+        ...buildReplacements(snapshot, { timeZone, paymentPlan }),
         ...Object.entries(customFields).map(([token, value]) => ({ token, value })),
       ];
 
@@ -117,6 +173,21 @@ export async function POST(req: Request) {
       // the admin "Available in Drive" list). Unset = previous behaviour.
       const newDocId = await copyDoc(googleDocId, name, settings.generated_contracts_folder_id ?? undefined);
       await replaceAllText(newDocId, replacements);
+
+      // A schedule, but the template has nowhere marked for it: add the terms
+      // after the line quoting the price, or ask the agent to place them.
+      const hasSlot = templateTokens.some((t) => t === "{{payment_terms}}" || t === "{{payment_schedule}}");
+      if (paymentPlan && !hasSlot) {
+        const doc = await getDocument(newDocId);
+        const edit = placePaymentTerms(docToBlocks(doc.body), paymentPlan, snapshot.one_time_price);
+        if (edit) {
+          await batchUpdateDoc(newDocId, buildEditRequests(docToBlocks(doc.body), [edit]), doc.revisionId);
+          notice = "The payment schedule was added after the line with the price — check it in the preview.";
+        } else {
+          notice = "This template has no {{payment_terms}} placeholder and no line with the price, so the payment schedule isn't in the contract yet — add it with Edit contract.";
+        }
+      }
+
       const pdf = await exportPdf(newDocId);
       const pdfPath = `${contract.id}.pdf`;
       await admin.storage.from("contracts").upload(pdfPath, pdf, { contentType: "application/pdf", upsert: true });
@@ -140,8 +211,13 @@ export async function POST(req: Request) {
 
   await admin.from("activity_log").insert({
     user_id: user.id, action: "contract.created", entity_type: "contract", entity_id: contract.id,
-    new_value: { lead_id: input.lead_id, google: !!googleDocId },
+    new_value: {
+      lead_id: input.lead_id,
+      google: !!googleDocId,
+      source: input.source,
+      payments: paymentPlan?.payments.length ?? 1,
+    },
   });
 
-  return NextResponse.json({ contract }, { status: 201 });
+  return NextResponse.json({ contract, notice }, { status: 201 });
 }
