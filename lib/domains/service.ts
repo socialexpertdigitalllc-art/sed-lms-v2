@@ -175,6 +175,34 @@ export async function searchDomainNames(query: string, registrar: DomainRegistra
 }
 
 /**
+ * Exact names only — no suggestions — checked authoritatively, keyed by name.
+ * Cloudflare answers up to 20 names per call; Hostinger one at a time. A name
+ * the registrar gave no answer for is missing from the map; null when it
+ * couldn't be reached at all.
+ */
+export async function checkExactDomains(domains: string[], registrar: DomainRegistrar): Promise<Map<string, DomainOffer> | null> {
+  const names = [...new Set(domains.map((d) => d.toLowerCase()))];
+  const out = new Map<string, DomainOffer>();
+  if (registrar === "cloudflare") {
+    for (let i = 0; i < names.length; i += 20) {
+      const checked = await checkDomains(names.slice(i, i + 20));
+      if (!checked) return i === 0 ? null : out;
+      for (const c of checked) out.set(c.name.toLowerCase(), cfOffer(c));
+    }
+    return out;
+  }
+  let reached = false;
+  for (const name of names) {
+    const o = await hostingerOffer(name);
+    if (o) {
+      reached = true;
+      out.set(name, o);
+    }
+  }
+  return reached || !names.length ? out : null;
+}
+
+/**
  * Availability + price as one list: the exact name first, then the same name
  * on other endings, then similar names. For callers that look one name up
  * (the assistant's domain.buy check finds its own name in it).

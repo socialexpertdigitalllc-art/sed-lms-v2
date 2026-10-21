@@ -13,6 +13,7 @@ import { notFound } from "next/navigation";
 import { getActiveUsers } from "@/lib/users/directory";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 import { domainForLead, suggestQuery } from "@/lib/domains/service";
+import { leadExactDomain, loadLeadDomainCheck } from "@/lib/domains/leadCheck";
 import { registrarSandbox } from "@/lib/cloudflare/client";
 import { receiptSenderAddress } from "@/lib/receipts/settings";
 import type { ReceiptRow } from "@/lib/receipts/types";
@@ -202,6 +203,8 @@ export default async function LeadDetailPage({
     canPurchaseDomains || canManageDomains || perms.has("domains.view")
       ? {
           row: await domainForLead(admin, id),
+          exactDomain: leadExactDomain(lead.business_name),
+          exactCheck: await loadLeadDomainCheck(admin, id),
           canPurchase: canPurchaseDomains,
           canManage: canManageDomains,
           sandbox: registrarSandbox(),

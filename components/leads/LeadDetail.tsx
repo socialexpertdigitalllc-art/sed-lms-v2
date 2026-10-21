@@ -43,6 +43,7 @@ import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
 import { LeadFormsCard } from "@/components/form-relay/LeadFormsCard";
 import { LeadDomainCard } from "@/components/domains/LeadDomainCard";
 import type { ClientDomainRow } from "@/lib/domains/types";
+import type { LeadDomainCheck } from "@/lib/domains/leadCheck";
 import type { ContractRow } from "@/lib/contracts/types";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 import { ReceiptModal } from "@/components/receipts/ReceiptModal";
@@ -115,7 +116,15 @@ export function LeadDetail({
   formEndpoints: FormEndpointRow[];
   formSubmissions: FormSubmissionRow[];
   /** The lead's client domain + what this user may do (null = no domains access). */
-  domainCard?: { row: ClientDomainRow | null; canPurchase: boolean; canManage: boolean; sandbox: boolean; suggestedQuery: string } | null;
+  domainCard?: {
+    row: ClientDomainRow | null;
+    canPurchase: boolean;
+    canManage: boolean;
+    sandbox: boolean;
+    suggestedQuery: string;
+    exactDomain?: string | null;
+    exactCheck?: LeadDomainCheck | null;
+  } | null;
   /** Holds receipts.send: may create, email and download payment receipts. */
   canSendReceipts?: boolean;
   receipts?: ReceiptRow[];
@@ -697,6 +706,9 @@ export function LeadDetail({
                 canPurchase={domainCard.canPurchase}
                 canManage={domainCard.canManage}
                 sandbox={domainCard.sandbox}
+                exactDomain={domainCard.exactDomain ?? null}
+                exactCheck={domainCard.exactCheck ?? null}
+                leadReady={lead.status === "Ready"}
               />
             ) : null}
             {canViewForms && (

@@ -15,6 +15,7 @@ import { recordStatusChange } from "@/lib/leads/statusEvents";
 import { notifyReceiptNeeded } from "@/lib/receipts/notify";
 import { nudgeWaitingDomain } from "@/lib/domains/service";
 import { processDomains } from "@/lib/domains/processor";
+import { kickLeadDomainChecks } from "@/lib/domains/leadCheck";
 import { realPipelineDeps } from "@/lib/domains/deps";
 
 /** Fields only an Admin-department member may change (see the PATCH gate). */
@@ -208,6 +209,9 @@ export async function PATCH(
       });
     }
     if (newStatus === "Ready") {
+      // Does the business's exact name exist as a .com? Answered before sales
+      // gets to the domain conversation (shown on the lead's Domain card).
+      kickLeadDomainChecks([id]);
       try {
         await notify(
           "website_ready",
@@ -223,6 +227,11 @@ export async function PATCH(
       } catch {}
     }
   }
+
+  // A Ready lead renamed: its exact-name .com is a different domain now.
+  const renamed = typeof parsed.data.business_name === "string" && parsed.data.business_name !== before.business_name;
+  const turnedReady = parsed.data.status === "Ready" && before.status !== "Ready"; // already kicked above
+  if (renamed && (parsed.data.status ?? before.status) === "Ready" && !turnedReady) kickLeadDomainChecks([id]);
 
   const newLink = parsed.data.website_link;
   if (typeof newLink === "string" && newLink.trim() && newLink !== before.website_link) {

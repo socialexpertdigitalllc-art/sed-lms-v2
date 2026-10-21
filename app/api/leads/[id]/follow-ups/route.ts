@@ -8,6 +8,7 @@ import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { endsFollowUps, isFollowUpEligible, nextStreak } from "@/lib/leads/followups";
 import { logFollowUpSchema } from "@/lib/leads/followupSchema";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
+import { kickLeadDomainChecks } from "@/lib/domains/leadCheck";
 import { notifyReceiptNeeded } from "@/lib/receipts/notify";
 import { blamesLateColumn } from "@/lib/leads/lateColumns";
 
@@ -199,6 +200,7 @@ export async function POST(
       });
     }
     if (statusChange === "Ready") {
+      kickLeadDomainChecks([id]);
       try {
         await notify(
           "website_ready",

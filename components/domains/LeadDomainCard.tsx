@@ -9,12 +9,16 @@ import { useToast } from "@/components/common/Toast";
 import { DomainStatusPill, DomainSteps, isWorking, money } from "@/components/domains/DomainBits";
 import { BuyDomainDialog } from "@/components/domains/BuyDomainDialog";
 import { PickDomainDialog } from "@/components/domains/PickDialogs";
+import { ExactNameCheck, exactSummary } from "@/components/domains/ExactNameCheck";
+import type { LeadDomainCheck } from "@/lib/domains/leadCheck";
 import { STATUS_LABELS, type ClientDomainRow } from "@/lib/domains/types";
 
 /**
  * The lead's domain: buy one (Cloudflare by default) or link one we own, then
  * watch the dashboard connect it — DNS, hosting, SSL, and the lead's site
- * going live on it. Polls while the pipeline is working.
+ * going live on it. Polls while the pipeline is working. Before there is a
+ * domain it says whether the business's exact name is free as a .com
+ * (checked when the lead turns Ready), so sales knows before the call.
  */
 export function LeadDomainCard({
   leadId,
@@ -24,6 +28,9 @@ export function LeadDomainCard({
   canPurchase,
   canManage,
   sandbox,
+  exactDomain = null,
+  exactCheck = null,
+  leadReady = false,
 }: {
   leadId: string;
   leadName: string;
@@ -32,12 +39,17 @@ export function LeadDomainCard({
   canPurchase: boolean;
   canManage: boolean;
   sandbox: boolean;
+  /** The business name's exact .com, and its stored availability check. */
+  exactDomain?: string | null;
+  exactCheck?: LeadDomainCheck | null;
+  leadReady?: boolean;
 }) {
   const { toast } = useToast();
   const [row, setRow] = useState<ClientDomainRow | null>(initial);
   const [buyOpen, setBuyOpen] = useState(false);
   const [pickOpen, setPickOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [check, setCheck] = useState<LeadDomainCheck | null>(exactCheck);
 
   const refresh = useCallback(async () => {
     const res = await fetch(`/api/domains?leadId=${leadId}`);
@@ -71,7 +83,8 @@ export function LeadDomainCard({
     }
   }
 
-  const summary = row ? `${row.domain} · ${STATUS_LABELS[row.status].toLowerCase()}` : "no domain yet";
+  const exact = exactSummary(exactDomain, check);
+  const summary = row ? `${row.domain} · ${STATUS_LABELS[row.status].toLowerCase()}` : exact ? `no domain yet · ${exact}` : "no domain yet";
   const action =
     !row && (canPurchase || canManage) ? (
       <span className="inline-flex gap-1">
@@ -92,17 +105,20 @@ export function LeadDomainCard({
     <>
       <CollapsibleCard icon={Globe} title="Domain" summary={summary} action={action} defaultOpen={Boolean(row && row.status !== "live" && row.status !== "connected")}>
         {!row ? (
-          <EmptyPanel
-            icon={Globe}
-            title="No domain yet"
-            hint={
-              canPurchase
-                ? "Buy one (Cloudflare by default) — the dashboard then connects it and puts the site live on it."
-                : canManage
-                  ? "Link a domain we already own, or ask an admin to buy one."
-                  : "An admin can buy or link a domain for this lead."
-            }
-          />
+          <div className="space-y-3">
+            <ExactNameCheck leadId={leadId} domain={exactDomain} initial={exactCheck} ready={leadReady} onChange={setCheck} />
+            <EmptyPanel
+              icon={Globe}
+              title="No domain yet"
+              hint={
+                canPurchase
+                  ? "Buy one (Cloudflare by default) — the dashboard then connects it and puts the site live on it."
+                  : canManage
+                    ? "Link a domain we already own, or ask an admin to buy one."
+                    : "An admin can buy or link a domain for this lead."
+              }
+            />
+          </div>
         ) : (
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">

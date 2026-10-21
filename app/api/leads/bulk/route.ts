@@ -8,6 +8,7 @@ import { isReadyGuardError, READY_GUARD_MESSAGE } from "@/lib/leads/errors";
 import { buildTagLinkRows } from "@/lib/leads/tagFilter";
 import { cancelGenerationsForLeads } from "@/lib/template-engine/forceResolve";
 import { bulkRecordStatusChanges } from "@/lib/leads/statusEvents";
+import { kickLeadDomainChecks } from "@/lib/domains/leadCheck";
 import { isAdminMember } from "@/lib/permissions/isAdminMember";
 
 const schema = z.object({
@@ -144,12 +145,9 @@ export async function POST(req: Request) {
   }
 
   if (action === "status" && value) {
-    await bulkRecordStatusChanges(
-      admin,
-      priorStatuses.filter((l) => l.status !== value),
-      value,
-      user.id
-    );
+    const changed = priorStatuses.filter((l) => l.status !== value);
+    await bulkRecordStatusChanges(admin, changed, value, user.id);
+    if (value === "Ready") kickLeadDomainChecks(changed.map((l) => l.id));
   }
 
   // Same ghost-build cleanup as the single-lead DELETE: a soft-deleted lead
