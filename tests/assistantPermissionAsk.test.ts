@@ -88,9 +88,12 @@ describe("compactToolResults — a long job keeps its context small", () => {
 
 describe("the Act prompt for big jobs", () => {
   const p = actSection({ mode: "act", catalogue: "Leads:\n- lead.categorize: Set the category of many leads", permission: { mode: "ask", allow: [] } }, "Asia/Karachi");
-  it("does the whole job in one answer, in bulk, and lists what it couldn't decide", () => {
-    expect(p).toMatch(/do ALL of it in this answer/);
+  it("makes a big job a background task that carries on by itself, in bulk, and lists what it couldn't decide", () => {
+    expect(p).toMatch(/call start_background_task FIRST/);
+    expect(p).toMatch(/never ask them to say "continue"/);
     expect(p).toMatch(/lead\.categorize/);
+    expect(p).toMatch(/never one lead\.update per record/);
+    expect(p).toMatch(/one call reads services for 100 leads/);
     expect(p).toMatch(/list them for the person at the end/);
   });
   it("asks once to switch the mode — even when permission was given in words", () => {

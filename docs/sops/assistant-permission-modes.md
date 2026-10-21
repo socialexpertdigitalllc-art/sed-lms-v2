@@ -22,14 +22,16 @@ Switch it from the **Act** chip by the message box, or under
   then runs on its own even in Ask mode. Remove it under Permissions.
 - A change that ran on its own says **Ran on its own** on its card. **Undo**
   still works for the usual window (10 minutes for most actions).
-- At most 60 changes run on their own per answer. The rest wait on cards.
-  This limit only guards against a runaway; bulk actions such as *Set the
-  category of many leads* carry up to 200 leads each.
+- At most 60 changes run on their own per answer. The rest wait on cards,
+  and a background task's next run picks those cards up. This limit only
+  guards against a runaway; bulk actions such as *Set the category of many
+  leads* carry up to 200 leads each.
 - **Big jobs** ("categorise the whole pipeline"): in an auto mode, the
-  assistant works through the whole job in one answer, batch after batch. It
-  can take up to 60 rounds, and older lookups are shortened as it goes so it
-  doesn't run out of room. Anything it can't decide is left unchanged and
-  listed for you at the end.
+  assistant makes the job a **background task**. It carries on by itself,
+  answer after answer, even with the page closed, until it is done. You don't
+  type "continue". Each answer can take up to 60 rounds, and older lookups are
+  shortened as it goes. Anything it can't decide is left unchanged and listed
+  for you at the end. See `assistant-background-tasks.md`.
 - **Asking once to switch:** if a big job meets Ask (or Safe) mode, the
   assistant asks one time per chat, with a **Switch and continue** button. One
   click raises your mode and the job carries on by itself. **Keep asking me**

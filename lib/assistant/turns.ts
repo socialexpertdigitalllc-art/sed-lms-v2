@@ -46,6 +46,8 @@ export interface TurnModel {
   mode: AssistantMode | null;
   /** The assistant switched itself to Act mode for this: the task, in its words. */
   switchedToAct: string | null;
+  /** A background task's run (the runner wrote the question, not the person). */
+  task?: { id: string; run: number } | null;
 }
 
 /** A turn still waiting for the server to accept it has this id prefix. */
@@ -77,6 +79,7 @@ export function turnsFromMessages(rows: UiMessage[], actions: ActionCard[] = [])
         attachments: row.meta?.attachments ?? [],
         mode: row.meta?.mode ?? null,
         switchedToAct: null,
+        task: row.meta?.task ?? null,
       };
       turns.push(turn);
       byTurn.set(row.turn_id ?? row.id, turn);

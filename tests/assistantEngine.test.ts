@@ -300,6 +300,77 @@ describe("runTurn", () => {
     }
   });
 
+  it("a big job cut off by the answer's budget becomes a background task that carries on by itself", async () => {
+    const { memorySupabase } = await import("./helpers/memorySupabase");
+    const { MAX_AUTONOMOUS_ROUNDS } = await import("@/lib/assistant/engine");
+    permissionState.saved = { mode: "auto", allow: [] };
+    const store = memorySupabase({}, { assistant_tasks: () => ({ id: "task-1", status: "running", progress: "", runs: 0, max_runs: 40, created_at: new Date().toISOString() }) });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    for (let i = 0; i < MAX_AUTONOMOUS_ROUNDS; i++) {
+      fetchMock.mockResolvedValueOnce(toolReply({ id: `call_${i}`, type: "function", function: { name: "calculate", arguments: `{"expression":"${i}+1"}` } }));
+    }
+    fetchMock.mockResolvedValueOnce(textReply("Did 600 of 822. It carries on in the background."));
+    try {
+      const out = await runTurn({
+        userId: "sam", displayName: "Sam Khan", assistantName: "Nova", perms: new Set(["assistant.use", "assistant.act"]),
+        db, admin: store.client, conversation, text: "categorise every lead in the pipeline by its services", emit: () => {},
+        signal: new AbortController().signal, now: new Date("2026-10-09T10:00:00Z"), mode: "act",
+      });
+      expect(out).toMatchObject({ ended: "budget", taskId: "task-1", answer: "Did 600 of 822. It carries on in the background." });
+      expect(store.tables.assistant_tasks).toEqual([
+        expect.objectContaining({ user_id: "sam", conversation_id: "conv-1", goal: "categorise every lead in the pipeline by its services", permission_mode: "auto" }),
+      ]);
+      const last = bodyOf(fetchMock, MAX_AUTONOMOUS_ROUNDS);
+      expect(last.tool_choice).toBe("none");
+      expect(JSON.stringify(last.messages.at(-1))).toMatch(/carries on by itself in the background — they do not need to say/);
+    } finally {
+      fetchMock.mockRestore();
+      permissionState.saved = { mode: "ask", allow: [] };
+    }
+  });
+
+  it("a background run: its opening message is marked as the task's, and the model is told where the task got to", async () => {
+    const { memorySupabase } = await import("./helpers/memorySupabase");
+    permissionState.saved = { mode: "auto", allow: [] };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(textReply("This run did 40 more."));
+    try {
+      const out = await runTurn({
+        userId: "sam", displayName: "Sam Khan", assistantName: "Nova", perms: new Set(["assistant.use", "assistant.act"]),
+        db, admin: memorySupabase({}).client, conversation, text: "[Background task — run 3] Carry on with the task: categorise every lead",
+        emit: () => {}, signal: new AbortController().signal, now: new Date("2026-10-09T10:00:00Z"), mode: "act", source: "scheduler",
+        task: { id: "task-1", goal: "categorise every lead", progress: "412 of 822 done", run: 3, maxRuns: 40 },
+      });
+      expect(out).toMatchObject({ ended: "answered", taskId: "task-1", progressSet: false });
+      expect(rows[0]).toMatchObject({ role: "user", meta: expect.objectContaining({ task: { id: "task-1", run: 3 } }) });
+      const body = bodyOf(fetchMock, 0);
+      expect(body.messages[0].content).toMatch(/Background task — run 3 of at most 40/);
+      expect(body.messages[0].content).toMatch(/Progress so far: 412 of 822 done/);
+      expect(body.tools.map((t: { function: { name: string } }) => t.function.name)).toContain("update_task_progress");
+    } finally {
+      fetchMock.mockRestore();
+      permissionState.saved = { mode: "ask", allow: [] };
+    }
+  });
+
+  it("a normal answer in a chat with a task running is told about it", async () => {
+    const { memorySupabase } = await import("./helpers/memorySupabase");
+    const store = memorySupabase({
+      assistant_tasks: [{ id: "task-1", conversation_id: "conv-1", user_id: "sam", status: "running", goal: "categorise every lead", progress: "500 done", runs: 4, max_runs: 40 }],
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(textReply("It's at 500."));
+    try {
+      const out = await runTurn({
+        userId: "sam", displayName: "Sam Khan", assistantName: "Nova", perms: new Set(["assistant.use", "assistant.act"]),
+        db, admin: store.client, conversation, text: "how far is it?", emit: () => {},
+        signal: new AbortController().signal, now: new Date("2026-10-09T10:00:00Z"), mode: "act",
+      });
+      expect(out.taskId).toBe("task-1");
+      expect(bodyOf(fetchMock, 0).messages[0].content).toMatch(/## Background task in this chat[\s\S]*Progress so far: 500 done/);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("after asking to switch the permission mode, the answer wraps up without more tools", async () => {
     const { memorySupabase } = await import("./helpers/memorySupabase");
     const fetchMock = vi

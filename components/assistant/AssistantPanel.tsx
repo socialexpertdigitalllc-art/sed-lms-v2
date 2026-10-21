@@ -22,6 +22,7 @@ import { useActPermissions } from "./useActPermissions";
 import { modeInfo, type PermissionMode } from "@/lib/assistant/actions/permissions";
 import { useStickToBottom } from "./useStickToBottom";
 import type { AssistantMode, MessageAttachment } from "@/lib/assistant/types";
+import { TaskBanner } from "./TaskBanner";
 
 /**
  * The floating chat: the assistant in front of whatever page the user is on.
@@ -344,6 +345,7 @@ export default function AssistantPanel({ hidden, onClose }: { hidden: boolean; o
             ) : null}
           </div>
           <div className="shrink-0 px-3 pb-2.5 pt-1">
+            {chat.task ? <TaskBanner task={chat.task} onStop={chat.stopTask} compact /> : null}
             {chat.notice ? (
               <div className="mb-2 flex items-start gap-2 rounded-xl border border-dropped-bg bg-dropped-bg/40 px-3 py-2 text-xs text-dropped-fg" role="alert">
                 <span className="min-w-0 flex-1">{chat.notice}</span>

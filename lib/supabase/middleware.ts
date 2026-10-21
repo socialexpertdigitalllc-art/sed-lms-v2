@@ -112,6 +112,9 @@ export async function updateSession(request: NextRequest) {
     // SED AI's scheduler (reminders, handover returns, standing rules):
     // x-wge-secret auth, called by the instrumentation poller every minute.
     path === "/api/assistant/scheduler" ||
+    // SED AI's background tasks (long jobs that carry on by themselves):
+    // x-wge-secret auth, called by the instrumentation poller every 30s.
+    path === "/api/assistant/tasks/process" ||
     // SED AI on the phone: Telegram and Meta call these with no session. Each
     // proves itself — Telegram's secret token header, WhatsApp's HMAC
     // signature (see lib/assistant/channels/verify.ts) — before anything runs.

@@ -18,9 +18,10 @@ import { buildHistory, DEFAULT_HISTORY } from "./history";
 import { streamChat, type ChatResult, type UserContentPart, type WireMessage } from "./llm";
 import { buildSystemPrompt, describeScope, type ActPromptFacts } from "./prompt";
 import { insertMessage, listMemories, listMessages, updateConversation } from "./store";
+import { goalFrom, runningTask, startTask, type AssistantTask } from "./tasks";
 import { parseToolArgs, runTool, toolDefinitions, toolsFor, ALL_TOOLS, type ToolRunOutcome } from "./tools";
 import { TurnData } from "./tools/data";
-import type { ToolContext } from "./tools/types";
+import type { TaskState, ToolContext } from "./tools/types";
 import type { AssistantConversation, AssistantMode, AssistantStreamEvent, MessageAttachment, MessageMeta, PageContext } from "./types";
 import { getUpload, signedUploadUrl } from "./uploads";
 import { toClientConversation } from "./view";
@@ -113,6 +114,24 @@ export interface TurnInput {
   /** The permission mode picked in the chat for this question; otherwise the
    *  person's saved one. Always clamped to the company limit. */
   permissionMode?: PermissionMode;
+  /** This answer is a run of the chat's background task (lib/assistant/taskRunner.ts):
+   *  nobody is watching, and it carries on from the task's saved progress. */
+  task?: { id: string; goal: string; progress: string; run: number; maxRuns: number } | null;
+}
+
+/** How an answer ended — what the background-task runner needs to know. */
+export interface TurnOutcome {
+  turnId: string;
+  /** answered: it finished in words · budget: its round budget ran out ·
+   *  timeout / stopped: aborted · error: the model or a tool failed */
+  ended: "answered" | "budget" | "timeout" | "stopped" | "error";
+  /** The final words (null when there were none). */
+  answer: string | null;
+  /** The chat's background task as this answer left it (started here, or already running). */
+  taskId: string | null;
+  /** update_task_progress was called in this answer. */
+  progressSet: boolean;
+  error?: string | null;
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -221,10 +240,25 @@ export async function describePage(page: PageContext | null | undefined, ctx: Ac
   return `the ${title || path} page (${path})`;
 }
 
-export async function runTurn(input: TurnInput): Promise<void> {
+/** The person's earlier messages in this chat, oldest first (background runs' own messages left out). */
+function earlierQuestions(rows: { role: string; content: string; turn_id: string | null; meta: MessageMeta | null }[], turnId: string): string[] {
+  return rows.filter((r) => r.role === "user" && r.turn_id !== turnId && !r.meta?.task).map((r) => r.content);
+}
+
+export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
   const { userId, admin, conversation, emit, signal } = input;
   const now = input.now ?? new Date();
   const turnId = randomUUID();
+  // The chat's background task as this answer knows it (the task tools update it).
+  let taskState: TaskState | null = input.task ? { id: input.task.id, goal: input.task.goal, background: true, progressSet: false } : null;
+  const outcome = (ended: TurnOutcome["ended"], answer: string | null, extra: Partial<TurnOutcome> = {}): TurnOutcome => ({
+    turnId,
+    ended,
+    answer,
+    taskId: taskState?.id ?? null,
+    progressSet: taskState?.progressSet ?? false,
+    ...extra,
+  });
 
   const canAct = input.perms.has("assistant.act");
   let mode: AssistantMode = canAct && input.mode === "act" ? "act" : "ask";
@@ -233,6 +267,8 @@ export async function runTurn(input: TurnInput): Promise<void> {
     ...(attachments.length ? { attachments } : {}),
     ...(canAct ? { mode } : {}),
     ...(input.page?.path ? { page: input.page } : {}),
+    // A background run's opening message: the chat shows it as a divider, not as their words.
+    ...(input.task ? { task: { id: input.task.id, run: input.task.run } } : {}),
   };
 
   // The question is saved before anything can fail, so it is never lost.
@@ -251,13 +287,13 @@ export async function runTurn(input: TurnInput): Promise<void> {
     const message = friendlyError(e);
     await insertMessage(admin, userId, conversation.id, { role: "assistant", turn_id: turnId, content: "", status: "error", error: message }).catch(() => {});
     emit({ type: "error", message });
-    return;
+    return outcome("error", null, { error: message });
   }
 
   emit({ type: "start", conversation: toClientConversation(conversation), userMessageId: turnId });
 
   const data = new TurnData({ db: input.db, admin, userId });
-  const [settings, memories, departments, teamIds, rows, isAdmin, chatActions, actionSettings, savedPermissions, permissionCap] = await Promise.all([
+  const [settings, memories, departments, teamIds, rows, isAdmin, chatActions, actionSettings, savedPermissions, permissionCap, liveTask] = await Promise.all([
     getAppSettings(),
     listMemories(admin, userId).catch(() => []),
     departmentsOf(admin, userId).catch(() => []),
@@ -269,6 +305,8 @@ export async function runTurn(input: TurnInput): Promise<void> {
     canAct ? getActionSettings(admin) : Promise.resolve(new Map()),
     canAct ? getActPermissions(admin, userId) : Promise.resolve(DEFAULT_ACT_PERMISSIONS),
     canAct ? getPermissionCap(admin) : Promise.resolve("ask" as PermissionMode),
+    // The chat's running background task (none before migration 0092).
+    canAct && !input.task ? runningTask(admin, conversation.id).catch(() => null) : Promise.resolve(null as AssistantTask | null),
   ]);
   // What may run without a click this turn (see ./actions/permissions.ts).
   const auto: AutoRunContext | null = canAct
@@ -281,6 +319,10 @@ export async function runTurn(input: TurnInput): Promise<void> {
       }
     : null;
   const timezone = settings.work_timezone || "Asia/Karachi";
+  // A big job runs to the end when changes may run on their own.
+  const autonomous = Boolean(auto && (auto.mode !== "ask" || auto.allow.length > 0));
+  if (!taskState && liveTask) taskState = { id: liveTask.id, goal: liveTask.goal, background: false, progressSet: false };
+  const background = Boolean(input.task);
 
   const toolCtx: ToolContext = {
     userId,
@@ -293,7 +335,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
     conversationId: conversation.id,
     data,
     emit: (event) => emit(event),
-    ...(canAct ? { act: { mode, turnId, source: input.source ?? "chat", isAdmin, auto } } : {}),
+    ...(canAct ? { act: { mode, turnId, source: input.source ?? "chat", isAdmin, auto, autonomous, task: taskState } } : {}),
   };
   const actionCtx: ActionContext = { userId, displayName: input.displayName, perms: input.perms, db: input.db, admin, timezone, now, isAdmin };
   const page = await describePage(input.page, actionCtx).catch(() => null);
@@ -308,6 +350,11 @@ export async function runTurn(input: TurnInput): Promise<void> {
           catalogue: m === "act" ? actionCatalogue(actionCtx, disabled) : undefined,
           history: actionHistoryLines(chatActions, now.getTime()),
           permission: auto ? { mode: auto.mode, allow: auto.allow } : null,
+          task: input.task
+            ? { goal: input.task.goal, progress: input.task.progress, run: input.task.run, maxRuns: input.task.maxRuns, background: true }
+            : liveTask
+              ? { goal: liveTask.goal, progress: liveTask.progress, run: liveTask.runs, maxRuns: liveTask.max_runs, background: false }
+              : null,
         }
       : null;
     const system = buildSystemPrompt({
@@ -359,8 +406,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
   const toolSlots: ToolSlot[] = [];
   // request_permission_mode was answered "asked": wrap up and wait for the click.
   let askedPermission = false;
-  // A big job runs to the end in one answer when changes may run on their own.
-  const autonomous = Boolean(auto && (auto.mode !== "ask" || auto.allow.length > 0));
+  let budgetSpent = false;
   let roundText = "";
   let emptyRetried = false;
   let anyOutput = false;
@@ -371,13 +417,20 @@ export async function runTurn(input: TurnInput): Promise<void> {
       const maxRounds = mode === "act" ? (autonomous ? MAX_AUTONOMOUS_ROUNDS : MAX_ACT_ROUNDS) : MAX_TOOL_ROUNDS;
       const lastRound = round >= maxRounds || askedPermission;
       if (lastRound) {
+        if (!askedPermission) budgetSpent = true;
+        // A big job cut off by the budget carries on by itself: make it a background task.
+        if (!askedPermission && mode === "act" && autonomous && !background) await ensureTask(null);
         messages.push({
           role: "user",
           content: askedPermission
             ? "[System note: you asked them to switch the permission mode. Do not call any more tools now. In one or two sentences say what the switch is for and that the task carries on by itself once they switch.]"
-            : mode === "act" && autonomous
-              ? "[System note: this answer's budget is used up. Do not call any more tools. Say exactly how far the job got (what was done, what is left), and that they can say \"continue\" to carry on from there.]"
-              : "[System note: the lookup budget for this answer is used up. Answer now from the results above, and do not call any more tools.]",
+            : background
+              ? "[System note: this run's budget is used up. Do not call any more tools. In a few lines, say what this run did and what is left — the next run carries on automatically.]"
+              : mode === "act" && autonomous && taskState
+                ? "[System note: this answer's budget is used up. Do not call any more tools. Say exactly how far the job got (what was done, what is left), and that it carries on by itself in the background — they do not need to say \"continue\"; they can follow it here or stop it with Stop task.]"
+                : mode === "act" && autonomous
+                  ? "[System note: this answer's budget is used up. Do not call any more tools. Say exactly how far the job got (what was done, what is left), and that they can say \"continue\" to carry on from there.]"
+                  : "[System note: the lookup budget for this answer is used up. Answer now from the results above, and do not call any more tools.]",
         });
       }
       // A long job: keep the context small by shortening old lookups.
@@ -445,7 +498,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
           error: message,
         });
         emit({ type: "error", message });
-        return;
+        return outcome("error", null, { error: message });
       }
 
       const row = await insertMessage(admin, userId, conversation.id, {
@@ -460,13 +513,16 @@ export async function runTurn(input: TurnInput): Promise<void> {
       });
 
       if (!calls.length) {
+        // The job used up this answer's changes and stopped with work left:
+        // it carries on by itself, starting with the cards still waiting.
+        if (mode === "act" && autonomous && !background && auto && auto.budget.left <= 0) await ensureTask(result.text);
         await updateConversation(admin, userId, conversation.id, {
           last_message_at: new Date().toISOString(),
           last_provider: model.providerKey,
           last_model: model.model,
         }).catch(() => null);
         emit({ type: "done", messageId: row.id, stopped: false });
-        return;
+        return outcome(budgetSpent ? "budget" : "answered", result.text);
       }
 
       // Continue the chain with the assistant turn EXACTLY as the vendor sent
@@ -535,6 +591,7 @@ export async function runTurn(input: TurnInput): Promise<void> {
     }
   } catch (e) {
     const stopped = isAbortedError(e) || signal.aborted;
+    const timedOut = stopped && signal.reason === "timeout";
     if (!stopped) console.error("[assistant] answer failed:", e);
     const message = stopped ? null : friendlyError(e);
     const saved = await insertMessage(admin, userId, conversation.id, {
@@ -549,5 +606,24 @@ export async function runTurn(input: TurnInput): Promise<void> {
     await updateConversation(admin, userId, conversation.id, { last_message_at: new Date().toISOString() }).catch(() => null);
     if (stopped) emit({ type: "done", messageId: saved?.id ?? null, stopped: true });
     else emit({ type: "error", message: message! });
+    return outcome(timedOut ? "timeout" : stopped ? "stopped" : "error", roundText || null, { error: message });
+  }
+
+  /** Make the job this chat's background task, if it isn't one already. Never throws. */
+  async function ensureTask(progress: string | null): Promise<void> {
+    if (taskState || !toolCtx.act) return;
+    try {
+      const { task } = await startTask(admin, {
+        userId,
+        conversationId: conversation.id,
+        goal: goalFrom(input.text, earlierQuestions(rows, turnId)),
+        progress: progress ?? "",
+        permissionMode: auto?.mode ?? null,
+      });
+      taskState = { id: task.id, goal: task.goal, background: false, progressSet: false };
+      toolCtx.act.task = taskState;
+    } catch {
+      // Before migration 0092 (or a database hiccup): it just ends here, as before.
+    }
   }
 }

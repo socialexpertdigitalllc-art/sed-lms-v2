@@ -210,6 +210,30 @@ function ranResult(card: ActionCard) {
   };
 }
 
+const LEAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A plan that is nothing but one-lead category edits ("lead.update" with only
+ * {lead, category}, by lead id) → the assignments for ONE lead.categorize.
+ * One bulk change instead of ten cards: one card, one undo, and it counts once
+ * against the changes an answer may make on its own. Null when the plan is
+ * anything else. PURE; tested.
+ */
+export function categoryEditsAsBulk(steps: { action: string; fields: Values }[]): { lead: string; category: string }[] | null {
+  if (steps.length < 2) return null;
+  const out: { lead: string; category: string }[] = [];
+  for (const s of steps) {
+    if (s.action !== "lead.update") return null;
+    const keys = Object.keys(s.fields).filter((k) => s.fields[k] !== undefined && s.fields[k] !== null && s.fields[k] !== "");
+    if (keys.some((k) => k !== "lead" && k !== "category")) return null;
+    const lead = typeof s.fields.lead === "string" ? s.fields.lead.trim() : "";
+    const category = typeof s.fields.category === "string" ? s.fields.category.trim() : "";
+    if (!LEAD_ID.test(lead) || !category) return null;
+    out.push({ lead, category });
+  }
+  return out;
+}
+
 export const proposePlanTool: AssistantTool = {
   name: "propose_plan",
   label: "Preparing a plan",
@@ -241,6 +265,18 @@ export const proposePlanTool: AssistantTool = {
       const o = (s ?? {}) as Record<string, unknown>;
       return { action: String(o.action ?? ""), fields: (o.fields && typeof o.fields === "object" ? o.fields : {}) as Values };
     });
+    // Ten category edits are one bulk change, not a ten-card plan.
+    const bulk = categoryEditsAsBulk(parsed);
+    if (bulk) {
+      const r = await prepareActionTool.run({ action: "lead.categorize", fields: { assignments: bulk } }, ctx);
+      return {
+        data: {
+          ...(r.data as Record<string, unknown>),
+          merged: `These ${bulk.length} category edits were made as ONE bulk change (lead.categorize). For categories always use lead.categorize directly — up to 50 leads per action.`,
+        },
+        summary: r.summary,
+      };
+    }
     const out = await guarded(() =>
       preparePlan(String(args.title ?? "Plan").slice(0, 200), parsed, {
         ctx: actionContext(ctx),
@@ -432,6 +468,9 @@ export const requestPermissionModeTool: AssistantTool = {
     if (!auto) throw new ToolError("Permission modes are not available here.");
     const want = args.mode;
     if (!isPermissionMode(want) || want === "ask") throw new ToolError('Ask for "auto_safe" or "auto".');
+    if (act.task?.background) {
+      throw new ToolError("This is a background run — nobody is here to press a button. Carry on with what their mode allows, and note in update_task_progress anything that needs a higher mode.");
+    }
     if (act.source === "telegram" || act.source === "whatsapp") {
       throw new ToolError("There is no button on the phone. Tell them they can switch the permission mode in SED AI on the computer (the chip next to Act), then carry on with what their mode allows.");
     }

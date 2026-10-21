@@ -107,6 +107,13 @@ export async function register() {
     fetch(`${origin}/api/assistant/scheduler`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
   }, 60_000);
 
+  // SED AI's background tasks: a long job ("categorise every lead") gets its
+  // next run here, with nobody watching. Answers at once; the runs happen
+  // after. Idle cost: one select on a partial index of running tasks.
+  setInterval(() => {
+    fetch(`${origin}/api/assistant/tasks/process`, { method: "POST", headers: { "x-wge-secret": secret } }).catch(() => {});
+  }, 30_000);
+
   // Domains round: a registrar sync every 6 hours (expiry, auto-renew, new and
   // departed domains, renewal alerts) and the site health checks that are due
   // (each site every ~6 hours; a first failure is re-checked within minutes so

@@ -22,8 +22,12 @@ const recent = new Map<string, number[]>();
 
 export type StartRefusal = { reason: "busy" | "concurrency" | "rate"; message: string };
 
-/** Claim the conversation for a new answer, or say why not. */
-export function startRun(userId: string, conversationId: string, now = Date.now()): { controller: AbortController } | StartRefusal {
+/**
+ * Claim the conversation for a new answer, or say why not. A background
+ * task's run (`background`) holds the chat like any answer, but doesn't spend
+ * the person's hourly allowance — they didn't send anything.
+ */
+export function startRun(userId: string, conversationId: string, now = Date.now(), opts: { background?: boolean } = {}): { controller: AbortController } | StartRefusal {
   if (active.has(conversationId)) {
     return { reason: "busy", message: "Still answering your previous message in this chat — wait for it, or press Stop." };
   }
@@ -31,12 +35,14 @@ export function startRun(userId: string, conversationId: string, now = Date.now(
   if (mine >= MAX_CONCURRENT_PER_USER) {
     return { reason: "concurrency", message: `You already have ${mine} answers in progress. Wait for one to finish.` };
   }
-  const stamps = (recent.get(userId) ?? []).filter((t) => now - t < HOUR_MS);
-  if (stamps.length >= MAX_MESSAGES_PER_HOUR) {
-    return { reason: "rate", message: `That's ${MAX_MESSAGES_PER_HOUR} messages in the last hour — the assistant needs a short break. Try again in a few minutes.` };
+  if (!opts.background) {
+    const stamps = (recent.get(userId) ?? []).filter((t) => now - t < HOUR_MS);
+    if (stamps.length >= MAX_MESSAGES_PER_HOUR) {
+      return { reason: "rate", message: `That's ${MAX_MESSAGES_PER_HOUR} messages in the last hour — the assistant needs a short break. Try again in a few minutes.` };
+    }
+    stamps.push(now);
+    recent.set(userId, stamps);
   }
-  stamps.push(now);
-  recent.set(userId, stamps);
   const controller = new AbortController();
   active.set(conversationId, { userId, controller });
   return { controller };

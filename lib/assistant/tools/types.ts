@@ -49,6 +49,20 @@ export interface ActState {
   auto?: AutoRunContext | null;
   /** Set by request_permission_mode: the engine has the model wrap up. */
   askedPermission?: boolean;
+  /** Changes may run on their own this answer (their mode or their "don't ask again" list). */
+  autonomous?: boolean;
+  /** The chat's running background task (lib/assistant/tasks.ts), if any. */
+  task?: TaskState | null;
+}
+
+/** The background task this answer knows about. Mutable: the task tools update it. */
+export interface TaskState {
+  id: string;
+  goal: string;
+  /** This answer IS one of the task's runs (nobody is watching). */
+  background: boolean;
+  /** update_task_progress was called in this answer. */
+  progressSet: boolean;
 }
 
 export type ToolSideEvent =

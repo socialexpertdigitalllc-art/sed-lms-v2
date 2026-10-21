@@ -5,6 +5,7 @@ import { assistantGuard, storeError, toClientConversation, toUiMessage, UUID_RE 
 import { deleteConversation, getConversation, listMessages, updateConversation } from "@/lib/assistant/store";
 import { isRunning, stopRun } from "@/lib/assistant/runs";
 import { listConversationActions, toCard } from "@/lib/assistant/actions/store";
+import { latestTask, taskView } from "@/lib/assistant/tasks";
 
 export const runtime = "nodejs";
 
@@ -25,16 +26,19 @@ export async function GET(_req: Request, { params }: Ctx) {
   try {
     const conversation = await getConversation(admin, guard.caller.user.id, id);
     if (!conversation) return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
-    const [messages, actions] = await Promise.all([
+    const [messages, actions, task] = await Promise.all([
       listMessages(admin, guard.caller.user.id, id),
       // Action cards (migration 0087 may not be applied yet: then there are none).
       listConversationActions(admin, guard.caller.user.id, id).catch(() => []),
+      // Its background task, if it has had one (none before migration 0092).
+      latestTask(admin, guard.caller.user.id, id),
     ]);
     return NextResponse.json({
       conversation: toClientConversation(conversation),
       messages: messages.map(toUiMessage),
       actions: actions.map((a) => toCard(a)),
       running: isRunning(id),
+      task: task ? taskView(task) : null,
     });
   } catch (e) {
     return storeError(e, "Could not load the conversation.");

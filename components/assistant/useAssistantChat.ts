@@ -5,6 +5,7 @@ import type { ActionCard } from "@/lib/assistant/actions/card";
 import type { PermissionMode } from "@/lib/assistant/actions/permissions";
 import type { AnswerFeedback, AssistantMemory, AssistantMode, AssistantStreamEvent, MessageAttachment, PageContext } from "@/lib/assistant/types";
 import type { ClientConversation, UiMessage } from "@/lib/assistant/view";
+import type { TaskView } from "@/lib/assistant/tasks";
 import { applyEvent, liveTurn, PENDING_PREFIX, turnsFromMessages, withCard, type TurnModel } from "@/lib/assistant/turns";
 
 /**
@@ -16,24 +17,31 @@ import { applyEvent, liveTurn, PENDING_PREFIX, turnsFromMessages, withCard, type
  * An answer streams in as NDJSON events and is saved server-side as it goes,
  * so switching chats or closing the panel mid-answer is harmless: the answer
  * keeps being written, and reopening the chat shows it finishing (polled) or
- * finished.
+ * finished. A chat with a background task running is followed the same way:
+ * each run's answer appears as it is written, with nobody needing to ask.
  */
 
 export const JSON_HEADERS = { "Content-Type": "application/json" };
 
 export async function fetchConversation(
   id: string,
-): Promise<{ conversation: ClientConversation; turns: TurnModel[]; running: boolean }> {
+): Promise<{ conversation: ClientConversation; turns: TurnModel[]; running: boolean; task: TaskView | null }> {
   const res = await fetch(`/api/assistant/conversations/${id}`, { cache: "no-store" });
   const body = (await res.json().catch(() => ({}))) as {
     conversation?: ClientConversation;
     messages?: UiMessage[];
     actions?: ActionCard[];
     running?: boolean;
+    task?: TaskView | null;
     error?: string;
   };
   if (!res.ok || !body.conversation) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status });
-  return { conversation: body.conversation, turns: turnsFromMessages(body.messages ?? [], body.actions ?? []), running: Boolean(body.running) };
+  return {
+    conversation: body.conversation,
+    turns: turnsFromMessages(body.messages ?? [], body.actions ?? []),
+    running: Boolean(body.running),
+    task: body.task ?? null,
+  };
 }
 
 /** What a card button sends, and what comes back. */
@@ -58,6 +66,8 @@ export interface AssistantChatOptions {
   initialMessages?: UiMessage[];
   initialActions?: ActionCard[];
   initialRunning?: boolean;
+  /** The open chat's background task, if it has had one. */
+  initialTask?: TaskView | null;
   /** Where the person is right now (the floating chat), read when a question is sent. */
   getPage?: () => PageContext | null;
   /** The assistant switched itself to Act mode for a request. */
@@ -87,6 +97,8 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
   const [mode, setMode] = useState<AssistantMode>("ask");
   const [live, setLive] = useState<TurnModel | null>(null);
   const [remoteRunning, setRemoteRunning] = useState(Boolean(opts.initialRunning));
+  /** The open chat's background task (its latest), which the banner shows. */
+  const [task, setTask] = useState<TaskView | null>(opts.initialTask ?? null);
   const [loading, setLoading] = useState(false);
   /** A request the server turned down before answering (busy, over the hourly
    *  budget…), shown above the message box. */
@@ -102,21 +114,26 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
   }, []);
 
   // An answer still being written (another tab, or this one before a reload,
-  // or a dropped stream): follow it until it lands.
+  // or a dropped stream) — or a background task carrying on: follow it.
+  const taskRunning = task?.status === "running";
   useEffect(() => {
-    if (!remoteRunning || live || !activeId) return;
+    if ((!remoteRunning && !taskRunning) || live || !activeId) return;
     const id = activeId;
-    const timer = setInterval(() => {
-      void fetchConversation(id)
-        .then((r) => {
-          if (activeRef.current !== id) return;
-          setTurns(r.turns);
-          setRemoteRunning(r.running);
-        })
-        .catch(() => {});
-    }, 2500);
+    const timer = setInterval(
+      () => {
+        void fetchConversation(id)
+          .then((r) => {
+            if (activeRef.current !== id) return;
+            setTurns(r.turns);
+            setRemoteRunning(r.running);
+            setTask(r.task);
+          })
+          .catch(() => {});
+      },
+      remoteRunning ? 2500 : 5000,
+    );
     return () => clearInterval(timer);
-  }, [remoteRunning, live, activeId]);
+  }, [remoteRunning, taskRunning, live, activeId]);
 
   /** Stop mirroring a live answer (it keeps going, and saving, on the server). */
   const detach = useCallback(() => {
@@ -133,6 +150,7 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
       setLive(null);
       setTurns([]);
       setRemoteRunning(false);
+      setTask(null);
       setNotice(null);
       setLoading(true);
       fetchConversation(id)
@@ -140,6 +158,7 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
           if (activeRef.current !== id) return;
           setTurns(r.turns);
           setRemoteRunning(r.running);
+          setTask(r.task);
           optsRef.current.onConversation?.(r.conversation);
         })
         .catch((e: Error & { status?: number }) => {
@@ -160,6 +179,7 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     setTurns([]);
     setLive(null);
     setRemoteRunning(false);
+    setTask(null);
     setNotice(null);
   }, [detach, setActive]);
 
@@ -305,6 +325,7 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
             if (activeRef.current === conversationId) {
               setTurns(r.turns);
               setRemoteRunning(r.running);
+              setTask(r.task);
               setLive(null);
             }
           } catch {
@@ -415,6 +436,20 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     );
   }, []);
 
+  /** Stop the chat's background task (and the run going right now, if any). */
+  const stopTask = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    const id = task?.id;
+    if (!id) return { ok: false, error: "No task to stop." };
+    try {
+      const res = await fetch(`/api/assistant/tasks/${id}/stop`, { method: "POST", headers: JSON_HEADERS, body: "{}" });
+      const json = (await res.json().catch(() => ({}))) as { task?: TaskView; error?: string };
+      if (json.task) setTask(json.task);
+      return res.ok ? { ok: true } : { ok: false, error: json.error ?? `HTTP ${res.status}` };
+    } catch {
+      return { ok: false, error: "Could not reach the server." };
+    }
+  }, [task?.id]);
+
   // Saved turns plus the one streaming in now. An answer still being written
   // elsewhere (another tab, or before a reload) shows its latest turn as live.
   let shown = turns;
@@ -444,5 +479,7 @@ export function useAssistantChat(opts: AssistantChatOptions = {}) {
     actOn,
     runPlan,
     updateCard,
+    task,
+    stopTask,
   };
 }

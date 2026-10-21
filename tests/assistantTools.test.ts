@@ -137,7 +137,10 @@ describe("which tools a user's assistant is given", () => {
 
   it("gives an admin every data tool (the action tools come with Act mode)", () => {
     const actionTools = new Set(ACTION_TOOLS.map((t) => t.name));
-    expect(toolsFor(ADMIN_PERMS).map((t) => t.name).sort()).toEqual(ALL_TOOLS.filter((t) => !actionTools.has(t.name)).map((t) => t.name).sort());
+    // Act-only tools (the action tools, the background-task tools) aren't offered in Ask.
+    const askTools = ALL_TOOLS.filter((t) => !actionTools.has(t.name) && (!t.modes || t.modes.includes("ask")));
+    expect(toolsFor(ADMIN_PERMS).map((t) => t.name).sort()).toEqual(askTools.map((t) => t.name).sort());
+    expect(toolsFor(new Set([...ADMIN_PERMS, "assistant.act"]), "act").map((t) => t.name)).toEqual(expect.arrayContaining(["start_background_task", "update_task_progress"]));
   });
 
   it("offers Act mode only to people with assistant.act — the switch in Ask, the action tools in Act", () => {

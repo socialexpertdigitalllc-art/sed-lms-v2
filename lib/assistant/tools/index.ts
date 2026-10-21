@@ -8,6 +8,7 @@ import { breakdownLeadsTool, leadDetailsTool, pipelineSummaryTool, searchLeadsTo
 import { preLeadsOverviewTool } from "./preleads";
 import { teamActivityTool, teamPerformanceTool } from "./team";
 import { ticketsOverviewTool } from "./tickets";
+import { TASK_TOOLS } from "./tasks";
 import { ToolError, type AssistantTool, type ToolContext } from "./types";
 
 /**
@@ -57,6 +58,7 @@ export const ALL_TOOLS: AssistantTool[] = [
   saveMemoryTool,
   forgetMemoryTool,
   ...ACTION_TOOLS,
+  ...TASK_TOOLS,
 ];
 
 /** Is this tool offered in this mode? (Act-mode tools only in Act mode; the switch only in Ask.) */

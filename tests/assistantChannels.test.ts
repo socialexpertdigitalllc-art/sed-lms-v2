@@ -4,7 +4,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActionCard } from "@/lib/assistant/actions/card";
 import type { StoredAction } from "@/lib/assistant/actions/types";
-import type { TurnInput } from "@/lib/assistant/engine";
+import type { TurnInput, TurnOutcome } from "@/lib/assistant/engine";
+
+const turnOutcome = (): TurnOutcome => ({ turnId: "t", ended: "answered", answer: null, taskId: null, progressSet: false });
 
 /**
  * SED AI on the phone: linking with one-time codes, the webhooks' platform
@@ -767,6 +769,7 @@ describe("a message from a phone", () => {
       db.tables.assistant_actions = [proposed as unknown as Row];
       input.emit({ type: "action", card: toCard(proposed) });
       input.emit({ type: "done", messageId: "m1", stopped: false });
+      return turnOutcome();
     });
     await handleInbound(msg("create a lead for Jumbo's Pizza"), deps);
 
@@ -790,6 +793,7 @@ describe("a message from a phone", () => {
       input.emit({ type: "start", conversation: input.conversation, userMessageId: "t2" });
       input.emit({ type: "text", delta: "Yes to what?" });
       input.emit({ type: "done", messageId: "m", stopped: false });
+      return turnOutcome();
     });
     await handleInbound(msg("yes"), deps);
     expect(confirmAction).not.toHaveBeenCalled();
@@ -890,6 +894,7 @@ describe("a message from a phone", () => {
       input.emit({ type: "start", conversation: input.conversation, userMessageId: "t9" });
       input.emit({ type: "text", delta: "You have **3** leads." });
       input.emit({ type: "done", messageId: "m", stopped: false });
+      return turnOutcome();
     });
     const wa = (id: string, text: string): InboundMessage => ({ channel: "whatsapp", externalId: "923001234567", messageId: id, text, label: "+923001234567" });
     await handleInboundAll([wa("wamid.a", "link 246810"), wa("wamid.b", "how many leads do I have?")], deps);

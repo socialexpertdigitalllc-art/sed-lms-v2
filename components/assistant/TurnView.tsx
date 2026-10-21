@@ -258,8 +258,8 @@ export function TurnView({
   latest = false,
   compact = false,
   onRetry,
-  onRegenerate,
-  onEdit,
+  onRegenerate: regenerateProp,
+  onEdit: editProp,
   onRate,
   onCardOp,
   onRunPlan,
@@ -289,6 +289,10 @@ export function TurnView({
   permission?: { current: PermissionMode | null; onDecide?: (mode: PermissionMode | null) => Promise<void> | void } | null;
 }) {
   const [editing, setEditing] = useState(false);
+  // A background task's run: nobody typed its opening message, so there is
+  // nothing to edit or ask again.
+  const onEdit = turn.task ? undefined : editProp;
+  const onRegenerate = turn.task ? undefined : regenerateProp;
   const live = turn.status === "running";
   const reasoning = turn.segments
     .filter((s): s is Extract<Segment, { kind: "reasoning" }> => s.kind === "reasoning")
@@ -325,46 +329,54 @@ export function TurnView({
 
   return (
     <article className={cn("group/turn space-y-3", size)}>
-      {/* The question */}
-      <div className="group/q flex flex-col items-end gap-1">
-        {editing && onEdit ? (
-          <EditQuestion
-            initial={turn.question}
-            onCancel={() => setEditing(false)}
-            onSave={(t) => {
-              setEditing(false);
-              if (t !== turn.question) onEdit(t);
-            }}
-          />
-        ) : (
-          <>
-            <AttachmentChips files={turn.attachments} />
-            <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-3xl bg-surface-2 px-4 py-2.5 leading-relaxed text-text">
-              {turn.mode === "act" && !turn.switchedToAct ? (
-                <span className="mr-1.5 inline-flex translate-y-[-1px] items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-px align-middle text-[10px] font-semibold uppercase tracking-wide text-accent-ink">
-                  <Zap className="h-2.5 w-2.5" aria-hidden /> Act
-                </span>
-              ) : null}
-              {turn.question}
-            </div>
-            <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/q:opacity-100">
-              <Action label={questionCopied ? "Copied" : "Copy question"} onClick={copyQuestion}>
-                {questionCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
-              </Action>
-              {onSaveShortcut ? (
-                <Action label="Save as a shortcut" onClick={() => onSaveShortcut(turn.question)}>
-                  <Bookmark className="h-3.5 w-3.5" aria-hidden />
+      {/* The question — or, for a background task's run, a divider */}
+      {turn.task ? (
+        <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-text-faint" data-testid="background-run">
+          <span className="h-px flex-1 bg-border-subtle" aria-hidden />
+          <RefreshCw className="h-3 w-3" aria-hidden /> Background task · run {turn.task.run}
+          <span className="h-px flex-1 bg-border-subtle" aria-hidden />
+        </div>
+      ) : (
+        <div className="group/q flex flex-col items-end gap-1">
+          {editing && onEdit ? (
+            <EditQuestion
+              initial={turn.question}
+              onCancel={() => setEditing(false)}
+              onSave={(t) => {
+                setEditing(false);
+                if (t !== turn.question) onEdit(t);
+              }}
+            />
+          ) : (
+            <>
+              <AttachmentChips files={turn.attachments} />
+              <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-3xl bg-surface-2 px-4 py-2.5 leading-relaxed text-text">
+                {turn.mode === "act" && !turn.switchedToAct ? (
+                  <span className="mr-1.5 inline-flex translate-y-[-1px] items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-px align-middle text-[10px] font-semibold uppercase tracking-wide text-accent-ink">
+                    <Zap className="h-2.5 w-2.5" aria-hidden /> Act
+                  </span>
+                ) : null}
+                {turn.question}
+              </div>
+              <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/q:opacity-100">
+                <Action label={questionCopied ? "Copied" : "Copy question"} onClick={copyQuestion}>
+                  {questionCopied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
                 </Action>
-              ) : null}
-              {onEdit ? (
-                <Action label="Edit question" onClick={() => setEditing(true)}>
-                  <Pencil className="h-3.5 w-3.5" aria-hidden />
-                </Action>
-              ) : null}
-            </div>
-          </>
-        )}
-      </div>
+                {onSaveShortcut ? (
+                  <Action label="Save as a shortcut" onClick={() => onSaveShortcut(turn.question)}>
+                    <Bookmark className="h-3.5 w-3.5" aria-hidden />
+                  </Action>
+                ) : null}
+                {onEdit ? (
+                  <Action label="Edit question" onClick={() => setEditing(true)}>
+                    <Pencil className="h-3.5 w-3.5" aria-hidden />
+                  </Action>
+                ) : null}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* The answer */}
       <div className="flex gap-3">

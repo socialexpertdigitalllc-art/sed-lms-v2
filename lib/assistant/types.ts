@@ -65,6 +65,8 @@ export interface MessageMeta extends Partial<ToolCallMeta> {
   attachments?: MessageAttachment[];
   mode?: AssistantMode;
   page?: PageContext;
+  /** A background task's run started with this message (not typed by the person). */
+  task?: { id: string; run: number };
 }
 
 export interface AssistantMessageRow {

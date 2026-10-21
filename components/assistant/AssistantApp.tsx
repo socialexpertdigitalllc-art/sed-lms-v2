@@ -24,6 +24,8 @@ import { JSON_HEADERS, useAssistantChat } from "./useAssistantChat";
 import { useActPermissions } from "./useActPermissions";
 import { modeInfo, type PermissionMode } from "@/lib/assistant/actions/permissions";
 import { useStickToBottom } from "./useStickToBottom";
+import { TaskBanner } from "./TaskBanner";
+import type { TaskView } from "@/lib/assistant/tasks";
 
 /**
  * The full Assistant page: the user's chats on the left, the open chat on the
@@ -43,6 +45,8 @@ export interface AssistantAppProps {
   initialMessages: UiMessage[];
   initialActions?: ActionCard[];
   initialRunning: boolean;
+  /** The open chat's background task, if it has had one. */
+  initialTask?: TaskView | null;
   /** Act mode is available to this person (assistant.act). */
   canAct?: boolean;
 }
@@ -83,6 +87,7 @@ export function AssistantApp(props: AssistantAppProps) {
     initialMessages: props.initialMessages,
     initialActions: props.initialActions,
     initialRunning: props.initialRunning,
+    initialTask: props.initialTask ?? null,
     onActiveChange: setUrl,
     onConversation: (c) => setConversations((prev) => upsert(prev, c)),
     onMemory: (action, m) =>
@@ -176,6 +181,7 @@ export function AssistantApp(props: AssistantAppProps) {
   const empty = shown.length === 0 && !chat.loading;
   const idle = !chat.running;
 
+  const taskBanner = chat.task ? <TaskBanner task={chat.task} onStop={chat.stopTask} /> : null;
   const notice = chat.notice ? (
     <div className="mx-auto mb-2 flex w-full max-w-3xl items-start gap-2 rounded-xl border border-dropped-bg bg-dropped-bg/40 px-3 py-2 text-[13px] text-dropped-fg" role="alert">
       <span className="min-w-0 flex-1">{chat.notice}</span>
@@ -288,6 +294,7 @@ export function AssistantApp(props: AssistantAppProps) {
                     remember what you tell me.
                   </p>
                 </div>
+                {taskBanner}
                 {notice}
                 <Composer
                   assistantName={name}
@@ -368,6 +375,7 @@ export function AssistantApp(props: AssistantAppProps) {
             </div>
 
             <div className="shrink-0 bg-surface px-3 pb-3 pt-1">
+              {taskBanner}
               {notice}
               <Composer
                 assistantName={name}

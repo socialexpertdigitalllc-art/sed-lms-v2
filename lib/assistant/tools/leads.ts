@@ -281,6 +281,13 @@ export const searchLeadsTool: AssistantTool = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const clip = (s: string | null | undefined, n: number) => (s && s.length > n ? `${s.slice(0, n)}…` : s ?? null);
 
+/** Leads opened one by one in each answer (keyed by the answer's TurnData). */
+const opened = new WeakMap<object, number>();
+/** After this many in one answer, the result says how to read many at once. */
+export const OPEN_ONE_BY_ONE_TIP_AFTER = 5;
+export const BULK_READ_TIP =
+  "You are opening leads one at a time. For work across many leads, search_leads with include_services: true (and uncategorized: true for categories) returns services and the about text for up to 100 leads in ONE call — use that, then one bulk action (lead.categorize) for all of them.";
+
 export const leadDetailsTool: AssistantTool = {
   name: "get_lead_details",
   label: "Opening the lead",
@@ -432,6 +439,10 @@ export const leadDetailsTool: AssistantTool = {
         yearly_price: money(c.yearly_price),
       }));
     }
+
+    const n = (opened.get(ctx.data) ?? 0) + 1;
+    opened.set(ctx.data, n);
+    if (n > OPEN_ONE_BY_ONE_TIP_AFTER) data.tip = BULK_READ_TIP;
 
     const calls = (fus ?? []).length;
     return { data, summary: `${lead.business_name} · ${lead.status} · ${calls} call${calls === 1 ? "" : "s"} logged` };
