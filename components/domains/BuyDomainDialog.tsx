@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Check, CircleCheck, CircleX, Globe, Loader2, Search, ShoppingCart } from "lucide-react";
+import { AlertTriangle, Loader2, Search, ShoppingCart } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
 import { cn } from "@/lib/utils";
 import { money } from "@/components/domains/DomainBits";
+import { DomainSearchResults } from "@/components/domains/DomainSearchResults";
 import type { DomainOffer, DomainSearch } from "@/lib/domains/service";
 import type { ClientDomainRow, DomainRegistrar } from "@/lib/domains/types";
 
@@ -14,118 +15,7 @@ const REGISTRARS: { id: DomainRegistrar; label: string; hint: string }[] = [
   { id: "hostinger", label: "Hostinger", hint: "When the client needs access to the domain" },
 ];
 
-/** The part of a suggested name that differs from the searched one:
- *  abc[contractor] vs abc[construction]. PURE. */
-export function differingPart(searched: string, candidate: string): { pre: string; mid: string; post: string } {
-  let p = 0;
-  while (p < searched.length && p < candidate.length && searched[p] === candidate[p]) p++;
-  let q = 0;
-  while (q < searched.length - p && q < candidate.length - p && searched[searched.length - 1 - q] === candidate[candidate.length - 1 - q]) q++;
-  return { pre: candidate.slice(0, p), mid: candidate.slice(p, candidate.length - q), post: candidate.slice(candidate.length - q) };
-}
-
-/** A suggested name with what differs from the search marked, so a near-miss can't pass for the real thing. */
-function MarkedName({ domain, searched }: { domain: string; searched: string | null }) {
-  if (!searched) return <>{domain}</>;
-  const d = differingPart(searched, domain);
-  if (!d.mid) return <>{domain}</>;
-  return (
-    <>
-      {d.pre}
-      <mark className="rounded-sm bg-notready-bg px-px text-notready-fg">{d.mid}</mark>
-      {d.post}
-    </>
-  );
-}
-
-function OfferRow({
-  o,
-  picked,
-  onPick,
-  searched,
-}: {
-  o: DomainOffer;
-  picked: DomainOffer | null;
-  onPick: (o: DomainOffer) => void;
-  /** The exact name searched for — marks how this one differs. */
-  searched?: string | null;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        disabled={!o.available}
-        onClick={() => onPick(o)}
-        className={cn(
-          "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm",
-          !o.available ? "cursor-not-allowed opacity-50" : picked?.domain === o.domain ? "bg-accent-soft text-accent-ink" : "text-text hover:bg-surface-2",
-        )}
-      >
-        <Globe className="h-4 w-4 shrink-0 text-text-faint" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium">
-            <MarkedName domain={o.domain} searched={searched ?? null} />
-          </span>
-          <span className="block text-xs text-text-faint">
-            {o.available ? `${money(o.registrationCents, o.currency)} first year · renews ${money(o.renewalCents, o.currency)}/yr` : o.reason}
-          </span>
-        </span>
-        {picked?.domain === o.domain ? <Check className="h-4 w-4 text-accent-ink" /> : null}
-      </button>
-    </li>
-  );
-}
-
-/** The name exactly as searched — first, on its own, available or taken. */
-function ExactMatch({ exact, picked, onPick }: { exact: NonNullable<DomainSearch["exact"]>; picked: DomainOffer | null; onPick: (o: DomainOffer) => void }) {
-  const o = exact.offer;
-  const available = Boolean(o?.available);
-  const selected = picked?.domain === exact.domain;
-  return (
-    <section aria-label="Exact match" className="p-2">
-      <p className="mb-1.5 flex flex-wrap items-baseline gap-x-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-text-faint">
-        Exact match
-        {exact.assumedTld ? <span className="font-normal normal-case tracking-normal">no ending typed, so .com was checked</span> : null}
-      </p>
-      <button
-        type="button"
-        disabled={!available}
-        onClick={() => o && onPick(o)}
-        className={cn(
-          "flex w-full items-center gap-3 rounded-lg border-2 px-3.5 py-3 text-left transition-colors",
-          available
-            ? selected
-              ? "border-accent bg-accent-soft"
-              : "border-ready-fg/40 bg-ready-bg/40 hover:border-ready-fg/70"
-            : "cursor-not-allowed border-dropped-fg/30 bg-dropped-bg/40",
-        )}
-      >
-        {available ? <CircleCheck className="h-5 w-5 shrink-0 text-ready-fg" aria-hidden /> : <CircleX className="h-5 w-5 shrink-0 text-dropped-fg" aria-hidden />}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-base font-semibold text-text">{exact.domain}</span>
-          <span className={cn("block text-xs", available ? "text-ready-fg" : "text-dropped-fg")}>
-            {!o
-              ? "Couldn't get an answer for this name — search again."
-              : available
-                ? `Available · ${money(o.registrationCents, o.currency)} first year · renews ${money(o.renewalCents, o.currency)}/yr`
-                : o.reason === "Taken"
-                  ? "Taken — someone already owns this name."
-                  : `Not available: ${o.reason ?? "can't be bought here"}`}
-          </span>
-        </span>
-        <span
-          className={cn(
-            "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold uppercase",
-            available ? "bg-ready-bg text-ready-fg" : "bg-dropped-bg text-dropped-fg",
-          )}
-        >
-          {available ? "Available" : o?.reason === "Taken" ? "Taken" : "Unavailable"}
-        </span>
-        {selected ? <Check className="h-4 w-4 shrink-0 text-accent-ink" /> : null}
-      </button>
-    </section>
-  );
-}
+export { differingPart } from "@/components/domains/DomainSearchResults";
 
 /**
  * Find and buy a domain (Cloudflare by default, Hostinger optional), for a
@@ -309,32 +199,7 @@ export function BuyDomainDialog({
               ) : !results.exact && !results.otherEndings.length && !results.similar.length ? (
                 <p className="p-4 text-sm text-text-faint">No names found — try a different phrase.</p>
               ) : (
-                <>
-                  {results.exact ? <ExactMatch exact={results.exact} picked={picked} onPick={pick} /> : null}
-                  {results.otherEndings.length ? (
-                    <section aria-label="Same name, other endings" className="border-t border-border-subtle p-2">
-                      <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Same name, other endings</p>
-                      <ul>
-                        {results.otherEndings.map((o) => (
-                          <OfferRow key={o.domain} o={o} picked={picked} onPick={pick} />
-                        ))}
-                      </ul>
-                    </section>
-                  ) : null}
-                  {results.similar.length ? (
-                    <section aria-label="Other suggestions" className="border-t-4 border-double border-border p-2">
-                      <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Other suggestions — different names</p>
-                      <p className="mb-1.5 px-1 text-xs text-notready-fg">
-                        These are not the name you searched for. What differs is <mark className="rounded-sm bg-notready-bg px-px text-notready-fg">marked</mark> — read each one carefully.
-                      </p>
-                      <ul>
-                        {results.similar.map((o) => (
-                          <OfferRow key={o.domain} o={o} picked={picked} onPick={pick} searched={results.exact ? results.exact.domain : null} />
-                        ))}
-                      </ul>
-                    </section>
-                  ) : null}
-                </>
+                <DomainSearchResults results={results} picked={picked} onPick={pick} />
               )}
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-border-subtle p-4">

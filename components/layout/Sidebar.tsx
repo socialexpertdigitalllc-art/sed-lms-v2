@@ -8,7 +8,7 @@ import {
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
   Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer, Images,
-  ClipboardList, ChevronDown, Plus, Earth,
+  ClipboardList, ChevronDown, Plus, Earth, SearchCheck,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -42,6 +42,8 @@ const MAIN: NavItem[] = [
   { href: "/contracts", label: "Contracts", icon: FileText, perm: "contracts.view" },
   { href: "/forms", label: "Forms", icon: Inbox, perm: "forms.view" },
   { href: "/domains", label: "Domains", icon: Earth, perm: "domains.view" },
+  // Sales check names on calls — one click, not two.
+  { href: "/domains/check", label: "Domain check", icon: SearchCheck, perm: "domains.view" },
   { href: "/website", label: "Website", icon: Globe, perm: "website.view" },
   { href: "/notifications", label: "Notifications", icon: Bell },
   // No `perm`: the verifier is auth-gated only, like Notifications.

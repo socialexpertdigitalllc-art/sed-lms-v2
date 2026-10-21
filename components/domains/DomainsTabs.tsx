@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Globe } from "lucide-react";
+import { BarChart3, Globe, SearchCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/** The Domains section's two views. A domain's own page belongs to "All domains". */
+/** The Domains section's views. A domain's own page belongs to "All domains". */
 export function DomainsTabs() {
   const path = usePathname() ?? "/domains";
   const analytics = path.startsWith("/domains/analytics");
+  const check = path.startsWith("/domains/check");
   const tabs = [
-    { href: "/domains", label: "All domains", icon: Globe, active: !analytics },
+    { href: "/domains", label: "All domains", icon: Globe, active: !analytics && !check },
+    { href: "/domains/check", label: "Check a name", icon: SearchCheck, active: check },
     { href: "/domains/analytics", label: "Analytics", icon: BarChart3, active: analytics },
   ];
   return (
