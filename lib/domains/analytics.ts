@@ -235,6 +235,7 @@ export function computeDomainAnalytics(rows: AnalyticsRow[], uptime: UptimeAgg[]
   const healthMix = (
     [
       { key: "up", name: "Site up", value: totals.sitesUp },
+      { key: "challenged", name: "Bot check", value: mine.filter((r) => health(r) === "challenged").length },
       { key: "down", name: "Site down", value: mine.filter((r) => health(r) === "down").length },
       { key: "ssl_error", name: "SSL problem", value: mine.filter((r) => health(r) === "ssl_error").length },
       { key: "parked", name: "Parked", value: totals.parked },

@@ -88,6 +88,7 @@ export function daysLeft(iso: string | null | undefined, now: number): number | 
 
 const HEALTH_TONE: Record<HealthState, PillTone> = {
   up: "ready",
+  challenged: "accent",
   down: "dropped",
   ssl_error: "dropped",
   parked: "neutral",
@@ -96,6 +97,7 @@ const HEALTH_TONE: Record<HealthState, PillTone> = {
 
 const HEALTH_DOT: Record<HealthState, string> = {
   up: "bg-ready-fg",
+  challenged: "bg-accent",
   down: "bg-dropped-fg",
   ssl_error: "bg-notready-fg",
   parked: "bg-text-faint",

@@ -39,7 +39,7 @@ const STATUS_COLOR: Record<string, string> = {
   in_progress: PURPLE,
   needs_attention: RED,
 };
-const HEALTH_COLOR: Record<string, string> = { up: TEAL, down: RED, ssl_error: AMBER, parked: GRAY, no_dns: "#CBD5E1", unchecked: "#E2E8F0" };
+const HEALTH_COLOR: Record<string, string> = { up: TEAL, challenged: PURPLE, down: RED, ssl_error: AMBER, parked: GRAY, no_dns: "#CBD5E1", unchecked: "#E2E8F0" };
 const REGISTRAR_COLOR: Record<string, string> = { Hostinger: PURPLE, Cloudflare: AMBER };
 
 const KIND_WORDS: Record<ActionKind, string> = {

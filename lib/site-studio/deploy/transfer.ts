@@ -10,6 +10,7 @@ import {
   websiteTypeLabel,
   type HostingerWebsite,
 } from "@/lib/hostinger/client";
+import { botChallengeOf } from "@/lib/domains/botCheck";
 import { isProtectedDomain } from "./protected";
 import { snapshotSite } from "./snapshots";
 
@@ -172,6 +173,8 @@ export async function probeSite(domain: string): Promise<boolean> {
     try {
       const res = await fetch(`${scheme}://${domain}/`, { signal: AbortSignal.timeout(4000) });
       if (res.ok || res.status === 301 || res.status === 308) return true;
+      // a host's bot check in front of the site: the domain is being served
+      if (await botChallengeOf(res)) return true;
     } catch {
       // provisioning
     }

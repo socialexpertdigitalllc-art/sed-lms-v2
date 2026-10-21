@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@/lib/notifications/notify", () => ({ notify: vi.fn(async () => {}) }));
 
+import { botChallengeOf, detectBotChallenge } from "@/lib/domains/botCheck";
 import { checkDomainHealth, classifyHealth, dueForCheck, HEALTH_RECHECK_MS, HEALTH_STALE_MS, type SiteProbe } from "@/lib/domains/health";
 import type { DomainHealth } from "@/lib/domains/types";
 
@@ -133,5 +134,101 @@ describe("checkDomainHealth", () => {
     const h = await checkDomainHealth(db.admin, hrow("x", null), { probe: async () => probe({ dns: { apex: null, www: null } }), now });
     expect(h).toBeNull();
     expect(db.writes).toEqual([]);
+  });
+});
+
+/**
+ * A host's bot check (Hostinger's LiteSpeed "Bot Verification", its CDN's
+ * "Checking your browser…", Cloudflare's challenge) is the host screening
+ * visitors, not the site being down. Seen live on 2026-10-20/21: ~30 healthy
+ * sites on one Hostinger account answered our checker this way and each got a
+ * false "Site down" alert.
+ */
+const LITESPEED_PAGE = `<!DOCTYPE html><html><head><title>Bot Verification</title><script>
+var onloadCallback = function() { var cont = grecaptcha.render('recaptchadiv', {'sitekey': 'x', 'callback': onSubmit}); grecaptcha.execute(cont); };
+</script></head><body><div class="panel"><h3 class="title">Verifying that you are not a robot...</h3>
+<form id="lsrecaptcha-form" method="POST" action="/.lsrecap/recaptcha?"><div id="recaptchadiv"></div></form></div></body></html>`;
+const CDN_PAGE = `<html><head><title>Just a moment...</title></head><body>Checking your browser before accessing acme.com. Please wait for up to 5 seconds...</body></html>`;
+const FORBIDDEN_PAGE = `<html><head><title> 403 Forbidden\n</title></head><body><h1>403</h1><h2>Forbidden</h2><p>Access to this resource on the server is denied!</p></body></html>`;
+
+describe("detectBotChallenge", () => {
+  const h = (init: Record<string, string> = {}) => new Headers(init);
+
+  it("names LiteSpeed's reCAPTCHA page, the CDN's browser check and Cloudflare's challenge", () => {
+    expect(detectBotChallenge(403, h({ server: "LiteSpeed" }), LITESPEED_PAGE)).toBe("litespeed");
+    expect(detectBotChallenge(403, h({ server: "hcdn" }), LITESPEED_PAGE)).toBe("litespeed");
+    expect(detectBotChallenge(503, h({ server: "hcdn" }), CDN_PAGE)).toBe("hostinger_cdn");
+    expect(detectBotChallenge(403, h({ "cf-mitigated": "challenge" }), "")).toBe("cloudflare");
+  });
+
+  it("a real error page, or a working page that mentions the words, is not a bot check", () => {
+    expect(detectBotChallenge(403, h({ server: "hcdn" }), FORBIDDEN_PAGE)).toBeNull();
+    expect(detectBotChallenge(500, h(), "<title>Internal Server Error</title>")).toBeNull();
+    expect(detectBotChallenge(200, h(), LITESPEED_PAGE)).toBeNull();
+  });
+});
+
+describe("botChallengeOf", () => {
+  it("reads an error page to find the bot check", async () => {
+    expect(await botChallengeOf(new Response(LITESPEED_PAGE, { status: 403 }))).toBe("litespeed");
+    expect(await botChallengeOf(new Response(FORBIDDEN_PAGE, { status: 403 }))).toBeNull();
+  });
+
+  it("never reads a working page, and stops after the first 32 KB of an error page", async () => {
+    const ok = new Response("<title>Bot Verification</title>", { status: 200 });
+    expect(await botChallengeOf(ok)).toBeNull();
+    expect(ok.body?.locked).toBe(false); // released unread
+    const huge = new Response("x".repeat(40_000) + "lsrecaptcha", { status: 403 });
+    expect(await botChallengeOf(huge)).toBeNull();
+  });
+});
+
+describe("a bot check in the health round", () => {
+  const challenged = (challenge: "litespeed" | "hostinger_cdn" | "cloudflare" = "litespeed") =>
+    probe({ http: { status: 403, finalUrl: "https://acme.com/", ms: 80, challenge } });
+
+  it("→ challenged, in words that say who put it up; not a failure", () => {
+    expect(classifyHealth(challenged(), null, now)).toMatchObject({
+      state: "challenged",
+      summary: "The web server showed our checker a bot check. Browsers normally pass it on their own; the page behind it wasn't checked",
+      http_status: 403,
+      consecutive_failures: 0,
+    });
+    expect(classifyHealth(challenged("hostinger_cdn"), null, now)?.summary).toMatch(/^Hostinger's CDN showed/);
+    expect(classifyHealth(challenged("cloudflare"), null, now)?.summary).toMatch(/^Cloudflare showed/);
+  });
+
+  it("breaks a failure streak, and two in a row never send a 'Site down' alert", async () => {
+    const failed = classifyHealth(probe({ tls: null }), null, now)!;
+    expect(classifyHealth(challenged(), failed, now)?.consecutive_failures).toBe(0);
+
+    const writes: unknown[] = [];
+    const admin = {
+      from: () => ({
+        update: () => ({ eq: async () => ({ error: null }) }),
+        insert: async (value: unknown) => (writes.push(value), { error: null }),
+      }),
+    } as never;
+    const notify = vi.fn(async () => {});
+    const row = { ...hrow("site", HEALTH_STALE_MS + 1), health_state: null, health: {} } as HealthRowT;
+    const first = await checkDomainHealth(admin, row, { probe: async () => challenged(), notify, now });
+    await checkDomainHealth(admin, { ...row, health_state: "challenged", health: first! }, { probe: async () => challenged(), notify, now });
+    expect(notify).not.toHaveBeenCalled();
+    expect(writes[0]).toMatchObject({ state: "challenged", http_status: 403 });
+  });
+});
+
+describe("go-live reachability probe", () => {
+  it("a bot check in front of the new domain counts as served, a plain 403 doesn't", async () => {
+    const { probeSite: goLiveProbe } = await import("@/lib/site-studio/deploy/transfer");
+    const fetchMock = vi.fn(async () => new Response(LITESPEED_PAGE, { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      expect(await goLiveProbe("acme.com")).toBe(true);
+      fetchMock.mockImplementation(async () => new Response(FORBIDDEN_PAGE, { status: 403 }));
+      expect(await goLiveProbe("acme.com")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

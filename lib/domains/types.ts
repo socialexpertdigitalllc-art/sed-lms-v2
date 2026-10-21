@@ -78,7 +78,8 @@ export interface DomainDetails {
   settings_at?: string | null;
 }
 
-export type HealthState = "up" | "down" | "ssl_error" | "parked" | "no_dns";
+/** challenged: the host answered with a bot check, so the page itself wasn't checked (see lib/domains/botCheck.ts). */
+export type HealthState = "up" | "challenged" | "down" | "ssl_error" | "parked" | "no_dns";
 
 export interface DomainHealth {
   state: HealthState;
@@ -107,6 +108,7 @@ export function isMissing(row: Pick<ClientDomainRow, "registrar_status">): boole
 
 export const HEALTH_LABELS: Record<HealthState, string> = {
   up: "Site up",
+  challenged: "Bot check",
   down: "Site down",
   ssl_error: "SSL problem",
   parked: "Parked",

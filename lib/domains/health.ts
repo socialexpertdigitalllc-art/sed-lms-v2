@@ -2,6 +2,10 @@
 // public DNS, the TLS certificate and an HTTPS request, and boils them down to
 // one state:
 //   up         the site answers over HTTPS (2xx/3xx) with a valid certificate
+//   challenged the host answered with a bot check ("Bot Verification", "Checking
+//              your browser…") — it is serving the domain and screening
+//              visitors; browsers pass, our checker can't, so the page behind
+//              it wasn't checked. Not a failure: no outage alert.
 //   down       no answer, an error page (4xx/5xx), or a timeout
 //   ssl_error  the certificate is expired, missing or for another name
 //   parked     the domain only points at Hostinger's parking page
@@ -12,6 +16,7 @@
 import { connect } from "node:tls";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { notify as realNotify } from "@/lib/notifications/notify";
+import { BOT_CHALLENGE_WHO, botChallengeOf, type BotChallenge } from "./botCheck";
 import { HOSTINGER_PARKING_IPS, lookupA } from "./dns";
 import type { ClientDomainRow, DomainHealth, HealthState } from "./types";
 
@@ -20,7 +25,8 @@ export interface SiteProbe {
   dns: { apex: string[] | null; www: string[] | null };
   /** null = nothing answered on port 443 */
   tls: { authorized: boolean; error: string | null; validTo: string | null; issuer: string | null } | null;
-  http: { status: number; finalUrl: string; ms: number } | null;
+  /** challenge: the answer was a host's bot check, not the site's page */
+  http: { status: number; finalUrl: string; ms: number; challenge?: BotChallenge | null } | null;
   httpError: string | null;
 }
 
@@ -74,9 +80,9 @@ export async function probeSite(domain: string): Promise<SiteProbe> {
         headers: { "User-Agent": "SED-LMS-SiteCheck/1.0" },
         signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
       });
-      probe.http = { status: res.status, finalUrl: res.url, ms: Date.now() - started };
+      const ms = Date.now() - started;
+      probe.http = { status: res.status, finalUrl: res.url, ms, challenge: await botChallengeOf(res) };
       probe.httpError = null;
-      await res.body?.cancel().catch(() => {});
       break;
     } catch (e) {
       probe.httpError = e instanceof Error ? (e.name === "TimeoutError" ? "timed out" : e.message) : "no answer";
@@ -123,6 +129,9 @@ export function classifyHealth(p: SiteProbe, prev: DomainHealth | null, now: Dat
   } else if (p.http.status >= 200 && p.http.status < 400) {
     state = "up";
     summary = `Up — answered in ${p.http.ms} ms`;
+  } else if (p.http.challenge) {
+    state = "challenged";
+    summary = `${BOT_CHALLENGE_WHO[p.http.challenge]} showed our checker a bot check. Browsers normally pass it on their own; the page behind it wasn't checked`;
   } else {
     state = "down";
     summary =

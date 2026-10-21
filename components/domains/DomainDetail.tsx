@@ -235,7 +235,7 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
 
       <div className="grid gap-5 lg:grid-cols-3">
         <Panel icon={CalendarClock} title="Registration & renewal">
-          <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-2 text-sm">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <Fact label="Registered">{d.registered_at ? new Date(d.registered_at).toLocaleDateString() : "—"}</Fact>
             <Fact label="Expires">
               {d.expires_at ? new Date(d.expires_at).toLocaleDateString() : "—"}
@@ -352,7 +352,7 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
               <p className={cn("text-sm", health.state === "up" ? "text-ready-fg" : health.state === "down" || health.state === "ssl_error" ? "text-dropped-fg" : "text-text-muted")}>
                 {health.summary}
               </p>
-              <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5 text-xs">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
                 <Fact label="HTTP">{health.http_status ?? "—"}</Fact>
                 <Fact label="Response">{health.ms !== null ? `${health.ms} ms` : "—"}</Fact>
                 <Fact label="SSL">
