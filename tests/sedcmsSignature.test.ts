@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   ReplayCache,
@@ -186,6 +186,44 @@ describe("the secret", () => {
     process.env[KEY] = wide;
     const wideSig = sedcmsSignature(wide, post.method, post.pathAndQuery, post.timestamp, post.body);
     expect(await verifySedcms(requestFor(post, { signature: wideSig }), post.body, { now: at(post.timestamp), seen: new ReplayCache() })).toEqual({ ok: true });
+  });
+
+  it("with leading or trailing whitespace is a 503, logged by its reason and never by its value", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const padded of [`${SECRET}${String.fromCharCode(10)}`, ` ${SECRET}`, `${SECRET} `, `${String.fromCharCode(9)}${SECRET}`, `${SECRET}${String.fromCharCode(13, 10)}`]) {
+        process.env[KEY] = padded;
+        // even a request signed with the padded value is refused: nothing is trimmed silently
+        const sig = sedcmsSignature(padded, post.method, post.pathAndQuery, post.timestamp, post.body);
+        expect(await verifySedcms(requestFor(post, { signature: sig }), post.body, { now: at(post.timestamp), seen: new ReplayCache() })).toEqual({ ok: false, status: 503 });
+        expect(await verifySedcms(requestFor(post), post.body, { now: at(post.timestamp), seen: new ReplayCache() })).toEqual({ ok: false, status: 503 });
+      }
+      const lines = warn.mock.calls.map((args) => args.map(String).join(" "));
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line).toContain("SEDCMS_LMS_SECRET has leading or trailing whitespace");
+        expect(line).not.toContain(SECRET);
+        expect(line).not.toContain(SECRET.slice(0, 12));
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("logs why it is refusing when it is unset or short, without the value", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      delete process.env[KEY];
+      await verifySedcms(requestFor(post), post.body, { now: at(post.timestamp), seen: new ReplayCache() });
+      process.env[KEY] = "short-secret-value";
+      await verifySedcms(requestFor(post), post.body, { now: at(post.timestamp), seen: new ReplayCache() });
+      const lines = warn.mock.calls.map((args) => args.map(String).join(" "));
+      expect(lines.some((l) => l.includes("SEDCMS_LMS_SECRET is not set"))).toBe(true);
+      expect(lines.some((l) => l.includes("SEDCMS_LMS_SECRET is shorter than 32 bytes"))).toBe(true);
+      expect(lines.join(" ")).not.toContain("short-secret-value");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("is read from SEDCMS_LMS_SECRET at call time", async () => {

@@ -114,6 +114,20 @@ describe("every read route: signature first", () => {
     expect(state.fromCalls).toBe(0);
   });
 
+  it.each(routes)("%s: a 503 NOT_CONFIGURED while the secret has whitespace around it", async (endpoint, handler, body) => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const restore = withEnv({ SEDCMS_LMS_SECRET: `${TEST_SECRET} ` });
+    try {
+      const res = await call(handler, STAGING_LEAD, endpoint, body, { secret: `${TEST_SECRET} ` });
+      expect(res.status).toBe(503);
+      expect((await res.json()).code).toBe("NOT_CONFIGURED");
+    } finally {
+      restore();
+      quiet.mockRestore();
+    }
+    expect(state.fromCalls).toBe(0);
+  });
+
   it.each(routes)("%s: a deleted, unknown or malformed lead is a 404 NO_LEAD", async (endpoint, handler, body) => {
     for (const id of [DELETED_LEAD, UNKNOWN_LEAD, "not-a-uuid"]) {
       const res = await call(handler, id, endpoint, body);

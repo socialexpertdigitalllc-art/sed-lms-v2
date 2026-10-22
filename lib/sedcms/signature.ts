@@ -12,8 +12,9 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
  *                       joined by line feeds.
  * Refused with 401: a missing or malformed header, a timestamp more than 300 s
  * away, a mismatch (compared in constant time), or a signature already seen
- * in the last 10 minutes. 503 while the secret is unset or shorter than 32
- * bytes, so a misconfigured LMS never accepts anything.
+ * in the last 10 minutes. 503 while the secret is unset, shorter than 32
+ * bytes, or has whitespace around it, so a misconfigured LMS never accepts
+ * anything; the log says which, never the value.
  *
  * The test vectors are shared with the CMS's signing client through
  * tests/fixtures/sedcms/shared-vectors.json.
@@ -100,19 +101,33 @@ export interface VerifyOptions {
   secret?: string;
 }
 
-function usableSecret(opts: VerifyOptions): string | null {
+/**
+ * The secret, or why it can't be used. Whitespace around it is refused, never
+ * trimmed: a value pasted with a stray space or line break would otherwise
+ * sign differently on the two sides, or be quietly "fixed" on one of them.
+ */
+function readSecret(opts: VerifyOptions): { ok: true; secret: string } | { ok: false; reason: string } {
   const secret = opts.secret ?? process.env.SEDCMS_LMS_SECRET;
-  if (typeof secret !== "string" || Buffer.byteLength(secret, "utf8") < SEDCMS_MIN_SECRET_BYTES) return null;
-  return secret;
+  if (typeof secret !== "string" || secret.length === 0) return { ok: false, reason: "SEDCMS_LMS_SECRET is not set" };
+  if (secret.trim() !== secret) return { ok: false, reason: "SEDCMS_LMS_SECRET has leading or trailing whitespace" };
+  if (Buffer.byteLength(secret, "utf8") < SEDCMS_MIN_SECRET_BYTES) {
+    return { ok: false, reason: `SEDCMS_LMS_SECRET is shorter than ${SEDCMS_MIN_SECRET_BYTES} bytes` };
+  }
+  return { ok: true, secret };
 }
 
 /**
- * The checks that need no body: the secret is set, both headers are well
- * formed, and the timestamp is inside the window. Routes run this before
- * reading a body, so an unsigned caller can't make the LMS read 30 MiB.
+ * The checks that need no body: the secret is usable (else 503, logged by its
+ * reason, never its value), both headers are well formed, and the timestamp is
+ * inside the window. Routes run this before reading a body, so an unsigned
+ * caller can't make the LMS read 30 MiB.
  */
 export function precheckSedcms(req: Request, opts: VerifyOptions = {}): SedcmsVerdict {
-  if (!usableSecret(opts)) return { ok: false, status: 503 };
+  const secret = readSecret(opts);
+  if (!secret.ok) {
+    console.error(`[sedcms] refusing CMS requests: ${secret.reason}`);
+    return { ok: false, status: 503 };
+  }
   const timestamp = req.headers.get(SEDCMS_TIMESTAMP_HEADER);
   const signature = req.headers.get(SEDCMS_SIGNATURE_HEADER);
   if (!timestamp || !signature || !TIMESTAMP.test(timestamp) || !SIGNATURE.test(signature)) return { ok: false, status: 401 };
@@ -125,7 +140,9 @@ export function precheckSedcms(req: Request, opts: VerifyOptions = {}): SedcmsVe
 export async function verifySedcms(req: Request, rawBody: string | Uint8Array, opts: VerifyOptions = {}): Promise<SedcmsVerdict> {
   const pre = precheckSedcms(req, opts);
   if (!pre.ok) return pre;
-  const secret = usableSecret(opts) as string;
+  const read = readSecret(opts);
+  if (!read.ok) return { ok: false, status: 503 };
+  const secret = read.secret;
   const timestamp = Number(req.headers.get(SEDCMS_TIMESTAMP_HEADER));
   const given = req.headers.get(SEDCMS_SIGNATURE_HEADER) as string;
 
