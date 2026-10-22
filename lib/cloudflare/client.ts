@@ -313,3 +313,25 @@ export async function deleteDnsRecord(zoneId: string, id: string): Promise<{ ok:
   });
   return r.ok ? { ok: true } : { ok: false, message: cfMessage(r) };
 }
+
+// ---------------------------------------------------------------------------
+// cache
+
+/** Cloudflare takes at most 30 URLs in one purge on the plans below Enterprise. */
+const PURGE_BATCH = 30;
+
+/**
+ * Drop Cloudflare's cached copies of these exact URLs (scheme and host
+ * included), 30 at a time: POST /zones/{z}/purge_cache { files }. The token
+ * needs the zone's Cache Purge permission. Stops at the first failure.
+ */
+export async function purgeCacheByUrls(zoneId: string, urls: string[]): Promise<{ ok: boolean; message?: string }> {
+  for (let i = 0; i < urls.length; i += PURGE_BATCH) {
+    const r = await cf<{ id: string }>(`/zones/${encodeURIComponent(zoneId)}/purge_cache`, {
+      method: "POST",
+      json: { files: urls.slice(i, i + PURGE_BATCH) },
+    });
+    if (!r.ok) return { ok: false, message: cfMessage(r) };
+  }
+  return { ok: true };
+}
