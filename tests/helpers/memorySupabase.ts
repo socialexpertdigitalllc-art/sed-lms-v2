@@ -4,12 +4,22 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 /**
  * An in-memory stand-in for a Supabase client — just enough PostgREST for the
  * assistant's action code: select (with count/head), insert, update, delete,
- * upsert; eq / neq / in / is / lt / lte / gt / gte / ilike / or(eq|ilike) /
+ * upsert; eq (a jsonb key too: "col->>key", as text) / neq / in / is / lt / lte / gt / gte / ilike / or(eq|ilike) /
  * not(in); order, limit, range, single / maybeSingle. Rows live in plain
  * arrays the test can read back. Not a general PostgREST clone.
  */
 
 type Row = Record<string, unknown>;
+
+/** A column, or one key of a jsonb column read as text ("new_value->>requestId"). */
+function column(r: Row, c: string): unknown {
+  const at = c.indexOf("->>");
+  if (at === -1) return r[c];
+  const json = r[c.slice(0, at)];
+  const v = json && typeof json === "object" ? (json as Row)[c.slice(at + 3)] : undefined;
+  return v === undefined || v === null ? null : typeof v === "string" ? v : JSON.stringify(v);
+}
+
 type Filter = (r: Row) => boolean;
 
 const ts = (v: unknown) => (typeof v === "number" ? v : Date.parse(String(v)));
@@ -75,7 +85,7 @@ export function memorySupabase(initial: Record<string, Row[]> = {}, defaults: Re
       upsert: (r: Row | Row[], o?: { onConflict?: string; ignoreDuplicates?: boolean }) => ((op = "upsert"), (payload = Array.isArray(r) ? r : [r]), (upsertOpts = o ?? {}), b),
       update: (p: Row) => ((op = "update"), (patch = p), b),
       delete: () => ((op = "delete"), b),
-      eq: (c: string, v: unknown) => (filters.push((r) => r[c] === v), b),
+      eq: (c: string, v: unknown) => (filters.push((r) => column(r, c) === v), b),
       neq: (c: string, v: unknown) => (filters.push((r) => r[c] !== v), b),
       in: (c: string, vs: unknown[]) => (filters.push((r) => vs.includes(r[c])), b),
       is: (c: string, v: unknown) => (filters.push((r) => (r[c] ?? null) === v), b),
