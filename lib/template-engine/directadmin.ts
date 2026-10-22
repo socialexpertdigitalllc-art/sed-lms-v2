@@ -22,6 +22,9 @@
  * surface as an error, not hang a deploy.
  */
 
+import { randomBytes } from "node:crypto";
+import { zipSync } from "fflate";
+
 export interface DaResult {
   error: boolean;
   text: string;
@@ -354,4 +357,158 @@ export async function uploadZipAndExtract(
   }
 
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// single files (SED CMS publishing). Paths are relative to the subdomain's
+// docroot and are checked by the caller (lib/sedcms/paths.ts).
+
+/** listDir's page size: a listing this long may be cut, so it isn't trusted. */
+const LIST_LIMIT = 1000;
+const FILE_READ_TIMEOUT_MS = 60000;
+
+const inDocroot = (sub: string, rel: string) => (rel ? `${docrootFor(sub)}/${rel}` : docrootFor(sub));
+
+export interface DocrootEntry {
+  name: string;
+  /** "other": a link or anything else, never followed. */
+  kind: "file" | "dir" | "other";
+  size: number | null;
+}
+
+function entryKind(f: Record<string, unknown>): DocrootEntry["kind"] {
+  const type = typeof f.type === "string" ? f.type.toLowerCase() : "";
+  if (type.includes("link") || f.isLink === true || f.isSymlink === true) return "other";
+  if (type === "dir" || type === "directory" || type === "folder" || f.isDir === true) return "dir";
+  if (type === "file" || type === "regular") return "file";
+  return "other";
+}
+
+/**
+ * The entries directly inside one folder of a subdomain's docroot ("" = the
+ * docroot) — the file manager listing clearDocroot already uses, with sizes.
+ * null when it can't be listed, or when the listing may have been cut short.
+ */
+export async function listDocrootDir(sub: string, relDir: string): Promise<DocrootEntry[] | null> {
+  const q = new URLSearchParams({ path: inDocroot(sub, relDir), limit: String(LIST_LIMIT) }).toString();
+  const r = await daJson(`/api/filemanager/list?${q}`, { method: "GET" });
+  if (!r.ok) return null;
+  try {
+    const j = JSON.parse(r.body) as { files?: Record<string, unknown>[] };
+    if (!Array.isArray(j.files) || j.files.length >= LIST_LIMIT) return null;
+    return j.files.map((f) => {
+      const size = typeof f.size === "number" ? f.size : typeof f.size === "string" && /^[0-9]+$/.test(f.size) ? Number(f.size) : NaN;
+      return {
+        name: typeof f.name === "string" ? f.name : "",
+        kind: entryKind(f),
+        size: Number.isFinite(size) && size >= 0 ? size : null,
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One file's bytes from a subdomain's docroot. null when DirectAdmin answers
+ * 404. Refused past maxBytes while streaming.
+ *
+ * UNVERIFIED — the one call the live spike must confirm (launch plan L2 and
+ * open question 1): GET /api/filemanager/download?path=<absolute path>, the
+ * single-file sibling of the verified download-archive. If it doesn't exist
+ * or doesn't return exact bytes, this function alone changes (the fallback is
+ * the staging host's public HTTPS URL; there is no CDN on staging). Callers
+ * check the result's length against the listing, so a 200 carrying one of
+ * DirectAdmin's error bodies is never taken for the file.
+ */
+export async function readDocrootFile(
+  sub: string,
+  relPath: string,
+  maxBytes: number,
+): Promise<{ ok: true; bytes: Uint8Array | null } | { ok: false; tooLarge: boolean; message: string }> {
+  const q = new URLSearchParams({ path: inDocroot(sub, relPath) }).toString();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FILE_READ_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${host()}/api/filemanager/download?${q}`, {
+      method: "GET",
+      headers: { Authorization: authHeader() },
+      signal: controller.signal,
+    });
+    if (res.status === 404) {
+      await res.body?.cancel().catch(() => {});
+      return { ok: true, bytes: null };
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return { ok: false, tooLarge: false, message: `HTTP ${res.status}` };
+    }
+    const declared = Number(res.headers.get("content-length") ?? "");
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body?.cancel().catch(() => {});
+      return { ok: false, tooLarge: true, message: `larger than ${maxBytes} bytes` };
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    if (res.body) {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => {});
+          return { ok: false, tooLarge: true, message: `larger than ${maxBytes} bytes` };
+        }
+        chunks.push(value);
+      }
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      bytes.set(c, offset);
+      offset += c.length;
+    }
+    return { ok: true, bytes };
+  } catch (e) {
+    return {
+      ok: false,
+      tooLarge: false,
+      message: controller.signal.aborted ? `no answer within ${FILE_READ_TIMEOUT_MS / 1000}s` : e instanceof Error ? e.message : "network error",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Write one file into a subdomain's docroot, replacing it. Into a folder that
+ * exists: one upload with overwrite=true (the verified upload, `dir` param).
+ * Into a folder that doesn't: a one-file zip through the verified
+ * upload + extract-archive + remove, which creates the folders. A zip left
+ * behind by a failed remove is harmless (never a CMS path) and is reported.
+ */
+export async function writeDocrootFile(
+  sub: string,
+  relPath: string,
+  bytes: Uint8Array,
+  opts: { parentExists: boolean },
+): Promise<{ ok: true; leftover?: string } | { ok: false; message: string }> {
+  const slash = relPath.lastIndexOf("/");
+  const parent = slash === -1 ? "" : relPath.slice(0, slash);
+  const name = relPath.slice(slash + 1);
+
+  if (opts.parentExists) {
+    const fd = new FormData();
+    fd.append("file", new File([new Uint8Array(bytes)], name, { type: "application/octet-stream" }));
+    const q = new URLSearchParams({ dir: inDocroot(sub, parent), name, overwrite: "true" }).toString();
+    const upload = await daJson(`/api/filemanager-actions/upload?${q}`, { method: "POST", form: fd, timeoutMs: UPLOAD_TIMEOUT_MS });
+    return upload.ok ? { ok: true } : { ok: false, message: `upload: ${jsonErrorMessage(upload)}` };
+  }
+
+  const zipName = `sedcms-${randomBytes(8).toString("hex")}.zip`;
+  const done = await uploadZipAndExtract(sub, zipSync({ [relPath]: new Uint8Array(bytes) }), zipName);
+  if (done.ok) return { ok: true };
+  if (done.failedStep === "delete") return { ok: true, leftover: zipName };
+  return { ok: false, message: `${done.failedStep ?? "upload"}: ${done.message ?? "failed"}` };
 }

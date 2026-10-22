@@ -322,7 +322,7 @@ export async function ensureWebsite(
 // ---------------------------------------------------------------------------
 // file server (TUS writes + File Browser reads behind the upload-URL credentials)
 
-interface FileSession {
+export interface FileSession {
   /** TUS endpoint — uploads land in `dir`. */
   tusUrl: string;
   /** File Browser REST root, e.g. https://srv955-files.hstgr.io/rest/{id} */
@@ -332,11 +332,11 @@ interface FileSession {
   headers: Record<string, string>;
 }
 
-type SessionResult = { ok: true; session: FileSession } | { ok: false; pending?: boolean; message: string };
+export type SessionResult = { ok: true; session: FileSession } | { ok: false; pending?: boolean; message: string };
 
 /** Credentials for the website's file server. A website still being set up
  *  answers 409 (pending — try again shortly). */
-async function openFileSession(website: { domain: string; username: string }): Promise<SessionResult> {
+export async function openFileSession(website: { domain: string; username: string }): Promise<SessionResult> {
   const gen = await hg("/api/hosting/v1/files/upload-urls", {
     method: "POST",
     json: { username: website.username, domain: website.domain },
@@ -590,6 +590,156 @@ export async function downloadWebsiteZip(
   if (first.ok || !first.retryable) return first.ok ? first : { ok: false, message: first.message };
   const second = await downloadOnce(opened.session, maxBytes);
   return second.ok ? second : { ok: false, message: second.message };
+}
+
+// ---------------------------------------------------------------------------
+// single files (SED CMS publishing): one folder listing, one exact read, one
+// TUS write at a time — never the whole docroot. Paths are relative to the
+// website's folder and are checked by the caller (lib/sedcms/paths.ts).
+
+const FILE_READ_TIMEOUT_MS = 60000;
+const FILE_WRITE_TIMEOUT_MS = 120000;
+/** A folder listing is small JSON; anything bigger is not one. */
+const MAX_LISTING_BYTES = 8 * 1024 * 1024;
+
+type CappedBody =
+  | { ok: true; status: number; bytes: Uint8Array }
+  | { ok: false; status: number; tooLarge: boolean; message: string };
+
+/**
+ * One GET whose timeout covers the whole body, read up to maxBytes and
+ * refused past it while streaming. A non-2xx answer's body is not read.
+ */
+async function getCapped(url: string, headers: Record<string, string>, maxBytes: number, timeoutMs: number): Promise<CappedBody> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return { ok: true, status: res.status, bytes: new Uint8Array() };
+    }
+    const declared = Number(res.headers.get("content-length") ?? "");
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body?.cancel().catch(() => {});
+      return { ok: false, status: res.status, tooLarge: true, message: `larger than ${maxBytes} bytes` };
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    if (res.body) {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => {});
+          return { ok: false, status: res.status, tooLarge: true, message: `larger than ${maxBytes} bytes` };
+        }
+        chunks.push(value);
+      }
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      bytes.set(c, offset);
+      offset += c.length;
+    }
+    return { ok: true, status: res.status, bytes };
+  } catch (e) {
+    const aborted = controller.signal.aborted;
+    return { ok: false, status: 0, tooLarge: false, message: aborted ? `no answer within ${timeoutMs / 1000}s` : e instanceof Error ? e.message : "network error" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A GET retried once on a network error (never on an HTTP answer or a size refusal). */
+async function getCappedOnce(url: string, headers: Record<string, string>, maxBytes: number, timeoutMs: number): Promise<CappedBody> {
+  const first = await getCapped(url, headers, maxBytes, timeoutMs);
+  if (first.ok || first.tooLarge || first.status !== 0) return first;
+  return getCapped(url, headers, maxBytes, timeoutMs);
+}
+
+export interface WebsiteDirEntry {
+  name: string;
+  /** "other": a symbolic link, never followed. */
+  kind: "file" | "dir" | "other";
+  size: number | null;
+}
+
+/**
+ * The entries directly inside one folder of the website ("" = its docroot),
+ * from the File Browser's resources listing; null when it can't be listed.
+ */
+export async function listWebsiteDir(session: FileSession, relDir: string): Promise<WebsiteDirEntry[] | null> {
+  const dir = relDir ? `${session.dir}/${relDir}` : session.dir;
+  const r = await getCappedOnce(`${session.restBase}/api/resources${encodePath(dir)}/`, session.headers, MAX_LISTING_BYTES, TIMEOUT_MS);
+  if (!r.ok || r.status < 200 || r.status >= 300) return null;
+  try {
+    const j = JSON.parse(new TextDecoder().decode(r.bytes)) as {
+      items?: { name?: unknown; size?: unknown; isDir?: unknown; isSymlink?: unknown }[] | null;
+    };
+    if (j.items === null) return []; // an empty folder
+    if (!Array.isArray(j.items)) return null;
+    return j.items.map((i) => ({
+      name: typeof i.name === "string" ? i.name : "",
+      kind: i.isSymlink === true ? "other" : i.isDir === true ? "dir" : "file",
+      size: typeof i.size === "number" && Number.isFinite(i.size) && i.size >= 0 ? i.size : null,
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One file's exact bytes through the File Browser's raw endpoint — the same
+ * read downloadWebsiteZip trusts, for one file instead of an archive. null when
+ * the server has no such file (404). Refused past maxBytes while streaming.
+ * The caller makes sure the path is a file: raw on a folder returns a zip.
+ */
+export async function readWebsiteFile(
+  session: FileSession,
+  relPath: string,
+  maxBytes: number,
+): Promise<{ ok: true; bytes: Uint8Array | null } | { ok: false; tooLarge: boolean; message: string }> {
+  const r = await getCappedOnce(`${session.restBase}/api/raw${encodePath(session.dir)}/${encodePath(relPath)}`, session.headers, maxBytes, FILE_READ_TIMEOUT_MS);
+  if (!r.ok) return { ok: false, tooLarge: r.tooLarge, message: r.message };
+  if (r.status === 404) return { ok: true, bytes: null };
+  if (r.status < 200 || r.status >= 300) return { ok: false, tooLarge: false, message: `HTTP ${r.status}` };
+  return { ok: true, bytes: r.bytes };
+}
+
+/**
+ * Write one file by TUS into its folder of the website, replacing it
+ * (override=true) — the upload deployZipToWebsite uses, for one file. Never
+ * retried: a PATCH that timed out may still have landed.
+ */
+export async function writeWebsiteFile(session: FileSession, relPath: string, bytes: Uint8Array): Promise<{ ok: true } | { ok: false; message: string }> {
+  const target = `${session.tusUrl}/${encodePath(relPath)}?override=true`;
+  const tusHeaders = { ...session.headers, "Tus-Resumable": "1.0.0" };
+
+  const created = await fileFetch(target, {
+    method: "POST",
+    headers: { ...tusHeaders, "Upload-Length": String(bytes.length), "Upload-Offset": "0" },
+    timeoutMs: TIMEOUT_MS,
+  });
+  await created.res?.body?.cancel().catch(() => {});
+  if (!created.ok) return { ok: false, message: `could not start the upload (HTTP ${created.status || created.error})` };
+
+  const sent = await fileFetch(target, {
+    method: "PATCH",
+    headers: { ...tusHeaders, "Content-Type": "application/offset+octet-stream", "Upload-Offset": "0" },
+    body: bytes,
+    timeoutMs: FILE_WRITE_TIMEOUT_MS,
+  });
+  await sent.res?.body?.cancel().catch(() => {});
+  if (!sent.ok) return { ok: false, message: `the upload did not complete (HTTP ${sent.status || sent.error})` };
+  const offset = sent.res?.headers.get("upload-offset") ?? null;
+  if (offset !== null && offset !== String(bytes.length)) {
+    return { ok: false, message: `the upload stopped at ${offset} of ${bytes.length} bytes` };
+  }
+  return { ok: true };
 }
 
 /**
