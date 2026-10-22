@@ -124,6 +124,11 @@ export async function updateSession(request: NextRequest) {
     // website server-to-server, gated by website_settings.api_key
     // (see lib/website-cms/public.ts). No session ever exists here.
     path.startsWith("/api/public/") ||
+    // SED CMS's internal endpoints: called server to server by the CMS with
+    // no session. Every request carries an HMAC signature with a timestamp,
+    // which each route verifies before anything else (lib/sedcms/
+    // signature.ts). Pinned by tests/sedcmsMiddleware.test.ts.
+    path.startsWith("/api/internal/sedcms/") ||
     // Signed site previews: the sandboxed preview page has no cookie to send
     // with its own page and asset requests, so they carry a signed path
     // segment instead, which the preview route verifies (lib/preview/

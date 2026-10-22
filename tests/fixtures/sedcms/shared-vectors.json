@@ -1,0 +1,219 @@
+{
+  "about": [
+    "Shared test vectors for the CMS <-> LMS contract (SED CMS launch plan, M3.3 and L1).",
+    "Both sides copy this file byte for byte: the CMS into packages/static/test and packages/api/test,",
+    "the LMS into tests/fixtures/sedcms. Change it on both sides at once, or not at all.",
+    "The secret below is a test value and opens nothing."
+  ],
+  "signature": {
+    "rule": "hex(HMAC-SHA256(key = the secret's UTF-8 bytes, message = [method, pathAndQuery, String(timestamp), hex(SHA-256(body's UTF-8 bytes))].join(LF))), lowercase; LF is character 10",
+    "headers": {
+      "timestamp": "x-sedcms-timestamp",
+      "signature": "x-sedcms-signature"
+    },
+    "windowSeconds": 300,
+    "replayMinutes": 10,
+    "minSecretBytes": 32,
+    "secret": "sedcms-test-only-secret-not-for-production-0123456789",
+    "cases": [
+      {
+        "name": "summary, empty object",
+        "method": "POST",
+        "pathAndQuery": "/api/internal/sedcms/leads/0b6c1f0e-8a4e-4c55-9d1a-3f2e5a7b9c10/summary",
+        "timestamp": 1761177600,
+        "body": "{}",
+        "bodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "signature": "2e6875b3a585a39901c09c60a07e7f8a0f4cb2196c022dd0c7bfe0857e2904a5"
+      },
+      {
+        "name": "live-files with a host",
+        "method": "POST",
+        "pathAndQuery": "/api/internal/sedcms/leads/0b6c1f0e-8a4e-4c55-9d1a-3f2e5a7b9c10/live-files",
+        "timestamp": 1761177601,
+        "body": "{\"host\":\"acme-roofing.dmviral.com\"}",
+        "bodySha256": "43caa3c668aaa5096a0e35c1b2462db518e18e10704c13fad4fd999e975c422a",
+        "signature": "0775ed95197c37932cefff86653147a7d7cae35dfab39ac2afd20a45f8f068bc"
+      },
+      {
+        "name": "checksums, path with a query",
+        "method": "POST",
+        "pathAndQuery": "/api/internal/sedcms/leads/0b6c1f0e-8a4e-4c55-9d1a-3f2e5a7b9c10/checksums?trace=1",
+        "timestamp": 1761177602,
+        "body": "{\"host\":\"acme-roofing.dmviral.com\",\"paths\":[\"index.html\",\"assets/js/components.js\"]}",
+        "bodySha256": "5115222bf95e53dee211dc7f675689b1cd22f3fe4f421ca1949b9dbabd1a5ce8",
+        "signature": "a0ab9f84fc108cfc940008dfbb5cae49684ed72723e720636ba6f9b693c258e6"
+      },
+      {
+        "name": "tickets, body with multi-byte UTF-8",
+        "method": "POST",
+        "pathAndQuery": "/api/internal/sedcms/leads/0b6c1f0e-8a4e-4c55-9d1a-3f2e5a7b9c10/tickets",
+        "timestamp": 1761177603,
+        "body": "{\"requestId\":\"5f0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f\",\"title\":\"Café menu — new prices\",\"items\":[\"Update the jalapeño price\"],\"requestedBy\":{\"name\":\"Zoë\",\"email\":\"zoe@example.com\"}}",
+        "bodySha256": "9f65de2bb6c723775bc13e25a87f901622dbf1e3307b697d4fa5e7766f97ff17",
+        "signature": "5db97f00439968007af9b269aebe740fb0fadae9d91bc6cf284b30a8dcd6b4a7"
+      },
+      {
+        "name": "empty body",
+        "method": "GET",
+        "pathAndQuery": "/api/internal/sedcms/leads/0b6c1f0e-8a4e-4c55-9d1a-3f2e5a7b9c10/summary",
+        "timestamp": 1761177604,
+        "body": "",
+        "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "signature": "2fa104cc94c92566ed4cb7e17bed49ced5e1f84746848ca06d5946b49be150ea"
+      }
+    ]
+  },
+  "paths": {
+    "rules": [
+      "a relative path matching ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ (ASCII only: no backslash, percent, colon, space or control character)",
+      "no segment that is . or .., and no segment starting with .",
+      "at most 300 characters and 6 segments",
+      "the last extension, case-sensitive, is one of .html .htm .js .css .json .xml .txt .webmanifest .jpg .jpeg .png .webp",
+      "no dot-separated part after the first, in any segment and in any case, names a server-side type: php php3 php4 php5 php7 php8 phtml pht phar phps cgi fcgi pl py sh asp aspx jsp shtml shtm htaccess htpasswd ini",
+      "the first segment is not cgi-bin, in any case"
+    ],
+    "maxFileBytes": 5242880,
+    "allowed": [
+      "index.html",
+      "about.htm",
+      "assets/js/components.js",
+      "assets/css/style.min.css",
+      "data/site.json",
+      "sitemap.xml",
+      "robots.txt",
+      "site.webmanifest",
+      "cms-media/0123456789abcdef.webp",
+      "images/hero.jpg",
+      "images/hero.jpeg",
+      "images/logo.png",
+      "services/kitchen-remodeling_2.html",
+      "jquery-3.7.1.min.js",
+      "About-Us.html",
+      "php.html",
+      "a/b/c/d/e/f.html",
+      "-x.html",
+      "dddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddd/ffffffffffffffffffffffffffffffffffffffff.html"
+    ],
+    "refused": [
+      "",
+      "/index.html",
+      "index.html/",
+      "a//b.html",
+      "./index.html",
+      "../index.html",
+      "a/../index.html",
+      "a/./b.html",
+      "a/..",
+      "..",
+      ".",
+      ".htaccess",
+      ".well-known/security.txt",
+      "assets/.hidden.js",
+      ".user.ini",
+      "index",
+      "index.",
+      "index.html.",
+      "index.HTML",
+      "photo.JPG",
+      "index.php",
+      "index.PHP",
+      "index.php.html",
+      "index.PhP.html",
+      "index.html.php",
+      "x.phtml",
+      "x.phar.js",
+      "x.cgi",
+      "x.shtml",
+      "x.pl.html",
+      "x.asp.html",
+      "assets/x.php/y.html",
+      "cgi-bin/index.html",
+      "CGI-BIN/index.html",
+      "web.config",
+      "file.svg",
+      "file.gif",
+      "archive.zip",
+      "a b.html",
+      "a%2e%2e/b.html",
+      "%2e%2e/index.html",
+      "index%2Ehtml",
+      "a:b.html",
+      "C:/x.html",
+      "http://x/a.html",
+      "//example.com/a.html",
+      "~/x.html",
+      "index.html?x=1",
+      "index.html#top",
+      "a/b/c/d/e/f/g.html",
+      "café.html",
+      "dddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddd/dddddddddddddddddddddddddddddddddddddddddddddddddd/fffffffffffffffffffffffffffffffffffffffff.html"
+    ],
+    "refusedWithChar": [
+      {
+        "text": "a{}b.html",
+        "char": 92,
+        "why": "backslash"
+      },
+      {
+        "text": "{}index.html",
+        "char": 92,
+        "why": "leading backslash"
+      },
+      {
+        "text": "..{}index.html",
+        "char": 92,
+        "why": "backslash traversal"
+      },
+      {
+        "text": "index.html{}",
+        "char": 0,
+        "why": "NUL"
+      },
+      {
+        "text": "a{}b.html",
+        "char": 10,
+        "why": "line feed"
+      },
+      {
+        "text": "a{}b.html",
+        "char": 13,
+        "why": "carriage return"
+      },
+      {
+        "text": "a{}b.html",
+        "char": 9,
+        "why": "tab"
+      },
+      {
+        "text": "index.html{}",
+        "char": 32,
+        "why": "trailing space"
+      },
+      {
+        "text": "a{}b.html",
+        "char": 8232,
+        "why": "line separator"
+      },
+      {
+        "text": "a{}b.html",
+        "char": 8203,
+        "why": "zero-width space"
+      },
+      {
+        "text": "a{}b.html",
+        "char": 65295,
+        "why": "fullwidth solidus"
+      },
+      {
+        "text": "a{}b.html",
+        "char": 8228,
+        "why": "one dot leader"
+      },
+      {
+        "text": "{}{}/index.html",
+        "char": 65294,
+        "why": "fullwidth full stops"
+      }
+    ]
+  }
+}
