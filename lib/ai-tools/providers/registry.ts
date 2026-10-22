@@ -270,7 +270,9 @@ export type AiTaskKey =
   | "site_build"
   | "image_rank"
   | "assistant_chat"
-  | "assistant_act";
+  | "assistant_act"
+  | "logo_concepts"
+  | "logo_check";
 
 export interface AiTaskDescriptor {
   key: AiTaskKey;
@@ -438,6 +440,31 @@ const assistantAct: AiTaskDescriptor = {
   routable: true,
 };
 
+const logoConcepts: AiTaskDescriptor = {
+  key: "logo_concepts",
+  label: "Logo ideas (lead page)",
+  description:
+    "One call per press of Generate logo / Retry: writes four distinct logo concepts (layout, symbol, lettering, colour use) from the lead's name, trade and colours — or revises one design as the person asked. Strict JSON out. MiniMax image-01 then draws each concept; when this model is unavailable the generator falls back to standard layouts, so the button still works.",
+  where: "lib/logos/prompt.ts",
+  // MiniMax counts its visible thinking against the output budget.
+  requires: { vision: false, minOutputTokens: 4000 },
+  defaultProvider: "minimax",
+  defaultModel: "MiniMax-M3",
+  routable: true,
+};
+
+const logoCheck: AiTaskDescriptor = {
+  key: "logo_check",
+  label: "Logo proofreading (lead page)",
+  description:
+    "Reads every generated logo back, letter by letter, so a misspelled design is flagged and sorted last (the comparison with the name is done in code). One short call per design. MULTIMODAL IS MANDATORY — a text-only model would answer about images it never saw.",
+  where: "lib/logos/check.ts",
+  requires: { vision: true, minOutputTokens: 4000 },
+  defaultProvider: "minimax",
+  defaultModel: "MiniMax-M3",
+  routable: true,
+};
+
 export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
   contentPlan,
   fileRegen,
@@ -449,6 +476,8 @@ export const AI_TASK_REGISTRY: AiTaskDescriptor[] = [
   imageRank,
   assistantChat,
   assistantAct,
+  logoConcepts,
+  logoCheck,
 ];
 
 export function getTask(key: string): AiTaskDescriptor | undefined {
