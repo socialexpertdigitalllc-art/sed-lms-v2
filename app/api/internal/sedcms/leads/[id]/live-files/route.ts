@@ -1,0 +1,40 @@
+import { z } from "zod";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { siteFilesFor } from "@/lib/sedcms/files";
+import { readSignedJson, sedcmsJson } from "@/lib/sedcms/http";
+import { expectHost, loadLead } from "@/lib/sedcms/lead";
+import { hostingFailure, liveFiles, siteRefusalResponse } from "@/lib/sedcms/read";
+
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
+type Ctx = { params: Promise<{ id: string }> };
+
+const Body = z.object({ host: z.string().max(253) }).strict();
+
+/**
+ * POST /api/internal/sedcms/leads/{id}/live-files { host } — what is live on
+ * the lead's site, for the CMS's importer: every file's path and size, and
+ * the text and sha256 of its text files (1 MiB each, 25 MiB in all).
+ * Signed by the CMS; no session. 409 HOST_CHANGED when the lead's site is no
+ * longer at `host`; 403 PROTECTED, 422 NOT_STATIC, 502 HOSTING.
+ */
+export async function POST(req: Request, ctx: Ctx) {
+  const signed = await readSignedJson(req, Body);
+  if (!signed.ok) return signed.response;
+  const { id } = await ctx.params;
+
+  const found = await loadLead(createAdminClient(), id);
+  if (!found.ok) return found.response;
+  const at = expectHost(found.lead, signed.body.host);
+  if (!at.ok) return at.response;
+
+  const site = await siteFilesFor(at.host);
+  if (!site.ok) return siteRefusalResponse(site);
+  try {
+    const live = await liveFiles(site.files);
+    return sedcmsJson(200, { host: at.host, files: live.files, truncated: live.truncated });
+  } catch (e) {
+    return hostingFailure(e, null);
+  }
+}
