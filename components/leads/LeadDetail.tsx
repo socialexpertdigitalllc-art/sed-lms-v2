@@ -28,6 +28,7 @@ import { SectionCard } from "@/components/forms/formShell";
 import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesButton";
 import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
 import { ShuffleSiteButton } from "@/components/common/ShuffleSiteButton";
+import { OpenInCmsButton } from "@/components/leads/OpenInCmsButton";
 import { FieldRow, type SelectOption } from "@/components/detail/FieldRow";
 import { RatingStars } from "@/components/common/RatingStars";
 import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
@@ -385,6 +386,10 @@ export function LeadDetail({
                             className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
                             iconSize={13}
                             onShuffled={() => router.refresh()}
+                          />
+                          <OpenInCmsButton leadId={lead.id}
+                            className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
+                            iconSize={13}
                           />
                         </>
                       )}
