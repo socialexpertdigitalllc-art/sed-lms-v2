@@ -17,6 +17,7 @@ import { VersionBadge } from "@/components/layout/VersionBadge";
 import { AssistantProvider } from "@/providers/AssistantProvider";
 import { AssistantWidget } from "@/components/assistant/AssistantWidget";
 import { assistantNameFrom } from "@/lib/assistant/name";
+import { MilestoneCelebration } from "@/components/celebrations/MilestoneCelebration";
 
 export default async function AppLayout({
   children,
@@ -71,6 +72,8 @@ export default async function AppLayout({
             </AssistantProvider>
           </UiPrefsProvider>
           <NotificationToaster />
+          {/* Every 1,000 leads: a one-time celebration for each person (lib/milestones.ts). */}
+          <MilestoneCelebration displayName={profile?.display_name ?? ""} />
           <PushPrompt />
           <TabBadge />
           <VersionBadge />
