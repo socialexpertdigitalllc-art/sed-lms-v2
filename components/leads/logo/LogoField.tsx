@@ -7,7 +7,7 @@ import { btnGhostSm, btnPrimary, btnSecondary } from "@/components/common/button
 import { useToast } from "@/components/common/Toast";
 import type { BrandColor } from "@/lib/logos/brief";
 import type { LogoCandidateView, LogoGenerationView } from "@/lib/logos/store";
-import { LogoRetryDialog, type RetryRequest } from "./LogoRetryDialog";
+import { LogoRetryDialog, type Designer, type RetryRequest } from "./LogoRetryDialog";
 import { ago, bgStyle, CHECKER_STYLE, DesignFacts, DesignImage, roundLabel, SpellingBadge, StageSteps, STAGE_LABEL, type PreviewBg } from "./LogoParts";
 
 /**
@@ -28,7 +28,13 @@ const POLL_MS = 2500;
 /** Designs still waiting for a decision come back up when the page is opened within this long. */
 const REOPEN_MS = 6 * 3_600_000;
 
-type StartBody = { mode: "new" | "idea" | "refine"; instructions?: string; logoText?: string; parentId?: string; parentIndex?: number; font?: string };
+type StartBody = { mode: "new" | "idea" | "refine"; instructions?: string; logoText?: string; parentId?: string; parentIndex?: number; font?: string; engine?: Designer };
+
+interface Engines {
+  google: boolean;
+  minimax: boolean;
+  default: Designer | null;
+}
 
 /** The same request as a round that failed, to try it again. PURE. */
 export function sameAgain(g: LogoGenerationView): StartBody {
@@ -79,6 +85,7 @@ export function LogoField({
   const [showHistory, setShowHistory] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
   const [budget, setBudget] = useState<{ used: number; limit: number | null } | null>(null);
+  const [engines, setEngines] = useState<Engines | null>(null);
 
   const upsert = useCallback((g: LogoGenerationView) => {
     setGens((prev) => (prev.some((x) => x.id === g.id) ? prev.map((x) => (x.id === g.id ? g : x)) : [g, ...prev]));
@@ -88,7 +95,7 @@ export function LogoField({
   const load = useCallback(
     () =>
       fetch(`/api/leads/${leadId}/logo`, { cache: "no-store" })
-        .then((r) => (r.ok ? readJson<{ generations: LogoGenerationView[]; brief: Brief; budget?: { used: number; limit: number | null } }>(r) : null))
+        .then((r) => (r.ok ? readJson<{ generations: LogoGenerationView[]; brief: Brief; budget?: { used: number; limit: number | null }; engines?: Engines }>(r) : null))
         .catch(() => null),
     [leadId],
   );
@@ -102,6 +109,7 @@ export function LogoField({
       setGens(j.generations);
       setBrief(j.brief);
       if (j.budget) setBudget(j.budget);
+      if (j.engines) setEngines(j.engines);
       const latest = j.generations[0];
       if (latest && (latest.status === "running" || awaitingDecision(latest, Date.now()))) setOpen(true);
     });
@@ -160,6 +168,7 @@ export function LogoField({
       void load().then((x) => {
         if (x?.brief) setBrief(x.brief);
         if (x?.budget) setBudget(x.budget);
+        if (x?.engines) setEngines(x.engines);
       });
       return true;
     } catch (e) {
@@ -226,8 +235,8 @@ export function LogoField({
   async function retry(r: RetryRequest) {
     const ok = await start(
       r.mode === "refine" && viewed && selected
-        ? { mode: "refine", instructions: r.instructions, logoText: r.logoText, parentId: viewed.id, parentIndex: selected.index, ...(r.font ? { font: r.font } : {}) }
-        : { mode: r.instructions ? "idea" : "new", instructions: r.instructions || undefined, logoText: r.logoText, ...(r.font ? { font: r.font } : {}) },
+        ? { mode: "refine", instructions: r.instructions, logoText: r.logoText, parentId: viewed.id, parentIndex: selected.index, ...(r.font ? { font: r.font } : {}), ...(r.engine ? { engine: r.engine } : {}) }
+        : { mode: r.instructions ? "idea" : "new", instructions: r.instructions || undefined, logoText: r.logoText, ...(r.font ? { font: r.font } : {}), ...(r.engine ? { engine: r.engine } : {}) },
     );
     if (ok) setRetryOpen(false);
   }
@@ -496,6 +505,8 @@ export function LogoField({
           colors={brief?.colors ?? []}
           busy={busy === "start"}
           error={retryError}
+          engines={engines ? (["google", "minimax"] as const).filter((e) => engines[e]) : []}
+          defaultEngine={engines?.default ?? null}
           onClose={() => setRetryOpen(false)}
           onSubmit={retry}
         />

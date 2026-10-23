@@ -46,8 +46,11 @@ export interface LogoConcept {
   iconScale: number;
   /** The colours this concept uses when the lead has none (hex). */
   palette?: string[];
-  /** Rounds made before 2026-10-23 described the lettering in words instead. */
+  /** Google designs: the style and art direction it was drawn from; the lettering in words. */
+  style?: string;
+  brief?: string;
   typography?: string;
+  /** Rounds made before 2026-10-23 described the colours in words. */
   colorUse?: string;
 }
 

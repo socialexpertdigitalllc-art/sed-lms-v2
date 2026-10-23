@@ -17,7 +17,7 @@ const colors = { present: ["#1e3a8a"], missing: [], offPalette: 0, dominant: [] 
 /** A design from a round made before typesetting (the picture had the name in it), unless `over` says otherwise. */
 const cand = (index: number, verdict: "exact" | "misspelled", read = "ABC ROOFING", over: Partial<LogoCandidateView> = {}): LogoCandidateView => ({
   index, concept: index, round: 1 as const, url: `https://cdn/${index + 1}.png`, width: 900, height: 300, aspect: 3, horizontal: true, transparent: true, background: "removed" as const,
-  colors, check: { verdict, read, extra: [], issues: [], quality: 8 }, score: verdict === "exact" ? 150 : 40, typeset: false, font: null, layout: null, iconCheck: null, ...over,
+  colors, check: { verdict, read, extra: [], issues: [], quality: 8 }, score: verdict === "exact" ? 150 : 40, typeset: false, font: null, layout: null, iconCheck: null, engine: null, fixes: 0, ...over,
 });
 const gen = (over: Partial<LogoGenerationView> = {}): LogoGenerationView => ({
   id: GEN, mode: "new", parentId: null, parentIndex: null, instructions: null, logoText: "ABC Roofing", status: "ready", stage: null,
@@ -65,7 +65,7 @@ describe("LogoField", () => {
     expect(await screen.findByRole("region", { name: "AI logo generator" })).toBeTruthy();
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
     expect(JSON.parse(String(post[1]!.body))).toEqual({ mode: "new" });
-    expect(screen.getByText(/Drawing the symbols and setting the name/)).toBeTruthy();
+    expect(screen.getByText(/Designing the logos/)).toBeTruthy();
     expect(screen.getByRole("list", { name: "Progress" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Stop/ })).toBeTruthy();
     // one drawn, three on their way
@@ -84,7 +84,7 @@ describe("LogoField", () => {
     const panel = await screen.findByRole("region", { name: "AI logo generator" });
     expect(within(panel).getByText(/Design 1 — Roof peak/)).toBeTruthy();
     expect(within(panel).getByText("A roof peak beside the name.")).toBeTruthy();
-    expect(within(panel).getAllByText(/Spelling checked|Spelled right/).length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText(/Spelling checked/).length).toBeGreaterThan(0);
     // the misspelled one says what it reads
     fireEvent.click(within(panel).getByRole("radio", { name: "Design 2" }));
     expect(within(panel).getByText(/Reads “ABC ROFING”/)).toBeTruthy();
@@ -174,6 +174,30 @@ describe("LogoField", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
     expect(JSON.parse(String(post[1]!.body))).toEqual({ mode: "refine", instructions: "Use the Lora font", logoText: "ABC Roofing", parentId: GEN, parentIndex: 0, font: "lora" });
+  });
+
+  it("Google designs say so; with two designers set up, Retry offers the choice and sends it", async () => {
+    const google = cand(0, "exact", "GARCIA'S ROOFING", { engine: "google", fixes: 1 });
+    const fetchMock = api({
+      "GET /api/leads/L1/logo": () => ({ generations: [gen({ candidates: [google] })], brief, engines: { google: true, minimax: true, default: "google" } }),
+      "POST /api/leads/L1/logo": () => ({ created: true, generation: gen({ id: "22222222-2222-4222-8222-222222222222", status: "running", stage: "concepts", candidates: [] }) }),
+    });
+    renderField();
+    const panel = await screen.findByRole("region", { name: "AI logo generator" });
+    expect(within(panel).getByText(/Designed by Google/)).toBeTruthy();
+    expect(within(panel).getByText(/Lettering corrected/)).toBeTruthy();
+    expect(within(panel).getAllByText("Spelling checked").length).toBeGreaterThan(0);
+    fireEvent.click(within(panel).getByRole("button", { name: /Retry/ }));
+    const dialog = screen.getByRole("dialog");
+    const designer = within(dialog).getByLabelText("Designer") as HTMLSelectElement;
+    expect(designer.value).toBe("google");
+    expect([...designer.options].map((o) => o.value)).toEqual(["google", "minimax"]);
+    fireEvent.change(designer, { target: { value: "minimax" } });
+    fireEvent.change(within(dialog).getByLabelText("What should change?"), { target: { value: "simpler" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Draw 4 versions/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]!.body))).toMatchObject({ mode: "refine", instructions: "simpler", engine: "minimax" });
   });
 
   it("a round that failed says why, with Try again", async () => {

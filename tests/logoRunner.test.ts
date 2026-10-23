@@ -79,7 +79,7 @@ describe("runLogoGeneration", () => {
     expect(g.candidates).toHaveLength(4);
     // only the two icon-left designs needed a picture — square symbols, never the name
     expect(deps.draw).toHaveBeenCalledTimes(2);
-    for (const [prompt] of vi.mocked(deps.draw).mock.calls) {
+    for (const [prompt] of vi.mocked(deps.draw!).mock.calls) {
       expect(prompt).toMatch(/logo symbol for a roofing business: roof symbol/);
       expect(prompt).toMatch(/Absolutely no text of any kind/);
       expect(prompt).not.toMatch(/ABC/);
@@ -101,7 +101,7 @@ describe("runLogoGeneration", () => {
     let n = 0;
     const s = setup({ draw: vi.fn(async () => Buffer.from(`img${++n}`)), readLogo: checker((url) => url.includes("symbol-1")) });
     await runLogoGeneration("G1", s.deps);
-    const prompts = vi.mocked(s.deps.draw).mock.calls.map(([p]) => p);
+    const prompts = vi.mocked(s.deps.draw!).mock.calls.map(([p]) => p);
     expect(prompts).toHaveLength(3); // design 1 twice (both lettered), design 4 once
     expect(prompts.filter((p) => /nothing that looks like writing/.test(p))).toHaveLength(1);
     const g = s.stored();
@@ -168,7 +168,7 @@ describe("runLogoGeneration", () => {
       const s = setup({ writeConcepts: vi.fn(async () => reply(4, { icon: "redraw" })) }, refine("a simpler roof icon"), [parent("lead-logos/L1/P1/symbol-3.png")]);
       await runLogoGeneration("G1", s.deps);
       expect(s.deps.draw).toHaveBeenCalled();
-      expect(vi.mocked(s.deps.draw).mock.calls.some(([, seed]) => seed === 424242)).toBe(true);
+      expect(vi.mocked(s.deps.draw!).mock.calls.some(([, seed]) => seed === 424242)).toBe(true);
     });
 
     it("without the writer saying, the words decide (bigger icon → keep; different icon → redraw)", async () => {
