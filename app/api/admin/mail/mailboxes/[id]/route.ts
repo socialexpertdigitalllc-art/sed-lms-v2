@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { invalidateMailboxCache } from "@/lib/mail/mailbox";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   const admin = createAdminClient();
   const { error } = await admin.from("company_mailboxes").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  invalidateMailboxCache();
 
   await admin.from("activity_log").insert({
     user_id: user.id,

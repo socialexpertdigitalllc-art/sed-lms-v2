@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserPermissions } from "@/lib/permissions/resolver";
+import { getUserPermissions, invalidateUserPermissions } from "@/lib/permissions/resolver";
 import { isKnownPermissionKey } from "@/lib/permissions/constants";
 
 export async function POST(
@@ -40,6 +40,9 @@ export async function POST(
       .eq("department_id", id)
       .eq("permission_key", permissionKey);
   }
+
+  // A department permission touches every member — drop everyone's cached set.
+  invalidateUserPermissions();
 
   await admin.from("activity_log").insert({
     user_id: user.id,

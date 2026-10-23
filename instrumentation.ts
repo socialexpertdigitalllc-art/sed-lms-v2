@@ -10,6 +10,17 @@ export async function register() {
   if (started) return; // guard against dev HMR double-registration
   started = true;
 
+  // pm2 cluster mode (ecosystem.config.cjs) runs N copies of this process
+  // behind one port. The pollers below must run in exactly ONE of them, or
+  // every sweep multiplies by the worker count — the 2026-08-17 disk-IO
+  // incident was this same multiplication across machines. pm2 numbers its
+  // workers through NODE_APP_INSTANCE: worker 0 polls, the others only serve.
+  const instance = process.env.NODE_APP_INSTANCE;
+  if (instance && instance !== "0") {
+    console.log(`[instrumentation] worker ${instance}: pollers run on worker 0 only`);
+    return;
+  }
+
   // Ticket Agent worker poller — gated by ITS OWN env var, independent of
   // WGE_POLLERS_DISABLED: the Windows box disables the recovery sweeps
   // (prod runs those) but IS the one instance that drives `agy`.

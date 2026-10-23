@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { createServerClient } from "@supabase/ssr";
+import type { UserResponse } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { cache } from "react";
+import { ttlCached } from "@/lib/cache/ttl";
 
 /**
  * A person's session to act in INSTEAD of the request's cookies — for work
@@ -47,15 +50,66 @@ const cookieClient = cache(async () => {
   // single in-flight round-trip. Calls that pass an explicit JWT are left alone
   // — they are asking about a *different* token than the request's own session.
   const verifyUser = client.auth.getUser.bind(client.auth);
-  let inflight: ReturnType<typeof verifyUser> | null = null;
+  let inflight: Promise<UserResponse> | null = null;
   client.auth.getUser = ((jwt?: string) => {
     if (jwt) return verifyUser(jwt);
-    inflight ??= verifyUser();
+    inflight ??= verifyUserCached(() => client.auth.getSession(), verifyUser);
     return inflight;
   }) as typeof client.auth.getUser;
 
   return client;
 });
+
+/**
+ * How long a verified user is trusted without asking GoTrue again. A token is
+ * valid for an hour anyway; what this bounds is how late a ban / deletion
+ * takes effect on an instance (at most this long).
+ */
+const AUTH_USER_TTL_MS = 60_000;
+
+/**
+ * Verified-user lookup shared ACROSS requests, keyed by the token it verifies.
+ *
+ * The per-request dedup above still left one GoTrue round-trip per request —
+ * and every page view fans out into 5–6 API calls (badges, bells, mail), so
+ * prod measured ~16,000 /auth/v1/user calls a day at ~300 ms each, with
+ * 30 s stalls under load. The token is read from the cookie (no network);
+ * the first request in each window verifies it for real and the rest reuse
+ * that answer. A failed verification is never cached, so a transient auth
+ * outage retries on the next call and a bad token stays bad every time.
+ */
+export async function verifyUserCached(
+  getSession: () => Promise<{ data: { session: { access_token: string } | null } }>,
+  verifyUser: () => Promise<UserResponse>,
+  now: () => number = Date.now,
+): Promise<UserResponse> {
+  const { data } = await getSession();
+  const token = data.session?.access_token;
+  if (!token) return verifyUser();
+  const key = createHash("sha256").update(token).digest("hex");
+  try {
+    return await ttlCached(
+      "auth-user",
+      key,
+      AUTH_USER_TTL_MS,
+      async () => {
+        const result = await verifyUser();
+        // Only a verified user is worth remembering; surface anything else
+        // to the caller untouched (and uncached) via the throw below.
+        if (result.error || !result.data.user) throw new Uncached(result);
+        return result;
+      },
+      now,
+    );
+  } catch (e) {
+    if (e instanceof Uncached) return e.result;
+    throw e;
+  }
+}
+
+class Uncached {
+  constructor(readonly result: UserResponse) {}
+}
 
 /** An RLS client signed in with an access token rather than cookies. */
 function sessionClient(accessToken: string) {

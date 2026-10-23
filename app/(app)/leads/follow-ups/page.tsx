@@ -6,6 +6,7 @@ import type { Lead } from "@/lib/leads/types";
 import { getUserDirectory } from "@/lib/users/directory";
 import { getTeamAgentIds } from "@/lib/teams/closers";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllRows } from "@/lib/supabase/fetchAll";
 
 export default async function FollowUpsPage() {
   const supabase = await createClient();
@@ -17,19 +18,26 @@ export default async function FollowUpsPage() {
   const perms = await getUserPermissions(user.id);
   if (!perms.has("leads.view")) redirect("/leads");
 
-  const { data: leadsData } = await supabase
-    .from("leads")
-    .select("*")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
+  const admin = createAdminClient();
+  // Independent reads fire together; leads come in pages (PostgREST caps one
+  // response at 1,000 rows — the table is past that).
+  const [{ data: leadsData }, agents, teamAgentIds] = await Promise.all([
+    fetchAllRows<Lead>((from, to) =>
+      supabase
+        .from("leads")
+        .select("*")
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+        .order("id")
+        .range(from, to),
+    ),
+    getUserDirectory(),
+    getTeamAgentIds(admin, user.id),
+  ]);
   const leads = (leadsData ?? []) as Lead[];
 
-  const agents = await getUserDirectory();
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
-
-  const admin = createAdminClient();
-  const teamAgentIds = await getTeamAgentIds(admin, user.id);
 
   return (
     <FollowUpQueue

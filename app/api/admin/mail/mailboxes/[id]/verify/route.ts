@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { getMailboxById, verifyMailboxCredentials } from "@/lib/mail/mailbox";
+import { getMailboxById, verifyMailboxCredentials, invalidateMailboxCache } from "@/lib/mail/mailbox";
 import { notify } from "@/lib/notifications/notify";
 
 export const runtime = "nodejs";
@@ -28,6 +28,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   const admin = createAdminClient();
   await admin.from("company_mailboxes").update(patch).eq("id", id);
+  invalidateMailboxCache();
 
   if (!result.ok) {
     // Owner-facing: their mailbox stopped working (expired password, host change).

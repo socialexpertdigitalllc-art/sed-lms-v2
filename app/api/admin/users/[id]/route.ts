@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserPermissions } from "@/lib/permissions/resolver";
+import { getUserPermissions, invalidateUserPermissions } from "@/lib/permissions/resolver";
 import { invalidateUserDirectory } from "@/lib/users/directory";
 
 export async function PATCH(
@@ -50,6 +50,8 @@ export async function PATCH(
         }))
       );
     }
+    // Department membership IS the permission source — refresh at once.
+    invalidateUserPermissions(id);
   }
 
   if ("password" in body) {
