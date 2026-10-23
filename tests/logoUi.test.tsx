@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { ToastProvider } from "@/components/common/Toast";
 import { LogoField, awaitingDecision, sameAgain } from "@/components/leads/logo/LogoField";
 import { withChip } from "@/components/leads/logo/LogoRetryDialog";
@@ -198,6 +198,29 @@ describe("LogoField", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
     expect(JSON.parse(String(post[1]!.body))).toMatchObject({ mode: "refine", instructions: "simpler", engine: "minimax" });
+  });
+
+  it("with MiniMax the default, Google is one click away (and not offered when it is the default)", async () => {
+    const fetchMock = api({
+      "GET /api/leads/L1/logo": () => ({ generations: [], brief, engines: { google: true, minimax: true, default: "minimax" } }),
+      "POST /api/leads/L1/logo": () => ({ created: true, generation: gen({ status: "running", stage: "concepts", candidates: [] }) }),
+    });
+    renderField();
+    fireEvent.click(await screen.findByRole("button", { name: /Design with Google/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]!.body))).toEqual({ mode: "new", engine: "google" });
+  });
+
+  it("no separate Google button when Google is already the default", async () => {
+    const fetchMock = api({ "GET /api/leads/L1/logo": () => ({ generations: [], brief, engines: { google: true, minimax: true, default: "google" } }) });
+    renderField();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20)); // the designers are known now
+    });
+    expect(screen.getByRole("button", { name: /Generate logo/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Design with Google/ })).toBeNull();
   });
 
   it("a round that failed says why, with Try again", async () => {

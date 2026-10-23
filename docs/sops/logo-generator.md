@@ -10,16 +10,17 @@ misspell names and draw malformed letters. So MiniMax now draws only the
 a real font. Every design is spelled exactly as typed, with properly formed
 letters.
 
-**Changed again 2026-10-23: Google designs complete logos.** The MiniMax
-symbols looked like basic clip-art (a plain house beside the name). With a
-Gemini API key set up, the default designer is now **Google's Nano Banana
-Pro** (`gemini-3-pro-image`). It draws complete, agency-style logos, graphic
-and name together, from briefs written by a "creative director" prompt.
-- Every design's lettering is read back. A misspelled one goes back to
-  Google to fix only the lettering, up to twice.
-- **Retry → Change this design** edits that very picture.
-- MiniMax (symbol + typeset name, spelling guaranteed) is still available as
-  the other designer, and is the automatic fallback.
+**Changed again 2026-10-23: Google can design complete logos.** The MiniMax
+symbols looked like basic clip-art (a plain house beside the name).
+- **Design with Google** (next to Generate logo) uses Google's Nano Banana
+  Pro (`gemini-3-pro-image`). It draws complete, agency-style logos, graphic
+  and name together, from briefs written by a "creative director" prompt.
+- Every Google design's lettering is read back. A misspelled one goes back
+  to Google to fix only the lettering, up to twice.
+- **Retry → Change this design** on a Google design edits that very picture.
+- **MiniMax stays the default** (Generate logo). Google is billed per
+  picture, so it is chosen per round. MiniMax's art direction now also asks
+  for distinctive, agency-style marks instead of stock icons.
 
 ## For users
 
@@ -78,15 +79,19 @@ closer acting for the lead's agent.
 
 ## The two designers
 
-| | Google (default) | MiniMax |
+| | Google ("Design with Google") | MiniMax (default: "Generate logo") |
 |---|---|---|
 | What it makes | Complete logos: graphic and name designed together (emblems, monograms, clever symbols, custom wordmarks) | A symbol, with the name set beside it in a real font |
 | Spelling | Read back and corrected automatically. A design still wrong after 2 fixes is flagged and sorted last | Always exact (typeset) |
 | Change this design | Edits the picture itself, keeping the rest | Keeps the same symbol unless the change is about it |
 | Cost | Billed per picture to the Gemini API key's Google Cloud project: Nano Banana Pro is about $0.13 per picture, so a round is about $0.50 to $1 | The MiniMax plan |
 
-- **Picking:** Retry → **Designer** shows both when both are set up.
-  `LOGO_IMAGE_ENGINE=minimax` (or `google`) changes the default.
+- **Picking:**
+  - **Generate logo** uses the default (MiniMax); **Design with Google**
+    starts a Google round.
+  - Retry → **Designer** offers both.
+  - `LOGO_IMAGE_ENGINE=google` makes Google the default; the button then
+    disappears.
 - **Fallback:** if Google can't design at all (key, billing, quota), the
   round is made with MiniMax and the note says why.
 - **About the Google AI Pro plan:**

@@ -80,7 +80,7 @@ describe("runLogoGeneration", () => {
     // only the two icon-left designs needed a picture — square symbols, never the name
     expect(deps.draw).toHaveBeenCalledTimes(2);
     for (const [prompt] of vi.mocked(deps.draw!).mock.calls) {
-      expect(prompt).toMatch(/logo symbol for a roofing business: roof symbol/);
+      expect(prompt).toMatch(/logo mark for a roofing business: roof symbol/);
       expect(prompt).toMatch(/Absolutely no text of any kind/);
       expect(prompt).not.toMatch(/ABC/);
     }

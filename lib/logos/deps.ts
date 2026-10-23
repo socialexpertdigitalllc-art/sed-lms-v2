@@ -48,12 +48,14 @@ export async function designers(): Promise<Designers> {
 
 /**
  * The designer a round uses when nobody picked one: LOGO_IMAGE_ENGINE when an
- * admin set it (and it is set up), else Google when it is set up, else MiniMax.
+ * admin set it (and it is set up), else MiniMax (the plan the company already
+ * pays for) — Google, billed per picture, is chosen per round ("Design with
+ * Google", Retry → Designer) — else whichever is set up.
  */
 export function defaultEngine(d: Designers, env = process.env.LOGO_IMAGE_ENGINE): LogoEngine | null {
   const wanted = env === "minimax" || env === "google" ? env : null;
   if (wanted && d[wanted]) return wanted;
-  return d.google ? "google" : d.minimax ? "minimax" : null;
+  return d.minimax ? "minimax" : d.google ? "google" : null;
 }
 
 export function productionLogoDeps(admin: SupabaseClient, d: Designers): LogoRunnerDeps {

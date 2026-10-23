@@ -70,7 +70,7 @@ How these logos are made:
 Rules for every concept:
 - HORIZONTAL: the symbol (or a badge with the initials) on the left, the name on the right — or the name alone ("wordmark").
 - The only words on the logo are the exact name you are given. No tagline, slogan, services, phone, email, website or year.
-- A symbol is ONE simple, bold, flat shape that fits the business (a roof peak, a water drop, a leaf, a wrench…) — never a scene, never tiny detail.
+- A symbol is a DISTINCTIVE logo mark, the kind a top branding agency designs — never clip-art and never a plain stock icon (a basic house, a wrench, a tooth, a leaf on its own). Reinvent the trade's motif: merge two ideas into one mark, use clever negative space, build it from geometric construction or a refined emblem. One mark, not a scene; crafted, but still clear when small.
 - Use the brand colours given (exact hex). When none are given, choose 2 that suit the trade and list them in "palette".
 - Make every concept clearly different (layout, symbol, font, line split).
 Reply with JSON only.`;
@@ -78,7 +78,7 @@ Reply with JSON only.`;
 const CONCEPT_FIELDS = `Each concept:
 {"title": "2-4 words", "idea": "one sentence for the client",
  "layout": "icon-left" | "badge-left" | "wordmark",
- "symbol": "icon-left only: the symbol in under 25 words — a picture, NO letters or numbers" ,
+ "symbol": "icon-left only: the mark in under 40 words — the idea and how it is drawn (two motifs merged, negative space, line weight, geometry); a picture, NO letters or numbers" ,
  "badge": "badge-left only: circle | rounded | shield | hexagon (it holds the initials)",
  "font": one of the font keys below,
  "case": "upper" | "title" | "as-is",
@@ -285,10 +285,10 @@ export function fallbackConcepts(b: LogoBrief, req: ConceptRequest): LogoConcept
     return variants.slice(0, req.count).map((c) => (req.font ? { ...c, font: req.font } : c));
   }
   const list = [
-    base({ title: "Symbol and name", idea: `A simple symbol for ${noun} beside the name.`, layout: "icon-left", symbol: said || `one bold, simple flat symbol that suggests ${noun}`, font: "montserrat", case: "upper", lines: [b.logoText], tracking: 0.03, nameColor: dark, subColor: accent }),
+    base({ title: "Clever mark", idea: `A distinctive ${noun} mark beside the name.`, layout: "icon-left", symbol: said || `a distinctive ${noun} mark that merges two ideas into one shape, with clever negative space and precise geometric construction`, font: "montserrat", case: "upper", lines: [b.logoText], tracking: 0.03, nameColor: dark, subColor: accent }),
     base({ title: "Badge and name", idea: "A badge with the initials, then the name.", layout: "badge-left", badge: "shield", font: "roboto-slab", case: "title", lines: split ?? [b.logoText], nameColor: dark, subColor: accent }),
     base({ title: "Two-tone wordmark", idea: "The name alone, in two brand colours.", layout: "wordmark", font: "poppins", case: "title", lines: [b.logoText], twoTone: true, nameColor: main, subColor: accent }),
-    base({ title: "Bold emblem", idea: `A bold emblem for ${noun} with the name in strong capitals.`, layout: "icon-left", symbol: said || `a bold emblem-style symbol for ${noun}`, font: "oswald", case: "upper", lines: split ?? [b.logoText], tracking: 0.04, nameColor: dark, subColor: accent, iconScale: 1.1 }),
+    base({ title: "Bold emblem", idea: `A crafted ${noun} emblem with the name in strong capitals.`, layout: "icon-left", symbol: said || `a refined emblem for ${noun}: a strong shield-like shape holding a stylised ${noun} motif drawn with confident, even line weights`, font: "oswald", case: "upper", lines: split ?? [b.logoText], tracking: 0.04, nameColor: dark, subColor: accent, iconScale: 1.1 }),
   ];
   return list.slice(0, Math.max(1, req.count)).map((c) => (req.font ? { ...c, font: req.font } : c));
 }
@@ -303,9 +303,9 @@ const quote = (s: string) => s.replace(/["“”]/g, "'");
 export function iconPrompt(b: LogoBrief, c: LogoConcept, opts: { strict?: boolean } = {}): string {
   const colours = c.iconColors || colorWords(conceptColors(b, c));
   const parts = [
-    `A single flat vector logo symbol for a ${quote(b.trade).toLowerCase()} business: ${quote(c.symbol) || "one simple bold symbol"}.`,
+    `A professional logo mark for a ${quote(b.trade).toLowerCase()} business: ${quote(c.symbol) || "one distinctive symbol"}.`,
     colours ? `Colours: ${quote(colours)}.` : "",
-    `Simple, bold, geometric shapes with clean edges and solid flat colours; minimal detail so it still reads when small. One symbol only, centred, with plenty of empty white space around it.`,
+    `Designed like a top branding agency's work: distinctive, clever and memorable — not clip-art, not a generic stock icon. Refined flat vector construction with crisp edges, confident line weights, balanced negative space and solid flat colours; crafted, yet clear when small. One mark only, centred, with plenty of empty white space around it.`,
     `Plain pure white background.`,
     `Absolutely no text of any kind: no letters, no words, no numbers, no initials, no monogram, no signature, no watermark${opts.strict ? ", nothing that looks like writing" : ""}. No frame, no border, no mockup, no shadow, no gradient, no 3D, no photo.`,
   ].filter(Boolean);

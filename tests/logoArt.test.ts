@@ -73,16 +73,18 @@ describe("the art direction", () => {
 });
 
 describe("which designer", () => {
-  it("Google when it is set up, MiniMax otherwise; an admin can prefer one (LOGO_IMAGE_ENGINE)", () => {
+  it("MiniMax by default (Google is billed per picture, chosen per round); an admin can prefer one (LOGO_IMAGE_ENGINE)", () => {
     const both = { google: {} as never, minimax: {} as never };
-    expect(defaultEngine(both, undefined)).toBe("google");
-    expect(defaultEngine(both, "minimax")).toBe("minimax");
+    expect(defaultEngine(both, undefined)).toBe("minimax");
+    expect(defaultEngine(both, "google")).toBe("google");
     expect(defaultEngine({ google: null, minimax: {} as never }, "google")).toBe("minimax");
+    expect(defaultEngine({ google: {} as never, minimax: null }, undefined)).toBe("google");
     expect(defaultEngine({ google: null, minimax: null }, undefined)).toBeNull();
     const fns = { art: vi.fn(), draw: vi.fn() };
-    expect(pickEngine(null, fns)).toBe("google");
-    expect(pickEngine("minimax", fns)).toBe("minimax");
+    expect(pickEngine(null, fns)).toBe("minimax");
+    expect(pickEngine("google", fns)).toBe("google");
     expect(pickEngine("google", { art: null, draw: vi.fn() })).toBe("minimax");
+    expect(pickEngine(null, { art: vi.fn(), draw: null })).toBe("google");
   });
 });
 

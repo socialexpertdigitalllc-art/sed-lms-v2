@@ -251,15 +251,28 @@ export function LogoField({
         </a>
       ) : null}
       {canEdit ? (
-        <button
-          type="button"
-          onClick={onGenerateClick}
-          disabled={busy === "start"}
-          className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent-soft px-2.5 py-1.5 text-xs font-semibold text-accent-ink transition-colors hover:border-accent hover:bg-accent hover:text-white disabled:opacity-60"
-        >
-          {busy === "start" ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Sparkles className="h-3.5 w-3.5" aria-hidden />}
-          {logoLink ? "New logo with AI" : "Generate logo"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onGenerateClick}
+            disabled={busy === "start"}
+            className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent-soft px-2.5 py-1.5 text-xs font-semibold text-accent-ink transition-colors hover:border-accent hover:bg-accent hover:text-white disabled:opacity-60"
+          >
+            {busy === "start" ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Sparkles className="h-3.5 w-3.5" aria-hidden />}
+            {logoLink ? "New logo with AI" : "Generate logo"}
+          </button>
+          {engines?.google && engines.default !== "google" ? (
+            <button
+              type="button"
+              onClick={() => void start({ mode: "new", engine: "google" })}
+              disabled={busy === "start"}
+              title="Google's Nano Banana Pro designs complete logos — graphic and name together. Billed per picture to the Gemini API key (about $0.13 each)."
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-accent-ink hover:bg-accent-soft disabled:opacity-60"
+            >
+              <Sparkles className="h-3.5 w-3.5" aria-hidden /> Design with Google
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

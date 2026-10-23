@@ -45,7 +45,7 @@ import { IMAGES_PER_ROUND_MAX, LOGO_TABLE, type LogoCandidate, type LogoGenerati
  * One logo round, start to finish, with nobody waiting on the request. Two
  * designers:
  *
- * GOOGLE (default when the Gemini key is set up) — complete logos:
+ * GOOGLE (picked per round; billed per picture) — complete logos:
  *   concepts → a creative director (the concept writer) briefs four
  *              agency-grade logos in different styles (artPrompt.ts);
  *   drawing  → Google's Nano Banana Pro draws each logo WHOLE — graphic and
@@ -56,9 +56,9 @@ import { IMAGES_PER_ROUND_MAX, LOGO_TABLE, type LogoCandidate, type LogoGenerati
  *   A change ("refine") is an EDIT of the chosen picture itself — the same
  *   logo, changed as asked.
  *
- * MINIMAX — typeset designs: MiniMax draws only a symbol, the name is set
- * beside it in a real font (compose.ts) — spelling guaranteed. Also what a
- * Google round falls back to when Google can't design at all.
+ * MINIMAX (the default) — typeset designs: MiniMax draws only a symbol, the
+ * name is set beside it in a real font (compose.ts) — spelling guaranteed.
+ * Also what a Google round falls back to when Google can't design at all.
  *
  * Every write is guarded by status = running, so Stop (or the stale sweep)
  * wins over a late write.
@@ -100,15 +100,15 @@ export interface LogoRunnerDeps {
 export interface RunOptions {
   /** A font the person picked in Retry: every design uses it. */
   font?: string | null;
-  /** Which designer; defaults to Google when it is set up. */
+  /** Which designer; defaults to MiniMax when it is set up. */
   engine?: LogoEngine | null;
 }
 
-/** The designer a round uses: the one asked for if it is set up, else Google, else MiniMax. PURE. */
+/** The designer a round uses: the one asked for if it is set up, else MiniMax, else Google. PURE. */
 export function pickEngine(asked: LogoEngine | null | undefined, deps: Pick<LogoRunnerDeps, "art" | "draw">): LogoEngine {
   if (asked === "minimax" && deps.draw) return "minimax";
   if (asked === "google" && deps.art) return "google";
-  return deps.art ? "google" : "minimax";
+  return deps.draw ? "minimax" : deps.art ? "google" : "minimax";
 }
 
 const LEAD_COLUMNS = "id, business_name, services, category, about_business, color_scheme";

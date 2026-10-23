@@ -59,7 +59,8 @@ describe("the colours", () => {
 describe("the symbol prompt (the image model draws ONLY the symbol)", () => {
   it("describes the symbol in the brand colours, never the name, never hex, and forbids any text", () => {
     const p = iconPrompt(brief, concept);
-    expect(p).toMatch(/A single flat vector logo symbol for a roofing business: a bold roof peak\./);
+    expect(p).toMatch(/A professional logo mark for a roofing business: a bold roof peak\./);
+    expect(p).toMatch(/not clip-art, not a generic stock icon/);
     expect(p).toMatch(/Colours: orange roof, navy base\./);
     expect(p).toMatch(/Absolutely no text of any kind: no letters, no words, no numbers, no initials/);
     expect(p).toMatch(/Plain pure white background/);

@@ -110,8 +110,8 @@ describe("POST /logo — start a round", () => {
     expect(state.db.tables[LOGO_TABLE]).toHaveLength(1);
     expect(state.after).toHaveLength(1);
     await state.after[0]();
-    // Google designs by default when it is set up
-    expect(mocks.run).toHaveBeenCalledWith(j.generation.id, { deps: true }, { font: null, engine: "google" });
+    // MiniMax designs by default (the plan the company pays for); Google is picked per round
+    expect(mocks.run).toHaveBeenCalledWith(j.generation.id, { deps: true }, { font: null, engine: "minimax" });
   });
 
   it("one at a time per lead: a second press shows the running one", async () => {
@@ -139,19 +139,28 @@ describe("POST /logo — start a round", () => {
     expect((await ok.json()).generation).toMatchObject({ mode: "refine", parentId: GEN, parentIndex: 1, instructions: "simpler", logoText: "ABC" });
   });
 
-  it("the designer: Google by default, MiniMax when asked; one that isn't set up is a clear 503 before anything is stored", async () => {
-    const minimax = await POST(post({ mode: "new", engine: "minimax" }), ctx);
-    expect(minimax.status).toBe(201);
+  it("the designer: MiniMax by default, Google when asked; one that isn't set up is a clear 503 before anything is stored", async () => {
+    const google = await POST(post({ mode: "new", engine: "google" }), ctx);
+    expect(google.status).toBe(201);
     await state.after[0]();
-    expect(mocks.run).toHaveBeenLastCalledWith(expect.any(String), { deps: true }, { font: null, engine: "minimax" });
+    expect(mocks.run).toHaveBeenLastCalledWith(expect.any(String), { deps: true }, { font: null, engine: "google" });
 
     state.db.tables[LOGO_TABLE] = [];
     state.google = false;
     const asked = await POST(post({ mode: "new", engine: "google" }), ctx);
     expect(asked.status).toBe(503);
     expect((await asked.json()).error).toMatch(/Google isn't set up.*Gemini API key/);
-    const fallback = await POST(post({ mode: "new" }), ctx); // nobody asked: MiniMax, the one that is set up
+    const fallback = await POST(post({ mode: "new" }), ctx); // nobody asked: MiniMax
     expect(fallback.status).toBe(201);
+
+    state.db.tables[LOGO_TABLE] = [];
+    state.google = true;
+    state.minimax = false;
+    const onlyGoogle = await POST(post({ mode: "new" }), ctx); // nobody asked, only Google set up: Google
+    expect(onlyGoogle.status).toBe(201);
+    await state.after[state.after.length - 1]();
+    expect(mocks.run).toHaveBeenLastCalledWith(expect.any(String), { deps: true }, { font: null, engine: "google" });
+    state.google = false;
 
     state.db.tables[LOGO_TABLE] = [];
     state.minimax = false;
@@ -191,7 +200,7 @@ describe("POST /logo — start a round", () => {
     const res = await POST(post({ mode: "new", font: "playfair" }), ctx);
     expect(res.status).toBe(201);
     await state.after[0]();
-    expect(mocks.run).toHaveBeenCalledWith((await res.json()).generation.id, { deps: true }, { font: "playfair", engine: "google" });
+    expect(mocks.run).toHaveBeenCalledWith((await res.json()).generation.id, { deps: true }, { font: "playfair", engine: "minimax" });
   });
 
   it("a migration not applied yet says so", async () => {
@@ -218,7 +227,7 @@ describe("GET — the rounds, the brief, today's allowance", () => {
     expect(JSON.stringify(j)).not.toMatch(/lead-logos\//);
     expect(j.brief).toMatchObject({ logoText: "ABC Roofing", colors: [{ name: "navy blue" }, { name: "bright orange" }] });
     expect(j.budget).toEqual({ used: 2, limit: null });
-    expect(j.engines).toEqual({ google: true, minimax: true, default: "google" });
+    expect(j.engines).toEqual({ google: true, minimax: true, default: "minimax" });
     expect((await (await GET_ONE(new Request("http://x"), genCtx)).json()).generation.id).toBe(GEN);
   });
 });
