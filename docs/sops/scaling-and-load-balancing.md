@@ -60,52 +60,49 @@ Rollback (if ever needed): re-run the policy block at the end of
   or realtime event calls `router.refresh()`, which clears it, so changes
   still appear immediately.
 
-### Process model (this release) — the "load balancing"
-`ecosystem.config.cjs` runs the server in **pm2 cluster mode**: several
-workers on the same port, connections balanced between them by pm2. A slow
-render occupies one worker while the others keep serving; a worker that leaks
-memory is recycled alone (`max_memory_restart`) instead of the site going
-down. `instrumentation.ts` runs the background pollers on **worker 0 only**.
+### Where the LMS actually runs (checked via the Hostinger API, 2026-10-23)
+`lms.sedsolutions.online` is a **Hostinger managed Node.js website** (hosting
+account `u461699018`, app type `next`, Node 22), NOT a VPS. Hostinger builds
+it from the GitHub repository on every push to `main` (Git auto-deployment)
+and runs the Next.js server itself. There is no pm2 and no shell on that box.
+
+What that means for "load balancing":
+- The hosting runs **one Node process** for the site and we cannot add
+  workers there. `ecosystem.config.cjs` (pm2 cluster) in this repo is ready
+  for the day the LMS moves to a VPS or a Cloud plan; it is **not used** on
+  the current hosting. `instrumentation.ts` already handles both cases.
+- On shared Node.js hosting the "crashes" are the account hitting its
+  resource limits (CPU, memory, IO, concurrent processes), after which the
+  platform answers 503 until load drops. So on this platform the load
+  balancing IS the work above: fewer and cheaper requests per person — far
+  fewer auth and permission round-trips, a database policy 20–50× cheaper,
+  no refresh herds from hidden tabs, no payload rebuilt on every screen
+  switch. That is what stops the limits being hit.
+- The next step up when the team grows again is a bigger hosting plan, or
+  a VPS / Cloud plan where the pm2 cluster file applies and workers can be
+  added one at a time.
 
 ## Deploy
 
-```bash
-cd /path/to/sed-lms-v2
-git pull
-npm ci
-NODE_OPTIONS=--max-old-space-size=8192 npm run build
-# first time only: move from the single process to the cluster
-pm2 delete sed-lms
-pm2 start ecosystem.config.cjs
-pm2 save
-# every later deploy:
-pm2 reload sed-lms          # zero-downtime, one worker at a time
-```
+Deploys are **Hostinger Node.js builds**. Two ways to start one:
 
-Worker count: default 2. Check headroom with `free -m` and `pm2 monit`; each
-worker sits around 400–700 MB. Raise with `SED_LMS_INSTANCES=4 pm2 start
-ecosystem.config.cjs` (or `max` = one per CPU) when RAM allows. Keep
-`WGE_POLLERS_DISABLED=1` on every non-prod machine exactly as before.
+1. **Push to `main`** — Git auto-deployment builds and publishes it (about
+   4–6 minutes; the build list in hPanel → Websites → lms → Node.js shows it).
+2. **From another branch** (what was done for this change on 2026-10-23):
+   start a build through the Hostinger API / connector —
+   `hosting_nodejs_start-build` with `source_type: git`, the repository
+   `socialexpertdigitalllc-art/sed-lms-v2` and the branch — then poll
+   `hosting_nodejs_build` until `completed`. A later push to `main` rebuilds
+   from `main`, so a branch deploy must be merged into `main` to stick.
 
-The reverse proxy (nginx/Apache → `localhost:3000`) needs **no change** — the
-cluster shares one port. If nginx is in front, these are worth having:
-
-```nginx
-upstream lms { server 127.0.0.1:3000; keepalive 32; }
-location / {
-  proxy_pass http://lms;
-  proxy_http_version 1.1;
-  proxy_set_header Connection "";
-  proxy_read_timeout 120s;      # AI streams / uploads
-  proxy_buffering off;          # streamed responses reach the browser as they are produced
-}
-```
+Environment variables live in hPanel (Node.js → Environment variables); a
+build picks them up. Nothing in this change needs a new variable.
+`WGE_POLLERS_DISABLED=1` stays set on every non-prod machine exactly as before.
 
 ## Verify after deploy
 
-1. `pm2 ls` shows `sed-lms` with N instances, mode `cluster`, all `online`.
-2. `pm2 logs sed-lms --lines 50` shows exactly one worker without the
-   "pollers run on worker 0 only" line.
+1. The Hostinger build for the commit shows `completed` and the site answers.
+2. (VPS only) `pm2 ls` shows `sed-lms` in cluster mode, all workers online.
 3. Dashboard total leads = `select count(*) from leads where deleted_at is null`
    (1,017 on 2026-10-23) — i.e. **more than 1,000**.
 4. Open Leads, then Dashboard, then Leads again within 30 s: the second visits

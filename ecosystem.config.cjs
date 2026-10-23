@@ -1,6 +1,11 @@
 /**
  * pm2 process file for the LMS — CLUSTER mode.
  *
+ * NOT USED ON THE CURRENT HOSTING. lms.sedsolutions.online runs on Hostinger's
+ * managed Node.js hosting, which builds from GitHub and runs the Next server
+ * itself (one process, no pm2, no shell). This file is for the day the LMS
+ * moves to a VPS or a Cloud plan; see docs/sops/scaling-and-load-balancing.md.
+ *
  * Until now the app ran as ONE Node process (`pm2 start ... sed-lms`). Node
  * serves requests on a single thread, so one slow render (the dashboard
  * serialising every lead for one tab) made every other person's click wait,
