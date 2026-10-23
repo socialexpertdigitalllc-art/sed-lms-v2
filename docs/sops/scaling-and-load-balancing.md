@@ -99,6 +99,14 @@ Environment variables live in hPanel (Node.js → Environment variables); a
 build picks them up. Nothing in this change needs a new variable.
 `WGE_POLLERS_DISABLED=1` stays set on every non-prod machine exactly as before.
 
+## Activity log paused (2026-10-23)
+
+The user-movement tracker (Admin → Logs → User Activity) is paused by
+`ACTIVITY_LOG_PAUSED` in `lib/activity/config.ts`: no page-view/click events
+are sent or stored. A one-per-minute presence heartbeat still runs so
+"online" status, idle timeouts and sign-in analytics stay correct. To resume,
+set the flag to `false` and deploy.
+
 ## Verify after deploy
 
 1. The Hostinger build for the commit shows `completed` and the site answers.

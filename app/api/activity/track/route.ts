@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { trackBatchSchema } from "@/lib/activity/track";
+import { ACTIVITY_LOG_PAUSED } from "@/lib/activity/config";
 
 export const runtime = "nodejs";
 
@@ -26,14 +27,19 @@ export async function POST(req: Request) {
   if (!parsed.success) return new NextResponse(null, { status: 400 });
 
   const admin = createAdminClient();
-  const rows = parsed.data.events.map((e) => ({
-    user_id: user.id,
-    type: e.type,
-    path: e.path ?? null,
-    label: e.label ?? null,
-    meta: e.meta ?? null,
-  }));
-  await admin.from("user_activity").insert(rows);
+  // Paused (lib/activity/config.ts): events are dropped here too, so tabs
+  // still running the previous build cannot keep filling user_activity.
+  // The heartbeat below carries on either way.
+  if (!ACTIVITY_LOG_PAUSED && parsed.data.events.length > 0) {
+    const rows = parsed.data.events.map((e) => ({
+      user_id: user.id,
+      type: e.type,
+      path: e.path ?? null,
+      label: e.label ?? null,
+      meta: e.meta ?? null,
+    }));
+    await admin.from("user_activity").insert(rows);
+  }
 
   const nowMs = Date.now();
   if (nowMs - (lastHeartbeat.get(user.id) ?? 0) > HEARTBEAT_MS) {

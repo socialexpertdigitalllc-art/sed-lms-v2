@@ -39,3 +39,16 @@ describe("trackBatchSchema", () => {
     expect(trackBatchSchema.safeParse({ events: Array(51).fill({ type: "click" }) }).success).toBe(false);
   });
 });
+
+describe("trackBatchSchema — paused mode heartbeat", () => {
+  it("accepts a heartbeat with no events", () => {
+    expect(trackBatchSchema.safeParse({ events: [], heartbeat: true }).success).toBe(true);
+  });
+  it("still rejects an empty batch that is not a heartbeat", () => {
+    expect(trackBatchSchema.safeParse({ events: [] }).success).toBe(false);
+    expect(trackBatchSchema.safeParse({ events: [], heartbeat: false }).success).toBe(false);
+  });
+  it("accepts real events without the flag", () => {
+    expect(trackBatchSchema.safeParse({ events: [{ type: "page_view", path: "/leads" }] }).success).toBe(true);
+  });
+});
