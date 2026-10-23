@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { SpellingVerdict } from "./check";
+import type { IconReading, SpellingVerdict } from "./check";
 import type { ColorReport } from "./cleanup";
+import type { LogoLayout } from "./design";
 import type { GenerationMode, LogoConcept } from "./prompt";
 
 /**
@@ -12,21 +13,20 @@ import type { GenerationMode, LogoConcept } from "./prompt";
 export const LOGO_TABLE = "lead_logo_generations";
 /** A running generation that hasn't written for this long died with the server. */
 export const LOGO_STALE_MS = 5 * 60_000;
-/** Per person, per rolling hour. */
-export const LOGO_HOURLY_LIMIT = 15;
-/** Per lead, per rolling day. */
-export const LOGO_DAILY_LEAD_LIMIT = 40;
+/** Per person, per rolling hour — only a guard against a runaway loop. */
+export const LOGO_HOURLY_LIMIT = 30;
+/** Per lead, per rolling day — the same kind of guard. */
+export const LOGO_DAILY_LEAD_LIMIT = 60;
 /**
- * Designs the whole company may draw per day (UTC). The MiniMax Max plan
- * allows about 120 image-01 pictures a day; keeping some back means one busy
- * afternoon can't leave the plan empty. LOGO_DAILY_IMAGE_BUDGET overrides it.
+ * No company-wide daily cap of our own: MiniMax's plan sets the real limit,
+ * and when it is reached MiniMax's own answer is shown. An admin can still
+ * set one with LOGO_DAILY_IMAGE_BUDGET (pictures per UTC day).
  */
-export const DEFAULT_DAILY_IMAGE_BUDGET = 100;
-export function dailyImageBudget(): number {
+export function dailyImageBudget(): number | null {
   const n = Number(process.env.LOGO_DAILY_IMAGE_BUDGET);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_DAILY_IMAGE_BUDGET;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
-/** At most this many designs per round (a first round of 4, and 4 more when the spelling was off). */
+/** At most this many pictures per round: 4 symbols, and one redraw each. */
 export const IMAGES_PER_ROUND_MAX = 8;
 
 export type GenerationStatus = "running" | "ready" | "failed" | "cancelled";
@@ -61,6 +61,16 @@ export interface LogoCandidate {
   colors: ColorReport;
   check: CandidateCheck | null;
   score: number;
+  /** The name was typeset by our code (rounds since 2026-10-23): always spelled exactly right. */
+  typeset?: boolean;
+  /** Font catalogue key, layout. */
+  font?: string;
+  layout?: LogoLayout;
+  /** The symbol on its own (transparent PNG), reused when this design is changed. */
+  iconPath?: string | null;
+  iconUrl?: string | null;
+  /** What the symbol check found. */
+  iconCheck?: IconReading | null;
 }
 
 export interface LogoGeneration {
@@ -176,7 +186,7 @@ export async function imagesUsedToday(db: Db, now: Date): Promise<number> {
 }
 
 export function budgetMessage(limit: number): string {
-  return `Today's logo allowance is used up (${limit} designs for the whole company). It starts again at midnight UTC — meanwhile, pick from the earlier rounds.`;
+  return `Today's logo cap is reached (${limit} pictures a day, set by an admin with LOGO_DAILY_IMAGE_BUDGET). It starts again at midnight UTC — meanwhile, pick from the earlier rounds.`;
 }
 
 export interface StartInput {
@@ -252,6 +262,10 @@ export function candidateView(c: LogoCandidate) {
     colors: c.colors,
     check: c.check,
     score: c.score,
+    typeset: c.typeset ?? false,
+    font: c.font ?? null,
+    layout: c.layout ?? null,
+    iconCheck: c.iconCheck ?? null,
   };
 }
 

@@ -9,8 +9,9 @@ import { LogoError } from "./store";
 /** The production wiring of the logo runner (MiniMax, the routed text/vision models, Supabase storage). */
 
 export const LOGO_BUCKET = "branding";
+const SYMBOL_SIZE = 1024;
 
-export function logoStorage(admin: SupabaseClient): LogoStorage & { get(path: string): Promise<Buffer> } {
+export function logoStorage(admin: SupabaseClient): LogoStorage {
   return {
     async put(path, png) {
       const { error } = await admin.storage.from(LOGO_BUCKET).upload(path, png, { contentType: "image/png", upsert: true, cacheControl: "31536000" });
@@ -42,6 +43,7 @@ export function productionLogoDeps(admin: SupabaseClient, spec: ProviderSpec): L
       (await callForTask("logo_concepts", system, user, { maxTokens: 8000, temperature: 0.9, timeoutMs: 120_000, maxAttempts: 2 })).text,
     readLogo: async (system, user, imageUrl) =>
       (await callForTask("logo_check", system, user, { maxTokens: 4000, temperature: 0, images: [imageUrl], timeoutMs: 75_000, maxAttempts: 2 })).text,
-    draw: (prompt, seed) => drawImage(spec, { prompt, seed }),
+    // The symbol only, square; the name is typeset beside it (compose.ts).
+    draw: (prompt, seed) => drawImage(spec, { prompt, seed, width: SYMBOL_SIZE, height: SYMBOL_SIZE }),
   };
 }

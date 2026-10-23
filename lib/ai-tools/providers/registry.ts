@@ -444,7 +444,7 @@ const logoConcepts: AiTaskDescriptor = {
   key: "logo_concepts",
   label: "Logo ideas (lead page)",
   description:
-    "One call per press of Generate logo / Retry: writes four distinct logo concepts (layout, symbol, lettering, colour use) from the lead's name, trade and colours — or revises one design as the person asked. Strict JSON out. MiniMax image-01 then draws each concept; when this model is unavailable the generator falls back to standard layouts, so the button still works.",
+    "One call per press of Generate logo / Retry: designs four logos as data — layout, the symbol to draw, a font from the catalogue, case, line split, colours — from the lead's name, trade and colours, or revises one design as the person asked. Strict JSON out. MiniMax image-01 then draws only the symbols and the name is typeset in code; when this model is unavailable the generator falls back to standard layouts, so the button still works.",
   where: "lib/logos/prompt.ts",
   // MiniMax counts its visible thinking against the output budget.
   requires: { vision: false, minOutputTokens: 4000 },
@@ -455,9 +455,9 @@ const logoConcepts: AiTaskDescriptor = {
 
 const logoCheck: AiTaskDescriptor = {
   key: "logo_check",
-  label: "Logo proofreading (lead page)",
+  label: "Logo symbol check (lead page)",
   description:
-    "Reads every generated logo back, letter by letter, so a misspelled design is flagged and sorted last (the comparison with the name is done in code). One short call per design. MULTIMODAL IS MANDATORY — a text-only model would answer about images it never saw.",
+    "Looks at every symbol MiniMax draws for a logo and reports any letters or letter-like scribbles in it (the name itself is typeset in code, so it is always right); a symbol with writing in it is drawn again. One short call per symbol. MULTIMODAL IS MANDATORY — a text-only model would answer about images it never saw.",
   where: "lib/logos/check.ts",
   requires: { vision: true, minOutputTokens: 4000 },
   defaultProvider: "minimax",

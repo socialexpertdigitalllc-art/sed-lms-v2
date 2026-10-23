@@ -3,6 +3,7 @@
 import { AlertTriangle, Check, CircleHelp } from "lucide-react";
 import type { LogoCandidateView, LogoGenerationView } from "@/lib/logos/store";
 import type { BrandColor } from "@/lib/logos/brief";
+import { fontInfo } from "@/lib/logos/fontList";
 
 /** Small, presentational pieces of the logo generator (LogoField.tsx). */
 
@@ -29,16 +30,16 @@ export function bgStyle(bg: PreviewBg): React.CSSProperties {
 
 export const STAGE_LABEL: Record<string, string> = {
   concepts: "Sketching ideas",
-  drawing: "Drawing the designs",
-  checking: "Proofreading the spelling",
-  redrawing: "Spelling was off — drawing more",
+  drawing: "Drawing the symbols and setting the name",
+  checking: "Checking the symbols",
+  redrawing: "Drawing more",
   finishing: "Finishing",
 };
 
-const STEPS = ["Ideas", "Drawing", "Proofreading"] as const;
-const stepOf = (stage: string | null) => (stage === "concepts" ? 0 : stage === "checking" ? 2 : 1);
+const STEPS = ["Ideas", "Designs"] as const;
+const stepOf = (stage: string | null) => (stage === "concepts" ? 0 : 1);
 
-/** Ideas → Drawing → Proofreading, the current one lit. */
+/** Ideas → Designs, the current one lit. */
 export function StageSteps({ stage }: { stage: string | null }) {
   const at = stepOf(stage);
   return (
@@ -62,9 +63,16 @@ export function StageSteps({ stage }: { stage: string | null }) {
   );
 }
 
-/** Spelled right / reads wrong / extra words / not checked. */
+/** Exact spelling (typeset) / reads wrong / extra words / not checked. */
 export function SpellingBadge({ c, compact = false }: { c: LogoCandidateView; compact?: boolean }) {
   const v = c.check?.verdict ?? "unchecked";
+  if (c.typeset) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-ready-bg px-2 py-0.5 text-[11px] font-medium text-ready-fg" title="The name is set in a real font, letter by letter — exactly as typed">
+        <Check className="h-3 w-3" aria-hidden /> Exact spelling
+      </span>
+    );
+  }
   if (v === "exact") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-ready-bg px-2 py-0.5 text-[11px] font-medium text-ready-fg" title="Read back letter by letter: matches the name">
@@ -87,8 +95,16 @@ export function SpellingBadge({ c, compact = false }: { c: LogoCandidateView; co
   );
 }
 
-/** What else is worth knowing about a design: shape, colours, background. */
+/** What else is worth knowing about a design: font, symbol, shape, colours, background. */
 export function DesignFacts({ c, colors }: { c: LogoCandidateView; colors: BrandColor[] }) {
+  if (c.typeset) {
+    const facts: { ok: boolean; text: string }[] = [
+      { ok: true, text: `Font: ${fontInfo(c.font).label}` },
+      c.iconCheck?.text ? { ok: false, text: "Symbol may have letter-like marks" } : null,
+      { ok: true, text: "Transparent background" },
+    ].filter((f): f is { ok: boolean; text: string } => f !== null);
+    return <FactList facts={facts} />;
+  }
   const ink = colors.filter((x) => x.role !== "light");
   const missing = ink.filter((x) => c.colors.missing.includes(x.hex));
   const facts: { ok: boolean; text: string }[] = [
@@ -96,6 +112,10 @@ export function DesignFacts({ c, colors }: { c: LogoCandidateView; colors: Brand
     ink.length ? { ok: missing.length === 0, text: missing.length ? `Missing ${missing.map((m) => m.name).join(", ")}` : "Brand colours" } : null,
     { ok: c.transparent, text: c.transparent ? "Transparent background" : c.background === "dark" ? "Dark background kept" : "Background kept" },
   ].filter((f): f is { ok: boolean; text: string } => f !== null);
+  return <FactList facts={facts} />;
+}
+
+function FactList({ facts }: { facts: { ok: boolean; text: string }[] }) {
   return (
     <>
       {facts.map((f) => (

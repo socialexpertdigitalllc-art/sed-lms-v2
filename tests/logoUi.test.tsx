@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { ToastProvider } from "@/components/common/Toast";
 import { LogoField, awaitingDecision, sameAgain } from "@/components/leads/logo/LogoField";
 import { withChip } from "@/components/leads/logo/LogoRetryDialog";
-import type { LogoGenerationView } from "@/lib/logos/store";
+import type { LogoCandidateView, LogoGenerationView } from "@/lib/logos/store";
 
 /**
  * The lead page: "Generate logo" by the logo field → designs appear under it →
@@ -14,16 +14,17 @@ afterEach(() => vi.unstubAllGlobals());
 
 const GEN = "11111111-1111-4111-8111-111111111111";
 const colors = { present: ["#1e3a8a"], missing: [], offPalette: 0, dominant: [] };
-const cand = (index: number, verdict: "exact" | "misspelled", read = "ABC ROOFING") => ({
+/** A design from a round made before typesetting (the picture had the name in it), unless `over` says otherwise. */
+const cand = (index: number, verdict: "exact" | "misspelled", read = "ABC ROOFING", over: Partial<LogoCandidateView> = {}): LogoCandidateView => ({
   index, concept: index, round: 1 as const, url: `https://cdn/${index + 1}.png`, width: 900, height: 300, aspect: 3, horizontal: true, transparent: true, background: "removed" as const,
-  colors, check: { verdict, read, extra: [], issues: [], quality: 8 }, score: verdict === "exact" ? 150 : 40,
+  colors, check: { verdict, read, extra: [], issues: [], quality: 8 }, score: verdict === "exact" ? 150 : 40, typeset: false, font: null, layout: null, iconCheck: null, ...over,
 });
 const gen = (over: Partial<LogoGenerationView> = {}): LogoGenerationView => ({
   id: GEN, mode: "new", parentId: null, parentIndex: null, instructions: null, logoText: "ABC Roofing", status: "ready", stage: null,
   concepts: [
     { title: "Roof peak", idea: "A roof peak beside the name.", symbol: "roof", typography: "bold", layout: "icon-left", colorUse: "c" },
     { title: "Clean wordmark", idea: "Just the name.", symbol: "", typography: "bold", layout: "wordmark", colorUse: "c" },
-  ],
+  ] as unknown as LogoGenerationView["concepts"],
   candidates: [cand(0, "exact"), cand(1, "misspelled", "ABC ROFING")],
   notes: [], error: null, acceptedIndex: null, acceptedUrl: null, acceptedAt: null, createdAt: new Date().toISOString(), finishedAt: null, userId: "U1", ...over,
 });
@@ -56,7 +57,7 @@ function renderField(props: Partial<React.ComponentProps<typeof LogoField>> = {}
 describe("LogoField", () => {
   it("no logo yet: Generate logo starts a round and shows its progress", async () => {
     const fetchMock = api({
-      "GET /api/leads/L1/logo": () => ({ generations: [], brief, budget: { used: 8, limit: 100 } }),
+      "GET /api/leads/L1/logo": () => ({ generations: [], brief, budget: { used: 8, limit: null } }),
       "POST /api/leads/L1/logo": () => ({ created: true, generation: gen({ status: "running", stage: "drawing", candidates: [cand(0, "exact")] }) }),
     });
     renderField();
@@ -64,12 +65,14 @@ describe("LogoField", () => {
     expect(await screen.findByRole("region", { name: "AI logo generator" })).toBeTruthy();
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
     expect(JSON.parse(String(post[1]!.body))).toEqual({ mode: "new" });
-    expect(screen.getByText(/Drawing the designs/)).toBeTruthy();
+    expect(screen.getByText(/Drawing the symbols and setting the name/)).toBeTruthy();
     expect(screen.getByRole("list", { name: "Progress" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Stop/ })).toBeTruthy();
     // one drawn, three on their way
     expect(screen.getAllByRole("radio")).toHaveLength(1);
-    await waitFor(() => expect(screen.getByText(/Today: 8 of 100 designs used/)).toBeTruthy());
+    // no daily cap of our own: nothing to count down
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => u === "/api/leads/L1/logo").length).toBeGreaterThan(1));
+    expect(screen.queryByText(/Today:/)).toBeNull();
   });
 
   it("designs waiting for a decision open by themselves; the best is shown first; Accept fills the field", async () => {
@@ -123,14 +126,14 @@ describe("LogoField", () => {
     expect(within(dialog).getByRole("tab", { name: "Change this design" }).getAttribute("aria-selected")).toBe("true");
     const send = within(dialog).getByRole("button", { name: /Draw 4 versions/ }) as HTMLButtonElement;
     expect(send.disabled).toBe(true); // nothing said yet
-    fireEvent.click(within(dialog).getByRole("button", { name: "Simpler" }));
-    fireEvent.click(within(dialog).getByRole("button", { name: "More bright orange" }));
-    expect((within(dialog).getByLabelText("What should change?") as HTMLTextAreaElement).value).toBe("Simpler, more bright orange");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Bigger symbol" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Name in bright orange" }));
+    expect((within(dialog).getByLabelText("What should change?") as HTMLTextAreaElement).value).toBe("Bigger symbol, name in bright orange");
     expect((within(dialog).getByLabelText("Words on the logo") as HTMLInputElement).value).toBe("ABC Roofing");
     fireEvent.click(send);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
-    expect(JSON.parse(String(post[1]!.body))).toEqual({ mode: "refine", instructions: "Simpler, more bright orange", logoText: "ABC Roofing", parentId: GEN, parentIndex: 0 });
+    expect(JSON.parse(String(post[1]!.body))).toEqual({ mode: "refine", instructions: "Bigger symbol, name in bright orange", logoText: "ABC Roofing", parentId: GEN, parentIndex: 0 });
   });
 
   it("Retry → a new idea (or nothing typed = fresh designs); a refused start shows the reason in the popup", async () => {
@@ -151,6 +154,26 @@ describe("LogoField", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /Draw 4 designs/ }));
     expect(await within(dialog).findByText(/15 logo rounds in the last hour/)).toBeTruthy();
     expect(bodies[0]).toEqual({ mode: "idea", instructions: "a shield with a hammer", logoText: "ABC Roofing" });
+  });
+
+  it("typeset designs say so (exact spelling, the font); picking a font alone is a change", async () => {
+    const typeset = cand(0, "exact", "ABC ROOFING", { typeset: true, font: "playfair", layout: "icon-left", iconCheck: { text: false, clean: true, issues: [], quality: 8 } });
+    const fetchMock = api({
+      "GET /api/leads/L1/logo": () => ({ generations: [gen({ candidates: [typeset] })], brief, budget: { used: 3, limit: 50 } }),
+      "POST /api/leads/L1/logo": () => ({ created: true, generation: gen({ id: "22222222-2222-4222-8222-222222222222", status: "running", stage: "concepts", candidates: [] }) }),
+    });
+    renderField();
+    const panel = await screen.findByRole("region", { name: "AI logo generator" });
+    expect(within(panel).getAllByText("Exact spelling").length).toBeGreaterThan(0);
+    expect(within(panel).getByText(/Font: Playfair Display/)).toBeTruthy();
+    expect(within(panel).getByText(/Today: 3 of 50 pictures used/)).toBeTruthy(); // only when an admin set a cap
+    fireEvent.click(within(panel).getByRole("button", { name: /Retry/ }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Font"), { target: { value: "lora" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Draw 4 versions/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]!.body))).toEqual({ mode: "refine", instructions: "Use the Lora font", logoText: "ABC Roofing", parentId: GEN, parentIndex: 0, font: "lora" });
   });
 
   it("a round that failed says why, with Try again", async () => {

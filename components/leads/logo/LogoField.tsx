@@ -28,7 +28,7 @@ const POLL_MS = 2500;
 /** Designs still waiting for a decision come back up when the page is opened within this long. */
 const REOPEN_MS = 6 * 3_600_000;
 
-type StartBody = { mode: "new" | "idea" | "refine"; instructions?: string; logoText?: string; parentId?: string; parentIndex?: number };
+type StartBody = { mode: "new" | "idea" | "refine"; instructions?: string; logoText?: string; parentId?: string; parentIndex?: number; font?: string };
 
 /** The same request as a round that failed, to try it again. PURE. */
 export function sameAgain(g: LogoGenerationView): StartBody {
@@ -78,7 +78,7 @@ export function LogoField({
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
-  const [budget, setBudget] = useState<{ used: number; limit: number } | null>(null);
+  const [budget, setBudget] = useState<{ used: number; limit: number | null } | null>(null);
 
   const upsert = useCallback((g: LogoGenerationView) => {
     setGens((prev) => (prev.some((x) => x.id === g.id) ? prev.map((x) => (x.id === g.id ? g : x)) : [g, ...prev]));
@@ -88,7 +88,7 @@ export function LogoField({
   const load = useCallback(
     () =>
       fetch(`/api/leads/${leadId}/logo`, { cache: "no-store" })
-        .then((r) => (r.ok ? readJson<{ generations: LogoGenerationView[]; brief: Brief; budget?: { used: number; limit: number } }>(r) : null))
+        .then((r) => (r.ok ? readJson<{ generations: LogoGenerationView[]; brief: Brief; budget?: { used: number; limit: number | null } }>(r) : null))
         .catch(() => null),
     [leadId],
   );
@@ -226,8 +226,8 @@ export function LogoField({
   async function retry(r: RetryRequest) {
     const ok = await start(
       r.mode === "refine" && viewed && selected
-        ? { mode: "refine", instructions: r.instructions, logoText: r.logoText, parentId: viewed.id, parentIndex: selected.index }
-        : { mode: r.instructions ? "idea" : "new", instructions: r.instructions || undefined, logoText: r.logoText },
+        ? { mode: "refine", instructions: r.instructions, logoText: r.logoText, parentId: viewed.id, parentIndex: selected.index, ...(r.font ? { font: r.font } : {}) }
+        : { mode: r.instructions ? "idea" : "new", instructions: r.instructions || undefined, logoText: r.logoText, ...(r.font ? { font: r.font } : {}) },
     );
     if (ok) setRetryOpen(false);
   }
@@ -438,9 +438,9 @@ export function LogoField({
             </div>
           ) : null}
 
-          {budget ? (
-            <p className="mt-3 text-right text-[11px] text-text-faint" title="MiniMax image allowance shared by the whole company; resets at midnight UTC">
-              Today: {Math.min(budget.used, budget.limit)} of {budget.limit} designs used
+          {budget?.limit ? (
+            <p className="mt-3 text-right text-[11px] text-text-faint" title="A daily cap an admin set (LOGO_DAILY_IMAGE_BUDGET); resets at midnight UTC">
+              Today: {Math.min(budget.used, budget.limit)} of {budget.limit} pictures used
             </p>
           ) : null}
 

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Sparkles, Wand2, X } from "lucide-react";
 import { btnPrimary, btnSecondary } from "@/components/common/buttons";
 import type { BrandColor } from "@/lib/logos/brief";
+import { LOGO_FONTS } from "@/lib/logos/fontList";
 import type { LogoCandidateView } from "@/lib/logos/store";
 import { CHECKER_STYLE, DesignImage, Swatches } from "./LogoParts";
 
@@ -19,10 +20,12 @@ export interface RetryRequest {
   mode: "refine" | "idea";
   instructions: string;
   logoText: string;
+  /** A font picked from the list (every design uses it); absent = the AI chooses. */
+  font?: string;
 }
 
-const CHANGE_CHIPS = ["Simpler", "Bolder lettering", "Bigger symbol", "Smaller symbol", "A different font", "More modern", "More classic", "No symbol, just the name", "Name on one line", "Thicker lines"];
-const IDEA_CHIPS = ["Minimal wordmark", "Symbol beside the name", "Badge or emblem", "Monogram initials", "Bold and industrial", "Friendly and rounded", "Elegant and premium", "Hand-lettered"];
+const CHANGE_CHIPS = ["Bigger symbol", "Smaller symbol", "A different font", "Bolder lettering", "All capitals", "Name on one line", "Name on two lines", "Simpler symbol", "A different symbol", "No symbol, just the name", "More space between letters"];
+const IDEA_CHIPS = ["Symbol beside the name", "Initials in a badge", "Just the name, two colours", "Bold and industrial", "Friendly and rounded", "Elegant and premium", "Modern and minimal", "Script lettering"];
 
 /** Add a chip's words to what's typed. PURE. */
 export function withChip(text: string, chip: string): string {
@@ -56,6 +59,7 @@ export function LogoRetryDialog({
   const [change, setChange] = useState("");
   const [idea, setIdea] = useState("");
   const [words, setWords] = useState(logoText);
+  const [font, setFont] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -71,13 +75,15 @@ export function LogoRetryDialog({
 
   const text = mode === "refine" ? change : idea;
   const setText = mode === "refine" ? setChange : setIdea;
-  const chips = mode === "refine" ? [...CHANGE_CHIPS, ...colors.filter((c) => c.role !== "light").map((c) => `More ${c.name}`)] : IDEA_CHIPS;
-  const canSend = !busy && words.trim().length > 0 && (mode === "idea" || change.trim().length > 0);
+  const chips = mode === "refine" ? [...CHANGE_CHIPS, ...colors.filter((c) => c.role !== "light").map((c) => `Name in ${c.name}`)] : IDEA_CHIPS;
+  // A picked font is a change in itself.
+  const canSend = !busy && words.trim().length > 0 && (mode === "idea" || change.trim().length > 0 || !!font);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSend) return;
-    onSubmit({ mode, instructions: text.trim(), logoText: words.trim() });
+    const said = text.trim() || (mode === "refine" && font ? `Use the ${LOGO_FONTS.find((f) => f.key === font)?.label ?? font} font` : "");
+    onSubmit({ mode, instructions: said, logoText: words.trim(), ...(font ? { font } : {}) });
   }
 
   const tab = (m: RetryMode, label: string, disabled = false) => (
@@ -163,6 +169,25 @@ export function LogoRetryDialog({
           </div>
 
           <div>
+            <label htmlFor="logo-retry-font" className="text-xs font-medium text-text">
+              Font
+            </label>
+            <select
+              id="logo-retry-font"
+              value={font}
+              onChange={(e) => setFont(e.target.value)}
+              className="mt-1 w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"
+            >
+              <option value="">Let the AI choose</option>
+              {LOGO_FONTS.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label} — {f.style.split(" — ")[0]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
             <label htmlFor="logo-retry-words" className="text-xs font-medium text-text">
               Words on the logo
             </label>
@@ -173,7 +198,7 @@ export function LogoRetryDialog({
               maxLength={80}
               className="mt-1 w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"
             />
-            <p className="mt-1 text-[11px] text-text-faint">Only these words go on it — never services, phone, email or a slogan.</p>
+            <p className="mt-1 text-[11px] text-text-faint">Set in the font exactly as typed — always spelled right. Only these words go on it.</p>
           </div>
 
           <p className="flex items-center gap-2 text-[11px] text-text-muted">

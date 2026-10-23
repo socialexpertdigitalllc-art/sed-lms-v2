@@ -2,6 +2,7 @@ import { NextResponse, after } from "next/server";
 import { z } from "zod";
 import { logoAccess, logoErrorResponse } from "@/lib/logos/access";
 import { logoBrief } from "@/lib/logos/brief";
+import { isLogoFont } from "@/lib/logos/fontList";
 import { minimaxSpec, productionLogoDeps } from "@/lib/logos/deps";
 import { runLogoGeneration } from "@/lib/logos/runner";
 import {
@@ -53,6 +54,8 @@ const startSchema = z
     logoText: z.string().trim().min(1).max(80).optional(),
     parentId: z.string().uuid().optional(),
     parentIndex: z.number().int().min(0).max(50).optional(),
+    /** A font the person picked (fontList.ts); every design uses it. */
+    font: z.string().refine(isLogoFont, "Unknown font").optional(),
   })
   .refine((b) => b.mode !== "refine" || (b.parentId && b.parentIndex !== undefined), { message: "Pick the design to change." })
   .refine((b) => b.mode !== "refine" || !!b.instructions, { message: "Say what to change." });
@@ -74,9 +77,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const now = new Date();
     const limited = await rateLimitReason(a.admin, a.userId, id, now);
     if (limited) throw new LogoError(limited, 429);
-    // A round can draw up to IMAGES_PER_ROUND_MAX; it needs room for its first 4 at least.
+    // Only when an admin set a daily cap (LOGO_DAILY_IMAGE_BUDGET); otherwise MiniMax's plan is the limit.
     const limit = dailyImageBudget();
-    if ((await imagesUsedToday(a.admin, now)) + Math.min(4, IMAGES_PER_ROUND_MAX) > limit) throw new LogoError(budgetMessage(limit), 429);
+    if (limit !== null && (await imagesUsedToday(a.admin, now)) + Math.min(4, IMAGES_PER_ROUND_MAX) > limit) throw new LogoError(budgetMessage(limit), 429);
     const logoText = body.logoText || logoBrief(a.lead).logoText;
     const { created, row } = await startGeneration(
       a.admin,
@@ -85,7 +88,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
     if (created) {
       const deps = productionLogoDeps(a.admin, spec);
-      after(() => runLogoGeneration(row.id, deps).catch((e) => console.error(`[logos] ${row.id}:`, e)));
+      after(() => runLogoGeneration(row.id, deps, { font: body.font ?? null }).catch((e) => console.error(`[logos] ${row.id}:`, e)));
     }
     return NextResponse.json({ created, generation: generationView(row) }, { status: created ? 201 : 200 });
   } catch (e) {

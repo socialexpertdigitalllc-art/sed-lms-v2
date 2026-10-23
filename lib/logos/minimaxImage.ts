@@ -12,7 +12,7 @@ import { minimaxStatusToHttp } from "@/lib/assistant/stream";
  */
 
 export const IMAGE_MODEL = "image-01";
-/** Wide, for a horizontal logo (both sides must be multiples of 8, 512–2048). */
+/** The default size when a caller gives none (both sides multiples of 8, 512–2048); logo symbols are drawn square (deps.ts). */
 export const LOGO_WIDTH = 1536;
 export const LOGO_HEIGHT = 640;
 const CALL_TIMEOUT_MS = 120_000;

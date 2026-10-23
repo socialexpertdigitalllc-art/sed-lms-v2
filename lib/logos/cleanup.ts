@@ -216,7 +216,7 @@ export function measureColors(data: Uint8Array, mask: Uint8Array, brand: BrandCo
 }
 
 type Sharp = typeof import("sharp");
-async function loadSharp(): Promise<Sharp> {
+export async function loadSharp(): Promise<Sharp> {
   const mod = await import("sharp");
   return ((mod as unknown as { default?: Sharp }).default ?? mod) as Sharp;
 }

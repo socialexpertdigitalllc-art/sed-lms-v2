@@ -108,7 +108,7 @@ describe("POST /logo — start a round", () => {
     expect(state.db.tables[LOGO_TABLE]).toHaveLength(1);
     expect(state.after).toHaveLength(1);
     await state.after[0]();
-    expect(mocks.run).toHaveBeenCalledWith(j.generation.id, { deps: true });
+    expect(mocks.run).toHaveBeenCalledWith(j.generation.id, { deps: true }, { font: null });
   });
 
   it("one at a time per lead: a second press shows the running one", async () => {
@@ -144,17 +144,36 @@ describe("POST /logo — start a round", () => {
     expect(state.db.tables[LOGO_TABLE]).toHaveLength(0);
   });
 
-  it("per-person hourly limit, and the company's daily allowance", async () => {
+  it("per-person hourly limit (a runaway guard)", async () => {
     const at = new Date().toISOString();
     state.db.tables[LOGO_TABLE] = Array.from({ length: LOGO_HOURLY_LIMIT }, (_, i) => readyGen({ id: `x${i}`, lead_id: `other${i}`, created_at: at, images_drawn: 0 }));
     const limited = await POST(post({ mode: "new" }), ctx);
     expect(limited.status).toBe(429);
     expect((await limited.json()).error).toMatch(/last hour/);
+  });
+
+  it("no company-wide daily cap of our own — MiniMax's plan is the limit — unless an admin sets one", async () => {
+    const at = new Date().toISOString();
+    state.db.tables[LOGO_TABLE] = [readyGen({ id: "y", lead_id: "other", user_id: "U2", created_at: at, images_drawn: 500 })];
+    expect((await POST(post({ mode: "new" }), ctx)).status).toBe(201);
 
     state.db.tables[LOGO_TABLE] = [readyGen({ id: "y", lead_id: "other", user_id: "U2", created_at: at, images_drawn: 97 })];
-    const spent = await POST(post({ mode: "new" }), ctx);
-    expect(spent.status).toBe(429);
-    expect((await spent.json()).error).toMatch(/allowance is used up \(100 designs/);
+    vi.stubEnv("LOGO_DAILY_IMAGE_BUDGET", "100");
+    try {
+      const spent = await POST(post({ mode: "new" }), ctx);
+      expect(spent.status).toBe(429);
+      expect((await spent.json()).error).toMatch(/cap is reached \(100 pictures a day, set by an admin/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("a font picked in Retry goes to the round; an unknown font is refused", async () => {
+    expect((await POST(post({ mode: "new", font: "comic-sans" }), ctx)).status).toBe(422);
+    const res = await POST(post({ mode: "new", font: "playfair" }), ctx);
+    expect(res.status).toBe(201);
+    await state.after[0]();
+    expect(mocks.run).toHaveBeenCalledWith((await res.json()).generation.id, { deps: true }, { font: "playfair" });
   });
 
   it("a migration not applied yet says so", async () => {
@@ -180,7 +199,7 @@ describe("GET — the rounds, the brief, today's allowance", () => {
     expect(j.generations[0].candidates.map((c: { index: number }) => c.index)).toEqual([1, 0]);
     expect(JSON.stringify(j)).not.toMatch(/lead-logos\//);
     expect(j.brief).toMatchObject({ logoText: "ABC Roofing", colors: [{ name: "navy blue" }, { name: "bright orange" }] });
-    expect(j.budget).toEqual({ used: 2, limit: 100 });
+    expect(j.budget).toEqual({ used: 2, limit: null });
     expect((await (await GET_ONE(new Request("http://x"), genCtx)).json()).generation.id).toBe(GEN);
   });
 });
