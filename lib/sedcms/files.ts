@@ -19,10 +19,10 @@ import {
   docrootFor,
   listDaFolder,
   listDocrootDir,
-  makeDocrootFolders,
+  makeDaFolder,
   moveDaFile,
   readDocrootFile,
-  removePaths,
+  removeDaPaths,
   siteFolderFor,
   subFromWebsiteLink,
   uploadDaFile,
@@ -141,8 +141,8 @@ type CheckResult = { ok: true; isFile: boolean; size: number | null; sha256: str
 interface HostOps {
   listDir(relDir: string, signal?: AbortSignal): Promise<Entry[] | null>;
   readFile(relPath: string, maxBytes: number, signal?: AbortSignal): Promise<ReadResult>;
-  /** Make a folder of the web root (and its parents) exist; writes no file. */
-  makeDir(relDir: string, canContinue: () => boolean): Promise<StepResult>;
+  /** Make these folders of the web root, top down (each one's parent exists before it); writes no file. */
+  makeDirs(levels: string[], canContinue: () => boolean): Promise<StepResult>;
   /** Where this write's temporary file goes. */
   tempFor(relPath: string, name: string): string;
   /** Upload the bytes to the temporary file; never touches a live path. */
@@ -158,6 +158,13 @@ interface HostOps {
 const sha256Hex = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const folderOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+
+/** The folders from `first` down to `last` ("a/b", "a/b/c" ...), top down. */
+function foldersFrom(first: string, last: string): string[] {
+  const levels = [first];
+  for (const segment of last.slice(first.length).split("/").filter(Boolean)) levels.push(`${levels[levels.length - 1]}/${segment}`);
+  return levels;
+}
 
 /** A walk never lists more folders than this. */
 const MAX_DIRS_LISTED = 500;
@@ -193,17 +200,21 @@ class HostedSiteFiles implements SiteFiles {
   }
 
   /** The entry at path, walking folder listings from the docroot. */
-  private async locate(path: string, step: SiteFilesStep, limits: CallLimits): Promise<{ entry: Entry | null; parentExists: boolean }> {
+  private async locate(
+    path: string,
+    step: SiteFilesStep,
+    limits: CallLimits,
+  ): Promise<{ entry: Entry | null; parentExists: boolean; firstMissing: string | null }> {
     const segments = path.split("/");
     let rel = "";
     for (let i = 0; i < segments.length - 1; i++) {
       const found = (await this.dir(rel, step, limits, path)).find((e) => e.name === segments[i]);
-      if (!found) return { entry: null, parentExists: false };
+      if (!found) return { entry: null, parentExists: false, firstMissing: rel ? `${rel}/${segments[i]}` : segments[i] };
       if (found.kind !== "dir") throw new SiteFilesError(step, "not_a_file", "a folder on the path is not a folder", path);
       rel = rel ? `${rel}/${segments[i]}` : segments[i];
     }
     const name = segments[segments.length - 1];
-    return { entry: (await this.dir(rel, step, limits, path)).find((e) => e.name === name) ?? null, parentExists: true };
+    return { entry: (await this.dir(rel, step, limits, path)).find((e) => e.name === name) ?? null, parentExists: true, firstMissing: null };
   }
 
   async list(maxDepth: number, maxEntries: number, limits: CallLimits = {}): Promise<{ files: ListedFile[]; truncated: boolean }> {
@@ -257,7 +268,7 @@ class HostedSiteFiles implements SiteFiles {
   async write(path: string, bytes: Uint8Array, limits: CallLimits = {}): Promise<void> {
     if (!cmsPathAllowed(path)) throw new SiteFilesError("write", "refused", "the path is not one the CMS may write", path);
     if (bytes.length > MAX_FILE_BYTES) throw new SiteFilesError("write", "refused", `larger than ${MAX_FILE_BYTES} bytes`, path);
-    const { entry, parentExists } = await this.locate(path, "write", limits);
+    const { entry, parentExists, firstMissing } = await this.locate(path, "write", limits);
     if (entry && entry.kind !== "file") throw new SiteFilesError("write", "not_a_file", "something other than a file is there", path);
     const late = () => limits.deadline?.passed() ?? false;
     const canContinue = () => !late();
@@ -265,8 +276,8 @@ class HostedSiteFiles implements SiteFiles {
     if (late()) throw outOfTime("write", path);
 
     try {
-      if (!parentExists) {
-        const made = await this.ops.makeDir(folderOf(path), canContinue);
+      if (!parentExists && firstMissing) {
+        const made = await this.ops.makeDirs(foldersFrom(firstMissing, folderOf(path)), canContinue);
         this.warnLeftover(made.leftover);
         if (!made.ok) throw new SiteFilesError("write", made.stopped || late() ? "deadline" : "hosting", made.message, path);
         if (late()) throw outOfTime("write", path);
@@ -317,7 +328,8 @@ function hostingerOps(session: FileSession, placement: TempPlacement): HostOps {
   return {
     listDir: (relDir, signal) => listWebsiteDir(session, relDir, { signal }),
     readFile: (relPath, maxBytes, signal) => readWebsiteFile(session, relPath, maxBytes, { signal }),
-    makeDir: (relDir) => makeWebsiteFolder(session, live(relDir)),
+    // the File Browser makes the parents too (MkdirAll): one call, for the deepest level
+    makeDirs: (levels) => makeWebsiteFolder(session, live(levels[levels.length - 1])),
     // "outside": the File Browser's folder that holds public_html
     tempFor: (relPath, name) =>
       placement === "outside" ? `${folderOf(session.dir)}/${name}` : `${folderOf(live(relPath))}/.${name}`,
@@ -331,11 +343,29 @@ function hostingerOps(session: FileSession, placement: TempPlacement): HostOps {
   };
 }
 
+/**
+ * DirectAdmin: each missing folder level by its own mkdir, top down; none
+ * starts after the deadline. An mkdir that fails counts as made only when a
+ * listing of its parent then shows a folder of that name (made meanwhile).
+ */
+async function makeDaFolders(sub: string, levels: string[], canContinue: () => boolean): Promise<StepResult> {
+  for (const level of levels) {
+    if (!canContinue()) return { ok: false, stopped: true, message: "out of time before making a folder" };
+    const made = await makeDaFolder(`${docrootFor(sub)}/${level}`);
+    if (made.ok) continue;
+    if (!canContinue()) return { ok: false, stopped: true, message: "out of time before checking a folder" };
+    const parent = folderOf(level);
+    const there = (await listDaFolder(parent ? `${docrootFor(sub)}/${parent}` : docrootFor(sub)))?.find((e) => e.name === nameOf(level));
+    if (there?.kind !== "dir") return { ok: false, message: made.message };
+  }
+  return { ok: true };
+}
+
 function directAdminOps(sub: string, placement: TempPlacement): HostOps {
   return {
     listDir: (relDir, signal) => listDocrootDir(sub, relDir, { signal }),
     readFile: (relPath, maxBytes, signal) => readDocrootFile(sub, relPath, maxBytes, { signal }),
-    makeDir: (relDir, canContinue) => makeDocrootFolders(sub, relDir, { canContinue }),
+    makeDirs: (levels, canContinue) => makeDaFolders(sub, levels, canContinue),
     // "outside": the subdomain's own folder, which holds its public_html
     tempFor: (relPath, name) => {
       if (placement === "outside") return `${siteFolderFor(sub)}/${name}`;
@@ -352,7 +382,7 @@ function directAdminOps(sub: string, placement: TempPlacement): HostOps {
       return { ok: true, isFile: entry.kind === "file", size: entry.size, sha256: null };
     },
     swap: (temp, relPath) => moveDaFile(temp, `${docrootFor(sub)}/${relPath}`),
-    discard: async (temp) => (await removePaths([temp])).ok,
+    discard: async (temp) => (await removeDaPaths([temp])).ok,
   };
 }
 

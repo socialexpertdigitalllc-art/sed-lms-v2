@@ -311,21 +311,19 @@ describe("staging subdomains: DirectAdmin's file manager", () => {
     expect(hosts.da.temps()).toEqual([]);
   });
 
-  it("writes into a new folder: the folder made by a zip of folder entries (extracted in place, then removed), then the file moved in", async () => {
+  it("writes into a new folder: the folder made by mkdir ({ path }), then the file staged and moved in", async () => {
     hosts = installFakeHosts();
     hosts.da.put(`${docroot}/index.html`, "x");
     const files = await filesFor("acme.dmviral.com");
     await files.write("cms-media/0123456789abcdef.webp", allByteValues());
     expect(hosts.da.files.get(`${docroot}/cms-media/0123456789abcdef.webp`)).toEqual(allByteValues());
-    const actions = hosts.calls.filter((c) => c.url.includes("/api/filemanager-actions/")).map((c) => new URL(c.url).pathname);
-    expect(actions).toEqual([
-      "/api/filemanager-actions/upload",
-      "/api/filemanager-actions/extract-archive",
-      "/api/filemanager-actions/remove",
+    const actions = hosts.calls.filter((c) => c.url.includes("/api/filemanager-actions/"));
+    expect(actions.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/filemanager-actions/mkdir",
       "/api/filemanager-actions/upload",
       "/api/filemanager-actions/move",
     ]);
-    expect([...hosts.da.files.keys()].filter((k) => k.endsWith(".zip"))).toEqual([]);
+    expect(JSON.parse(String(actions[0].body))).toEqual({ path: `${docroot}/cms-media` });
     expect(hosts.da.temps()).toEqual([]);
   });
 

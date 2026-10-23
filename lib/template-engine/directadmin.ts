@@ -22,9 +22,6 @@
  * surface as an error, not hang a deploy.
  */
 
-import { randomBytes } from "node:crypto";
-import { zipSync, type Zippable } from "fflate";
-
 export interface DaResult {
   error: boolean;
   text: string;
@@ -438,9 +435,11 @@ export async function listDaFolder(absPath: string, opts: { signal?: AbortSignal
  *
  * UNVERIFIED — the one call the live spike must confirm (launch plan L2 and
  * open question 1): GET /api/filemanager/download?path=<absolute path>, the
- * single-file sibling of the verified download-archive. If it doesn't exist
- * or doesn't return exact bytes, this function alone changes (the fallback is
- * the staging host's public HTTPS URL; there is no CDN on staging). Callers
+ * single-file sibling of the verified download-archive. DirectAdmin's OpenAPI
+ * spec lists GET /api/filemanager/download; the spike confirms its `path`
+ * parameter and that the bytes are exact. If not, this function alone changes
+ * (the fallback is the staging host's public HTTPS URL; there is no CDN on
+ * staging). Callers
  * check the result's length against the listing, so a 200 carrying one of
  * DirectAdmin's error bodies is never taken for the file.
  */
@@ -517,7 +516,12 @@ export async function readDocrootFile(
 // temporary file (uploadDaFile, normally in the subdomain's own folder, next
 // to its public_html: outside the web root), checks it (listDaFolder), and
 // replaces the live file in ONE move (moveDaFile). A missing folder is made
-// first (makeDocrootFolders), which writes no file.
+// first, level by level (makeDaFolder), which writes no file.
+//
+// The shapes follow DirectAdmin's OpenAPI spec (its /static/swagger.json):
+// paths are chrooted to the user's home; move takes { source, destination,
+// overwrite } (all required) and answers 204, or 409 FilemanagerOpError;
+// mkdir takes { path }; remove takes { paths, trash } (both required).
 
 /** The folder that holds a subdomain's public_html: outside its web root. */
 export function siteFolderFor(sub: string): string {
@@ -537,14 +541,13 @@ export async function uploadDaFile(absDir: string, name: string, bytes: Uint8Arr
 }
 
 /**
- * Replace `toAbs` with `fromAbs` in ONE call. 30 s; never retried.
+ * Replace `toAbs` with `fromAbs` in ONE call: POST
+ * /api/filemanager-actions/move { source, destination, overwrite: true }, as
+ * DirectAdmin's spec documents it. 204 is success; a 409 FilemanagerOpError
+ * (or anything else) is a failed move. 30 s; never retried.
  *
- * UNVERIFIED — the second call the live spike must confirm: POST
- * /api/filemanager-actions/move with JSON { source, destination, overwrite:
- * true }, the sibling of the verified extract-archive and remove. The spike
- * must also confirm that it is one rename(2) — the old file replaced whole,
- * never deleted first or copied in place. If the API differs, this function
- * alone changes.
+ * The live spike must confirm it is one rename(2) — the old file replaced
+ * whole, never deleted first or copied in place.
  */
 export async function moveDaFile(fromAbs: string, toAbs: string): Promise<DaStep> {
   const r = await daJson("/api/filemanager-actions/move", {
@@ -556,40 +559,23 @@ export async function moveDaFile(fromAbs: string, toAbs: string): Promise<DaStep
 }
 
 /**
- * Make folders of a subdomain's docroot exist (relDir, e.g. "cms-media"),
- * with the verified calls only: a zip of folder entries alone is uploaded
- * next to public_html, extracted into the docroot (making the folders, no
- * file), and removed. Each call has its own 30 s; `canContinue` is asked
- * before the extract. The zip is removed whatever happened; one that can't be
- * is reported as `leftover` (outside the web root, never a CMS path).
+ * Make one folder: POST /api/filemanager-actions/mkdir { path }. 30 s. One
+ * level at a time (the spec doesn't say it makes parents). A folder that is
+ * already there is an error here; the caller confirms it with a listing.
  */
-export async function makeDocrootFolders(
-  sub: string,
-  relDir: string,
-  opts: { canContinue?: () => boolean } = {},
-): Promise<{ ok: true; leftover?: string } | { ok: false; stopped?: boolean; leftover?: string; message: string }> {
-  const tree: Zippable = {};
-  let node = tree;
-  for (const segment of relDir.split("/")) {
-    const next: Zippable = {};
-    node[segment] = next;
-    node = next;
-  }
-  const folder = siteFolderFor(sub);
-  const zipName = `sedcms-${randomBytes(8).toString("hex")}.zip`;
-  const zipPath = `${folder}/${zipName}`;
-  const cleanUp = async () => ((await removePaths([zipPath])).ok ? undefined : zipName);
+export async function makeDaFolder(absPath: string): Promise<DaStep> {
+  const r = await daJson("/api/filemanager-actions/mkdir", { method: "POST", json: { path: absPath }, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
+  return r.ok ? { ok: true } : { ok: false, message: `mkdir: ${jsonErrorMessage(r)}` };
+}
 
-  const upload = await uploadDaFile(folder, zipName, new Uint8Array(zipSync(tree)), "application/zip");
-  if (!upload.ok) return { ok: false, leftover: await cleanUp(), message: upload.message };
-  if (opts.canContinue && !opts.canContinue()) {
-    return { ok: false, stopped: true, leftover: await cleanUp(), message: "out of time before making the folder" };
-  }
-  const extract = await daJson("/api/filemanager-actions/extract-archive", {
-    method: "POST",
-    json: { source: zipPath, destinationDir: docrootFor(sub), members: [], mergeAndOverwrite: true },
-    timeoutMs: SINGLE_FILE_TIMEOUT_MS,
-  });
-  const leftover = await cleanUp();
-  return extract.ok ? { ok: true, leftover } : { ok: false, leftover, message: `extract: ${jsonErrorMessage(extract)}` };
+/**
+ * Remove SED CMS's own temporary files for good: POST
+ * /api/filemanager-actions/remove { paths, trash: false } — both fields are
+ * required by the spec, and trash: false removes permanently. 30 s.
+ * (removePaths, used by the deploy flows, sends { paths } alone.)
+ */
+export async function removeDaPaths(paths: string[]): Promise<DaStep> {
+  if (paths.length === 0) return { ok: true };
+  const r = await daJson("/api/filemanager-actions/remove", { method: "POST", json: { paths, trash: false }, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
+  return r.ok ? { ok: true } : { ok: false, message: `remove: ${jsonErrorMessage(r)}` };
 }

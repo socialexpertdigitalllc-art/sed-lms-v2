@@ -360,23 +360,107 @@ describe("Hostinger: the TUS create", () => {
   });
 });
 
-describe("DirectAdmin: a new folder", () => {
-  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] }));
-  afterEach(() => vi.useRealTimers());
+describe("DirectAdmin: the documented file-manager calls (its OpenAPI spec)", () => {
+  const da = HOSTS[1];
+  const isMkdir = (c: RecordedCall) => c.url.includes("/api/filemanager-actions/mkdir");
+  const bodyOf = (c: RecordedCall) => JSON.parse(String(c.body)) as Record<string, unknown>;
 
-  it("the deadline passing while the folder is made: nothing is extracted or written, and its zip is removed", async () => {
-    const da = HOSTS[1];
-    const hosts = da.install({ delay: (x) => (daUpload(x) ? 20_000 : 0) });
+  it("the move is exactly { source, destination, overwrite: true }, and its 204 is success", async () => {
+    const hosts = da.install();
     hosts.da.put(da.live("index.html"), original);
     const files = await filesFor(da);
-    const deadline = new Deadline(Date.now() + 10_000);
-    const run = failure(files.write("cms-media/0123456789abcdef.webp", replacement, { deadline }));
-    await vi.advanceTimersByTimeAsync(200_000);
-    expect(await run).toMatchObject({ reason: "deadline", maybeWritten: false });
+    await files.write("index.html", replacement);
+    const [move] = hosts.calls.filter(daMove);
+    const temp = hosts.calls.filter(daUpload).flatMap((x) => x.changed)[0];
+    expect(bodyOf(move)).toEqual({ source: temp, destination: da.live("index.html"), overwrite: true });
+    expect(hosts.da.files.get(da.live("index.html"))).toEqual(replacement);
+  });
+
+  it("a 409 FilemanagerOpError from the move is a failed move: the temporary file removed, the live file as it was", async () => {
+    const hosts = da.install({
+      answer: (x) => (daMove(x) ? Response.json({ type: "FilemanagerOpError", message: "rename failed" }, { status: 409 }) : undefined),
+    });
+    hosts.da.put(da.live("index.html"), original);
+    const files = await filesFor(da);
+    expect(await failure(files.write("index.html", replacement))).toMatchObject({ step: "write", reason: "hosting", maybeWritten: true });
+    expect(hosts.da.files.get(da.live("index.html"))).toEqual(original);
+    expect(hosts.da.temps()).toEqual([]);
+  });
+
+  it("every clean-up removes for good: { paths: [the temporary file], trash: false }", async () => {
+    const hosts = da.install({ fail: daCheck });
+    hosts.da.put(da.live("index.html"), original);
+    const files = await filesFor(da);
+    await failure(files.write("index.html", replacement));
+    const temp = hosts.calls.filter(daUpload).flatMap((x) => x.changed)[0];
+    const removals = hosts.calls.filter(da.isRemoval);
+    expect(removals).toHaveLength(1);
+    expect(bodyOf(removals[0])).toEqual({ paths: [temp], trash: false });
+    expect(hosts.da.temps()).toEqual([]);
+  });
+
+  it("makes every missing folder level, top down, and no other, each with mkdir { path }", async () => {
+    const hosts = da.install();
+    hosts.da.put(da.live("a/existing.html"), original);
+    const files = await filesFor(da);
+    await files.write("a/b/c/page.html", replacement);
+    expect(hosts.calls.filter(isMkdir).map(bodyOf)).toEqual([{ path: da.live("a/b") }, { path: da.live("a/b/c") }]);
+    expect(hosts.da.files.get(da.live("a/b/c/page.html"))).toEqual(replacement);
+    expect(hosts.calls.filter(isMkdir).every((x) => hosts.calls.indexOf(x) < hosts.calls.findIndex(daUpload))).toBe(true);
+  });
+
+  it("a level that already exists (made meanwhile) counts, once a listing shows a folder there", async () => {
+    const hosts: FakeHosts = da.install({
+      delay: (x) => {
+        if (isMkdir(x)) hosts.da.emptyDirs.add(da.live("cms-media")); // someone made it first
+        return 0;
+      },
+    });
+    hosts.da.put(da.live("index.html"), original);
+    const files = await filesFor(da);
+    await files.write("cms-media/0123456789abcdef.webp", replacement);
+    expect(hosts.da.files.get(da.live("cms-media/0123456789abcdef.webp"))).toEqual(replacement);
+  });
+
+  it("an 'already exists' that turns out to be a file is a failure: nothing is uploaded, nothing changed", async () => {
+    const hosts: FakeHosts = da.install({
+      delay: (x) => {
+        if (isMkdir(x)) hosts.da.put(da.live("cms-media"), "a file, not a folder");
+        return 0;
+      },
+    });
+    hosts.da.put(da.live("index.html"), original);
+    const files = await filesFor(da);
+    expect(await failure(files.write("cms-media/0123456789abcdef.webp", replacement))).toMatchObject({ step: "write", reason: "hosting", maybeWritten: false });
+    expect(hosts.calls.filter(daUpload)).toEqual([]);
+    expect(hosts.da.text(da.live("cms-media"))).toBe("a file, not a folder");
+  });
+
+  it("the extract-archive zip trick is gone: a write never extracts anything", async () => {
+    const hosts = da.install();
+    hosts.da.put(da.live("index.html"), original);
+    const files = await filesFor(da);
+    await files.write("x/y/z.html", replacement);
     expect(hosts.calls.filter((x) => x.url.includes("/extract-archive"))).toEqual([]);
     expect([...hosts.da.files.keys()].filter((k) => k.endsWith(".zip"))).toEqual([]);
-    expect(hosts.da.isDir(da.live("cms-media"))).toBe(false);
-    expect(hosts.calls.filter((x) => x.at >= deadline.at).every(da.isRemoval)).toBe(true);
-    deadline.dispose();
+  });
+
+  describe("on fake time", () => {
+    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] }));
+    afterEach(() => vi.useRealTimers());
+
+    it("the deadline passing while a folder level is made: no further level, nothing uploaded, not written", async () => {
+      const hosts = da.install({ delay: (x) => (isMkdir(x) ? 20_000 : 0) });
+      hosts.da.put(da.live("index.html"), original);
+      const files = await filesFor(da);
+      const deadline = new Deadline(Date.now() + 10_000);
+      const run = failure(files.write("a/b/page.html", replacement, { deadline }));
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(await run).toMatchObject({ reason: "deadline", maybeWritten: false });
+      expect(hosts.calls.filter(isMkdir).map(bodyOf)).toEqual([{ path: da.live("a") }]);
+      expect(hosts.calls.filter(daUpload)).toEqual([]);
+      expect(hosts.calls.filter((x) => x.at >= deadline.at)).toEqual([]);
+      deadline.dispose();
+    });
   });
 });

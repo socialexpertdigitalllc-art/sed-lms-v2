@@ -113,6 +113,8 @@ export interface FakeHostsOptions {
   shortRead?: string;
   /** answer this call with a 500, changing nothing */
   fail?: (call: RecordedCall) => boolean;
+  /** answer this call with this response instead, changing nothing */
+  answer?: (call: RecordedCall) => Response | undefined;
   /** what a file-info answer or a listing says about this path instead of the truth */
   misreport?: (abs: string) => { size?: number; sha256?: string } | undefined;
   /** answer this call only after this many ms (setTimeout, so fake timers drive it); aborting the call's signal ends the wait, as with a real fetch */
@@ -204,6 +206,8 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
     const delay = opts.delay?.(call) ?? 0;
     if (delay > 0) await wait(delay, init?.signal);
     if (opts.fail?.(call)) return new Response("the host failed", { status: 500 });
+    const answered = opts.answer?.(call);
+    if (answered) return answered;
 
     // ---- Hostinger API
     if (url.origin === HG_API) {
@@ -337,10 +341,18 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
         call.changed.push(`${dir}/${name}`);
         return new Response(null, { status: 204 });
       }
+      // The filemanager-actions below follow DirectAdmin's OpenAPI spec: every
+      // body field it marks required is required here (400 without it), and
+      // an operation that can't be done is a 409 FilemanagerOpError.
+      const opError = (message: string) => Response.json({ type: "FilemanagerOpError", message }, { status: 409 });
+      const jsonBody = () => JSON.parse(String(init?.body)) as Record<string, unknown>;
       if (url.pathname === "/api/filemanager-actions/extract-archive" && method === "POST") {
-        const j = JSON.parse(String(init?.body)) as { source: string; destinationDir: string; members: string[]; mergeAndOverwrite: boolean };
+        const j = jsonBody();
+        if (typeof j.source !== "string" || typeof j.destinationDir !== "string" || !Array.isArray(j.members) || typeof j.mergeAndOverwrite !== "boolean") {
+          return Response.json({ message: "source, destinationDir, members and mergeAndOverwrite are required" }, { status: 400 });
+        }
         const zip = fs.files.get(j.source);
-        if (!zip || !j.mergeAndOverwrite) return Response.json({ message: "bad extract" }, { status: 400 });
+        if (!zip || !j.mergeAndOverwrite) return opError("bad extract");
         for (const [name, data] of Object.entries(unzipSync(zip))) {
           const target = `${j.destinationDir}/${name.replace(/[/]+$/, "")}`;
           if (name.endsWith("/")) fs.emptyDirs.add(target);
@@ -350,16 +362,30 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
         return new Response(null, { status: 204 });
       }
       if (url.pathname === "/api/filemanager-actions/remove" && method === "POST") {
-        const j = JSON.parse(String(init?.body)) as { paths: string[] };
-        for (const p of j.paths) if (fs.remove(p)) call.changed.push(p);
+        const j = jsonBody();
+        if (!Array.isArray(j.paths) || typeof j.trash !== "boolean") return Response.json({ message: "paths and trash are required" }, { status: 400 });
+        for (const p of j.paths as string[]) if (fs.remove(p)) call.changed.push(p);
+        return new Response(null, { status: 204 });
+      }
+      if (url.pathname === "/api/filemanager-actions/mkdir" && method === "POST") {
+        const j = jsonBody();
+        if (typeof j.path !== "string") return Response.json({ message: "path is required" }, { status: 400 });
+        const target = j.path.replace(/[/]+$/, "");
+        if (fs.files.has(target) || fs.isDir(target)) return opError("already exists");
+        if (!fs.isDir(parentOf(target))) return opError("no such parent directory"); // one level at a time
+        fs.emptyDirs.add(target);
+        call.changed.push(target);
         return new Response(null, { status: 204 });
       }
       if (url.pathname === "/api/filemanager-actions/move" && method === "POST") {
-        const j = JSON.parse(String(init?.body)) as { source: string; destination: string; overwrite?: boolean };
+        const j = jsonBody();
+        if (typeof j.source !== "string" || typeof j.destination !== "string" || typeof j.overwrite !== "boolean") {
+          return Response.json({ message: "source, destination and overwrite are required" }, { status: 400 });
+        }
         const bytes = fs.files.get(j.source);
-        if (!bytes) return Response.json({ message: "no such file" }, { status: 404 });
-        if (fs.files.has(j.destination) && j.overwrite !== true) return Response.json({ message: "exists" }, { status: 409 });
-        if (!fs.isDir(parentOf(j.destination))) return Response.json({ message: "no such directory" }, { status: 404 });
+        if (!bytes) return opError("no such file");
+        if (fs.files.has(j.destination) && !j.overwrite) return opError("already exists");
+        if (!fs.isDir(parentOf(j.destination))) return opError("no such directory");
         fs.files.set(j.destination, bytes); // one rename(2): the old file is replaced whole
         fs.files.delete(j.source);
         call.changed.push(j.source, j.destination);

@@ -17,7 +17,7 @@ import {
   uploadWebsiteFile,
   type FileSession,
 } from "@/lib/hostinger/client";
-import { listDocrootDir, makeDocrootFolders, moveDaFile, readDocrootFile, uploadDaFile } from "@/lib/template-engine/directadmin";
+import { listDocrootDir, makeDaFolder, moveDaFile, readDocrootFile, removeDaPaths, uploadDaFile } from "@/lib/template-engine/directadmin";
 import { purgeCacheByUrls } from "@/lib/cloudflare/client";
 
 /**
@@ -143,6 +143,8 @@ describe("every single-file host call has its own 30 s", () => {
     ["DirectAdmin: a single-file read", () => readDocrootFile("acme", "index.html", 1024)],
     ["DirectAdmin: an upload", () => uploadDaFile("/domains/acme.dmviral.com", "sedcms-0123456789abcdef.tmp", bytes)],
     ["DirectAdmin: the move", () => moveDaFile("/domains/acme.dmviral.com/sedcms-0123456789abcdef.tmp", "/domains/acme.dmviral.com/public_html/index.html")],
+    ["DirectAdmin: making a folder", () => makeDaFolder("/domains/acme.dmviral.com/public_html/cms-media")],
+    ["DirectAdmin: a removal", () => removeDaPaths(["/domains/acme.dmviral.com/sedcms-0123456789abcdef.tmp"])],
     ["Cloudflare: a purge", () => purgeCacheByUrls("zone-1", ["https://client.com/"])],
   ];
 
@@ -159,28 +161,13 @@ describe("every single-file host call has its own 30 s", () => {
     expect(fetched).toHaveLength(1);
   });
 
-  it("the second step of a call gets its own 30 s too: a TUS patch, a DirectAdmin extract", async () => {
+  it("the second step of a call gets its own 30 s too: a TUS patch", async () => {
     const fetched = hangingFetch((url, init) => (init.method === "POST" && url.includes("/api/tus/") ? new Response(null, { status: 201 }) : null));
     const tus = track(uploadWebsiteFile(session, "/sedcms-0123456789abcdef.tmp", bytes));
     await advance(HOST_CALL_TIMEOUT_MS);
     expect(tus.done).toBe(true);
     expect(tus.value).toMatchObject({ ok: false });
     expect(fetched.map((c) => c.method)).toEqual(["POST", "PATCH"]);
-
-    vi.unstubAllGlobals();
-    const da = hangingFetch((url) =>
-      url.includes("/filemanager-actions/upload") || url.includes("/filemanager-actions/remove") ? new Response(null, { status: 204 }) : null,
-    );
-    const extract = track(makeDocrootFolders("acme", "cms-media"));
-    await advance(HOST_CALL_TIMEOUT_MS);
-    expect(extract.done).toBe(true);
-    expect(extract.value).toMatchObject({ ok: false });
-    // the extract given up, its zip is still cleaned away
-    expect(da.map((c) => new URL(c.url).pathname)).toEqual([
-      "/api/filemanager-actions/upload",
-      "/api/filemanager-actions/extract-archive",
-      "/api/filemanager-actions/remove",
-    ]);
   });
 
   it("reads, listings and purges also stop the moment the caller's signal aborts", async () => {
@@ -394,8 +381,9 @@ describe("through the real host clients (DirectAdmin faked), on fake time", () =
     deadline.dispose();
   });
 
-  it("a new folder whose zip went up as the deadline passed is not extracted: that file isn't written", async () => {
-    hosts = installFakeHosts({ delay: (c) => (isUpload(c.url) ? 25_000 : 0) });
+  it("a new folder made as the deadline passed: that file is never uploaded, and isn't written", async () => {
+    const isMkdir = (url: string) => url.includes("/api/filemanager-actions/mkdir");
+    hosts = installFakeHosts({ delay: (c) => (isUpload(c.url) || isMkdir(c.url) ? 25_000 : 0) });
     const files = await staging(9);
     const media = enc("WEBP");
     const changes = [...existing(9), { path: "cms-media/0123456789abcdef.webp", expectedSha256: null, bytes: media, sha256: sha(media) }];
@@ -405,6 +393,8 @@ describe("through the real host clients (DirectAdmin faked), on fake time", () =
     await advance(400_000);
     expect(run.value).toMatchObject({ kind: "failed", cut: true, failed: { path: "cms-media/0123456789abcdef.webp", step: "write" } });
     expect((run.value as { results: unknown[] }).results).toHaveLength(9);
+    expect(hosts.calls.filter((c) => isMkdir(c.url))).toHaveLength(1);
+    expect(hosts.calls.filter((c) => isUpload(c.url))).toHaveLength(9);
     expect(hosts.calls.filter((c) => isExtract(c.url))).toEqual([]);
     expect(hosts.da.files.has(`${docroot}/cms-media/0123456789abcdef.webp`)).toBe(false);
     deadline.dispose();
