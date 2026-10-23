@@ -171,8 +171,10 @@ export async function applyChanges(files: SiteFiles, changes: DecodedChange[], o
       await files.write(c.path, c.bytes, limits);
     } catch (e) {
       logFailure(e, c.path, "write");
-      // A write the deadline kept from starting changed nothing; any other failure may have.
-      return { kind: "failed", results, failed: { path: c.path, step: "write" }, wrote: isLate(e) ? someWritten() : true, cut: isLate(e) };
+      // A write stages, checks, then moves in one call: only a failed move may
+      // have changed the live file (an unexpected error is counted as one too).
+      const mayHaveChanged = !(e instanceof SiteFilesError) || e.maybeWritten;
+      return { kind: "failed", results, failed: { path: c.path, step: "write" }, wrote: someWritten() || mayHaveChanged, cut: isLate(e) };
     }
     results.push({ path: c.path, outcome: "written", sha256: c.sha256 });
   }

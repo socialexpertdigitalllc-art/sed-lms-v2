@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { SiteFilesError, siteFilesFor, type SiteFiles } from "@/lib/sedcms/files";
-import { DA_HOST, HG_FILES, HG_ROOT, daDocroot, fakeHostEnv, installFakeHosts, withEnv, type FakeHosts } from "./helpers/fakeSiteHosts";
+import { DA_HOST, HG_FILES, HG_ROOT, daDocroot, daSiteFolder, fakeHostEnv, installFakeHosts, withEnv, type FakeHosts } from "./helpers/fakeSiteHosts";
 
 /**
  * SED CMS reads and writes single files of a client site (launch plan, L2),
@@ -155,7 +155,7 @@ describe("custom domains: Hostinger's File Browser", () => {
     await expect(files.read("index.html", 1024)).rejects.toMatchObject({ step: "read", reason: "hosting" });
   });
 
-  it("writes one file by TUS into its folder, overwriting, and reads the new bytes back", async () => {
+  it("writes by TUS to a temporary file beside public_html, checks it, renames it over the live one, and reads the new bytes back", async () => {
     hosts = installFakeHosts({ websites: [site] });
     hosts.hostinger.put(abs("assets/js/components.js"), "old();");
     const files = await filesFor("client.com");
@@ -164,14 +164,22 @@ describe("custom domains: Hostinger's File Browser", () => {
     await files.write("assets/js/components.js", bytesOf("next();"));
     const tus = hosts.calls.filter((c) => c.url.includes("/api/tus/"));
     expect(tus.map((c) => c.method)).toEqual(["POST", "PATCH"]);
+    const temp = new URL(tus[0].url).pathname.slice(new URL(HG_FILES).pathname.length + "/api/tus".length);
+    expect(temp).toMatch(/^[/]sedcms-[0-9a-f]{16}[.]tmp$/);
     for (const c of tus) {
-      expect(c.url).toBe(`${HG_FILES}/api/tus/public_html/assets/js/components.js?override=true`);
+      expect(c.url).toBe(`${HG_FILES}/api/tus${temp}?override=true`);
       expect(c.headers["tus-resumable"]).toBe("1.0.0");
       expect(c.headers["x-auth"]).toBe("AK");
     }
     expect(tus[0].headers["upload-length"]).toBe("7");
     expect(tus[1].headers["content-type"]).toBe("application/offset+octet-stream");
+    const check = hosts.calls.find((c) => c.url.includes("checksum=sha256"))!;
+    expect(check.url).toBe(`${HG_FILES}/api/resources${temp}?checksum=sha256`);
+    const move = hosts.calls.find((c) => c.method === "PATCH" && c.url.includes("/api/resources/"))!;
+    expect(new URL(move.url).pathname).toBe(`${new URL(HG_FILES).pathname}/api/resources${temp}`);
+    expect(Object.fromEntries(new URL(move.url).searchParams)).toEqual({ action: "rename", destination: "/public_html/assets/js/components.js", override: "true" });
     expect(hosts.hostinger.text(abs("assets/js/components.js"))).toBe("next();");
+    expect(hosts.hostinger.temps()).toEqual([]);
     // the folder listing it cached is forgotten, so the next read sees the write
     expect(await files.read("assets/js/components.js", 1024)).toEqual(bytesOf("next();"));
   });
@@ -185,7 +193,7 @@ describe("custom domains: Hostinger's File Browser", () => {
   });
 
   it("a failed upload is a write error", async () => {
-    hosts = installFakeHosts({ websites: [site], failWrites: ["index.html"] });
+    hosts = installFakeHosts({ websites: [site], fail: (c) => c.method === "PATCH" && c.url.includes("/api/tus/") });
     hosts.hostinger.put(abs("index.html"), "x");
     const files = await filesFor("client.com");
     await expect(files.write("index.html", bytesOf("y"))).rejects.toMatchObject({ step: "write", reason: "hosting" });
@@ -283,31 +291,46 @@ describe("staging subdomains: DirectAdmin's file manager", () => {
     await expect(files.read("index.html", 1024)).rejects.toMatchObject({ step: "read", reason: "hosting" });
   });
 
-  it("writes into an existing folder with one upload, overwriting", async () => {
+  it("writes by an upload to a temporary file beside public_html, checked, then moved over the live file", async () => {
     hosts = installFakeHosts();
     hosts.da.put(`${docroot}/assets/js/components.js`, "old();");
     const files = await filesFor("acme.dmviral.com");
     await files.write("assets/js/components.js", bytesOf("next();"));
-    const uploads = hosts.calls.filter((c) => c.url.includes("/api/filemanager-actions/"));
-    expect(uploads).toHaveLength(1);
-    const q = new URL(uploads[0].url).searchParams;
-    expect(Object.fromEntries(q)).toEqual({ dir: `${docroot}/assets/js`, name: "components.js", overwrite: "true" });
+    const actions = hosts.calls.filter((c) => c.url.includes("/api/filemanager-actions/"));
+    expect(actions.map((c) => new URL(c.url).pathname)).toEqual(["/api/filemanager-actions/upload", "/api/filemanager-actions/move"]);
+    const q = Object.fromEntries(new URL(actions[0].url).searchParams);
+    expect(q.dir).toBe(daSiteFolder("acme"));
+    expect(q.name).toMatch(/^sedcms-[0-9a-f]{16}[.]tmp$/);
+    expect(q.overwrite).toBe("true");
+    expect(JSON.parse(String(actions[1].body))).toEqual({
+      source: `${daSiteFolder("acme")}/${q.name}`,
+      destination: `${docroot}/assets/js/components.js`,
+      overwrite: true,
+    });
     expect(hosts.da.text(`${docroot}/assets/js/components.js`)).toBe("next();");
+    expect(hosts.da.temps()).toEqual([]);
   });
 
-  it("writes into a new folder through a one-file zip, extracted in place and then removed", async () => {
+  it("writes into a new folder: the folder made by a zip of folder entries (extracted in place, then removed), then the file moved in", async () => {
     hosts = installFakeHosts();
     hosts.da.put(`${docroot}/index.html`, "x");
     const files = await filesFor("acme.dmviral.com");
     await files.write("cms-media/0123456789abcdef.webp", allByteValues());
     expect(hosts.da.files.get(`${docroot}/cms-media/0123456789abcdef.webp`)).toEqual(allByteValues());
     const actions = hosts.calls.filter((c) => c.url.includes("/api/filemanager-actions/")).map((c) => new URL(c.url).pathname);
-    expect(actions).toEqual(["/api/filemanager-actions/upload", "/api/filemanager-actions/extract-archive", "/api/filemanager-actions/remove"]);
+    expect(actions).toEqual([
+      "/api/filemanager-actions/upload",
+      "/api/filemanager-actions/extract-archive",
+      "/api/filemanager-actions/remove",
+      "/api/filemanager-actions/upload",
+      "/api/filemanager-actions/move",
+    ]);
     expect([...hosts.da.files.keys()].filter((k) => k.endsWith(".zip"))).toEqual([]);
+    expect(hosts.da.temps()).toEqual([]);
   });
 
   it("a failed upload is a write error", async () => {
-    hosts = installFakeHosts({ failWrites: ["index.html"] });
+    hosts = installFakeHosts({ fail: (c) => c.url.includes("/api/filemanager-actions/upload") });
     hosts.da.put(`${docroot}/index.html`, "x");
     const files = await filesFor("acme.dmviral.com");
     await expect(files.write("index.html", bytesOf("y"))).rejects.toBeInstanceOf(SiteFilesError);

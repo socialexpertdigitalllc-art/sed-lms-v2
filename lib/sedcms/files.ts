@@ -1,20 +1,31 @@
+import { createHash, randomBytes } from "node:crypto";
 import {
   findWebsite,
   hostingerConfigured,
   isStaticWebsite,
   listWebsiteDir,
+  makeWebsiteFolder,
+  moveWebsiteFile,
   openFileSession,
   readWebsiteFile,
-  writeWebsiteFile,
+  removeWebsiteFile,
+  statWebsiteFile,
+  uploadWebsiteFile,
   type FileSession,
   type HostingerWebsite,
 } from "@/lib/hostinger/client";
 import {
   daConfigured,
+  docrootFor,
+  listDaFolder,
   listDocrootDir,
+  makeDocrootFolders,
+  moveDaFile,
   readDocrootFile,
+  removePaths,
+  siteFolderFor,
   subFromWebsiteLink,
-  writeDocrootFile,
+  uploadDaFile,
 } from "@/lib/template-engine/directadmin";
 import { hostCandidates } from "@/lib/site-studio/deploy/liveFiles";
 import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
@@ -27,8 +38,7 @@ import { MAX_FILE_BYTES, cmsPathAllowed } from "./paths";
  * Never the whole docroot (client sites reach 1.3 GB): one folder listing,
  * one read, one write at a time, through the hosts the LMS already uses —
  *   - staging subdomains ({sub}.DA_DOMAIN): DirectAdmin's file manager;
- *   - custom domains: Hostinger's File Browser (raw reads, TUS writes),
- *     static websites only.
+ *   - custom domains: Hostinger's File Browser, static websites only.
  * The branching is liveFiles.ts's: the staging check comes before the
  * protected-domain check (DA_DOMAIN is always protected), then Hostinger.
  *
@@ -39,11 +49,24 @@ import { MAX_FILE_BYTES, cmsPathAllowed } from "./paths";
  * Failures throw SiteFilesError, which says which step failed and never
  * carries file content.
  *
+ * A live file is never half-written. A write:
+ *   1. uploads the bytes to a temporary file under a random name — outside
+ *      the web root, in the folder that holds public_html (TEMP_PLACEMENT
+ *      "outside"), or, for a host that can't reach there, as a dot-named
+ *      file beside the live one ("beside");
+ *   2. checks it: its size, and its sha256 where the host computes one;
+ *   3. moves it over the live file in ONE call (a rename with override) —
+ *      the only call that touches the live path;
+ *   4. on any failure before the move, removes the temporary file (best
+ *      effort) and leaves the live file as it was.
+ * A missing folder is made first, by a call that writes no file.
+ *
  * Time (lib/sedcms/deadline.ts): each host call has its own 30 s in the
- * clients. With a deadline, no host call starts once it has passed (reason
- * "deadline"); reads and listings in flight stop at it; a write in flight is
- * never cut — a Hostinger write's create and bytes run together, and
- * DirectAdmin's zip path asks before extracting and before cleaning up.
+ * clients. With a deadline, no step starts once it has passed (reason
+ * "deadline"); reads, listings and checks in flight stop at it. A move in
+ * flight is never cut. When the deadline passes between the upload and the
+ * move, the move doesn't start: the temporary file is removed (that clean-up
+ * is the one call allowed after the deadline) and the file is not written.
  */
 
 export type SiteFilesStep = "list" | "read" | "write";
@@ -53,15 +76,31 @@ export class SiteFilesError extends Error {
   readonly step: SiteFilesStep;
   readonly reason: SiteFilesReason;
   readonly path: string | null;
+  /** The live file may have been replaced: only when the move itself failed,
+   *  since its outcome can't be known. Every earlier failure left it as it was. */
+  readonly maybeWritten: boolean;
 
-  constructor(step: SiteFilesStep, reason: SiteFilesReason, message: string, path: string | null = null) {
+  constructor(step: SiteFilesStep, reason: SiteFilesReason, message: string, path: string | null = null, opts: { maybeWritten?: boolean } = {}) {
     super(message);
     this.name = "SiteFilesError";
     this.step = step;
     this.reason = reason;
     this.path = path;
+    this.maybeWritten = opts.maybeWritten ?? false;
   }
 }
+
+/** Where a host's temporary files go (see above). */
+export type TempPlacement = "outside" | "beside";
+
+/**
+ * Both hosts' file APIs reach the folder that holds public_html: the File
+ * Browser's root is that folder (its paths start /public_html), and
+ * DirectAdmin's file manager takes any path of the account
+ * (/domains/<sub>.<domain>/…). The live spike confirms both can write and
+ * move there; a host that can't is switched to "beside" here.
+ */
+export const TEMP_PLACEMENT: Readonly<Record<"staging" | "custom", TempPlacement>> = Object.freeze({ staging: "outside", custom: "outside" });
 
 export interface ListedFile {
   path: string;
@@ -91,15 +130,34 @@ interface Entry {
 }
 
 type ReadResult = { ok: true; bytes: Uint8Array | null } | { ok: false; tooLarge: boolean; message: string };
-type WriteResult = { ok: true; leftover?: string } | { ok: false; stopped?: boolean; leftover?: string; message: string };
+type StepResult = { ok: true; leftover?: string } | { ok: false; stopped?: boolean; leftover?: string; message: string };
+type CheckResult = { ok: true; isFile: boolean; size: number | null; sha256: string | null } | { ok: false; message: string };
 
-/** What each host must do; everything else is shared. `signal` stops a read
- *  or a listing; `canContinue` is asked between the steps of a write. */
+/**
+ * What each host must do; everything else is shared. Temporary files are
+ * named by their host's own absolute path. `signal` stops a read, a listing
+ * or a check; `canContinue` is asked between the calls of one step.
+ */
 interface HostOps {
   listDir(relDir: string, signal?: AbortSignal): Promise<Entry[] | null>;
   readFile(relPath: string, maxBytes: number, signal?: AbortSignal): Promise<ReadResult>;
-  writeFile(relPath: string, bytes: Uint8Array, parentExists: boolean, canContinue: () => boolean): Promise<WriteResult>;
+  /** Make a folder of the web root (and its parents) exist; writes no file. */
+  makeDir(relDir: string, canContinue: () => boolean): Promise<StepResult>;
+  /** Where this write's temporary file goes. */
+  tempFor(relPath: string, name: string): string;
+  /** Upload the bytes to the temporary file; never touches a live path. */
+  stage(temp: string, bytes: Uint8Array, canContinue: () => boolean): Promise<StepResult>;
+  /** The temporary file's size, and its sha256 where the host computes one. */
+  check(temp: string, signal?: AbortSignal): Promise<CheckResult>;
+  /** ONE call: the temporary file replaces the live one. */
+  swap(temp: string, relPath: string): Promise<StepResult>;
+  /** Best effort; true when the temporary file is gone. */
+  discard(temp: string): Promise<boolean>;
 }
+
+const sha256Hex = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const folderOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
+const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
 /** A walk never lists more folders than this. */
 const MAX_DIRS_LISTED = 500;
@@ -201,34 +259,100 @@ class HostedSiteFiles implements SiteFiles {
     if (bytes.length > MAX_FILE_BYTES) throw new SiteFilesError("write", "refused", `larger than ${MAX_FILE_BYTES} bytes`, path);
     const { entry, parentExists } = await this.locate(path, "write", limits);
     if (entry && entry.kind !== "file") throw new SiteFilesError("write", "not_a_file", "something other than a file is there", path);
+    const late = () => limits.deadline?.passed() ?? false;
+    const canContinue = () => !late();
     // The last moment to decide: past the deadline, this write never starts.
-    if (limits.deadline?.passed()) throw outOfTime("write", path);
-    const canContinue = () => !limits.deadline?.passed();
-    let r: WriteResult;
+    if (late()) throw outOfTime("write", path);
+
     try {
-      r = await this.ops.writeFile(path, bytes, parentExists, canContinue);
+      if (!parentExists) {
+        const made = await this.ops.makeDir(folderOf(path), canContinue);
+        this.warnLeftover(made.leftover);
+        if (!made.ok) throw new SiteFilesError("write", made.stopped || late() ? "deadline" : "hosting", made.message, path);
+        if (late()) throw outOfTime("write", path);
+      }
+
+      const temp = this.ops.tempFor(path, `sedcms-${randomBytes(8).toString("hex")}.tmp`);
+      // Before the move the live file is untouched: a failure removes the temporary file and says so.
+      const abandon = async (reason: SiteFilesReason, message: string) => {
+        await this.discard(temp);
+        return new SiteFilesError("write", reason, message, path);
+      };
+
+      const staged = await this.ops.stage(temp, bytes, canContinue);
+      this.warnLeftover(staged.leftover);
+      if (!staged.ok) throw await abandon(staged.stopped || late() ? "deadline" : "hosting", staged.message);
+      if (late()) throw await abandon("deadline", "out of time before the check");
+
+      const checked = await this.ops.check(temp, limits.deadline?.signal);
+      if (!checked.ok) throw await abandon(late() ? "deadline" : "hosting", checked.message);
+      if (!checked.isFile || checked.size !== bytes.length || (checked.sha256 !== null && checked.sha256 !== sha256Hex(bytes))) {
+        throw await abandon("hosting", "the temporary file is not what was sent");
+      }
+      if (late()) throw await abandon("deadline", "out of time before the move");
+
+      const moved = await this.ops.swap(temp, path);
+      if (!moved.ok) {
+        // The move's outcome can't be known: the live file may or may not have been replaced.
+        await this.discard(temp);
+        throw new SiteFilesError("write", "hosting", moved.message, path, { maybeWritten: true });
+      }
     } finally {
       this.listings.clear(); // whatever happened, the folders may have changed
     }
-    if (r.leftover) console.warn(`[sedcms] ${this.label}: a temporary ${r.leftover} was left in the docroot`);
-    if (!r.ok) throw new SiteFilesError("write", r.stopped ? "deadline" : "hosting", r.message, path);
+  }
+
+  private async discard(temp: string): Promise<void> {
+    const gone = await this.ops.discard(temp).catch(() => false);
+    if (!gone) this.warnLeftover(nameOf(temp));
+  }
+
+  private warnLeftover(name: string | undefined): void {
+    if (name) console.warn(`[sedcms] ${this.label}: the temporary file ${name} could not be removed`);
   }
 }
 
-function hostingerOps(session: FileSession): HostOps {
+function hostingerOps(session: FileSession, placement: TempPlacement): HostOps {
+  const live = (rel: string) => `${session.dir}/${rel}`;
   return {
     listDir: (relDir, signal) => listWebsiteDir(session, relDir, { signal }),
     readFile: (relPath, maxBytes, signal) => readWebsiteFile(session, relPath, maxBytes, { signal }),
-    // The create and the bytes are one write: nothing may stop between them.
-    writeFile: (relPath, bytes) => writeWebsiteFile(session, relPath, bytes),
+    makeDir: (relDir) => makeWebsiteFolder(session, live(relDir)),
+    // "outside": the File Browser's folder that holds public_html
+    tempFor: (relPath, name) =>
+      placement === "outside" ? `${folderOf(session.dir)}/${name}` : `${folderOf(live(relPath))}/.${name}`,
+    stage: (temp, bytes, canContinue) => uploadWebsiteFile(session, temp, bytes, { canContinue }),
+    check: async (temp, signal) => {
+      const r = await statWebsiteFile(session, temp, { signal });
+      return r.ok ? { ok: true, isFile: !r.isDir, size: r.size, sha256: r.sha256 } : r;
+    },
+    swap: (temp, relPath) => moveWebsiteFile(session, temp, live(relPath)),
+    discard: async (temp) => (await removeWebsiteFile(session, temp)).ok,
   };
 }
 
-function directAdminOps(sub: string): HostOps {
+function directAdminOps(sub: string, placement: TempPlacement): HostOps {
   return {
     listDir: (relDir, signal) => listDocrootDir(sub, relDir, { signal }),
     readFile: (relPath, maxBytes, signal) => readDocrootFile(sub, relPath, maxBytes, { signal }),
-    writeFile: (relPath, bytes, parentExists, canContinue) => writeDocrootFile(sub, relPath, bytes, { parentExists, canContinue }),
+    makeDir: (relDir, canContinue) => makeDocrootFolders(sub, relDir, { canContinue }),
+    // "outside": the subdomain's own folder, which holds its public_html
+    tempFor: (relPath, name) => {
+      if (placement === "outside") return `${siteFolderFor(sub)}/${name}`;
+      const dir = folderOf(relPath);
+      return `${docrootFor(sub)}${dir ? `/${dir}` : ""}/.${name}`;
+    },
+    stage: (temp, bytes) => uploadDaFile(folderOf(temp), nameOf(temp), bytes),
+    // DirectAdmin's listing gives the size; it computes no checksum
+    check: async (temp, signal) => {
+      const entries = await listDaFolder(folderOf(temp), { signal });
+      if (!entries) return { ok: false, message: "the temporary file's folder could not be listed" };
+      const entry = entries.find((e) => e.name === nameOf(temp));
+      if (!entry) return { ok: false, message: "the temporary file is not there" };
+      return { ok: true, isFile: entry.kind === "file", size: entry.size, sha256: null };
+    },
+    swap: (temp, relPath) => moveDaFile(temp, `${docrootFor(sub)}/${relPath}`),
+    discard: async (temp) => (await removePaths([temp])).ok,
   };
 }
 
@@ -289,11 +413,12 @@ export type SiteFilesResult =
   | { ok: true; files: SiteFiles; kind: "staging" | "custom"; host: string; /** one per site: the per-site write lock's key */ key: string }
   | SiteRefusal;
 
-export async function siteFilesFor(host: string): Promise<SiteFilesResult> {
+/** The site at `host`, as single files. `placement` overrides TEMP_PLACEMENT (tests; a host the spike moves to "beside" changes TEMP_PLACEMENT itself). */
+export async function siteFilesFor(host: string, opts: { placement?: TempPlacement } = {}): Promise<SiteFilesResult> {
   const site = await resolveSite(host);
   if (!site.ok) return site;
   if (site.kind === "staging") {
-    return { ok: true, kind: "staging", host, key: `staging:${site.sub}`, files: new HostedSiteFiles(directAdminOps(site.sub), host) };
+    return { ok: true, kind: "staging", host, key: `staging:${site.sub}`, files: new HostedSiteFiles(directAdminOps(site.sub, opts.placement ?? TEMP_PLACEMENT.staging), host) };
   }
   const opened = await openFileSession(site.website);
   if (!opened.ok) {
@@ -302,5 +427,5 @@ export async function siteFilesFor(host: string): Promise<SiteFilesResult> {
     return { ok: false, status: 502, code: "HOSTING", error: "The website's file server could not be opened." };
   }
   const domain = site.website.domain.toLowerCase();
-  return { ok: true, kind: "custom", host, key: `custom:${domain}`, files: new HostedSiteFiles(hostingerOps(opened.session), domain) };
+  return { ok: true, kind: "custom", host, key: `custom:${domain}`, files: new HostedSiteFiles(hostingerOps(opened.session, opts.placement ?? TEMP_PLACEMENT.custom), domain) };
 }

@@ -382,7 +382,7 @@ const UPLOAD_TIMEOUT_MS = 180000;
 
 async function fileFetch(
   url: string,
-  init: { method: "GET" | "POST" | "PATCH"; headers: Record<string, string>; body?: Uint8Array; timeoutMs?: number },
+  init: { method: "GET" | "POST" | "PATCH" | "DELETE"; headers: Record<string, string>; body?: Uint8Array; timeoutMs?: number },
 ): Promise<{ ok: boolean; status: number; res: Response | null; error?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? UPLOAD_TIMEOUT_MS);
@@ -753,17 +753,28 @@ export async function readWebsiteFile(
   return { ok: true, bytes: r.bytes };
 }
 
+// SED CMS never writes a live file in place: the TUS create, under
+// override=true, may empty the file it targets at once (filebrowser opens it
+// with O_TRUNC), so a failed upload would leave a page blank. A write goes to
+// a temporary file instead (uploadWebsiteFile), is checked (statWebsiteFile),
+// and replaces the live file in ONE rename (moveWebsiteFile). Paths here are
+// the File Browser's own, from its root, which holds public_html.
+
+type FileStep = { ok: true } | { ok: false; message: string };
+
 /**
- * Write one file by TUS into its folder of the website, replacing it
- * (override=true) — the upload deployZipToWebsite uses, for one file. Never
- * retried: a PATCH that timed out may still have landed.
- *
- * The create (POST) and the bytes (PATCH) are one write: each has its own
- * 30 s, and nothing stops between them, since the File Browser may already
- * have emptied the file when it took the POST.
+ * Upload bytes by TUS to a file of the File Browser (absPath, e.g. a
+ * temporary file next to public_html), replacing one of that name. The create
+ * and the bytes each have 30 s; `canContinue` is asked between them, and when
+ * it says no the bytes are never sent (`stopped`).
  */
-export async function writeWebsiteFile(session: FileSession, relPath: string, bytes: Uint8Array): Promise<{ ok: true } | { ok: false; message: string }> {
-  const target = `${session.tusUrl}/${encodePath(relPath)}?override=true`;
+export async function uploadWebsiteFile(
+  session: FileSession,
+  absPath: string,
+  bytes: Uint8Array,
+  opts: { canContinue?: () => boolean } = {},
+): Promise<{ ok: true } | { ok: false; stopped?: boolean; message: string }> {
+  const target = `${session.restBase}/api/tus${encodePath(absPath)}?override=true`;
   const tusHeaders = { ...session.headers, "Tus-Resumable": "1.0.0" };
 
   const created = await fileFetch(target, {
@@ -773,6 +784,7 @@ export async function writeWebsiteFile(session: FileSession, relPath: string, by
   });
   await created.res?.body?.cancel().catch(() => {});
   if (!created.ok) return { ok: false, message: `could not start the upload (HTTP ${created.status || created.error})` };
+  if (opts.canContinue && !opts.canContinue()) return { ok: false, stopped: true, message: "stopped before the bytes were sent" };
 
   const sent = await fileFetch(target, {
     method: "PATCH",
@@ -787,6 +799,72 @@ export async function writeWebsiteFile(session: FileSession, relPath: string, by
     return { ok: false, message: `the upload stopped at ${offset} of ${bytes.length} bytes` };
   }
   return { ok: true };
+}
+
+/** A file's info answer can carry a text file's content; past this it is refused. */
+const MAX_FILE_INFO_BYTES = 16 * 1024 * 1024;
+
+/**
+ * A file's size and, where the File Browser computes one, its sha256 — GET
+ * resources/<path>?checksum=sha256, hashed on the server, so nothing is
+ * downloaded. sha256 is null when the answer carries none.
+ */
+export async function statWebsiteFile(
+  session: FileSession,
+  absPath: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ ok: true; isDir: boolean; size: number | null; sha256: string | null } | { ok: false; message: string }> {
+  const r = await getCappedRetrying(
+    `${session.restBase}/api/resources${encodePath(absPath)}?checksum=sha256`,
+    session.headers,
+    MAX_FILE_INFO_BYTES,
+    SINGLE_FILE_TIMEOUT_MS,
+    opts.signal,
+  );
+  if (!r.ok) return { ok: false, message: r.message };
+  if (r.status < 200 || r.status >= 300) return { ok: false, message: `HTTP ${r.status}` };
+  try {
+    const j = JSON.parse(new TextDecoder().decode(r.bytes)) as { isDir?: unknown; size?: unknown; checksums?: { sha256?: unknown } | null };
+    const sha256 = typeof j.checksums?.sha256 === "string" && /^[0-9a-f]{64}$/i.test(j.checksums.sha256) ? j.checksums.sha256.toLowerCase() : null;
+    return {
+      ok: true,
+      isDir: j.isDir === true,
+      size: typeof j.size === "number" && Number.isFinite(j.size) && j.size >= 0 ? j.size : null,
+      sha256,
+    };
+  } catch {
+    return { ok: false, message: "the file info was not JSON" };
+  }
+}
+
+/** Run one small File Browser call with its own 30 s; its answer's body is dropped. */
+async function fileCall(url: string, method: "POST" | "PATCH" | "DELETE", headers: Record<string, string>): Promise<{ ok: boolean; status: number; error?: string }> {
+  const r = await fileFetch(url, { method, headers, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
+  await r.res?.body?.cancel().catch(() => {});
+  return { ok: r.ok, status: r.status, error: r.error };
+}
+
+/**
+ * Replace `toAbs` with `fromAbs` in ONE call: the File Browser's rename with
+ * override (PATCH resources/<from>?action=rename&destination=<to>&override=true),
+ * a rename(2) on the server when both are on one filesystem. Never retried.
+ */
+export async function moveWebsiteFile(session: FileSession, fromAbs: string, toAbs: string): Promise<FileStep> {
+  const q = `action=rename&destination=${encodeURIComponent(encodePath(toAbs))}&override=true`;
+  const r = await fileCall(`${session.restBase}/api/resources${encodePath(fromAbs)}?${q}`, "PATCH", session.headers);
+  return r.ok ? { ok: true } : { ok: false, message: `the move did not complete (HTTP ${r.status || r.error})` };
+}
+
+/** Remove one file; one already gone counts as removed. */
+export async function removeWebsiteFile(session: FileSession, absPath: string): Promise<FileStep> {
+  const r = await fileCall(`${session.restBase}/api/resources${encodePath(absPath)}`, "DELETE", session.headers);
+  return r.ok || r.status === 404 ? { ok: true } : { ok: false, message: `the removal did not complete (HTTP ${r.status || r.error})` };
+}
+
+/** Make a folder (and its parents): the File Browser's POST resources/<dir>/. Writes no file. */
+export async function makeWebsiteFolder(session: FileSession, absDir: string): Promise<FileStep> {
+  const r = await fileCall(`${session.restBase}/api/resources${encodePath(absDir)}/`, "POST", session.headers);
+  return r.ok ? { ok: true } : { ok: false, message: `the folder could not be made (HTTP ${r.status || r.error})` };
 }
 
 /**

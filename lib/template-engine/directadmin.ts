@@ -23,7 +23,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { zipSync } from "fflate";
+import { zipSync, type Zippable } from "fflate";
 
 export interface DaResult {
   error: boolean;
@@ -408,7 +408,12 @@ function entryKind(f: Record<string, unknown>): DocrootEntry["kind"] {
  * null when it can't be listed, or when the listing may have been cut short.
  */
 export async function listDocrootDir(sub: string, relDir: string, opts: { signal?: AbortSignal } = {}): Promise<DocrootEntry[] | null> {
-  const q = new URLSearchParams({ path: inDocroot(sub, relDir), limit: String(LIST_LIMIT) }).toString();
+  return listDaFolder(inDocroot(sub, relDir), opts);
+}
+
+/** The same listing, for any folder of the account by its absolute path. */
+export async function listDaFolder(absPath: string, opts: { signal?: AbortSignal } = {}): Promise<DocrootEntry[] | null> {
+  const q = new URLSearchParams({ path: absPath, limit: String(LIST_LIMIT) }).toString();
   const r = await daJson(`/api/filemanager/list?${q}`, { method: "GET", timeoutMs: SINGLE_FILE_TIMEOUT_MS, signal: opts.signal });
   if (!r.ok) return null;
   try {
@@ -508,59 +513,83 @@ export async function readDocrootFile(
   }
 }
 
-/**
- * Write one file into a subdomain's docroot, replacing it. Into a folder that
- * exists: one upload with overwrite=true (the verified upload, `dir` param).
- * Into a folder that doesn't: a one-file zip through the verified
- * upload + extract-archive + remove, which creates the folders. A zip left
- * behind is harmless (never a CMS path) and is reported.
- *
- * Each call has its own 30 s. On the zip path, `canContinue` is asked before
- * the extract (the step that writes the file) and before the remove: when it
- * says no (SED CMS's deadline has passed), nothing more is started — the file
- * isn't written (`stopped`), or the zip stays behind.
- */
-export async function writeDocrootFile(
-  sub: string,
-  relPath: string,
-  bytes: Uint8Array,
-  opts: { parentExists: boolean; canContinue?: () => boolean },
-): Promise<{ ok: true; leftover?: string } | { ok: false; stopped?: boolean; leftover?: string; message: string }> {
-  const slash = relPath.lastIndexOf("/");
-  const parent = slash === -1 ? "" : relPath.slice(0, slash);
-  const name = relPath.slice(slash + 1);
-  const canContinue = opts.canContinue ?? (() => true);
+// SED CMS never writes a live file in place. A write uploads the bytes to a
+// temporary file (uploadDaFile, normally in the subdomain's own folder, next
+// to its public_html: outside the web root), checks it (listDaFolder), and
+// replaces the live file in ONE move (moveDaFile). A missing folder is made
+// first (makeDocrootFolders), which writes no file.
 
-  if (opts.parentExists) {
-    const fd = new FormData();
-    fd.append("file", new File([new Uint8Array(bytes)], name, { type: "application/octet-stream" }));
-    const q = new URLSearchParams({ dir: inDocroot(sub, parent), name, overwrite: "true" }).toString();
-    const upload = await daJson(`/api/filemanager-actions/upload?${q}`, { method: "POST", form: fd, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
-    return upload.ok ? { ok: true } : { ok: false, message: `upload: ${jsonErrorMessage(upload)}` };
-  }
+/** The folder that holds a subdomain's public_html: outside its web root. */
+export function siteFolderFor(sub: string): string {
+  return `/domains/${sub}.${process.env.DA_DOMAIN ?? ""}`;
+}
 
-  const docroot = docrootFor(sub);
-  const zipName = `sedcms-${randomBytes(8).toString("hex")}.zip`;
-  const zipPath = `${docroot}/${zipName}`;
+type DaStep = { ok: true } | { ok: false; message: string };
+
+/** Upload bytes as absDir/name, replacing one of that name (the verified
+ *  upload, `dir` param). 30 s. Only ever a temporary file of SED CMS's. */
+export async function uploadDaFile(absDir: string, name: string, bytes: Uint8Array, type = "application/octet-stream"): Promise<DaStep> {
   const fd = new FormData();
-  fd.append("file", new File([new Uint8Array(zipSync({ [relPath]: new Uint8Array(bytes) }))], zipName, { type: "application/zip" }));
-  const uq = new URLSearchParams({ dir: docroot, name: zipName, overwrite: "true" }).toString();
-  const upload = await daJson(`/api/filemanager-actions/upload?${uq}`, { method: "POST", form: fd, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
-  if (!upload.ok) return { ok: false, message: `upload: ${jsonErrorMessage(upload)}` };
+  fd.append("file", new File([new Uint8Array(bytes)], name, { type }));
+  const q = new URLSearchParams({ dir: absDir, name, overwrite: "true" }).toString();
+  const r = await daJson(`/api/filemanager-actions/upload?${q}`, { method: "POST", form: fd, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
+  return r.ok ? { ok: true } : { ok: false, message: `upload: ${jsonErrorMessage(r)}` };
+}
 
-  if (!canContinue()) return { ok: false, stopped: true, leftover: zipName, message: "out of time before extracting" };
+/**
+ * Replace `toAbs` with `fromAbs` in ONE call. 30 s; never retried.
+ *
+ * UNVERIFIED — the second call the live spike must confirm: POST
+ * /api/filemanager-actions/move with JSON { source, destination, overwrite:
+ * true }, the sibling of the verified extract-archive and remove. The spike
+ * must also confirm that it is one rename(2) — the old file replaced whole,
+ * never deleted first or copied in place. If the API differs, this function
+ * alone changes.
+ */
+export async function moveDaFile(fromAbs: string, toAbs: string): Promise<DaStep> {
+  const r = await daJson("/api/filemanager-actions/move", {
+    method: "POST",
+    json: { source: fromAbs, destination: toAbs, overwrite: true },
+    timeoutMs: SINGLE_FILE_TIMEOUT_MS,
+  });
+  return r.ok ? { ok: true } : { ok: false, message: `move: ${jsonErrorMessage(r)}` };
+}
+
+/**
+ * Make folders of a subdomain's docroot exist (relDir, e.g. "cms-media"),
+ * with the verified calls only: a zip of folder entries alone is uploaded
+ * next to public_html, extracted into the docroot (making the folders, no
+ * file), and removed. Each call has its own 30 s; `canContinue` is asked
+ * before the extract. The zip is removed whatever happened; one that can't be
+ * is reported as `leftover` (outside the web root, never a CMS path).
+ */
+export async function makeDocrootFolders(
+  sub: string,
+  relDir: string,
+  opts: { canContinue?: () => boolean } = {},
+): Promise<{ ok: true; leftover?: string } | { ok: false; stopped?: boolean; leftover?: string; message: string }> {
+  const tree: Zippable = {};
+  let node = tree;
+  for (const segment of relDir.split("/")) {
+    const next: Zippable = {};
+    node[segment] = next;
+    node = next;
+  }
+  const folder = siteFolderFor(sub);
+  const zipName = `sedcms-${randomBytes(8).toString("hex")}.zip`;
+  const zipPath = `${folder}/${zipName}`;
+  const cleanUp = async () => ((await removePaths([zipPath])).ok ? undefined : zipName);
+
+  const upload = await uploadDaFile(folder, zipName, new Uint8Array(zipSync(tree)), "application/zip");
+  if (!upload.ok) return { ok: false, leftover: await cleanUp(), message: upload.message };
+  if (opts.canContinue && !opts.canContinue()) {
+    return { ok: false, stopped: true, leftover: await cleanUp(), message: "out of time before making the folder" };
+  }
   const extract = await daJson("/api/filemanager-actions/extract-archive", {
     method: "POST",
-    json: { source: zipPath, destinationDir: docroot, members: [], mergeAndOverwrite: true },
+    json: { source: zipPath, destinationDir: docrootFor(sub), members: [], mergeAndOverwrite: true },
     timeoutMs: SINGLE_FILE_TIMEOUT_MS,
   });
-  if (!extract.ok) return { ok: false, leftover: zipName, message: `extract: ${jsonErrorMessage(extract)}` };
-
-  if (!canContinue()) return { ok: true, leftover: zipName };
-  const removed = await daJson("/api/filemanager-actions/remove", {
-    method: "POST",
-    json: { paths: [zipPath] },
-    timeoutMs: SINGLE_FILE_TIMEOUT_MS,
-  });
-  return removed.ok ? { ok: true } : { ok: true, leftover: zipName };
+  const leftover = await cleanUp();
+  return extract.ok ? { ok: true, leftover } : { ok: false, leftover, message: `extract: ${jsonErrorMessage(extract)}` };
 }

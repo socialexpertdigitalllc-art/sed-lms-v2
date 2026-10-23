@@ -1,17 +1,20 @@
 import { vi } from "vitest";
+import { createHash } from "node:crypto";
 import { unzipSync } from "fflate";
 
 /**
  * In-memory stand-ins for the two hosts a client site lives on, served
  * through a stubbed global fetch, for the SED CMS single-file tests:
  *   - Hostinger: the websites lookup, the upload-URL credentials, and the
- *     File Browser behind them (resources listing, raw reads, TUS writes),
- *     in the request shapes lib/hostinger/client.ts already uses;
- *   - DirectAdmin: the file manager's list, the single-file download, the
- *     upload, extract-archive and remove, as lib/template-engine/directadmin.ts
- *     uses them.
+ *     File Browser behind them: resources (folder listing, file info with
+ *     ?checksum=sha256, rename with override, delete, make a folder), raw
+ *     reads, and TUS uploads — whose create, with override=true, empties an
+ *     existing file at once, as filebrowser's does;
+ *   - DirectAdmin: the file manager's list, single-file download, upload,
+ *     extract-archive, remove and move.
  * Each host has its own little filesystem of absolute paths. Every request is
- * recorded, so a test can assert what was (or wasn't) called.
+ * recorded, with the paths it actually changed, so a test can assert what
+ * was (or wasn't) called and touched.
  */
 
 export const HG_API = "https://developers.hostinger.com";
@@ -37,12 +40,19 @@ export class MemFs {
   }
 
   isDir(abs: string): boolean {
-    const prefix = `${abs.replace(/[/]+$/, "")}/`;
-    if (this.emptyDirs.has(abs.replace(/[/]+$/, ""))) return true;
+    const dir = abs.replace(/[/]+$/, "");
+    if (dir === "") return true; // the root
+    const prefix = `${dir}/`;
+    if (this.emptyDirs.has(dir)) return true;
     for (const k of this.files.keys()) if (k.startsWith(prefix)) return true;
     for (const k of this.links) if (k.startsWith(prefix)) return true;
     for (const k of this.emptyDirs) if (k.startsWith(prefix)) return true;
     return false;
+  }
+
+  /** Every path that looks like one of SED CMS's temporary files. */
+  temps(): string[] {
+    return [...this.files.keys()].filter((k) => /[/][.]?sedcms-[^/]*$/.test(k));
   }
 
   children(absDir: string): { name: string; kind: "file" | "dir" | "link"; size: number }[] {
@@ -62,6 +72,15 @@ export class MemFs {
     }
     return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
+
+  /** Remove a file, or a folder and everything in it. */
+  remove(abs: string): boolean {
+    const prefix = `${abs}/`;
+    let found = this.files.delete(abs);
+    for (const k of [...this.files.keys()]) if (k.startsWith(prefix)) found = this.files.delete(k) || found;
+    for (const k of [...this.emptyDirs]) if (k === abs || k.startsWith(prefix)) found = this.emptyDirs.delete(k) || found;
+    return found;
+  }
 }
 
 export interface RecordedCall {
@@ -71,6 +90,8 @@ export interface RecordedCall {
   body: unknown;
   /** Date.now() when the call was made (the fake clock under fake timers) */
   at: number;
+  /** the paths this call changed (written, emptied, moved, removed, made) */
+  changed: string[];
 }
 
 export interface HostingerWebsiteFake {
@@ -90,8 +111,10 @@ export interface FakeHostsOptions {
   chunkBytes?: number;
   /** answer this path's raw read / download with a body of a different size than listed */
   shortRead?: string;
-  /** fail writes (TUS PATCH on Hostinger, upload on DirectAdmin) to these relative paths */
-  failWrites?: string[];
+  /** answer this call with a 500, changing nothing */
+  fail?: (call: RecordedCall) => boolean;
+  /** what a file-info answer or a listing says about this path instead of the truth */
+  misreport?: (abs: string) => { size?: number; sha256?: string } | undefined;
   /** answer this call only after this many ms (setTimeout, so fake timers drive it); aborting the call's signal ends the wait, as with a real fetch */
   delay?: (call: RecordedCall) => number;
   /** never answer this call: it ends only when its signal aborts, as a real fetch would */
@@ -158,8 +181,12 @@ async function bodyBytes(body: unknown): Promise<Uint8Array> {
   return new Uint8Array();
 }
 
+const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+const parentOf = (abs: string) => abs.slice(0, abs.lastIndexOf("/"));
+
 export const HG_ROOT = "/public_html";
 export const daDocroot = (sub: string) => `/domains/${sub}.${DA_DOMAIN}/public_html`;
+export const daSiteFolder = (sub: string) => `/domains/${sub}.${DA_DOMAIN}`;
 
 /** Stubs global fetch with both fake hosts. Call vi.unstubAllGlobals() after. */
 export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
@@ -171,11 +198,12 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
     const url = new URL(String(input instanceof Request ? input.url : input));
     const method = (init?.method ?? "GET").toUpperCase();
     const headers = headersOf(init);
-    const call: RecordedCall = { method, url: url.toString(), headers, body: init?.body, at: Date.now() };
+    const call: RecordedCall = { method, url: url.toString(), headers, body: init?.body, at: Date.now(), changed: [] };
     state.calls.push(call);
     if (opts.hang?.(call)) await wait(Infinity, init?.signal);
     const delay = opts.delay?.(call) ?? 0;
     if (delay > 0) await wait(delay, init?.signal);
+    if (opts.fail?.(call)) return new Response("the host failed", { status: 500 });
 
     // ---- Hostinger API
     if (url.origin === HG_API) {
@@ -195,23 +223,56 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
       throw new Error(`unexpected Hostinger API call: ${method} ${url}`);
     }
 
-    // ---- Hostinger File Browser
+    // ---- Hostinger File Browser (filebrowser's API)
     if (url.origin === new URL(HG_FILES).origin && url.pathname.startsWith(new URL(HG_FILES).pathname)) {
       if (headers["x-auth"] !== "AK" || headers["x-auth-rest"] !== "RK") return new Response("no", { status: 401 });
       const rest = decodeURIComponent(url.pathname.slice(new URL(HG_FILES).pathname.length));
       const fs = state.hostinger;
-      if (rest.startsWith("/api/resources/") && method === "GET") {
-        const abs = rest.slice("/api/resources".length).replace(/[/]+$/, "");
-        if (!fs.isDir(abs)) return new Response("404 Not Found", { status: 404 });
-        const items = fs.children(abs).map((c) => ({
-          path: `${abs}/${c.name}`,
-          name: c.name,
-          size: c.size,
-          isDir: c.kind === "dir",
-          isSymlink: c.kind === "link",
-          type: c.kind === "dir" ? "" : "text",
-        }));
-        return Response.json({ items, isDir: true, path: abs });
+
+      if (rest.startsWith("/api/resources/")) {
+        const raw = rest.slice("/api/resources".length);
+        const abs = raw.replace(/[/]+$/, "");
+        if (method === "GET") {
+          if (fs.isDir(abs)) {
+            const items = fs.children(abs).map((c) => ({
+              path: `${abs}/${c.name}`,
+              name: c.name,
+              size: opts.misreport?.(`${abs}/${c.name}`)?.size ?? c.size,
+              isDir: c.kind === "dir",
+              isSymlink: c.kind === "link",
+              type: c.kind === "dir" ? "" : "text",
+            }));
+            return Response.json({ items, isDir: true, path: abs });
+          }
+          const bytes = fs.files.get(abs);
+          if (!bytes) return new Response("404 Not Found", { status: 404 });
+          const lie = opts.misreport?.(abs);
+          const info: Record<string, unknown> = { path: abs, name: abs.slice(abs.lastIndexOf("/") + 1), size: lie?.size ?? bytes.length, isDir: false, type: "blob" };
+          if (url.searchParams.get("checksum") === "sha256") info.checksums = { sha256: lie?.sha256 ?? sha256(bytes) };
+          return Response.json(info);
+        }
+        if (method === "POST" && raw.endsWith("/")) {
+          // filebrowser: a POST to a path ending in "/" makes the folder (MkdirAll)
+          fs.emptyDirs.add(abs);
+          call.changed.push(abs);
+          return new Response(null, { status: 200 });
+        }
+        if (method === "PATCH" && url.searchParams.get("action") === "rename") {
+          const dst = decodeURIComponent(url.searchParams.get("destination") ?? "");
+          const bytes = fs.files.get(abs);
+          if (!bytes) return new Response("404 Not Found", { status: 404 });
+          if (fs.files.has(dst) && url.searchParams.get("override") !== "true") return new Response("409 Conflict", { status: 409 });
+          if (!fs.isDir(parentOf(dst))) return new Response("500 rename: no such file or directory", { status: 500 });
+          fs.files.set(dst, bytes); // one rename(2): the old file is replaced whole
+          fs.files.delete(abs);
+          call.changed.push(abs, dst);
+          return new Response(null, { status: 200 });
+        }
+        if (method === "DELETE") {
+          if (!fs.remove(abs)) return new Response("404 Not Found", { status: 404 });
+          call.changed.push(abs);
+          return new Response(null, { status: 200 });
+        }
       }
       if (rest.startsWith("/api/raw/") && method === "GET") {
         const abs = rest.slice("/api/raw".length);
@@ -223,20 +284,22 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
       }
       if (rest.startsWith("/api/tus/")) {
         const abs = rest.slice("/api/tus".length);
-        if (url.searchParams.get("override") !== "true") return new Response("conflict", { status: 409 });
+        if (url.searchParams.get("override") !== "true" && fs.files.has(abs)) return new Response("conflict", { status: 409 });
         if (headers["tus-resumable"] !== "1.0.0") return new Response("tus?", { status: 412 });
         if (method === "POST") {
+          // filebrowser opens the target with O_CREATE|O_TRUNC under override=true: an existing file is emptied now
           tus.set(abs, Number(headers["upload-length"]));
+          fs.put(abs, new Uint8Array());
+          call.changed.push(abs);
           return new Response(null, { status: 201 });
         }
         if (method === "PATCH") {
-          const rel = abs.slice(`${HG_ROOT}/`.length);
-          if (opts.failWrites?.includes(rel)) return new Response("disk full", { status: 500 });
           const expected = tus.get(abs);
           const bytes = await bodyBytes(init?.body);
           if (expected === undefined || bytes.length !== expected) return new Response("length", { status: 400 });
           fs.put(abs, bytes);
           tus.delete(abs);
+          call.changed.push(abs);
           return new Response(null, { status: 204, headers: { "Upload-Offset": String(bytes.length) } });
         }
       }
@@ -251,7 +314,9 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
       if (url.pathname === "/api/filemanager/list" && method === "GET") {
         const abs = (url.searchParams.get("path") ?? "").replace(/[/]+$/, "");
         if (!fs.isDir(abs)) return Response.json({ type: "error", message: "no such directory" }, { status: 404 });
-        return Response.json({ files: fs.children(abs).map((c) => ({ name: c.name, type: c.kind, size: c.size })) });
+        return Response.json({
+          files: fs.children(abs).map((c) => ({ name: c.name, type: c.kind, size: opts.misreport?.(`${abs}/${c.name}`)?.size ?? c.size })),
+        });
       }
       if (url.pathname === "/api/filemanager/download" && method === "GET") {
         const abs = url.searchParams.get("path") ?? "";
@@ -268,9 +333,8 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
         const form = init?.body as FormData;
         const file = form.get("file");
         if (!(file instanceof Blob)) return Response.json({ message: "no file" }, { status: 400 });
-        const rel = `${dir}/${name}`.split("/public_html/")[1] ?? name;
-        if (opts.failWrites?.includes(rel)) return Response.json({ message: "quota" }, { status: 500 });
         fs.put(`${dir}/${name}`, new Uint8Array(await file.arrayBuffer()));
+        call.changed.push(`${dir}/${name}`);
         return new Response(null, { status: 204 });
       }
       if (url.pathname === "/api/filemanager-actions/extract-archive" && method === "POST") {
@@ -278,13 +342,27 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
         const zip = fs.files.get(j.source);
         if (!zip || !j.mergeAndOverwrite) return Response.json({ message: "bad extract" }, { status: 400 });
         for (const [name, data] of Object.entries(unzipSync(zip))) {
-          if (!name.endsWith("/")) fs.put(`${j.destinationDir}/${name}`, data);
+          const target = `${j.destinationDir}/${name.replace(/[/]+$/, "")}`;
+          if (name.endsWith("/")) fs.emptyDirs.add(target);
+          else fs.put(target, data);
+          call.changed.push(target);
         }
         return new Response(null, { status: 204 });
       }
       if (url.pathname === "/api/filemanager-actions/remove" && method === "POST") {
         const j = JSON.parse(String(init?.body)) as { paths: string[] };
-        for (const p of j.paths) fs.files.delete(p);
+        for (const p of j.paths) if (fs.remove(p)) call.changed.push(p);
+        return new Response(null, { status: 204 });
+      }
+      if (url.pathname === "/api/filemanager-actions/move" && method === "POST") {
+        const j = JSON.parse(String(init?.body)) as { source: string; destination: string; overwrite?: boolean };
+        const bytes = fs.files.get(j.source);
+        if (!bytes) return Response.json({ message: "no such file" }, { status: 404 });
+        if (fs.files.has(j.destination) && j.overwrite !== true) return Response.json({ message: "exists" }, { status: 409 });
+        if (!fs.isDir(parentOf(j.destination))) return Response.json({ message: "no such directory" }, { status: 404 });
+        fs.files.set(j.destination, bytes); // one rename(2): the old file is replaced whole
+        fs.files.delete(j.source);
+        call.changed.push(j.source, j.destination);
         return new Response(null, { status: 204 });
       }
       throw new Error(`unexpected DirectAdmin call: ${method} ${url}`);
