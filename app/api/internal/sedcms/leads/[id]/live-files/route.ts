@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { siteFilesFor } from "@/lib/sedcms/files";
+import { READ_DEADLINE_MS, Deadline } from "@/lib/sedcms/deadline";
 import { readSignedJson, sedcmsJson } from "@/lib/sedcms/http";
 import { expectHost, loadLead } from "@/lib/sedcms/lead";
 import { hostingFailure, liveFiles, siteRefusalResponse } from "@/lib/sedcms/read";
@@ -20,6 +21,16 @@ const Body = z.object({ host: z.string().max(253) }).strict();
  * longer at `host`; 403 PROTECTED, 422 NOT_STATIC, 502 HOSTING.
  */
 export async function POST(req: Request, ctx: Ctx) {
+  // No host call starts after 100 s, under the CMS's 120 s (lib/sedcms/deadline.ts).
+  const deadline = new Deadline(Date.now() + READ_DEADLINE_MS);
+  try {
+    return await readWithin(req, ctx, deadline);
+  } finally {
+    deadline.dispose();
+  }
+}
+
+async function readWithin(req: Request, ctx: Ctx, deadline: Deadline) {
   const signed = await readSignedJson(req, Body);
   if (!signed.ok) return signed.response;
   const { id } = await ctx.params;
@@ -32,7 +43,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const site = await siteFilesFor(at.host);
   if (!site.ok) return siteRefusalResponse(site);
   try {
-    const live = await liveFiles(site.files);
+    const live = await liveFiles(site.files, { deadline });
     return sedcmsJson(200, { host: at.host, files: live.files, truncated: live.truncated });
   } catch (e) {
     return hostingFailure(e, null);

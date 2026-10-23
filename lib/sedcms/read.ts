@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { NextResponse } from "next/server";
-import { SiteFilesError, type SiteFiles, type SiteRefusal } from "./files";
+import { SiteFilesError, type CallLimits, type SiteFiles, type SiteRefusal } from "./files";
 import { sedcmsError } from "./http";
 import { cmsPathAllowed, isTextPath } from "./paths";
 
@@ -54,8 +54,10 @@ export function siteRefusalResponse(r: SiteRefusal, mode: "read" | "apply" = "re
 export function hostingFailure(e: unknown, fallbackPath: string | null, extra: Record<string, unknown> = {}): NextResponse {
   const step = e instanceof SiteFilesError ? e.step : "read";
   const path = e instanceof SiteFilesError && e.path ? e.path : fallbackPath;
+  const late = e instanceof SiteFilesError && e.reason === "deadline";
   console.warn(`[sedcms] hosting ${step} failed${path ? ` for ${path}` : ""}: ${e instanceof Error ? e.message : "unknown error"}`);
-  return sedcmsError(502, "HOSTING", `The hosting failed while trying to ${step} a file.`, {
+  const message = late ? "The hosting did not answer in time." : `The hosting failed while trying to ${step} a file.`;
+  return sedcmsError(502, "HOSTING", message, {
     ...extra,
     ...(path ? { failed: { path, step } } : {}),
   });
@@ -67,9 +69,14 @@ export function hostingFailure(e: unknown, fallbackPath: string | null, extra: R
  * 25 MiB in all. Past the total, or past the listing's cap, truncated is true
  * and the remaining text files carry neither. A text file that isn't UTF-8,
  * or whose path the CMS could never write, carries no text.
+ *
+ * With a deadline: a listing it cuts short throws (the file list would be
+ * incomplete, so the route answers 502); once it passes while the text is
+ * read, the remaining text files carry neither text nor sha256, and
+ * truncated is true — as for the size budget.
  */
-export async function liveFiles(files: SiteFiles): Promise<{ files: LiveFile[]; truncated: boolean }> {
-  const listing = await files.list(LIVE_FILES_MAX_DEPTH, LIVE_FILES_MAX_ENTRIES);
+export async function liveFiles(files: SiteFiles, limits: CallLimits = {}): Promise<{ files: LiveFile[]; truncated: boolean }> {
+  const listing = await files.list(LIVE_FILES_MAX_DEPTH, LIVE_FILES_MAX_ENTRIES, limits);
   let truncated = listing.truncated;
   let used = 0;
   let usedJson = 0;
@@ -84,7 +91,7 @@ export async function liveFiles(files: SiteFiles): Promise<{ files: LiveFile[]; 
       out.push(entry);
       continue;
     }
-    if (exhausted || (f.size !== null && used + f.size > TEXT_TOTAL_MAX_BYTES)) {
+    if (exhausted || limits.deadline?.passed() || (f.size !== null && used + f.size > TEXT_TOTAL_MAX_BYTES)) {
       exhausted = truncated = true;
       out.push(entry);
       continue;
@@ -92,10 +99,15 @@ export async function liveFiles(files: SiteFiles): Promise<{ files: LiveFile[]; 
 
     let bytes: Uint8Array | null;
     try {
-      bytes = await files.read(f.path, TEXT_MAX_BYTES);
+      bytes = await files.read(f.path, TEXT_MAX_BYTES, limits);
     } catch (e) {
       if (e instanceof SiteFilesError && e.reason === "too_large") {
         out.push(entry); // over 1 MiB after all (a listing without sizes)
+        continue;
+      }
+      if (e instanceof SiteFilesError && e.reason === "deadline") {
+        exhausted = truncated = true;
+        out.push(entry);
         continue;
       }
       throw e;
@@ -121,11 +133,12 @@ export async function liveFiles(files: SiteFiles): Promise<{ files: LiveFile[]; 
   return { files: out, truncated };
 }
 
-/** Each path's live sha256, null where there is no such file, in the order asked. */
-export async function checksums(files: SiteFiles, paths: string[]): Promise<{ path: string; sha256: string | null }[]> {
+/** Each path's live sha256, null where there is no such file, in the order
+ *  asked. A deadline that passes first throws (the answer must be whole). */
+export async function checksums(files: SiteFiles, paths: string[], limits: CallLimits = {}): Promise<{ path: string; sha256: string | null }[]> {
   const out: { path: string; sha256: string | null }[] = [];
   for (const path of paths) {
-    const bytes = await files.read(path, HASH_READ_MAX_BYTES);
+    const bytes = await files.read(path, HASH_READ_MAX_BYTES, limits);
     out.push({ path, sha256: bytes === null ? null : sha256Hex(bytes) });
   }
   return out;

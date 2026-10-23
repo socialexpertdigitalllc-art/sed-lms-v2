@@ -69,6 +69,8 @@ export interface RecordedCall {
   url: string;
   headers: Record<string, string>;
   body: unknown;
+  /** Date.now() when the call was made (the fake clock under fake timers) */
+  at: number;
 }
 
 export interface HostingerWebsiteFake {
@@ -90,6 +92,10 @@ export interface FakeHostsOptions {
   shortRead?: string;
   /** fail writes (TUS PATCH on Hostinger, upload on DirectAdmin) to these relative paths */
   failWrites?: string[];
+  /** answer this call only after this many ms (setTimeout, so fake timers drive it); aborting the call's signal ends the wait, as with a real fetch */
+  delay?: (call: RecordedCall) => number;
+  /** never answer this call: it ends only when its signal aborts, as a real fetch would */
+  hang?: (call: RecordedCall) => boolean;
 }
 
 export interface FakeHosts {
@@ -126,6 +132,24 @@ function streamed(bytes: Uint8Array, chunk: number, state: FakeHosts): Response 
   return new Response(body, { status: 200, headers: { "content-type": "application/octet-stream" } });
 }
 
+const abortError = () => new DOMException("This operation was aborted", "AbortError");
+
+/** Waits ms (forever when ms is Infinity); rejects like fetch when the signal aborts. */
+function wait(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(abortError());
+    const timer = Number.isFinite(ms) ? setTimeout(resolve, ms) : null;
+    signal?.addEventListener(
+      "abort",
+      () => {
+        if (timer) clearTimeout(timer);
+        reject(abortError());
+      },
+      { once: true },
+    );
+  });
+}
+
 async function bodyBytes(body: unknown): Promise<Uint8Array> {
   if (body instanceof Uint8Array) return body;
   if (body instanceof ArrayBuffer) return new Uint8Array(body);
@@ -147,7 +171,11 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
     const url = new URL(String(input instanceof Request ? input.url : input));
     const method = (init?.method ?? "GET").toUpperCase();
     const headers = headersOf(init);
-    state.calls.push({ method, url: url.toString(), headers, body: init?.body });
+    const call: RecordedCall = { method, url: url.toString(), headers, body: init?.body, at: Date.now() };
+    state.calls.push(call);
+    if (opts.hang?.(call)) await wait(Infinity, init?.signal);
+    const delay = opts.delay?.(call) ?? 0;
+    if (delay > 0) await wait(delay, init?.signal);
 
     // ---- Hostinger API
     if (url.origin === HG_API) {

@@ -208,13 +208,27 @@ interface JsonCallResult {
   body: string;
 }
 
-/** Modern /api/* call. Non-throwing; body is the raw response text ("" on 204). */
+/** Abort `controller` when `outer` does; returns the unhooking. */
+function followSignal(controller: AbortController, outer: AbortSignal | undefined): () => void {
+  if (!outer) return () => {};
+  if (outer.aborted) {
+    controller.abort();
+    return () => {};
+  }
+  const stop = () => controller.abort();
+  outer.addEventListener("abort", stop, { once: true });
+  return () => outer.removeEventListener("abort", stop);
+}
+
+/** Modern /api/* call. Non-throwing; body is the raw response text ("" on 204).
+ *  Its timeout covers the whole exchange; `signal` stops it early. */
 async function daJson(
   pathAndQuery: string,
-  init: { method: "GET" | "POST" | "DELETE"; json?: unknown; form?: FormData; timeoutMs?: number }
+  init: { method: "GET" | "POST" | "DELETE"; json?: unknown; form?: FormData; timeoutMs?: number; signal?: AbortSignal }
 ): Promise<JsonCallResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? CALL_TIMEOUT_MS);
+  const unfollow = followSignal(controller, init.signal);
   try {
     const headers: Record<string, string> = { Authorization: authHeader() };
     let body: BodyInit | undefined;
@@ -231,6 +245,7 @@ async function daJson(
     return { ok: false, status: 0, body: e instanceof Error ? e.message : "network error" };
   } finally {
     clearTimeout(timer);
+    unfollow();
   }
 }
 
@@ -361,11 +376,14 @@ export async function uploadZipAndExtract(
 
 // ---------------------------------------------------------------------------
 // single files (SED CMS publishing). Paths are relative to the subdomain's
-// docroot and are checked by the caller (lib/sedcms/paths.ts).
+// docroot and are checked by the caller (lib/sedcms/paths.ts). Every call
+// here has its own 30 s, through an AbortSignal; reads and listings also stop
+// when the caller's signal aborts (SED CMS's deadline).
 
 /** listDir's page size: a listing this long may be cut, so it isn't trusted. */
 const LIST_LIMIT = 1000;
-const FILE_READ_TIMEOUT_MS = 60000;
+/** One single-file call, its whole exchange. */
+const SINGLE_FILE_TIMEOUT_MS = 30000;
 
 const inDocroot = (sub: string, rel: string) => (rel ? `${docrootFor(sub)}/${rel}` : docrootFor(sub));
 
@@ -389,9 +407,9 @@ function entryKind(f: Record<string, unknown>): DocrootEntry["kind"] {
  * docroot) — the file manager listing clearDocroot already uses, with sizes.
  * null when it can't be listed, or when the listing may have been cut short.
  */
-export async function listDocrootDir(sub: string, relDir: string): Promise<DocrootEntry[] | null> {
+export async function listDocrootDir(sub: string, relDir: string, opts: { signal?: AbortSignal } = {}): Promise<DocrootEntry[] | null> {
   const q = new URLSearchParams({ path: inDocroot(sub, relDir), limit: String(LIST_LIMIT) }).toString();
-  const r = await daJson(`/api/filemanager/list?${q}`, { method: "GET" });
+  const r = await daJson(`/api/filemanager/list?${q}`, { method: "GET", timeoutMs: SINGLE_FILE_TIMEOUT_MS, signal: opts.signal });
   if (!r.ok) return null;
   try {
     const j = JSON.parse(r.body) as { files?: Record<string, unknown>[] };
@@ -425,10 +443,12 @@ export async function readDocrootFile(
   sub: string,
   relPath: string,
   maxBytes: number,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<{ ok: true; bytes: Uint8Array | null } | { ok: false; tooLarge: boolean; message: string }> {
   const q = new URLSearchParams({ path: inDocroot(sub, relPath) }).toString();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FILE_READ_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), SINGLE_FILE_TIMEOUT_MS);
+  const unfollow = followSignal(controller, opts.signal);
   try {
     const res = await fetch(`${host()}/api/filemanager/download?${q}`, {
       method: "GET",
@@ -474,10 +494,17 @@ export async function readDocrootFile(
     return {
       ok: false,
       tooLarge: false,
-      message: controller.signal.aborted ? `no answer within ${FILE_READ_TIMEOUT_MS / 1000}s` : e instanceof Error ? e.message : "network error",
+      message: opts.signal?.aborted
+        ? "stopped by the caller"
+        : controller.signal.aborted
+          ? `no answer within ${SINGLE_FILE_TIMEOUT_MS / 1000}s`
+          : e instanceof Error
+            ? e.message
+            : "network error",
     };
   } finally {
     clearTimeout(timer);
+    unfollow();
   }
 }
 
@@ -486,29 +513,54 @@ export async function readDocrootFile(
  * exists: one upload with overwrite=true (the verified upload, `dir` param).
  * Into a folder that doesn't: a one-file zip through the verified
  * upload + extract-archive + remove, which creates the folders. A zip left
- * behind by a failed remove is harmless (never a CMS path) and is reported.
+ * behind is harmless (never a CMS path) and is reported.
+ *
+ * Each call has its own 30 s. On the zip path, `canContinue` is asked before
+ * the extract (the step that writes the file) and before the remove: when it
+ * says no (SED CMS's deadline has passed), nothing more is started — the file
+ * isn't written (`stopped`), or the zip stays behind.
  */
 export async function writeDocrootFile(
   sub: string,
   relPath: string,
   bytes: Uint8Array,
-  opts: { parentExists: boolean },
-): Promise<{ ok: true; leftover?: string } | { ok: false; message: string }> {
+  opts: { parentExists: boolean; canContinue?: () => boolean },
+): Promise<{ ok: true; leftover?: string } | { ok: false; stopped?: boolean; leftover?: string; message: string }> {
   const slash = relPath.lastIndexOf("/");
   const parent = slash === -1 ? "" : relPath.slice(0, slash);
   const name = relPath.slice(slash + 1);
+  const canContinue = opts.canContinue ?? (() => true);
 
   if (opts.parentExists) {
     const fd = new FormData();
     fd.append("file", new File([new Uint8Array(bytes)], name, { type: "application/octet-stream" }));
     const q = new URLSearchParams({ dir: inDocroot(sub, parent), name, overwrite: "true" }).toString();
-    const upload = await daJson(`/api/filemanager-actions/upload?${q}`, { method: "POST", form: fd, timeoutMs: UPLOAD_TIMEOUT_MS });
+    const upload = await daJson(`/api/filemanager-actions/upload?${q}`, { method: "POST", form: fd, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
     return upload.ok ? { ok: true } : { ok: false, message: `upload: ${jsonErrorMessage(upload)}` };
   }
 
+  const docroot = docrootFor(sub);
   const zipName = `sedcms-${randomBytes(8).toString("hex")}.zip`;
-  const done = await uploadZipAndExtract(sub, zipSync({ [relPath]: new Uint8Array(bytes) }), zipName);
-  if (done.ok) return { ok: true };
-  if (done.failedStep === "delete") return { ok: true, leftover: zipName };
-  return { ok: false, message: `${done.failedStep ?? "upload"}: ${done.message ?? "failed"}` };
+  const zipPath = `${docroot}/${zipName}`;
+  const fd = new FormData();
+  fd.append("file", new File([new Uint8Array(zipSync({ [relPath]: new Uint8Array(bytes) }))], zipName, { type: "application/zip" }));
+  const uq = new URLSearchParams({ dir: docroot, name: zipName, overwrite: "true" }).toString();
+  const upload = await daJson(`/api/filemanager-actions/upload?${uq}`, { method: "POST", form: fd, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
+  if (!upload.ok) return { ok: false, message: `upload: ${jsonErrorMessage(upload)}` };
+
+  if (!canContinue()) return { ok: false, stopped: true, leftover: zipName, message: "out of time before extracting" };
+  const extract = await daJson("/api/filemanager-actions/extract-archive", {
+    method: "POST",
+    json: { source: zipPath, destinationDir: docroot, members: [], mergeAndOverwrite: true },
+    timeoutMs: SINGLE_FILE_TIMEOUT_MS,
+  });
+  if (!extract.ok) return { ok: false, leftover: zipName, message: `extract: ${jsonErrorMessage(extract)}` };
+
+  if (!canContinue()) return { ok: true, leftover: zipName };
+  const removed = await daJson("/api/filemanager-actions/remove", {
+    method: "POST",
+    json: { paths: [zipPath] },
+    timeoutMs: SINGLE_FILE_TIMEOUT_MS,
+  });
+  return removed.ok ? { ok: true } : { ok: true, leftover: zipName };
 }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { siteFilesFor } from "@/lib/sedcms/files";
+import { READ_DEADLINE_MS, Deadline } from "@/lib/sedcms/deadline";
 import { readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
 import { expectHost, loadLead } from "@/lib/sedcms/lead";
 import { cmsPathAllowed } from "@/lib/sedcms/paths";
@@ -21,6 +22,16 @@ const Body = z.object({ host: z.string().max(253), paths: z.array(z.string().max
  * any hosting call); 409 HOST_CHANGED when the lead's site moved.
  */
 export async function POST(req: Request, ctx: Ctx) {
+  // No host call starts after 100 s, under the CMS's 120 s (lib/sedcms/deadline.ts).
+  const deadline = new Deadline(Date.now() + READ_DEADLINE_MS);
+  try {
+    return await readWithin(req, ctx, deadline);
+  } finally {
+    deadline.dispose();
+  }
+}
+
+async function readWithin(req: Request, ctx: Ctx, deadline: Deadline) {
   const signed = await readSignedJson(req, Body);
   if (!signed.ok) return signed.response;
   const { host, paths } = signed.body;
@@ -36,7 +47,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const site = await siteFilesFor(at.host);
   if (!site.ok) return siteRefusalResponse(site);
   try {
-    return sedcmsJson(200, { files: await checksums(site.files, paths) });
+    return sedcmsJson(200, { files: await checksums(site.files, paths, { deadline }) });
   } catch (e) {
     return hostingFailure(e, null);
   }

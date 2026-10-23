@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cloudflareConfigured, purgeCacheByUrls } from "@/lib/cloudflare/client";
+import type { Deadline } from "./deadline";
 import { SiteFilesError, type SiteFiles } from "./files";
 import { MAX_FILE_BYTES, cmsPathAllowed } from "./paths";
 import { HASH_READ_MAX_BYTES, sha256Hex } from "./read";
@@ -18,6 +19,13 @@ import { HASH_READ_MAX_BYTES, sha256Hex } from "./read";
  *   5. Cloudflare is purged, best effort, when the lead's domain has a zone;
  *   6. one activity_log row (never any file content);
  *   7. the lock is released.
+ *
+ * Time (lib/sedcms/deadline.ts): the route gives the apply a deadline 240 s
+ * after the request was accepted, lock wait included. No read, write or purge
+ * starts after it; a read in flight stops at it; a write in flight finishes on
+ * its own 30 s. An apply the deadline cuts answers as a partial failure
+ * (what was written, and the first file that wasn't), is never purged, and
+ * the CMS's "Check" settles it.
  */
 
 export const APPLY_MAX_FILES = 50;
@@ -116,19 +124,33 @@ export interface ApplyResult {
 export type ApplyOutcome =
   | { kind: "applied"; results: ApplyResult[] }
   | { kind: "conflict"; files: { path: string; expectedSha256: string | null; liveSha256: string | null }[] }
-  | { kind: "failed"; results: ApplyResult[]; failed: { path: string; step: "read" | "write" }; wrote: boolean };
+  | {
+      kind: "failed";
+      results: ApplyResult[];
+      failed: { path: string; step: "read" | "write" };
+      /** a write was started (so the site may have changed) */
+      wrote: boolean;
+      /** the deadline stopped it, rather than a host */
+      cut: boolean;
+    };
 
-export async function applyChanges(files: SiteFiles, changes: DecodedChange[]): Promise<ApplyOutcome> {
+const isLate = (e: unknown) => e instanceof SiteFilesError && e.reason === "deadline";
+
+export async function applyChanges(files: SiteFiles, changes: DecodedChange[], opts: { deadline?: Deadline } = {}): Promise<ApplyOutcome> {
+  const limits = { deadline: opts.deadline };
+  const late = () => opts.deadline?.passed() ?? false;
+
   // 3. every target's live bytes, before anything is written
   const already = new Set<string>();
   const conflicts: { path: string; expectedSha256: string | null; liveSha256: string | null }[] = [];
   for (const c of changes) {
+    if (late()) return { kind: "failed", results: [], failed: { path: c.path, step: "read" }, wrote: false, cut: true };
     let live: Uint8Array | null;
     try {
-      live = await files.read(c.path, HASH_READ_MAX_BYTES);
+      live = await files.read(c.path, HASH_READ_MAX_BYTES, limits);
     } catch (e) {
       logFailure(e, c.path, "read");
-      return { kind: "failed", results: [], failed: { path: c.path, step: "read" }, wrote: false };
+      return { kind: "failed", results: [], failed: { path: c.path, step: "read" }, wrote: false, cut: isLate(e) };
     }
     const liveSha256 = live === null ? null : sha256Hex(live);
     if (liveSha256 === c.sha256) already.add(c.path);
@@ -136,18 +158,21 @@ export async function applyChanges(files: SiteFiles, changes: DecodedChange[]): 
   }
   if (conflicts.length > 0) return { kind: "conflict", files: conflicts };
 
-  // 4. one by one, in the order given
+  // 4. one by one, in the order given; none started after the deadline
   const results: ApplyResult[] = [];
+  const someWritten = () => results.some((r) => r.outcome === "written");
   for (const c of changes) {
     if (already.has(c.path)) {
       results.push({ path: c.path, outcome: "unchanged", sha256: c.sha256 });
       continue;
     }
+    if (late()) return { kind: "failed", results, failed: { path: c.path, step: "write" }, wrote: someWritten(), cut: true };
     try {
-      await files.write(c.path, c.bytes);
+      await files.write(c.path, c.bytes, limits);
     } catch (e) {
       logFailure(e, c.path, "write");
-      return { kind: "failed", results, failed: { path: c.path, step: "write" }, wrote: true };
+      // A write the deadline kept from starting changed nothing; any other failure may have.
+      return { kind: "failed", results, failed: { path: c.path, step: "write" }, wrote: isLate(e) ? someWritten() : true, cut: isLate(e) };
     }
     results.push({ path: c.path, outcome: "written", sha256: c.sha256 });
   }
@@ -181,18 +206,18 @@ export function purgeUrls(host: string, domain: string, paths: string[]): string
  * Purge the written files when Cloudflare fronts the lead's domain (its
  * client_domains row, not a failed one, has a zone, and the site's host is
  * that domain or under it). Never throws: true only when every purge call
- * succeeded.
+ * succeeded. Nothing is sent once the deadline has passed.
  */
-export async function purgeWritten(admin: SupabaseClient, leadId: string, host: string, written: string[]): Promise<boolean> {
-  if (written.length === 0 || !cloudflareConfigured()) return false;
+export async function purgeWritten(admin: SupabaseClient, leadId: string, host: string, written: string[], deadline?: Deadline): Promise<boolean> {
+  if (written.length === 0 || !cloudflareConfigured() || deadline?.passed()) return false;
   try {
     const { data, error } = await admin.from("client_domains").select("domain, cf_zone_id, status").eq("lead_id", leadId);
     if (error || !Array.isArray(data)) return false;
     const row = (data as { domain: string; cf_zone_id: string | null; status: string }[]).find(
       (d) => d.status !== "failed" && d.cf_zone_id && (host === d.domain || host.endsWith(`.${d.domain}`)),
     );
-    if (!row?.cf_zone_id) return false;
-    const purged = await purgeCacheByUrls(row.cf_zone_id, purgeUrls(host, row.domain, written));
+    if (!row?.cf_zone_id || deadline?.passed()) return false;
+    const purged = await purgeCacheByUrls(row.cf_zone_id, purgeUrls(host, row.domain, written), { signal: deadline?.signal });
     if (!purged.ok) console.warn(`[sedcms] apply: the Cloudflare purge for ${host} failed: ${purged.message ?? "unknown"}`);
     return purged.ok;
   } catch {
@@ -207,7 +232,16 @@ export async function purgeWritten(admin: SupabaseClient, leadId: string, host: 
 export async function logApply(
   admin: SupabaseClient,
   leadId: string,
-  entry: { requestId: string; host: string; paths: string[]; outcome: "applied" | "unchanged" | "failed"; written: string[]; failed?: { path: string; step: string } },
+  entry: {
+    requestId: string;
+    host: string;
+    paths: string[];
+    outcome: "applied" | "unchanged" | "failed";
+    written: string[];
+    failed?: { path: string; step: string };
+    /** the deadline stopped it */
+    timedOut?: true;
+  },
 ): Promise<void> {
   try {
     const { error } = await admin.from("activity_log").insert({

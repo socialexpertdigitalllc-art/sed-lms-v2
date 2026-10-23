@@ -40,12 +40,25 @@ export interface CfResponse<T> {
   resultInfo: Record<string, unknown> | null;
 }
 
+/** Abort `controller` when `outer` does; returns the unhooking. */
+function followSignal(controller: AbortController, outer: AbortSignal | undefined): () => void {
+  if (!outer) return () => {};
+  if (outer.aborted) {
+    controller.abort();
+    return () => {};
+  }
+  const stop = () => controller.abort();
+  outer.addEventListener("abort", stop, { once: true });
+  return () => outer.removeEventListener("abort", stop);
+}
+
 async function cfOnce<T>(
   path: string,
-  init: { method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"; json?: unknown; headers?: Record<string, string> },
+  init: { method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"; json?: unknown; headers?: Record<string, string>; signal?: AbortSignal },
 ): Promise<CfResponse<T>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const unfollow = followSignal(controller, init.signal);
   try {
     const res = await fetch(`${API}${path}`, {
       method: init.method,
@@ -75,6 +88,7 @@ async function cfOnce<T>(
     return { ok: false, status: 0, result: null, errors: [{ code: 0, message: e instanceof Error ? e.message : "network error" }], resultInfo: null };
   } finally {
     clearTimeout(timer);
+    unfollow();
   }
 }
 
@@ -82,10 +96,10 @@ async function cfOnce<T>(
  *  timed out may still have been applied (a registration certainly may). */
 async function cf<T>(
   path: string,
-  init: { method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"; json?: unknown; headers?: Record<string, string> },
+  init: { method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"; json?: unknown; headers?: Record<string, string>; signal?: AbortSignal },
 ): Promise<CfResponse<T>> {
   const first = await cfOnce<T>(path, init);
-  if (first.status !== 0 || init.method !== "GET") return first;
+  if (first.status !== 0 || init.method !== "GET" || init.signal?.aborted) return first;
   return cfOnce<T>(path, init);
 }
 
@@ -323,13 +337,20 @@ const PURGE_BATCH = 30;
 /**
  * Drop Cloudflare's cached copies of these exact URLs (scheme and host
  * included), 30 at a time: POST /zones/{z}/purge_cache { files }. The token
- * needs the zone's Cache Purge permission. Stops at the first failure.
+ * needs the zone's Cache Purge permission. Stops at the first failure. Each
+ * batch has 30 s; none starts, and one in flight stops, once `signal` aborts.
  */
-export async function purgeCacheByUrls(zoneId: string, urls: string[]): Promise<{ ok: boolean; message?: string }> {
+export async function purgeCacheByUrls(
+  zoneId: string,
+  urls: string[],
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ ok: boolean; message?: string }> {
   for (let i = 0; i < urls.length; i += PURGE_BATCH) {
+    if (opts.signal?.aborted) return { ok: false, message: "stopped before every batch was sent" };
     const r = await cf<{ id: string }>(`/zones/${encodeURIComponent(zoneId)}/purge_cache`, {
       method: "POST",
       json: { files: urls.slice(i, i + PURGE_BATCH) },
+      signal: opts.signal,
     });
     if (!r.ok) return { ok: false, message: cfMessage(r) };
   }

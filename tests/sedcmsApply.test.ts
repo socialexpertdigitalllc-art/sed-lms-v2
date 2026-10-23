@@ -23,6 +23,10 @@ class MemSiteFiles implements SiteFiles {
   failWrite: string | null = null;
   failRead: string | null = null;
   gate: Promise<void> | null = null;
+  /** each write takes this long (setTimeout, so fake timers drive it) */
+  writeDelayMs = 0;
+  /** Date.now() as each write began */
+  readonly writeTimes: number[] = [];
   constructor(readonly tag: string) {}
 
   async list() {
@@ -36,6 +40,8 @@ class MemSiteFiles implements SiteFiles {
   }
   async write(path: string, bytes: Uint8Array) {
     this.ops.push(`${this.tag}:write:${path}`);
+    this.writeTimes.push(Date.now());
+    if (this.writeDelayMs) await new Promise((resolve) => setTimeout(resolve, this.writeDelayMs));
     if (this.gate) await this.gate;
     if (path === this.failWrite) throw new SiteFilesError("write", "hosting", "HTTP 500 from srv955", path);
     this.files.set(path, bytes);
@@ -462,6 +468,87 @@ describe("apply: one at a time per site", () => {
     expect((await apply(LEAD, { host: HOST, requestId: REQUEST_ID, changes: [change("index.html", "<h1>Old</h1>", "x")] })).status).toBe(502);
     site.failWrite = null;
     expect((await apply(LEAD, { host: HOST, requestId: REQUEST_ID, changes: [change("index.html", "<h1>Old</h1>", "x")] })).status).toBe(200);
+  });
+});
+
+describe("apply: 240 s from when the request was accepted, on fake time", () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] }));
+  afterEach(() => vi.useRealTimers());
+
+  /** Lets requests run on (setImmediate is real under these fake timers) until done() holds. */
+  async function flushUntil(done: () => boolean) {
+    for (let i = 0; i < 1000 && !done(); i++) await new Promise((resolve) => setImmediate(resolve));
+    if (!done()) throw new Error("timed out waiting");
+  }
+
+  it("a cut apply answers what was written and the first file that wasn't, starts no write after 240 s, and isn't purged", async () => {
+    site.writeDelayMs = 100_000;
+    site.files.set("about.html", enc("<p>About</p>"));
+    site.files.set("contact.html", enc("<p>Contact</p>"));
+    const start = Date.now();
+    const pending = apply(LEAD, {
+      host: HOST,
+      requestId: REQUEST_ID,
+      changes: [
+        change("index.html", "<h1>Old</h1>", "<h1>New</h1>"),
+        change("assets/js/components.js", "old();", "next();"),
+        change("about.html", "<p>About</p>", "<p>About us</p>"),
+        change("contact.html", "<p>Contact</p>", "<p>Contact us</p>"),
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(600_000);
+    const res = await pending;
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body).toEqual({
+      code: "HOSTING",
+      message: expect.any(String),
+      results: [
+        { path: "index.html", outcome: "written", sha256: sha("<h1>New</h1>") },
+        { path: "assets/js/components.js", outcome: "written", sha256: sha("next();") },
+        { path: "about.html", outcome: "written", sha256: sha("<p>About us</p>") },
+      ],
+      failed: { path: "contact.html", step: "write" },
+    });
+    expect(body.message).toMatch(/time/);
+    expect(site.writeTimes).toHaveLength(3);
+    for (const t of site.writeTimes) expect(t).toBeLessThan(start + 240_000);
+    expect(site.ops).not.toContain("a:write:contact.html");
+    expect(state.purges).toHaveLength(0);
+    const [row] = logRows();
+    expect(row.new_value).toEqual({
+      requestId: REQUEST_ID,
+      host: HOST,
+      paths: ["index.html", "assets/js/components.js", "about.html", "contact.html"],
+      outcome: "failed",
+      written: ["index.html", "assets/js/components.js", "about.html"],
+      failed: { path: "contact.html", step: "write" },
+      timedOut: true,
+    });
+  });
+
+  it("an apply that waited behind another past its own deadline reads and writes nothing; the first isn't purged once its deadline has passed", async () => {
+    site.writeDelayMs = 250_000;
+    site.files.set("about.html", enc("<p>About</p>"));
+    const first = apply(LEAD, { host: HOST, requestId: REQUEST_ID, changes: [change("index.html", "<h1>Old</h1>", "<h1>New</h1>")] });
+    await flushUntil(() => site.ops.includes("a:write:index.html"));
+    const second = apply(LEAD, {
+      host: HOST,
+      requestId: "6f0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f",
+      changes: [change("about.html", "<p>About</p>", "<p>About us</p>")],
+    });
+    await vi.advanceTimersByTimeAsync(600_000);
+    const [a, b] = [await first, await second];
+
+    expect(a.status).toBe(200);
+    expect(await a.json()).toEqual({ results: [{ path: "index.html", outcome: "written", sha256: sha("<h1>New</h1>") }], purged: false });
+    expect(state.purges).toHaveLength(0);
+
+    expect(b.status).toBe(502);
+    expect(await b.json()).toEqual({ code: "HOSTING", message: expect.any(String), results: [], failed: { path: "about.html", step: "read" } });
+    expect(site.ops).not.toContain("a:read:about.html");
+    expect(site.ops).not.toContain("a:write:about.html");
+    expect(logRows().map((r) => (r.new_value as { requestId: string }).requestId)).toEqual([REQUEST_ID]);
   });
 });
 
