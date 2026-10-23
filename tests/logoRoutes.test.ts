@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   perms: new Set<string>(["leads.edit"]),
   closer: false,
   minimax: true,
+  google: true,
   db: null as unknown as MemoryDb,
   after: [] as (() => unknown)[],
   upload: { directUrl: "https://i.ibb.co/abc/abc-roofing-llc-logo.png", hostId: "h1", provider: "imgbb", attempts: [], lastError: null } as Record<string, unknown>,
@@ -31,12 +32,12 @@ vi.mock("@/lib/teams/closers", () => ({
   actingAs: (actor: string, agent: string | null) => (agent && agent !== actor ? { as: "closer", on_behalf_of: agent, performed_by: actor } : null),
 }));
 vi.mock("@/lib/logos/deps", async () => {
-  const { LogoError } = await import("@/lib/logos/store");
+  // The real engine choice (pure); only which keys are set up is faked.
+  const real = await vi.importActual<typeof import("@/lib/logos/deps")>("@/lib/logos/deps");
   return {
-    minimaxSpec: async () => {
-      if (!state.minimax) throw new LogoError("MiniMax isn't set up — an admin needs to add its API key under Admin → AI providers.", 503);
-      return { endpoint: "https://api.minimax.io/v1/chat/completions", apiKey: "k" };
-    },
+    designers: async () => ({ google: state.google ? { apiKey: "g" } : null, minimax: state.minimax ? { apiKey: "m" } : null }),
+    defaultEngine: real.defaultEngine,
+    NO_DESIGNER_MESSAGE: real.NO_DESIGNER_MESSAGE,
     productionLogoDeps: () => ({ deps: true }),
     logoStorage: () => ({ get: async () => state.stored }),
   };
@@ -72,6 +73,7 @@ beforeEach(() => {
   state.perms = new Set(["leads.edit"]);
   state.closer = false;
   state.minimax = true;
+  state.google = true;
   state.after = [];
   state.db = memorySupabase({ leads: [{ ...lead }], [LOGO_TABLE]: [], activity_log: [] }, { [LOGO_TABLE]: () => ({ id: crypto.randomUUID(), candidates: [], concepts: [], notes: [], images_drawn: 0, accepted_index: null }) });
   mocks.run.mockClear();
@@ -108,7 +110,8 @@ describe("POST /logo — start a round", () => {
     expect(state.db.tables[LOGO_TABLE]).toHaveLength(1);
     expect(state.after).toHaveLength(1);
     await state.after[0]();
-    expect(mocks.run).toHaveBeenCalledWith(j.generation.id, { deps: true }, { font: null });
+    // MiniMax designs by default (the plan the company pays for); Google is picked per round
+    expect(mocks.run).toHaveBeenCalledWith(j.generation.id, { deps: true }, { font: null, engine: "minimax" });
   });
 
   it("one at a time per lead: a second press shows the running one", async () => {
@@ -136,12 +139,36 @@ describe("POST /logo — start a round", () => {
     expect((await ok.json()).generation).toMatchObject({ mode: "refine", parentId: GEN, parentIndex: 1, instructions: "simpler", logoText: "ABC" });
   });
 
-  it("MiniMax not set up → a clear 503 before anything is stored", async () => {
+  it("the designer: MiniMax by default, Google when asked; one that isn't set up is a clear 503 before anything is stored", async () => {
+    const google = await POST(post({ mode: "new", engine: "google" }), ctx);
+    expect(google.status).toBe(201);
+    await state.after[0]();
+    expect(mocks.run).toHaveBeenLastCalledWith(expect.any(String), { deps: true }, { font: null, engine: "google" });
+
+    state.db.tables[LOGO_TABLE] = [];
+    state.google = false;
+    const asked = await POST(post({ mode: "new", engine: "google" }), ctx);
+    expect(asked.status).toBe(503);
+    expect((await asked.json()).error).toMatch(/Google isn't set up.*Gemini API key/);
+    const fallback = await POST(post({ mode: "new" }), ctx); // nobody asked: MiniMax
+    expect(fallback.status).toBe(201);
+
+    state.db.tables[LOGO_TABLE] = [];
+    state.google = true;
     state.minimax = false;
-    const res = await POST(post({ mode: "new" }), ctx);
-    expect(res.status).toBe(503);
-    expect((await res.json()).error).toMatch(/Admin → AI providers/);
+    const onlyGoogle = await POST(post({ mode: "new" }), ctx); // nobody asked, only Google set up: Google
+    expect(onlyGoogle.status).toBe(201);
+    await state.after[state.after.length - 1]();
+    expect(mocks.run).toHaveBeenLastCalledWith(expect.any(String), { deps: true }, { font: null, engine: "google" });
+    state.google = false;
+
+    state.db.tables[LOGO_TABLE] = [];
+    state.minimax = false;
+    const none = await POST(post({ mode: "new" }), ctx);
+    expect(none.status).toBe(503);
+    expect((await none.json()).error).toMatch(/No logo designer is set up/);
     expect(state.db.tables[LOGO_TABLE]).toHaveLength(0);
+    expect((await POST(post({ mode: "new", engine: "dall-e" }), ctx)).status).toBe(422);
   });
 
   it("per-person hourly limit (a runaway guard)", async () => {
@@ -173,7 +200,7 @@ describe("POST /logo — start a round", () => {
     const res = await POST(post({ mode: "new", font: "playfair" }), ctx);
     expect(res.status).toBe(201);
     await state.after[0]();
-    expect(mocks.run).toHaveBeenCalledWith((await res.json()).generation.id, { deps: true }, { font: "playfair" });
+    expect(mocks.run).toHaveBeenCalledWith((await res.json()).generation.id, { deps: true }, { font: "playfair", engine: "minimax" });
   });
 
   it("a migration not applied yet says so", async () => {
@@ -200,6 +227,7 @@ describe("GET — the rounds, the brief, today's allowance", () => {
     expect(JSON.stringify(j)).not.toMatch(/lead-logos\//);
     expect(j.brief).toMatchObject({ logoText: "ABC Roofing", colors: [{ name: "navy blue" }, { name: "bright orange" }] });
     expect(j.budget).toEqual({ used: 2, limit: null });
+    expect(j.engines).toEqual({ google: true, minimax: true, default: "minimax" });
     expect((await (await GET_ONE(new Request("http://x"), genCtx)).json()).generation.id).toBe(GEN);
   });
 });

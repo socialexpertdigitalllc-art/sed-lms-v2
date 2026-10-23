@@ -16,13 +16,22 @@ import { CHECKER_STYLE, DesignImage, Swatches } from "./LogoParts";
 
 export type RetryMode = "refine" | "idea";
 
+export type Designer = "google" | "minimax";
+
 export interface RetryRequest {
   mode: "refine" | "idea";
   instructions: string;
   logoText: string;
   /** A font picked from the list (every design uses it); absent = the AI chooses. */
   font?: string;
+  /** Which designer draws it; absent = the default. */
+  engine?: Designer;
 }
+
+const DESIGNER_LABEL: Record<Designer, string> = {
+  google: "Google — complete logo designs (Nano Banana Pro)",
+  minimax: "MiniMax — symbol + name set in a font (spelling guaranteed)",
+};
 
 const CHANGE_CHIPS = ["Bigger symbol", "Smaller symbol", "A different font", "Bolder lettering", "All capitals", "Name on one line", "Name on two lines", "Simpler symbol", "A different symbol", "No symbol, just the name", "More space between letters"];
 const IDEA_CHIPS = ["Symbol beside the name", "Initials in a badge", "Just the name, two colours", "Bold and industrial", "Friendly and rounded", "Elegant and premium", "Modern and minimal", "Script lettering"];
@@ -42,6 +51,8 @@ export function LogoRetryDialog({
   colors,
   busy,
   error,
+  engines = [],
+  defaultEngine = null,
   onClose,
   onSubmit,
 }: {
@@ -52,6 +63,9 @@ export function LogoRetryDialog({
   colors: BrandColor[];
   busy: boolean;
   error: string | null;
+  /** The designers that are set up (the picker shows when there are two). */
+  engines?: Designer[];
+  defaultEngine?: Designer | null;
   onClose: () => void;
   onSubmit: (r: RetryRequest) => void;
 }) {
@@ -60,6 +74,7 @@ export function LogoRetryDialog({
   const [idea, setIdea] = useState("");
   const [words, setWords] = useState(logoText);
   const [font, setFont] = useState("");
+  const [engine, setEngine] = useState<Designer | "">(defaultEngine ?? "");
   const box = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -83,7 +98,7 @@ export function LogoRetryDialog({
     e.preventDefault();
     if (!canSend) return;
     const said = text.trim() || (mode === "refine" && font ? `Use the ${LOGO_FONTS.find((f) => f.key === font)?.label ?? font} font` : "");
-    onSubmit({ mode, instructions: said, logoText: words.trim(), ...(font ? { font } : {}) });
+    onSubmit({ mode, instructions: said, logoText: words.trim(), ...(font ? { font } : {}), ...(engine ? { engine } : {}) });
   }
 
   const tab = (m: RetryMode, label: string, disabled = false) => (
@@ -168,6 +183,26 @@ export function LogoRetryDialog({
             </div>
           </div>
 
+          {engines.length > 1 ? (
+            <div>
+              <label htmlFor="logo-retry-engine" className="text-xs font-medium text-text">
+                Designer
+              </label>
+              <select
+                id="logo-retry-engine"
+                value={engine}
+                onChange={(e) => setEngine(e.target.value as Designer)}
+                className="mt-1 w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"
+              >
+                {engines.map((e) => (
+                  <option key={e} value={e}>
+                    {DESIGNER_LABEL[e]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
           <div>
             <label htmlFor="logo-retry-font" className="text-xs font-medium text-text">
               Font
@@ -198,7 +233,7 @@ export function LogoRetryDialog({
               maxLength={80}
               className="mt-1 w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent focus:ring-2 focus:ring-accent/30"
             />
-            <p className="mt-1 text-[11px] text-text-faint">Set in the font exactly as typed — always spelled right. Only these words go on it.</p>
+            <p className="mt-1 text-[11px] text-text-faint">Only these words go on it, exactly as typed — the spelling is checked on every design.</p>
           </div>
 
           <p className="flex items-center gap-2 text-[11px] text-text-muted">

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { logoAccess, logoErrorResponse } from "@/lib/logos/access";
 import { logoBrief } from "@/lib/logos/brief";
 import { isLogoFont } from "@/lib/logos/fontList";
-import { minimaxSpec, productionLogoDeps } from "@/lib/logos/deps";
+import { defaultEngine, designers, NO_DESIGNER_MESSAGE, productionLogoDeps } from "@/lib/logos/deps";
 import { runLogoGeneration } from "@/lib/logos/runner";
 import {
   budgetMessage,
@@ -24,9 +24,11 @@ export const maxDuration = 300;
 
 /**
  * The lead's AI logo generator (lib/logos/*).
- * GET: the rounds so far (newest first) and what the generator will use.
+ * GET: the rounds so far (newest first), what the generator will use, and
+ * which designers are set up (Google, MiniMax).
  * POST: start a round — fresh designs, the person's own idea, or a change to
- * one design. The work runs after the response; the page polls the round.
+ * one design — with a designer (default: Google when set up). The work runs
+ * after the response; the page polls the round.
  */
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -36,11 +38,12 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const brief = logoBrief(a.lead);
   try {
     const now = new Date();
-    const [rows, used] = await Promise.all([listGenerations(a.admin, id, now), imagesUsedToday(a.admin, now)]);
+    const [rows, used, d] = await Promise.all([listGenerations(a.admin, id, now), imagesUsedToday(a.admin, now), designers()]);
     return NextResponse.json({
       generations: rows.map((r) => generationView(r)),
       brief: { logoText: brief.logoText, trade: brief.trade, colors: brief.colors },
       budget: { used, limit: dailyImageBudget() },
+      engines: { google: !!d.google, minimax: !!d.minimax, default: defaultEngine(d) },
     });
   } catch (e) {
     return logoErrorResponse(e);
@@ -56,6 +59,8 @@ const startSchema = z
     parentIndex: z.number().int().min(0).max(50).optional(),
     /** A font the person picked (fontList.ts); every design uses it. */
     font: z.string().refine(isLogoFont, "Unknown font").optional(),
+    /** The designer: google (complete logos) or minimax (symbol + typeset name). */
+    engine: z.enum(["google", "minimax"]).optional(),
   })
   .refine((b) => b.mode !== "refine" || (b.parentId && b.parentIndex !== undefined), { message: "Pick the design to change." })
   .refine((b) => b.mode !== "refine" || !!b.instructions, { message: "Say what to change." });
@@ -73,7 +78,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       const parent = await getGeneration(a.admin, id, body.parentId!);
       if (!parent?.candidates?.some((c) => c.index === body.parentIndex)) throw new LogoError("That design is gone — pick another.", 404);
     }
-    const spec = await minimaxSpec();
+    const d = await designers();
+    const engine = body.engine ?? defaultEngine(d);
+    if (!engine) throw new LogoError(NO_DESIGNER_MESSAGE, 503);
+    if (!d[engine]) throw new LogoError(engine === "google" ? "Google isn't set up — an admin needs to add the Gemini API key under Admin → AI providers." : "MiniMax isn't set up — an admin needs to add its API key under Admin → AI providers.", 503);
     const now = new Date();
     const limited = await rateLimitReason(a.admin, a.userId, id, now);
     if (limited) throw new LogoError(limited, 429);
@@ -87,8 +95,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       now,
     );
     if (created) {
-      const deps = productionLogoDeps(a.admin, spec);
-      after(() => runLogoGeneration(row.id, deps, { font: body.font ?? null }).catch((e) => console.error(`[logos] ${row.id}:`, e)));
+      const deps = productionLogoDeps(a.admin, d);
+      after(() => runLogoGeneration(row.id, deps, { font: body.font ?? null, engine }).catch((e) => console.error(`[logos] ${row.id}:`, e)));
     }
     return NextResponse.json({ created, generation: generationView(row) }, { status: created ? 201 : 200 });
   } catch (e) {

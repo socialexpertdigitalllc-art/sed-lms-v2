@@ -71,6 +71,12 @@ export interface LogoCandidate {
   iconUrl?: string | null;
   /** What the symbol check found. */
   iconCheck?: IconReading | null;
+  /** Which designer made it: google (a complete logo) or minimax (symbol + typeset name). */
+  engine?: "google" | "minimax";
+  /** The Google image model that drew it. */
+  model?: string;
+  /** How many times Google had to fix the lettering. */
+  fixes?: number;
 }
 
 export interface LogoGeneration {
@@ -266,6 +272,8 @@ export function candidateView(c: LogoCandidate) {
     font: c.font ?? null,
     layout: c.layout ?? null,
     iconCheck: c.iconCheck ?? null,
+    engine: c.engine ?? (c.typeset ? "minimax" : null),
+    fixes: c.fixes ?? 0,
   };
 }
 

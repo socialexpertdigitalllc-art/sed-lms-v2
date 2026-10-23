@@ -455,13 +455,13 @@ const logoConcepts: AiTaskDescriptor = {
 
 const logoCheck: AiTaskDescriptor = {
   key: "logo_check",
-  label: "Logo symbol check (lead page)",
+  label: "Logo spelling & symbol check (lead page)",
   description:
-    "Looks at every symbol MiniMax draws for a logo and reports any letters or letter-like scribbles in it (the name itself is typeset in code, so it is always right); a symbol with writing in it is drawn again. One short call per symbol. MULTIMODAL IS MANDATORY — a text-only model would answer about images it never saw.",
+    "Reads every complete logo Google draws back letter by letter, so a misspelled one is sent back to be fixed (the comparison with the name is done in code); for MiniMax designs, looks for stray letters in the symbol. One short call per picture. MULTIMODAL IS MANDATORY — a text-only model would answer about images it never saw. A strong reader (Gemini Flash) catches more mistakes.",
   where: "lib/logos/check.ts",
   requires: { vision: true, minOutputTokens: 4000 },
-  defaultProvider: "minimax",
-  defaultModel: "MiniMax-M3",
+  defaultProvider: "gemini",
+  defaultModel: "gemini-3.5-flash",
   routable: true,
 };
 

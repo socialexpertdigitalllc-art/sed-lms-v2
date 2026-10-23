@@ -30,7 +30,7 @@ export function bgStyle(bg: PreviewBg): React.CSSProperties {
 
 export const STAGE_LABEL: Record<string, string> = {
   concepts: "Sketching ideas",
-  drawing: "Drawing the symbols and setting the name",
+  drawing: "Designing the logos",
   checking: "Checking the symbols",
   redrawing: "Drawing more",
   finishing: "Finishing",
@@ -74,9 +74,13 @@ export function SpellingBadge({ c, compact = false }: { c: LogoCandidateView; co
     );
   }
   if (v === "exact") {
+    const fixed = (c.fixes ?? 0) > 0;
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-ready-bg px-2 py-0.5 text-[11px] font-medium text-ready-fg" title="Read back letter by letter: matches the name">
-        <Check className="h-3 w-3" aria-hidden /> Spelled right
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-ready-bg px-2 py-0.5 text-[11px] font-medium text-ready-fg"
+        title={fixed ? "It came out misspelled, was corrected automatically, and was read back again: matches the name" : "Read back letter by letter: matches the name"}
+      >
+        <Check className="h-3 w-3" aria-hidden /> Spelling checked
       </span>
     );
   }
@@ -102,6 +106,15 @@ export function DesignFacts({ c, colors }: { c: LogoCandidateView; colors: Brand
       { ok: true, text: `Font: ${fontInfo(c.font).label}` },
       c.iconCheck?.text ? { ok: false, text: "Symbol may have letter-like marks" } : null,
       { ok: true, text: "Transparent background" },
+    ].filter((f): f is { ok: boolean; text: string } => f !== null);
+    return <FactList facts={facts} />;
+  }
+  if (c.engine === "google") {
+    const facts: { ok: boolean; text: string }[] = [
+      { ok: true, text: "Designed by Google" },
+      (c.fixes ?? 0) > 0 ? { ok: true, text: "Lettering corrected" } : null,
+      { ok: c.horizontal, text: c.horizontal ? "Horizontal" : "Not very wide" },
+      { ok: c.transparent, text: c.transparent ? "Transparent background" : "Background kept" },
     ].filter((f): f is { ok: boolean; text: string } => f !== null);
     return <FactList facts={facts} />;
   }
