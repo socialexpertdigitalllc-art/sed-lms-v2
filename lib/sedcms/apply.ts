@@ -10,6 +10,9 @@ import { HASH_READ_MAX_BYTES, sha256Hex } from "./read";
  * "Apply, in the LMS, in order" (launch plan, the CMS <-> LMS contract):
  *   1. the host is resolved (the route);
  *   2. one apply at a time per site (an in-process lock);
+ *   2b. the request id is claimed in the database, before anything is read
+ *      or written (lib/sedcms/requests.ts): a used one never writes, and is
+ *      a 200 only when every file is already at its new bytes (atNewBytes);
  *   3. every target's live bytes are read first: any whose sha256 is
  *      neither expectedSha256 (null: must not exist) nor already the new
  *      content is a conflict, and a conflict writes nothing;
@@ -95,7 +98,11 @@ function locks(): Map<string, Promise<void>> {
   return (g[LOCKS] ??= new Map());
 }
 
-/** Runs fn once every earlier holder of `key` has finished (in-process: the LMS runs one process). */
+/**
+ * Runs fn once every earlier holder of `key` has finished. In-process: a
+ * second LMS process has its own, so it orders this process's applies; what
+ * no process may do twice is held by the database (lib/sedcms/requests.ts).
+ */
 export async function withSiteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const map = locks();
   const before = map.get(key) ?? Promise.resolve();
@@ -179,6 +186,26 @@ export async function applyChanges(files: SiteFiles, changes: DecodedChange[], o
     results.push({ path: c.path, outcome: "written", sha256: c.sha256 });
   }
   return { kind: "applied", results };
+}
+
+/**
+ * Is every file already at its new bytes? For a request whose id was used
+ * before: "all" lets a retry answer 200 without writing; anything else, or a
+ * read that fails or runs out of time ("unknown"), is not.
+ */
+export async function atNewBytes(files: SiteFiles, changes: DecodedChange[], opts: { deadline?: Deadline } = {}): Promise<"all" | "not" | "unknown"> {
+  for (const c of changes) {
+    if (opts.deadline?.passed()) return "unknown";
+    let live: Uint8Array | null;
+    try {
+      live = await files.read(c.path, HASH_READ_MAX_BYTES, { deadline: opts.deadline });
+    } catch (e) {
+      logFailure(e, c.path, "read");
+      return "unknown";
+    }
+    if (live === null || sha256Hex(live) !== c.sha256) return "not";
+  }
+  return "all";
 }
 
 function logFailure(e: unknown, path: string, step: string) {

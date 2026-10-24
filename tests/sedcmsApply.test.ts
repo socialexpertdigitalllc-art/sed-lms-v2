@@ -416,7 +416,7 @@ describe("apply: Cloudflare", () => {
     const a = await apply(OTHER_LEAD, { host: OTHER_HOST, requestId: REQUEST_ID, changes: [change("index.html", "<h1>Old</h1>", "x")] });
     expect(a.status).toBe(200);
     expect((await a.json()).purged).toBe(false);
-    const b = await apply(NO_ZONE_LEAD, { host: NO_ZONE_HOST, requestId: REQUEST_ID, changes: [change("index.html", "x", "y")] });
+    const b = await apply(NO_ZONE_LEAD, { host: NO_ZONE_HOST, requestId: "7e0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f", changes: [change("index.html", "x", "y")] });
     expect(b.status).toBe(200);
     expect((await b.json()).purged).toBe(false);
     expect(state.purges).toHaveLength(0);
@@ -460,7 +460,7 @@ describe("apply: one at a time per site", () => {
     const first = apply(LEAD, { host: HOST, requestId: REQUEST_ID, changes: [change("index.html", "<h1>Old</h1>", "<h1>New</h1>")] });
     await until(() => site.ops.includes("a:write:index.html")); // the first holds the site, mid-write
     const second = apply(LEAD, { host: HOST, requestId: "6f0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f", changes: [change("about.html", "<p>About</p>", "<p>About us</p>")] });
-    const elsewhere = apply(OTHER_LEAD, { host: OTHER_HOST, requestId: REQUEST_ID, changes: [change("index.html", "<h1>Old</h1>", "x")] });
+    const elsewhere = apply(OTHER_LEAD, { host: OTHER_HOST, requestId: "7e0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f", changes: [change("index.html", "<h1>Old</h1>", "x")] });
 
     expect((await elsewhere).status).toBe(200); // not held by client.com's lock
     await new Promise((r) => setTimeout(r, 20));
@@ -475,7 +475,8 @@ describe("apply: one at a time per site", () => {
     site.failWrite = "index.html";
     expect((await apply(LEAD, { host: HOST, requestId: REQUEST_ID, changes: [change("index.html", "<h1>Old</h1>", "x")] })).status).toBe(502);
     site.failWrite = null;
-    expect((await apply(LEAD, { host: HOST, requestId: REQUEST_ID, changes: [change("index.html", "<h1>Old</h1>", "x")] })).status).toBe(200);
+    // the CMS's Retry is a new publish, with a new request id (the old one is used: tests/sedcmsRequests.test.ts)
+    expect((await apply(LEAD, { host: HOST, requestId: "7e0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f", changes: [change("index.html", "<h1>Old</h1>", "x")] })).status).toBe(200);
   });
 });
 

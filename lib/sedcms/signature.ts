@@ -52,7 +52,9 @@ export function sedcmsSignature(
  * Signatures already accepted, each kept for 10 minutes: a signature is only
  * valid while its timestamp is within 300 s of now, so 10 minutes from its
  * first use outlives it. Bounded: a full cache refuses rather than forgetting
- * a live entry early. In memory — the LMS runs one process.
+ * a live entry early. In memory, per process: the LMS may run two, so a
+ * signature replayed on the other one passes here; an apply is then stopped
+ * by its single-use request id (lib/sedcms/requests.ts), and a read only reads.
  */
 export class ReplayCache {
   private readonly entries = new Map<string, number>(); // signature -> expiry (ms), oldest first

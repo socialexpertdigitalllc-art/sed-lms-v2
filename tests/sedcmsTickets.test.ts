@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { memorySupabase, type MemoryDb } from "./helpers/memorySupabase";
 import { withEnv } from "./helpers/fakeSiteHosts";
-import { TEST_SECRET, leadPath, linkRow, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
+import { SEDCMS_DEFAULTS, SEDCMS_UNIQUE, TEST_SECRET, leadPath, linkRow, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
 import { isTicketEligible } from "@/lib/tickets/logic";
 
 /**
@@ -11,6 +11,12 @@ import { isTicketEligible } from "@/lib/tickets/logic";
  * requestId, with the usual "ticket opened" notification. Unlike the staff
  * route, the lead's status isn't checked: a client asking for a change to
  * their own live site is always eligible.
+ *
+ * Idempotent on every process (the security review's M3): the request id is
+ * claimed in sedcms_requests first, and the ticket, its items and its log row
+ * have ids derived from it, so no failed write, crash or second process ever
+ * makes a second ticket or a second notification, and a later delivery
+ * completes one that stopped part-way.
  */
 
 const state = vi.hoisted(() => ({
@@ -18,13 +24,31 @@ const state = vi.hoisted(() => ({
   fromCalls: 0,
   notified: [] as Record<string, unknown>[],
   notifyFails: false,
+  /** writes (insert or upsert) to fail, per table, before they work again */
+  failWrites: {} as Record<string, number>,
+  /** the next ticket insert waits for this */
+  ticketGate: null as Promise<void> | null,
 }));
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (table: string) => {
       state.fromCalls++;
-      return state.db!.client.from(table);
+      const q = state.db!.client.from(table) as unknown as Record<string | symbol, unknown>;
+      return new Proxy(q, {
+        get(target, prop) {
+          if ((prop === "insert" || prop === "upsert") && (state.failWrites[table] ?? 0) > 0) {
+            state.failWrites[table]--;
+            return () => Promise.resolve({ data: null, error: { message: "canceling statement due to statement timeout" } });
+          }
+          if (prop === "insert" && table === "lead_tickets" && state.ticketGate) {
+            const gate = state.ticketGate;
+            state.ticketGate = null;
+            return (...args: unknown[]) => gate.then(() => (target.insert as (...a: unknown[]) => unknown)(...args));
+          }
+          return target[prop];
+        },
+      });
     },
   }),
 }));
@@ -84,10 +108,13 @@ beforeEach(() => {
       linkRow(NOT_READY_LEAD, "not-ready.dmviral.com"),
       linkRow(OTHER_LEAD, "other-co.dmviral.com"),
     ],
-  });
+    sedcms_requests: [],
+  }, SEDCMS_DEFAULTS, SEDCMS_UNIQUE);
   state.fromCalls = 0;
   state.notified = [];
   state.notifyFails = false;
+  state.failWrites = {};
+  state.ticketGate = null;
 });
 afterEach(() => restoreEnv());
 
@@ -236,5 +263,115 @@ describe("idempotent by requestId", () => {
     await send(LEAD, body());
     await send(LEAD, body({ requestId: "6f0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f" }));
     expect(tickets()).toHaveLength(2);
+  });
+});
+
+describe("idempotent on every process (probe-ticket-idempotency, inverted)", () => {
+  const LOCKS = Symbol.for("sedcms.applyLocks");
+  /** Notifications as the notifications table keeps them: one per dedup key (lib/tickets/notify.ts). */
+  const notifications = () => new Set(state.notified.map((n) => `${n.eventKey}:${n.ticketId}:${n.nonce}`));
+  const requests = () => state.db!.tables.sedcms_requests;
+  const quiet = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+  it("when the activity_log write fails, the request fails, and the retry completes the same ticket, notified once", async () => {
+    const err = quiet();
+    state.failWrites.activity_log = 1;
+    const first = await send(LEAD, body());
+    expect(first.status).toBe(500); // not done: who asked is only in that row
+    expect(state.notified).toHaveLength(0);
+    const retry = await send(LEAD, body());
+    expect(retry.status).toBe(201);
+    expect(tickets()).toHaveLength(1);
+    expect(items()).toHaveLength(3);
+    expect(created()).toHaveLength(1);
+    expect(state.notified).toHaveLength(1);
+    expect((await retry.json()).ticketId).toBe(tickets()[0].id);
+    expect(requests()).toEqual([expect.objectContaining({ request_id: REQUEST_ID, lead_id: LEAD, kind: "ticket", ticket_id: tickets()[0].id, completed_at: expect.any(String) })]);
+    err.mockRestore();
+  });
+
+  it("a delivery that stopped after the ticket (its items failed) is completed by the next: one ticket, every item", async () => {
+    const err = quiet();
+    state.failWrites.ticket_items = 1;
+    expect((await send(LEAD, body())).status).toBe(500);
+    expect(tickets()).toHaveLength(1); // made, not yet complete
+    expect(requests()[0].completed_at).toBeNull();
+    const retry = await send(LEAD, body());
+    expect(retry.status).toBe(201);
+    expect(tickets()).toHaveLength(1);
+    expect(items().map((i) => i.body)).toEqual(body().items);
+    expect(notifications().size).toBe(1);
+    err.mockRestore();
+  });
+
+  it("a crash after the notification, before the request was marked done: the retry adds nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const real = state.db!.client.from.bind(state.db!.client);
+    // the "done" write is lost, as if the process died right before it
+    (state.db!.client as unknown as { from: (t: string) => unknown }).from = (t: string) => {
+      const q = real(t) as unknown as Record<string, unknown>;
+      return t === "sedcms_requests" ? { ...q, insert: q.insert, select: q.select, update: () => ({ eq: () => ({ is: async () => ({ error: { message: "connection lost" } }) }) }) } : q;
+    };
+    expect((await send(LEAD, body())).status).toBe(201);
+    (state.db!.client as unknown as { from: (t: string) => unknown }).from = real;
+    expect(requests()[0].completed_at).toBeNull();
+    expect((await send(LEAD, body())).status).toBe(201);
+    expect(tickets()).toHaveLength(1);
+    expect(items()).toHaveLength(3);
+    expect(created()).toHaveLength(1);
+    expect(notifications().size).toBe(1); // a second call, the same dedup key: the table keeps one
+    warn.mockRestore();
+  });
+
+  it("two deliveries on two processes, the second while the first is mid-way: one ticket, one notification", async () => {
+    let open!: () => void;
+    state.ticketGate = new Promise<void>((r) => (open = r));
+    const a = send(LEAD, body()); // process 1: claims, then waits at its ticket insert
+    for (let i = 0; i < 100 && requests().length === 0; i++) await new Promise((r) => setTimeout(r, 1));
+    expect(requests()).toHaveLength(1);
+    (globalThis as Record<symbol, unknown>)[LOCKS] = new Map(); // process 2 has its own locks
+    const b = await send(LEAD, body()); // finds the claim incomplete, and completes it
+    expect(b.status).toBe(201);
+    open();
+    const ra = await a; // finds the ticket made, and finishes without making another
+    expect(ra.status).toBe(201);
+    expect((await ra.json()).ticketId).toBe((await b.json()).ticketId);
+    expect(tickets()).toHaveLength(1);
+    expect(items()).toHaveLength(3);
+    expect(created()).toHaveLength(1);
+    expect(notifications().size).toBe(1);
+  });
+
+  it("a completed request is answered from its record, writing nothing", async () => {
+    const { ticketId } = await (await send(LEAD, body())).json();
+    const writes = state.db!.writes.length;
+    const again = await send(LEAD, body());
+    expect(again.status).toBe(201);
+    expect(await again.json()).toEqual({ ticketId });
+    expect(state.db!.writes.length).toBe(writes);
+    expect(state.notified).toHaveLength(1);
+  });
+
+  it("the same id with other content, or an apply's id, is a 409 REQUEST_ID_USED", async () => {
+    expect((await send(LEAD, body())).status).toBe(201);
+    const other = await send(LEAD, body({ items: ["Something else"] }));
+    expect(other.status).toBe(409);
+    expect((await other.json()).code).toBe("REQUEST_ID_USED");
+    const APPLY_ID = "7f0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f";
+    state.db!.tables.sedcms_requests.push({ request_id: APPLY_ID, lead_id: LEAD, kind: "apply", digest: "0".repeat(64), ticket_id: null, completed_at: null });
+    const reused = await send(LEAD, body({ requestId: APPLY_ID }));
+    expect(reused.status).toBe(409);
+    expect(tickets()).toHaveLength(1);
+  });
+
+  it("the ids are derived from the request: the same request always names the same ticket", async () => {
+    const { changeTicketIds } = await import("@/lib/sedcms/tickets");
+    const ids = changeTicketIds(REQUEST_ID, 3);
+    expect(changeTicketIds(REQUEST_ID, 3)).toEqual(ids);
+    expect(new Set([ids.ticket, ids.log, ...ids.items]).size).toBe(5);
+    for (const id of [ids.ticket, ids.log, ...ids.items]) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    const { ticketId } = await (await send(LEAD, body())).json();
+    expect(ticketId).toBe(ids.ticket);
+    expect(changeTicketIds("6f0c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f", 3).ticket).not.toBe(ids.ticket);
   });
 });
