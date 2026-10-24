@@ -159,10 +159,11 @@ describe("every read route: signature first", () => {
     }
   });
 
-  it("refuses a body over 30 MiB with a 413, before verifying it", async () => {
-    const huge = JSON.stringify({ host: STAGING, pad: "x".repeat(30 * 1024 * 1024) });
-    const res = await call(liveFilesPOST, STAGING_LEAD, "live-files", huge);
+  it("refuses a body over its route's 64 KiB with a 413, before verifying it (tests/sedcmsBodyCaps.test.ts)", async () => {
+    const big = JSON.stringify({ host: STAGING, pad: "x".repeat(64 * 1024) });
+    const res = await call(liveFilesPOST, STAGING_LEAD, "live-files", big);
     expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ code: "TOO_LARGE", message: "The request body is over 64 KiB." });
     expect(state.fromCalls).toBe(0);
   });
 });

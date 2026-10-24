@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
+import { TICKET_REQUEST_BYTES, readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
 import { loadLead } from "@/lib/sedcms/lead";
 import { requireLink } from "@/lib/sedcms/links";
 import { ChangeRequestBody, createChangeTicket } from "@/lib/sedcms/tickets";
@@ -20,7 +20,7 @@ type Ctx = { params: Promise<{ id: string }> };
  * ticket asks the staff, it changes no file).
  */
 export async function POST(req: Request, ctx: Ctx) {
-  const signed = await readSignedJson(req, ChangeRequestBody);
+  const signed = await readSignedJson(req, ChangeRequestBody, TICKET_REQUEST_BYTES);
   if (!signed.ok) return signed.response;
   const { id } = await ctx.params;
 

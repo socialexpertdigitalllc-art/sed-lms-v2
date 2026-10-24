@@ -6,16 +6,31 @@ import { precheckSedcms, verifySedcms } from "./signature";
  * The request and answer plumbing every /api/internal/sedcms route shares.
  * SERVER ONLY.
  *
- * Order: the body-free signature checks; the raw body, at most 30 MiB; the
- * full signature check over those exact bytes; then strict UTF-8, JSON and
- * the route's schema. Nothing touches the database or a host before the
- * signature holds.
+ * Order: the body-free signature checks; the raw body, at most the route's
+ * own cap; the full signature check over those exact bytes; then strict
+ * UTF-8, JSON and the route's schema. Nothing touches the database or a host
+ * before the signature holds.
+ *
+ * The HMAC covers the body, so a body is read before it can be checked: a
+ * forged request with well-formed headers costs the LMS its route's cap, and
+ * no more. So each route reads only what its largest real request needs:
+ * 64 KiB for summary, live-files and checksums, 160 KiB for tickets, 30 MiB
+ * for apply alone.
  *
  * Every error is { code, message } (plus the contract's own fields), with no
  * stack and no hosting detail beyond the step that failed.
  */
 
+/** apply: 50 files, 20 MiB decoded, as base64 in JSON. */
 export const MAX_REQUEST_BYTES = 30 * 1024 * 1024;
+/** summary, live-files, checksums: at most 100 paths of 300 characters. */
+export const SMALL_REQUEST_BYTES = 64 * 1024;
+/** tickets: 10 items of 2000 characters and the rest, even with every character escaped in the JSON (6 bytes each, about 136 KB). */
+export const TICKET_REQUEST_BYTES = 160 * 1024;
+
+function sizeLabel(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${bytes / (1024 * 1024)} MiB` : `${bytes / 1024} KiB`;
+}
 
 export function sedcmsJson(status: number, body: unknown): NextResponse {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -65,16 +80,17 @@ function signatureRefusal(status: 401 | 503): NextResponse {
 
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-/** A signed request's body, parsed and checked against the route's schema. */
+/** A signed request's body, at most `maxBytes`, parsed and checked against the route's schema. */
 export async function readSignedJson<S extends z.ZodType>(
   req: Request,
   schema: S,
+  maxBytes: number,
 ): Promise<{ ok: true; body: z.infer<S> } | { ok: false; response: NextResponse }> {
   const pre = precheckSedcms(req);
   if (!pre.ok) return { ok: false, response: signatureRefusal(pre.status) };
 
-  const raw = await readRawBody(req, MAX_REQUEST_BYTES);
-  if (!raw.ok) return { ok: false, response: sedcmsError(413, "TOO_LARGE", "The request body is over 30 MiB.") };
+  const raw = await readRawBody(req, maxBytes);
+  if (!raw.ok) return { ok: false, response: sedcmsError(413, "TOO_LARGE", `The request body is over ${sizeLabel(maxBytes)}.`) };
 
   const verdict = await verifySedcms(req, raw.bytes);
   if (!verdict.ok) return { ok: false, response: signatureRefusal(verdict.status) };

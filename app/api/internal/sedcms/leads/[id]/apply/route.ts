@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { applyChanges, decodeChanges, logApply, purgeWritten, withSiteLock } from "@/lib/sedcms/apply";
 import { APPLY_DEADLINE_MS, Deadline } from "@/lib/sedcms/deadline";
 import { siteFilesFor } from "@/lib/sedcms/files";
-import { isUuid, readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
+import { MAX_REQUEST_BYTES, isUuid, readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
 import { loadLead } from "@/lib/sedcms/lead";
 import { linkedHost } from "@/lib/sedcms/links";
 import { siteRefusalResponse } from "@/lib/sedcms/read";
@@ -60,7 +60,8 @@ export async function POST(req: Request, ctx: Ctx) {
 }
 
 async function applyWithin(req: Request, ctx: Ctx, deadline: Deadline) {
-  const signed = await readSignedJson(req, Body);
+  // The one route that takes big bodies: 50 files, 20 MiB decoded.
+  const signed = await readSignedJson(req, Body, MAX_REQUEST_BYTES);
   if (!signed.ok) return signed.response;
   const { host, requestId, changes } = signed.body;
   const decoded = decodeChanges(changes);

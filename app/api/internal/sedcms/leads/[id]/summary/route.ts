@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
+import { SMALL_REQUEST_BYTES, readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
 import { leadSummary, loadLead } from "@/lib/sedcms/lead";
 import { linkedHost } from "@/lib/sedcms/links";
 
@@ -21,7 +21,7 @@ const Body = z.object({}).strict();
  * HOST_CHANGED (lib/sedcms/links.ts).
  */
 export async function POST(req: Request, ctx: Ctx) {
-  const signed = await readSignedJson(req, Body);
+  const signed = await readSignedJson(req, Body, SMALL_REQUEST_BYTES);
   if (!signed.ok) return signed.response;
   const { id } = await ctx.params;
 

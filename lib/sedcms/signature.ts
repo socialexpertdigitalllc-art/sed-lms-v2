@@ -119,8 +119,11 @@ function readSecret(opts: VerifyOptions): { ok: true; secret: string } | { ok: f
 /**
  * The checks that need no body: the secret is usable (else 503, logged by its
  * reason, never its value), both headers are well formed, and the timestamp is
- * inside the window. Routes run this before reading a body, so an unsigned
- * caller can't make the LMS read 30 MiB.
+ * inside the window. Routes run this before reading a body, so a request
+ * without them is refused unread. It proves nothing, though: well-formed
+ * headers are easy to make up, and the HMAC can only be checked once the body
+ * is in. So each route reads at most its own cap first (lib/sedcms/http.ts:
+ * 64 KiB, 160 KiB for tickets, 30 MiB for apply alone).
  */
 export function precheckSedcms(req: Request, opts: VerifyOptions = {}): SedcmsVerdict {
   const secret = readSecret(opts);

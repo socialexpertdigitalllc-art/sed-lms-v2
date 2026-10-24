@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { siteFilesFor } from "@/lib/sedcms/files";
 import { READ_DEADLINE_MS, Deadline } from "@/lib/sedcms/deadline";
-import { readSignedJson, sedcmsJson } from "@/lib/sedcms/http";
+import { SMALL_REQUEST_BYTES, readSignedJson, sedcmsJson } from "@/lib/sedcms/http";
 import { loadLead } from "@/lib/sedcms/lead";
 import { linkedHost } from "@/lib/sedcms/links";
 import { hostingFailure, liveFiles, siteRefusalResponse } from "@/lib/sedcms/read";
@@ -34,7 +34,7 @@ export async function POST(req: Request, ctx: Ctx) {
 }
 
 async function readWithin(req: Request, ctx: Ctx, deadline: Deadline) {
-  const signed = await readSignedJson(req, Body);
+  const signed = await readSignedJson(req, Body, SMALL_REQUEST_BYTES);
   if (!signed.ok) return signed.response;
   const { id } = await ctx.params;
 
