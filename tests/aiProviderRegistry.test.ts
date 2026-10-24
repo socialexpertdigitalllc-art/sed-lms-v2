@@ -63,7 +63,7 @@ describe("AI provider registry", () => {
 });
 
 describe("AI task registry", () => {
-  it("describes exactly the ten AI tasks", () => {
+  it("describes exactly the twelve AI tasks", () => {
     expect(AI_TASK_REGISTRY.map((t) => t.key)).toEqual([
       "content_plan",
       "file_regen",
@@ -75,6 +75,8 @@ describe("AI task registry", () => {
       "image_rank",
       "assistant_chat",
       "assistant_act",
+      "logo_concepts",
+      "logo_check",
     ]);
     expect(isAiTaskKey("file_regen")).toBe(true);
     expect(isAiTaskKey("nope")).toBe(false);

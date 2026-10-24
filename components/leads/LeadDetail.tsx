@@ -41,6 +41,7 @@ import { stateOfPhone } from "@/lib/geo/areaCodes";
 import { RecommendedTemplateField } from "@/components/leads/RecommendedTemplateField";
 import { ColorSchemeSwatches } from "@/components/leads/ColorSchemeSwatches";
 import { LeadPhotoPicker } from "@/components/leads/LeadPhotoPicker";
+import { LogoField } from "@/components/leads/logo/LogoField";
 import { LeadFormsCard } from "@/components/form-relay/LeadFormsCard";
 import { LeadDomainCard } from "@/components/domains/LeadDomainCard";
 import type { ClientDomainRow } from "@/lib/domains/types";
@@ -400,17 +401,15 @@ export function LeadDetail({
               {/* A logo sent by SMS is uploaded to an image host afterwards, so the
                   link arrives LATER — the field must stay editable rather than being
                   replaced by static text. The note only shows until a link exists. */}
-              <FieldRow
-                label="Logo link"
-                value={lead.logo_link ?? ""}
-                type="url"
+              {/* No logo? "Generate logo" draws designs in the lead's colours
+                  (lib/logos/*); Accept uploads one and fills this field. */}
+              <LogoField
+                leadId={lead.id}
+                logoLink={lead.logo_link}
+                logoViaSms={!!lead.logo_via_sms}
                 canEdit={canEdit}
                 onSave={(v) => patch({ logo_link: nz(v) })}
-                display={
-                  lead.logo_via_sms && !lead.logo_link
-                    ? muted("Sent via SMS — add the link once uploaded")
-                    : undefined
-                }
+                onSaved={() => router.refresh()}
               />
               <FieldRow label="Map embed link" value={lead.map_embed_link ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ map_embed_link: nz(v) })} />
               <FieldRow label="Reference link" value={lead.reference_link ?? ""} type="url" canEdit={canEdit} onSave={(v) => patch({ reference_link: nz(v) })} />

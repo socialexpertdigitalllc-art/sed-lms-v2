@@ -70,9 +70,9 @@ export const postimagesAdapter: UploadAdapter = {
       form.append("optsize", "0");
       form.append("expire", "0");
       form.append("session_upload", String(Date.now()));
-      // Captured photos are always Google-sourced JPEGs, so the MIME type is
-      // known rather than guessed.
-      form.append("file", new Blob([new Uint8Array(buf)], { type: "image/jpeg" }), source.filename);
+      // Captured photos are always Google-sourced JPEGs; other callers (a
+      // generated logo is a PNG) say what they send.
+      form.append("file", new Blob([new Uint8Array(buf)], { type: source.contentType ?? "image/jpeg" }), source.filename);
 
       const upResp = await fetch(UPLOAD, {
         method: "POST",

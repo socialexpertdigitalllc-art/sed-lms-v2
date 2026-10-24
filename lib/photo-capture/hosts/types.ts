@@ -26,6 +26,8 @@ export type UploadSource = {
   url: string;
   filename: string;
   fetchBytes: () => Promise<Buffer>;
+  /** The bytes' type for the hosts that take a file (default image/jpeg — captured photos). */
+  contentType?: string;
 };
 
 export type UploadResult =
