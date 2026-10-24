@@ -391,11 +391,23 @@ export interface DocrootEntry {
   size: number | null;
 }
 
+/** A flag that is set: true, 1, or a string that isn't empty, "0" or "false". */
+const isSet = (v: unknown) => v === true || v === 1 || (typeof v === "string" && v !== "" && v !== "0" && v.toLowerCase() !== "false");
+
+/**
+ * What a file manager entry is. Fails closed (the live spike confirms the
+ * listing's real fields): a file or a folder only when its `type` says so
+ * and nothing contradicts it; an entry marked a link in any way (its type, a
+ * link flag or target, an ls-style mode starting "l") or of any other or
+ * missing type is "other", never followed.
+ */
 function entryKind(f: Record<string, unknown>): DocrootEntry["kind"] {
   const type = typeof f.type === "string" ? f.type.toLowerCase() : "";
-  if (type.includes("link") || f.isLink === true || f.isSymlink === true) return "other";
-  if (type === "dir" || type === "directory" || type === "folder" || f.isDir === true) return "dir";
-  if (type === "file" || type === "regular") return "file";
+  if (type.includes("link")) return "other";
+  if (["isLink", "isSymlink", "is_link", "is_symlink", "islink", "link", "symlink", "linkTarget", "link_target", "target"].some((k) => isSet(f[k]))) return "other";
+  if (["mode", "perm", "perms", "permissions"].some((k) => typeof f[k] === "string" && (f[k] as string).startsWith("l"))) return "other";
+  if ((type === "dir" || type === "directory" || type === "folder") && f.isDir !== false) return "dir";
+  if ((type === "file" || type === "regular") && f.isDir !== true) return "file";
   return "other";
 }
 

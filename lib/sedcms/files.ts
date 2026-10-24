@@ -3,6 +3,7 @@ import {
   findWebsite,
   hostingerConfigured,
   isStaticWebsite,
+  listAccountWebsites,
   listWebsiteDir,
   makeWebsiteFolder,
   moveWebsiteFile,
@@ -46,6 +47,10 @@ import { MAX_FILE_BYTES, cmsPathAllowed } from "./paths";
  * exists, and that it is a plain file, comes from the folder listings (walked
  * from the docroot, never through a link); a read whose length isn't the
  * listed size is refused, so a host's error page is never taken for a file.
+ * What an entry is fails closed on both hosts: unknown, missing or anything
+ * marked a link is neither a file nor a folder. On Hostinger, a folder that
+ * is another website's root (a subdomain made inside public_html) belongs to
+ * that website: it is never listed, read or written as this site's.
  * Failures throw SiteFilesError, which says which step failed and never
  * carries file content.
  *
@@ -181,7 +186,13 @@ class HostedSiteFiles implements SiteFiles {
   constructor(
     private readonly ops: HostOps,
     private readonly label: string,
+    /** folders of the docroot that are other websites' roots */
+    private readonly others: readonly string[] = [],
   ) {}
+
+  private inOtherSite(path: string): boolean {
+    return this.others.some((f) => path === f || path.startsWith(`${f}/`));
+  }
 
   private async dir(relDir: string, step: SiteFilesStep, limits: CallLimits, path: string | null): Promise<Entry[]> {
     let pending = this.listings.get(relDir);
@@ -233,7 +244,7 @@ class HostedSiteFiles implements SiteFiles {
         if (!listable(e.name)) continue;
         const path = rel ? `${rel}/${e.name}` : e.name;
         if (e.kind === "dir") {
-          if (depth < maxDepth && !(rel === "" && e.name.toLowerCase() === "cgi-bin")) queue.push({ rel: path, depth: depth + 1 });
+          if (depth < maxDepth && !(rel === "" && e.name.toLowerCase() === "cgi-bin") && !this.inOtherSite(path)) queue.push({ rel: path, depth: depth + 1 });
         } else if (e.kind === "file") {
           if (files.length >= maxEntries) {
             truncated = true;
@@ -248,6 +259,7 @@ class HostedSiteFiles implements SiteFiles {
 
   async read(path: string, maxBytes: number, limits: CallLimits = {}): Promise<Uint8Array | null> {
     if (!cmsPathAllowed(path)) throw new SiteFilesError("read", "refused", "the path is not one the CMS may read", path);
+    if (this.inOtherSite(path)) throw new SiteFilesError("read", "refused", "the path is in another website's folder", path);
     const { entry } = await this.locate(path, "read", limits);
     if (!entry) return null;
     if (entry.kind !== "file") throw new SiteFilesError("read", "not_a_file", "not a plain file", path);
@@ -267,6 +279,7 @@ class HostedSiteFiles implements SiteFiles {
 
   async write(path: string, bytes: Uint8Array, limits: CallLimits = {}): Promise<void> {
     if (!cmsPathAllowed(path)) throw new SiteFilesError("write", "refused", "the path is not one the CMS may write", path);
+    if (this.inOtherSite(path)) throw new SiteFilesError("write", "refused", "the path is in another website's folder", path);
     if (bytes.length > MAX_FILE_BYTES) throw new SiteFilesError("write", "refused", `larger than ${MAX_FILE_BYTES} bytes`, path);
     const { entry, parentExists, firstMissing } = await this.locate(path, "write", limits);
     if (entry && entry.kind !== "file") throw new SiteFilesError("write", "not_a_file", "something other than a file is there", path);
@@ -336,7 +349,7 @@ function hostingerOps(session: FileSession, placement: TempPlacement): HostOps {
     stage: (temp, bytes, canContinue) => uploadWebsiteFile(session, temp, bytes, { canContinue }),
     check: async (temp, signal) => {
       const r = await statWebsiteFile(session, temp, { signal });
-      return r.ok ? { ok: true, isFile: !r.isDir, size: r.size, sha256: r.sha256 } : r;
+      return r.ok ? { ok: true, isFile: r.isPlainFile, size: r.size, sha256: r.sha256 } : r;
     },
     swap: (temp, relPath) => moveWebsiteFile(session, temp, live(relPath)),
     discard: async (temp) => (await removeWebsiteFile(session, temp)).ok,
@@ -475,6 +488,11 @@ export async function siteFilesFor(host: string, opts: { placement?: TempPlaceme
   if (site.kind === "staging") {
     return { ok: true, kind: "staging", host, key: `staging:${site.sub}`, files: new HostedSiteFiles(directAdminOps(site.sub, opts.placement ?? TEMP_PLACEMENT.staging), host) };
   }
+  const others = await nestedSiteFolders(site.website);
+  if (!others) {
+    console.warn(`[sedcms] ${host}: the account's other websites could not be read`);
+    return { ok: false, status: 502, code: "HOSTING", error: "The hosting's list of websites could not be read." };
+  }
   const opened = await openFileSession(site.website);
   if (!opened.ok) {
     if (opened.pending) return { ok: false, status: 409, code: "HOSTING_PENDING", error: "The website is still being set up on the hosting." };
@@ -482,5 +500,32 @@ export async function siteFilesFor(host: string, opts: { placement?: TempPlaceme
     return { ok: false, status: 502, code: "HOSTING", error: "The website's file server could not be opened." };
   }
   const domain = site.website.domain.toLowerCase();
-  return { ok: true, kind: "custom", host, key: `custom:${domain}`, files: new HostedSiteFiles(hostingerOps(opened.session, opts.placement ?? TEMP_PLACEMENT.custom), domain) };
+  return {
+    ok: true,
+    kind: "custom",
+    host,
+    key: `custom:${domain}`,
+    files: new HostedSiteFiles(hostingerOps(opened.session, opts.placement ?? TEMP_PLACEMENT.custom), domain, others),
+  };
+}
+
+const withoutTrailingSlash = (dir: unknown) => (typeof dir === "string" ? dir.replace(/[/]+$/, "") : "");
+
+/**
+ * The folders inside this website's own that are the roots of the account's
+ * other websites (Hostinger makes a subdomain's folder inside its parent's
+ * public_html), relative to its docroot; null when that can't be known (the
+ * account's websites can't be read, or a root is missing), and the site is
+ * then refused. DirectAdmin needs none of this: every staging site is a
+ * domain of its own, with its own folder beside the others.
+ */
+async function nestedSiteFolders(website: HostingerWebsite): Promise<string[] | null> {
+  const root = withoutTrailingSlash(website.root_directory);
+  if (!root.startsWith("/")) return null;
+  const account = await listAccountWebsites(website.username);
+  if (!account) return null;
+  const others = account.filter((w) => String(w.domain ?? "").toLowerCase() !== website.domain.toLowerCase());
+  if (others.some((w) => !withoutTrailingSlash(w.root_directory).startsWith("/"))) return null;
+  const inside = others.map((w) => withoutTrailingSlash(w.root_directory)).filter((r) => r.startsWith(`${root}/`));
+  return [...new Set(inside.map((r) => r.slice(root.length + 1)))];
 }

@@ -121,6 +121,8 @@ export interface FakeHostsOptions {
   delay?: (call: RecordedCall) => number;
   /** never answer this call: it ends only when its signal aborts, as a real fetch would */
   hang?: (call: RecordedCall) => boolean;
+  /** rewrite what a host says about one entry (a listing item, or a File Browser file info) before it is sent */
+  reshape?: (host: "hostinger" | "da", abs: string, entry: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export interface FakeHosts {
@@ -238,21 +240,25 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
         const abs = raw.replace(/[/]+$/, "");
         if (method === "GET") {
           if (fs.isDir(abs)) {
-            const items = fs.children(abs).map((c) => ({
-              path: `${abs}/${c.name}`,
-              name: c.name,
-              size: opts.misreport?.(`${abs}/${c.name}`)?.size ?? c.size,
-              isDir: c.kind === "dir",
-              isSymlink: c.kind === "link",
-              type: c.kind === "dir" ? "" : "text",
-            }));
+            const items = fs.children(abs).map((c) => {
+              const item = {
+                path: `${abs}/${c.name}`,
+                name: c.name,
+                size: opts.misreport?.(`${abs}/${c.name}`)?.size ?? c.size,
+                isDir: c.kind === "dir",
+                isSymlink: c.kind === "link",
+                type: c.kind === "dir" ? "" : "text",
+              };
+              return opts.reshape ? opts.reshape("hostinger", `${abs}/${c.name}`, item) : item;
+            });
             return Response.json({ items, isDir: true, path: abs });
           }
           const bytes = fs.files.get(abs);
           if (!bytes) return new Response("404 Not Found", { status: 404 });
           const lie = opts.misreport?.(abs);
-          const info: Record<string, unknown> = { path: abs, name: abs.slice(abs.lastIndexOf("/") + 1), size: lie?.size ?? bytes.length, isDir: false, type: "blob" };
+          let info: Record<string, unknown> = { path: abs, name: abs.slice(abs.lastIndexOf("/") + 1), size: lie?.size ?? bytes.length, isDir: false, isSymlink: false, type: "blob" };
           if (url.searchParams.get("checksum") === "sha256") info.checksums = { sha256: lie?.sha256 ?? sha256(bytes) };
+          if (opts.reshape) info = opts.reshape("hostinger", abs, info);
           return Response.json(info);
         }
         if (method === "POST" && raw.endsWith("/")) {
@@ -319,7 +325,10 @@ export function installFakeHosts(opts: FakeHostsOptions = {}): FakeHosts {
         const abs = (url.searchParams.get("path") ?? "").replace(/[/]+$/, "");
         if (!fs.isDir(abs)) return Response.json({ type: "error", message: "no such directory" }, { status: 404 });
         return Response.json({
-          files: fs.children(abs).map((c) => ({ name: c.name, type: c.kind, size: opts.misreport?.(`${abs}/${c.name}`)?.size ?? c.size })),
+          files: fs.children(abs).map((c) => {
+            const entry = { name: c.name, type: c.kind, size: opts.misreport?.(`${abs}/${c.name}`)?.size ?? c.size };
+            return opts.reshape ? opts.reshape("da", `${abs}/${c.name}`, entry) : entry;
+          }),
         });
       }
       if (url.pathname === "/api/filemanager/download" && method === "GET") {

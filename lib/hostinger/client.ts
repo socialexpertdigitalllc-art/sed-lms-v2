@@ -156,6 +156,32 @@ export async function listWebsites(): Promise<HostingerWebsite[] | null> {
   return all;
 }
 
+/**
+ * Every website of one hosting account (they share its filesystem), or null
+ * when the list can't be read in full. Asked by username, and checked by
+ * username again, whatever the API does with the filter.
+ */
+export async function listAccountWebsites(username: string): Promise<HostingerWebsite[] | null> {
+  const all: HostingerWebsite[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const r = await hg(`/api/hosting/v1/websites?username=${encodeURIComponent(username)}&per_page=${WEBSITES_PAGE}&page=${page}`, { method: "GET" });
+    if (!r.ok) return null;
+    let j: { data?: unknown; meta?: { last_page?: number; total?: number; per_page?: number } };
+    try {
+      j = JSON.parse(r.body) as typeof j;
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(j.data)) return null;
+    const data = j.data as HostingerWebsite[];
+    all.push(...data);
+    const m = j.meta;
+    const lastPage = m?.last_page ?? (m?.total && m?.per_page ? Math.ceil(m.total / m.per_page) : null);
+    if (data.length === 0 || (lastPage !== null ? page >= lastPage : data.length < WEBSITES_PAGE)) return all.filter((w) => w.username === username);
+  }
+  return null; // more than 20 pages: not read in full
+}
+
 /** The website for a domain (exact, case-insensitive), or null if none. */
 export async function getWebsite(domain: string): Promise<HostingerWebsite | null> {
   const w = await findWebsite(domain);
@@ -694,9 +720,29 @@ async function getCappedRetrying(
 
 export interface WebsiteDirEntry {
   name: string;
-  /** "other": a symbolic link, never followed. */
+  /** "other": a symbolic link, or anything not plainly a file or a folder; never followed. */
   kind: "file" | "dir" | "other";
   size: number | null;
+}
+
+/**
+ * Go's os.FileMode bits (the File Browser's `mode`) for what is neither a
+ * regular file nor a folder: a link, a device, a pipe, a socket, a character
+ * device, irregular.
+ */
+const NOT_PLAIN_MODE = (1 << 27) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 21) | (1 << 19);
+
+/**
+ * What a File Browser item is. Fails closed: a file or a folder only when the
+ * item says so plainly (isSymlink false, isDir a boolean, no special mode
+ * bits); anything missing, unknown or marked a link is "other".
+ */
+function itemKind(i: { isDir?: unknown; isSymlink?: unknown; mode?: unknown }): WebsiteDirEntry["kind"] {
+  if (i.isSymlink !== false) return "other";
+  if (i.mode !== undefined && (typeof i.mode !== "number" || (i.mode & NOT_PLAIN_MODE) !== 0)) return "other";
+  if (i.isDir === true) return "dir";
+  if (i.isDir === false) return "file";
+  return "other";
 }
 
 /**
@@ -714,13 +760,13 @@ export async function listWebsiteDir(
   if (!r.ok || r.status < 200 || r.status >= 300) return null;
   try {
     const j = JSON.parse(new TextDecoder().decode(r.bytes)) as {
-      items?: { name?: unknown; size?: unknown; isDir?: unknown; isSymlink?: unknown }[] | null;
+      items?: { name?: unknown; size?: unknown; isDir?: unknown; isSymlink?: unknown; mode?: unknown }[] | null;
     };
     if (j.items === null) return []; // an empty folder
     if (!Array.isArray(j.items)) return null;
     return j.items.map((i) => ({
       name: typeof i.name === "string" ? i.name : "",
-      kind: i.isSymlink === true ? "other" : i.isDir === true ? "dir" : "file",
+      kind: itemKind(i),
       size: typeof i.size === "number" && Number.isFinite(i.size) && i.size >= 0 ? i.size : null,
     }));
   } catch {
@@ -813,7 +859,7 @@ export async function statWebsiteFile(
   session: FileSession,
   absPath: string,
   opts: { signal?: AbortSignal } = {},
-): Promise<{ ok: true; isDir: boolean; size: number | null; sha256: string | null } | { ok: false; message: string }> {
+): Promise<{ ok: true; isDir: boolean; isPlainFile: boolean; size: number | null; sha256: string | null } | { ok: false; message: string }> {
   const r = await getCappedRetrying(
     `${session.restBase}/api/resources${encodePath(absPath)}?checksum=sha256`,
     session.headers,
@@ -824,11 +870,19 @@ export async function statWebsiteFile(
   if (!r.ok) return { ok: false, message: r.message };
   if (r.status < 200 || r.status >= 300) return { ok: false, message: `HTTP ${r.status}` };
   try {
-    const j = JSON.parse(new TextDecoder().decode(r.bytes)) as { isDir?: unknown; size?: unknown; checksums?: { sha256?: unknown } | null };
+    const j = JSON.parse(new TextDecoder().decode(r.bytes)) as {
+      isDir?: unknown;
+      isSymlink?: unknown;
+      mode?: unknown;
+      size?: unknown;
+      checksums?: { sha256?: unknown } | null;
+    };
     const sha256 = typeof j.checksums?.sha256 === "string" && /^[0-9a-f]{64}$/i.test(j.checksums.sha256) ? j.checksums.sha256.toLowerCase() : null;
     return {
       ok: true,
       isDir: j.isDir === true,
+      /** only when the answer says so plainly (as a listing item must) */
+      isPlainFile: itemKind(j) === "file",
       size: typeof j.size === "number" && Number.isFinite(j.size) && j.size >= 0 ? j.size : null,
       sha256,
     };
@@ -848,6 +902,12 @@ async function fileCall(url: string, method: "POST" | "PATCH" | "DELETE", header
  * Replace `toAbs` with `fromAbs` in ONE call: the File Browser's rename with
  * override (PATCH resources/<from>?action=rename&destination=<to>&override=true),
  * a rename(2) on the server when both are on one filesystem. Never retried.
+ *
+ * UNVERIFIED (the live spike): filebrowser's move falls back to copy, then
+ * remove, when the rename fails, and a copy over the live file is not one
+ * step. The spike checks what a failed rename does on Hostinger, and that
+ * the folder holding public_html is on public_html's filesystem. A failed
+ * move is always reported as one that may have changed the live file.
  */
 export async function moveWebsiteFile(session: FileSession, fromAbs: string, toAbs: string): Promise<FileStep> {
   const q = `action=rename&destination=${encodeURIComponent(encodePath(toAbs))}&override=true`;
