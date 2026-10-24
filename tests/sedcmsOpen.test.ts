@@ -231,6 +231,26 @@ describe("the mint call", () => {
   });
 });
 
+describe("what the CMS answers reaches a log line only as a code", () => {
+  it("a code of anything but capitals and underscores is left out of the log", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const LF = String.fromCharCode(10);
+    for (const code of [`BAD${LF}[sedcms] forged log line`, "<script>x</script>", "lower_case", "A".repeat(65), 42]) {
+      cms(() => Response.json({ code, message: "nope" }, { status: 500 }));
+      expect((await open({ leadId: LEAD })).status).toBe(502);
+    }
+    cms(() => Response.json({ code: "SOME_CODE" }, { status: 500 }));
+    await open({ leadId: LEAD });
+    const logged = warn.mock.calls.flat().join(" ");
+    expect(logged).not.toContain("forged log line");
+    expect(logged).not.toContain("<script>");
+    expect(logged).not.toContain("lower_case");
+    expect(logged).not.toContain("A".repeat(65));
+    expect(logged).toContain("HTTP 500 SOME_CODE");
+    warn.mockRestore();
+  });
+});
+
 describe("the CMS link's configuration (lib/sedcms/cms.ts)", () => {
   it("is off (503) while SEDCMS_URL or SEDCMS_API_KEY is missing or malformed, and says why without the values", async () => {
     const calls = cms(() => minted());

@@ -114,7 +114,8 @@ export async function mintCmsLink(
   } catch {
     json = null;
   }
-  const code = typeof json?.code === "string" ? json.code.slice(0, 64) : null;
+  // The CMS's code reaches a log line only as what a code is: capitals and underscores.
+  const code = typeof json?.code === "string" && /^[A-Z_]{1,64}$/.test(json.code) ? json.code : null;
   if (status === 404 && code === "UNKNOWN_DEVELOPER") return { ok: false, kind: "unknown_developer", detail: "UNKNOWN_DEVELOPER" };
   if (status !== 200 || !json) return { ok: false, kind: "unavailable", detail: `HTTP ${status}${code ? ` ${code}` : ""}` };
   if (!onCmsOrigin(json.url, cfg.origin)) return { ok: false, kind: "unavailable", detail: "the CMS answered a link that isn't on its own address" };

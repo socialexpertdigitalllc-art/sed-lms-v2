@@ -52,6 +52,22 @@ describe("cmsPathAllowed, beyond the vectors", () => {
     }
   });
 
+  it("allows only min or a number between a name's first part and its extension: an allowlist (the review's NIT rows)", () => {
+    // handlers no denylist named: type maps, send-as-is, includes, PHP 9, ColdFusion, Ruby, ...
+    for (const p of ["x.var.html", "x.asis.html", "x.inc.html", "x.stm.html", "x.php9.html", "x.cfm.html", "x.rb.txt", "x.en.html", "x.bundle.min.js", "x.Min.js", "x.1a.js", "x.min-1.js"]) {
+      expect(cmsPathAllowed(p), p).toBe(false);
+    }
+    for (const p of ["app.min.js", "jquery-3.7.1.min.js", "x.0.1.css", "photo.2024.jpg", "vendor/font-awesome-4.7.0/css/all.min.css", "x.min.min.js"]) {
+      expect(cmsPathAllowed(p), p).toBe(true);
+    }
+  });
+
+  it("checks a folder's every part after the first, its last one included", () => {
+    expect(cmsPathAllowed("assets.v2/app.js")).toBe(false);
+    expect(cmsPathAllowed("site.html/index.html")).toBe(false);
+    expect(cmsPathAllowed("release.2/app.js")).toBe(true);
+  });
+
   it("allows every listed extension, lowercase only", () => {
     for (const ext of ["html", "htm", "js", "css", "json", "xml", "txt", "webmanifest", "jpg", "jpeg", "png", "webp"]) {
       expect(cmsPathAllowed(`a/file.${ext}`)).toBe(true);

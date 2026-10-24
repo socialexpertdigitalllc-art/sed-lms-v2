@@ -12,9 +12,9 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
  *                       joined by line feeds.
  * Refused with 401: a missing or malformed header, a timestamp more than 300 s
  * away, a mismatch (compared in constant time), or a signature already seen
- * in the last 10 minutes. 503 while the secret is unset, shorter than 32
- * bytes, or has whitespace around it, so a misconfigured LMS never accepts
- * anything; the log says which, never the value.
+ * in the last 601 s. 503 while the secret is unset, shorter than 32 bytes, or
+ * has whitespace around it, so a misconfigured LMS never accepts anything;
+ * the log says which, once per process, never the value.
  *
  * The test vectors are shared with the CMS's signing client through
  * tests/fixtures/sedcms/shared-vectors.json.
@@ -24,7 +24,10 @@ export const SEDCMS_TIMESTAMP_HEADER = "x-sedcms-timestamp";
 export const SEDCMS_SIGNATURE_HEADER = "x-sedcms-signature";
 export const SEDCMS_WINDOW_SECONDS = 300;
 export const SEDCMS_MIN_SECRET_BYTES = 32;
-const REPLAY_TTL_MS = 10 * 60_000;
+// A signature can be valid for 600 s from its first use (a timestamp 300 s
+// ahead then, 300 s behind at the end, both inside the window), and still at
+// that last second: so it is remembered one second longer.
+const REPLAY_TTL_MS = (2 * SEDCMS_WINDOW_SECONDS + 1) * 1000;
 const REPLAY_MAX_ENTRIES = 10_000;
 
 const LF = String.fromCharCode(10);
@@ -49,10 +52,10 @@ export function sedcmsSignature(
 }
 
 /**
- * Signatures already accepted, each kept for 10 minutes: a signature is only
- * valid while its timestamp is within 300 s of now, so 10 minutes from its
- * first use outlives it. Bounded: a full cache refuses rather than forgetting
- * a live entry early. In memory, per process: the LMS may run two, so a
+ * Signatures already accepted, each kept for 601 s: a signature is only valid
+ * while its timestamp is within 300 s of now, so at most 600 s from its first
+ * use, that last second included. Bounded: a full cache refuses rather than
+ * forgetting a live entry early. In memory, per process: the LMS may run two, so a
  * signature replayed on the other one passes here; an apply is then stopped
  * by its single-use request id (lib/sedcms/requests.ts), and a read only reads.
  */
@@ -118,9 +121,20 @@ function readSecret(opts: VerifyOptions): { ok: true; secret: string } | { ok: f
   return { ok: true, secret };
 }
 
+// Why the secret can't be used, logged once per process and reason (every
+// request would otherwise log it again); on globalThis, like the cache.
+const WARNED_KEY = Symbol.for("sedcms.secretWarned");
+function warnOnce(reason: string): void {
+  const g = globalThis as unknown as Record<symbol, Set<string> | undefined>;
+  const warned = (g[WARNED_KEY] ??= new Set());
+  if (warned.has(reason)) return;
+  warned.add(reason);
+  console.error(`[sedcms] refusing CMS requests: ${reason}`);
+}
+
 /**
  * The checks that need no body: the secret is usable (else 503, logged by its
- * reason, never its value), both headers are well formed, and the timestamp is
+ * reason once per process, never its value), both headers are well formed, and the timestamp is
  * inside the window. Routes run this before reading a body, so a request
  * without them is refused unread. It proves nothing, though: well-formed
  * headers are easy to make up, and the HMAC can only be checked once the body
@@ -130,7 +144,7 @@ function readSecret(opts: VerifyOptions): { ok: true; secret: string } | { ok: f
 export function precheckSedcms(req: Request, opts: VerifyOptions = {}): SedcmsVerdict {
   const secret = readSecret(opts);
   if (!secret.ok) {
-    console.error(`[sedcms] refusing CMS requests: ${secret.reason}`);
+    warnOnce(secret.reason);
     return { ok: false, status: 503 };
   }
   const timestamp = req.headers.get(SEDCMS_TIMESTAMP_HEADER);

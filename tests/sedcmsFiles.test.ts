@@ -203,6 +203,7 @@ describe("custom domains: Hostinger's File Browser", () => {
   it("refuses a path that breaks cmsPathAllowed, an oversized file, or a folder in the way, before any request", async () => {
     hosts = installFakeHosts({ websites: [site] });
     hosts.hostinger.put(abs("old.html/inner.txt"), "x");
+    hosts.hostinger.put(abs("docs/readme"), "x");
     const files = await filesFor("client.com");
     const before = hosts.calls.length;
     for (const path of ["../index.html", "/index.html", ".htaccess", "index.php", "x.php.html", "cgi-bin/a.html", "a%2fb.html", "index.HTML"]) {
@@ -213,7 +214,7 @@ describe("custom domains: Hostinger's File Browser", () => {
     expect(hosts.calls.length).toBe(before);
 
     await expect(files.write("old.html", bytesOf("x"))).rejects.toMatchObject({ step: "write", reason: "not_a_file" });
-    await expect(files.write("old.html/inner.txt/x.html", bytesOf("x"))).rejects.toMatchObject({ step: "write", reason: "not_a_file" });
+    await expect(files.write("docs/readme/x.html", bytesOf("x"))).rejects.toMatchObject({ step: "write", reason: "not_a_file" });
     expect(hosts.calls.some((c) => c.url.includes("/api/tus/"))).toBe(false);
   });
 

@@ -32,6 +32,7 @@ const shared = JSON.parse(readFileSync("tests/fixtures/sedcms/shared-vectors.jso
     secret: string;
     headers: { timestamp: string; signature: string };
     windowSeconds: number;
+    replaySeconds: number;
     minSecretBytes: number;
     cases: SigCase[];
   };
@@ -66,6 +67,7 @@ describe("the shared vectors", () => {
   it("name the headers and limits this module uses", () => {
     expect(shared.signature.headers).toEqual({ timestamp: SEDCMS_TIMESTAMP_HEADER, signature: SEDCMS_SIGNATURE_HEADER });
     expect(shared.signature.windowSeconds).toBe(300);
+    expect(shared.signature.replaySeconds).toBe(601);
     expect(shared.signature.minSecretBytes).toBe(32);
   });
 
@@ -142,12 +144,29 @@ describe("replays", () => {
     expect(await verifySedcms(requestFor(post), post.body, { now: at(post.timestamp), seen })).toEqual({ ok: true });
   });
 
-  it("the cache keeps a signature for 10 minutes, then forgets it", () => {
+  it("the cache keeps a signature for 601 s, then forgets it", () => {
     const cache = new ReplayCache();
     const t0 = 1_761_177_600_000;
     expect(cache.record("a".repeat(64), t0)).toBe("fresh");
-    expect(cache.record("a".repeat(64), t0 + 10 * 60_000 - 1)).toBe("seen");
-    expect(cache.record("a".repeat(64), t0 + 10 * 60_000 + 1)).toBe("fresh");
+    expect(cache.record("a".repeat(64), t0 + 600_000)).toBe("seen");
+    expect(cache.record("a".repeat(64), t0 + 601_000 - 1)).toBe("seen");
+    expect(cache.record("a".repeat(64), t0 + 601_000)).toBe("fresh");
+  });
+
+  it("a signature 300 s ahead at first use is still refused as a replay at its last valid second, 600 s later", async () => {
+    const secret = "s".repeat(40);
+    const path = "/api/internal/sedcms/leads/11111111-1111-4111-8111-111111111111/summary";
+    const req = (ts: number, sig: string) =>
+      new Request(`https://lms.example${path}`, { method: "POST", headers: { "x-sedcms-timestamp": String(ts), "x-sedcms-signature": sig } });
+    const t0 = 1_800_000_000_000; // ms
+    const T = t0 / 1000 + 300; // the largest skew the window allows
+    const sig = sedcmsSignature(secret, "POST", path, T, "{}");
+    const seen = new ReplayCache();
+    expect(await verifySedcms(req(T, sig), "{}", { secret, seen, now: () => t0 })).toEqual({ ok: true });
+    for (const later of [599_999, 600_000]) {
+      expect(await verifySedcms(req(T, sig), "{}", { secret, seen, now: () => t0 + later }), String(later)).toEqual({ ok: false, status: 401 });
+    }
+    expect(await verifySedcms(req(T, sig), "{}", { secret, seen, now: () => t0 + 600_001 })).toEqual({ ok: false, status: 401 }); // and past the window
   });
 
   it("the cache holds at most 10 000 entries, and a full cache refuses (503) rather than forget early", async () => {
@@ -162,12 +181,33 @@ describe("replays", () => {
     expect(await verifySedcms(requestFor(post), post.body, { now: at(post.timestamp), seen: small })).toEqual({ ok: true });
     expect(await verifySedcms(requestFor(other), other.body, { now: at(other.timestamp), seen: small })).toEqual({ ok: false, status: 503 });
     // expired entries make room again
-    expect(cache.record("f".repeat(64), t0 + 10 * 60_000 + 1)).toBe("fresh");
+    expect(cache.record("f".repeat(64), t0 + 601_000)).toBe("fresh");
     expect(cache.size).toBe(1);
   });
 });
 
 describe("the secret", () => {
+  // the log says why once per process; each test starts as a fresh process would
+  beforeEach(() => {
+    delete (globalThis as Record<symbol, unknown>)[Symbol.for("sedcms.secretWarned")];
+  });
+
+  it("logs each reason once per process, not once per request", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      delete process.env[KEY];
+      for (let i = 0; i < 5; i++) await verifySedcms(requestFor(post), post.body, { now: at(post.timestamp), seen: new ReplayCache() });
+      process.env[KEY] = "short-secret-value";
+      for (let i = 0; i < 5; i++) await verifySedcms(requestFor(post), post.body, { now: at(post.timestamp), seen: new ReplayCache() });
+      const lines = warn.mock.calls.map((args) => args.map(String).join(" "));
+      expect(lines.filter((l) => l.includes("SEDCMS_LMS_SECRET is not set"))).toHaveLength(1);
+      expect(lines.filter((l) => l.includes("shorter than 32 bytes"))).toHaveLength(1);
+      expect(lines).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("missing is a 503, before anything else is looked at", async () => {
     delete process.env[KEY];
     expect(await verifySedcms(requestFor(post), post.body, { now: at(post.timestamp), seen: new ReplayCache() })).toEqual({ ok: false, status: 503 });
