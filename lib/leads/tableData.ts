@@ -6,6 +6,12 @@ import type { Lead, LeadTag } from "@/lib/leads/types";
 import { getUserDirectory } from "@/lib/users/directory";
 import { getTeamAgentIds } from "@/lib/teams/closers";
 import { loadHitlist, type HitlistMap } from "@/lib/hitlist/store";
+import { fetchAllRows } from "@/lib/supabase/fetchAll";
+
+/** A lead row with its embedded tag links, as the select below returns it. */
+type LeadRow = Omit<Lead, "tag_ids"> & { lead_tag_links?: { tag_id: string }[] | null };
+/** department_members joined to profiles, as the select below returns it. */
+type MemberRow = { profiles: { id: string; display_name: string | null } | null };
 
 /**
  * Everything the leads table needs, shared by /leads and /hitlist. Leads are
@@ -24,16 +30,18 @@ export async function loadLeadsTableData({ hitlistOnly = false }: { hitlistOnly?
   const canManageHitlist = perms.has("hitlist.manage");
   const hitlistP: Promise<HitlistMap | undefined> = canViewHitlist ? loadHitlist(admin) : Promise.resolve(undefined);
 
-  let leadsQuery = supabase
-    .from("leads")
-    .select("*, lead_tag_links(tag_id)")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
-  if (hitlistOnly) {
-    // The HitList tab reads only the starred leads, so it needs the ids first.
-    const ids = Object.keys((await hitlistP) ?? {});
-    leadsQuery = leadsQuery.in("id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]);
-  }
+  // The HitList tab reads only the starred leads, so it needs the ids first.
+  const onlyIds = hitlistOnly ? Object.keys((await hitlistP) ?? {}) : null;
+  // Every page of leads: PostgREST caps one response at 1,000 rows and the
+  // table crossed that in Oct 2026 — the newest rows were silently missing.
+  const leadsQuery = fetchAllRows<LeadRow>((from, to) => {
+    let q = supabase
+      .from("leads")
+      .select("*, lead_tag_links(tag_id)")
+      .is("deleted_at", null);
+    if (onlyIds) q = q.in("id", onlyIds.length ? onlyIds : ["00000000-0000-0000-0000-000000000000"]);
+    return q.order("created_at", { ascending: false }).order("id").range(from, to);
+  });
 
   // Independent reads fire together. `department_members` still follows because
   // it depends on the resolved `salesDept.id`.
@@ -52,8 +60,7 @@ export async function loadLeadsTableData({ hitlistOnly = false }: { hitlistOnly?
 
   // Flatten the embedded links into `tag_ids` and drop the nested field.
   // For users without a tag permission, RLS returns no link rows → `tag_ids: []`.
-  type LeadRow = Omit<Lead, "tag_ids"> & { lead_tag_links?: { tag_id: string }[] | null };
-  const leads: Lead[] = ((leadsData ?? []) as LeadRow[]).map((row) => {
+  const leads: Lead[] = (leadsData ?? []).map((row) => {
     const { lead_tag_links, ...rest } = row;
     return { ...rest, tag_ids: (lead_tag_links ?? []).map((l) => l.tag_id) } as Lead;
   });
@@ -68,7 +75,6 @@ export async function loadLeadsTableData({ hitlistOnly = false }: { hitlistOnly?
       .from("department_members")
       .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
       .eq("department_id", salesDept.id);
-    type MemberRow = { profiles: { id: string; display_name: string | null } | null };
     salesAgents = ((members ?? []) as unknown as MemberRow[])
       .map((m) => ({ id: m.profiles?.id ?? "", name: m.profiles?.display_name ?? "—" }))
       .filter((u) => u.id);

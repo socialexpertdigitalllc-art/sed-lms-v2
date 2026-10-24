@@ -1,6 +1,6 @@
 # HitList — runbook
 
-Added 2026-10-24 (migration 0094). One company-wide list of premium leads,
+Added 2026-10-24 (migration 0095). One company-wide list of premium leads,
 each with a priority of 1 to 5 stars.
 
 ## Who can do what
@@ -36,7 +36,7 @@ to anyone else under **Admin → Permissions**.
 
 ## How it works
 
-- `supabase/migrations/0094_lead_hitlist.sql`: the `lead_hitlist` table (one
+- `supabase/migrations/0095_lead_hitlist.sql`: the `lead_hitlist` table (one
   row per lead: `priority` 1–5, `added_by`), RLS read for `hitlist.view`,
   realtime, the two permissions and their grants.
 - `lib/hitlist/store.ts`: read the list, add / re-rate / remove. Each change is
@@ -53,6 +53,6 @@ to anyone else under **Admin → Permissions**.
 
 | Symptom | What to do |
 |---|---|
-| No stars or tab for admins | Apply migration 0094 (the permission grants at its end). |
+| No stars or tab for admins | Apply migration 0095 (the permission grants at its end). |
 | *Only admins can change the hit list.* | The user lacks `hitlist.manage`. |
 | Stars don't appear on other screens until reload | Check the `lead_hitlist` table is in the `supabase_realtime` publication. |

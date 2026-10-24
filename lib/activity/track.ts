@@ -25,18 +25,22 @@ export function resolveClickTarget(target: Element | null): ClickInfo | null {
   return { label, meta };
 }
 
-export const trackBatchSchema = z.object({
-  events: z
-    .array(
-      z.object({
-        type: z.enum(["page_view", "click", "focus"]),
-        path: z.string().max(300).optional(),
-        label: z.string().max(120).optional(),
-        meta: z.record(z.string(), z.unknown()).optional(),
-      })
-    )
-    .min(1)
-    .max(50),
-});
+export const trackBatchSchema = z
+  .object({
+    events: z
+      .array(
+        z.object({
+          type: z.enum(["page_view", "click", "focus"]),
+          path: z.string().max(300).optional(),
+          label: z.string().max(120).optional(),
+          meta: z.record(z.string(), z.unknown()).optional(),
+        })
+      )
+      .max(50),
+    /** A presence-only beat (no events) — what the tracker sends while paused. */
+    heartbeat: z.boolean().optional(),
+  })
+  // Either real events, or an explicit heartbeat; an empty batch alone is a bug.
+  .refine((b) => b.events.length > 0 || b.heartbeat === true, { message: "events required unless heartbeat" });
 
 export type TrackBatch = z.infer<typeof trackBatchSchema>;

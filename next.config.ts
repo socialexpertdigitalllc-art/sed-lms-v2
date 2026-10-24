@@ -10,6 +10,15 @@ const nextConfig: NextConfig = {
     // 60MB zip (site-studio manual upload); 64mb covers it plus multipart
     // framing overhead.
     proxyClientMaxBodySize: "64mb",
+    // Client router cache for dynamic pages. Since Next 15 every <Link>
+    // navigation re-fetched the page from the server (dynamic stale time 0),
+    // so Dashboard → Leads → Dashboard rebuilt the whole dashboard from the
+    // database each time: "on screen switch it loads all the data from 0".
+    // With 30 s, bouncing between screens reuses the payload already in the
+    // browser; a realtime event or a mutation calls router.refresh(), which
+    // drops the cache, so changes still show at once. 180 s for static
+    // segments is the documented default pairing.
+    staleTimes: { dynamic: 30, static: 180 },
   },
   images: {
     // Thumbnails for the image picker. See lib/images/hosts.ts for the

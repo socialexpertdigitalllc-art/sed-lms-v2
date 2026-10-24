@@ -3,7 +3,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 type Admin = ReturnType<typeof createAdminClient>;
 
 /**
- * The HitList (migration 0094): one company-wide list of premium leads, each
+ * The HitList (migration 0095): one company-wide list of premium leads, each
  * with a 1–5 star priority. Admins add and remove (hitlist.manage); closers
  * only view (hitlist.view). Writes go through the service role behind
  * /api/hitlist/[leadId]; reads use it too, after the page's permission check.

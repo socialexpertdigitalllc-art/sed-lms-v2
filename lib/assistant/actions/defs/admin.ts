@@ -1,3 +1,4 @@
+import { invalidateUserPermissions } from "@/lib/permissions/resolver";
 import { randomBytes } from "node:crypto";
 import { DEFAULT_MAPPING, IMPORT_TARGETS } from "@/lib/import/columns";
 import { mapRow } from "@/lib/import/map";
@@ -672,6 +673,7 @@ async function settleExpiry(ctx: ActionContext, userId: string, key: string, exp
   if (!row || sameInstant(row.expires_at, expiresAt)) return;
   const { error } = await ctx.admin.from("user_permission_overrides").update({ expires_at: expiresAt }).eq("user_id", userId).eq("permission_key", key);
   if (error) throw new Error(error.message);
+  invalidateUserPermissions(userId);
   await ctx.admin.from("activity_log").insert({
     user_id: ctx.userId,
     action: "user.permission.expiry_set",

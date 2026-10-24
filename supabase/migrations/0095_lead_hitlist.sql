@@ -1,4 +1,4 @@
--- 0094_lead_hitlist.sql — the HitList: one company-wide list of premium leads,
+-- 0095_lead_hitlist.sql — the HitList: one company-wide list of premium leads,
 -- each with a 1–5 star priority. Admins add and remove (hitlist.manage);
 -- closers only view (hitlist.view). Shown as a golden star beside the business
 -- name in the leads table, a "Hit list" filter there, and the /hitlist tab.

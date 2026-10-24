@@ -8,6 +8,8 @@ import { buildRegionFacets } from "@/lib/geo/regions";
 import { DashboardBoard } from "@/components/dashboard/DashboardBoard";
 import { getUserDirectory } from "@/lib/users/directory";
 import { getTeamAgentIds } from "@/lib/teams/closers";
+import { fetchAllRows } from "@/lib/supabase/fetchAll";
+import { DASHBOARD_LEAD_SELECT, type DashboardLead } from "@/lib/dashboard/columns";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -29,22 +31,35 @@ export default async function DashboardPage() {
       .from("department_members")
       .select("user_id, profiles!department_members_user_id_fkey(id, display_name)")
       .eq("department_id", salesDept.id);
-    return (members ?? [])
-      .map((m: any) => ({ id: m.profiles?.id, display_name: m.profiles?.display_name ?? "—" }))
-      .filter((u: { id?: string }) => u.id)
+    type MemberRow = { profiles: { id: string; display_name: string | null } | null };
+    return ((members ?? []) as unknown as MemberRow[])
+      .map((m) => ({ id: m.profiles?.id ?? "", display_name: m.profiles?.display_name ?? "—" }))
+      .filter((u) => u.id)
       .sort((a, b) => a.display_name.localeCompare(b.display_name));
   })();
 
   // Independent reads fire together; salesUsers resolves in parallel.
+  // Leads: only the columns the metrics read (see lib/dashboard/columns.ts),
+  // and every page of them — PostgREST caps one response at 1,000 rows.
   const [{ data: leadsData }, agents, { data: followUps }, { data: tickets }, salesUsers] =
     await Promise.all([
-      supabase.from("leads").select("*").is("deleted_at", null),
+      fetchAllRows<DashboardLead>((from, to) =>
+        supabase
+          .from("leads")
+          .select(DASHBOARD_LEAD_SELECT)
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false })
+          .order("id")
+          .range(from, to),
+      ),
       getUserDirectory(),
       supabase.from("lead_follow_ups").select("fu_status, lead_id"),
       supabase.from("lead_tickets").select("status, due_date, created_at, resolved_at, lead_id"),
       salesUsersPromise,
     ]);
-  const leads = (leadsData ?? []) as Lead[];
+  // The board's helpers are typed on the full Lead; they only touch the
+  // columns selected above (the type above is the contract that keeps it so).
+  const leads = (leadsData ?? []) as unknown as Lead[];
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 
