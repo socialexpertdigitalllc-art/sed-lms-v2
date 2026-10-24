@@ -75,3 +75,6 @@ backups/
 
 # built Site Builder template zips + covers (npm run build:site-template)
 /site-builder-templates/dist/
+
+# anchor-memory plugin session state
+.anchor/
