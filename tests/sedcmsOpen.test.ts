@@ -468,3 +468,135 @@ describe("turning SED CMS on for a lead (lib/sedcms/links.ts)", () => {
     err.mockRestore();
   });
 });
+
+describe("a soft-deleted lead's link gives its site up to a manager", () => {
+  const GONE = "99999999-9999-4999-8999-999999999999"; // soft-deleted, still linked at reclaim.dmviral.com
+  const GONE_TOO = "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd"; // soft-deleted, still linked at movedv2.dmviral.com
+  const NEXT = "abababab-abab-4bab-8bab-abababababab"; // a live lead whose site is reclaim.dmviral.com now
+  const SITE = "reclaim.dmviral.com";
+  const links = () => state.admin!.tables.sedcms_links;
+  const active = () => links().filter((r) => r.revoked_at == null);
+  const linkOf = (leadId: string) => links().find((r) => r.lead_id === leadId)!;
+  const audit = (action: string) => state.admin!.tables.activity_log.filter((r) => r.action === action);
+
+  /** The next insert or update of sedcms_links fails, as a lost connection would. */
+  function failNext(op: "insert" | "update") {
+    const db = state.admin!.client as unknown as { from: (t: string) => Record<string, unknown> };
+    const real = db.from.bind(db);
+    let armed = true;
+    db.from = (t: string) => {
+      const q = real(t);
+      if (t !== "sedcms_links" || !armed) return q;
+      return new Proxy(q, {
+        get(target, p) {
+          if (p !== op || !armed) return target[p as string];
+          armed = false;
+          const failing: Record<string, unknown> = {};
+          for (const m of ["eq", "is", "in", "select"]) failing[m] = () => failing;
+          failing.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: null, error: { message: "connection lost" } }).then(resolve);
+          return () => failing;
+        },
+      });
+    };
+  }
+
+  beforeEach(() => {
+    state.admin!.tables.leads = [
+      { id: GONE, deleted_at: "2026-10-20T00:00:00.000Z" },
+      { id: GONE_TOO, deleted_at: "2026-10-21T00:00:00.000Z" },
+      { id: LEAD, deleted_at: null },
+    ];
+    state.admin!.tables.sedcms_links.push(linkRow(GONE, SITE), linkRow(GONE_TOO, "movedv2.dmviral.com"));
+    state.rls!.tables.leads.push({ id: NEXT, business_name: "Next Co", website_link: `https://${SITE}`, deleted_at: null });
+  });
+
+  it("asks first, and ends nothing until a manager confirms", async () => {
+    const calls = cms(() => minted());
+    const res = await open({ leadId: NEXT });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "CONFIRM_LINK", host: SITE });
+    expect(linkOf(GONE).revoked_at).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("once confirmed, the deleted lead's link is ended first, then the new one made, and the log names both leads", async () => {
+    const calls = cms(() => minted());
+    const res = await open({ leadId: NEXT, confirmHost: SITE });
+    expect(res.status).toBe(200);
+    expect(linkOf(GONE)).toMatchObject({ revoked_at: expect.any(String), revoked_by: USER });
+    expect(active().filter((r) => r.host === SITE)).toEqual([expect.objectContaining({ lead_id: NEXT, linked_by: USER })]);
+    const order = state.admin!.writes.filter(([t]) => t === "sedcms_links").map(([, op]) => op);
+    expect(order).toEqual(["update", "insert"]); // ended, then linked: never two active links
+    expect(audit("sedcms.link_reclaimed")).toEqual([
+      expect.objectContaining({
+        user_id: USER,
+        entity_type: "lead",
+        entity_id: GONE,
+        old_value: { leadId: GONE, host: SITE },
+        new_value: { leadId: NEXT, host: SITE },
+      }),
+    ]);
+    expect(audit("sedcms.linked")).toEqual([expect.objectContaining({ entity_id: NEXT, new_value: { host: SITE, reclaimedFrom: GONE } })]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("when the new link fails, the old one is put back: never two active links, and the old one isn't lost", async () => {
+    const calls = cms(() => minted());
+    failNext("insert");
+    const res = await open({ leadId: NEXT, confirmHost: SITE });
+    expect(res.status).toBe(500);
+    expect(linkOf(GONE)).toMatchObject({ revoked_at: null, revoked_by: null });
+    expect(active().filter((r) => r.host === SITE)).toEqual([expect.objectContaining({ lead_id: GONE })]);
+    expect(links().some((r) => r.lead_id === NEXT)).toBe(false);
+    expect(audit("sedcms.link_reclaimed")).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("when the old link can't be ended, nothing changes and nothing is linked", async () => {
+    const calls = cms(() => minted());
+    failNext("update");
+    const res = await open({ leadId: NEXT, confirmHost: SITE });
+    expect(res.status).toBe(500);
+    expect(linkOf(GONE).revoked_at).toBeNull();
+    expect(links().some((r) => r.lead_id === NEXT)).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a site held by a live lead is still refused, and so is one whose lead can't be found", async () => {
+    const calls = cms(() => minted());
+    state.admin!.tables.leads.find((l) => l.id === GONE)!.deleted_at = null; // the holder is a live lead after all
+    for (const body of [{ leadId: NEXT }, { leadId: NEXT, confirmHost: SITE }]) {
+      const res = await open(body);
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe("HOST_TAKEN");
+    }
+    state.admin!.tables.leads = state.admin!.tables.leads.filter((l) => l.id !== GONE);
+    expect((await open({ leadId: NEXT, confirmHost: SITE })).status).toBe(409);
+    expect(linkOf(GONE).revoked_at).toBeNull();
+    expect(links().some((r) => r.lead_id === NEXT)).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a manager confirming a lead's new address reclaims it the same way", async () => {
+    const calls = cms(() => minted());
+    const res = await open({ leadId: MOVED_LEAD, confirmHost: "movedv2.dmviral.com" });
+    expect(res.status).toBe(200);
+    expect(linkOf(GONE_TOO)).toMatchObject({ revoked_at: expect.any(String), revoked_by: USER });
+    expect(linkOf(MOVED_LEAD)).toMatchObject({ host: "movedv2.dmviral.com", revoked_at: null });
+    expect(audit("sedcms.link_reclaimed")).toEqual([
+      expect.objectContaining({ entity_id: GONE_TOO, new_value: { leadId: MOVED_LEAD, host: "movedv2.dmviral.com" } }),
+    ]);
+    expect(audit("sedcms.host_confirmed")).toEqual([
+      expect.objectContaining({ entity_id: MOVED_LEAD, new_value: { host: "movedv2.dmviral.com", reclaimedFrom: GONE_TOO } }),
+    ]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("only a manager can: tickets.resolve alone still can't link at all", async () => {
+    const calls = cms(() => minted());
+    state.perms = new Set(["tickets.resolve"]);
+    expect((await open({ leadId: NEXT, confirmHost: SITE })).status).toBe(403);
+    expect(linkOf(GONE).revoked_at).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+});

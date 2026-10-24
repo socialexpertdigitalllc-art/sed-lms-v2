@@ -7,7 +7,7 @@ import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
 import { cmsConfig, mintCmsLink } from "@/lib/sedcms/cms";
 import { isPlainHost, isProtectedSite } from "@/lib/sedcms/files";
 import { isUuid } from "@/lib/sedcms/http";
-import { createLink, hostChangedMessage, moveLink, readLink, siteHolder } from "@/lib/sedcms/links";
+import { createLink, hostChangedMessage, moveLink, readLink, restoreLink, revokeLink, siteHolder, type SedcmsLink } from "@/lib/sedcms/links";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -38,7 +38,11 @@ const answer = (status: number, body: Record<string, unknown>) =>
  *     confirms 409 CONFIRM_HOST_CHANGE { host, from, message } the same
  *     way, which moves the link (audited sedcms.host_confirmed, old -> new);
  *     anyone else gets 409 HOST_CHANGED;
- *   - a site another lead holds is 409 HOST_TAKEN;
+ *   - a site another lead holds is 409 HOST_TAKEN, unless that lead is
+ *     soft-deleted: then, once confirmed, its link is ended first (audited
+ *     sedcms.link_reclaimed, naming both leads) and the new one made; if the
+ *     new one fails, the old one is put back, so there are never two active
+ *     links and the old one is never lost to a failure;
  * so tickets.resolve alone opens only linked leads whose host still matches.
  */
 export async function POST(req: Request) {
@@ -102,9 +106,11 @@ export async function POST(req: Request) {
     if (isProtectedSite(host)) {
       return answer(422, { code: "PROTECTED", error: `${host} is a protected company website: SED CMS can't change it.` });
     }
-    const holder = await siteHolder(admin, host, leadId);
-    if (!holder.ok) return answer(500, { error: "The CMS link could not be checked. Try again." });
-    if (holder.leadId) return answer(409, { code: "HOST_TAKEN", error: `${host} is already turned on for SED CMS on another lead.` });
+    const held = await siteHolder(admin, host, leadId);
+    if (!held.ok) return answer(500, { error: "The CMS link could not be checked. Try again." });
+    if (held.holder && !held.holder.leadDeleted) {
+      return answer(409, { code: "HOST_TAKEN", error: `${host} is already turned on for SED CMS on another lead.` });
+    }
     if (confirmHost !== host) {
       const business = businessName?.trim() || "this lead";
       return link
@@ -120,16 +126,39 @@ export async function POST(req: Request) {
             message: `Turn on SED CMS for ${business} at ${host}? The CMS will be able to change this website's files.`,
           });
     }
+    // A soft-deleted lead's link gives the site up: ended first, so there are never two active links.
+    let reclaimed: { link: SedcmsLink; revokedAt: string } | null = null;
+    if (held.holder) {
+      const revoked = await revokeLink(admin, held.holder.link, user.id);
+      if (!revoked.ok) return answer(500, { error: "The CMS link could not be saved. Try again." });
+      reclaimed = { link: held.holder.link, revokedAt: revoked.revokedAt };
+    }
     const saved = link ? await moveLink(admin, link, host, user.id) : await createLink(admin, leadId, host, user.id);
     if (!saved.ok) {
+      // the new link failed: the deleted lead's goes back in place
+      if (reclaimed && !(await restoreLink(admin, reclaimed.link, reclaimed.revokedAt))) {
+        console.error(`[sedcms] the link of deleted lead ${reclaimed.link.leadId} could not be put back after a failed reclaim`);
+      }
       return saved.taken
         ? answer(409, { code: "HOST_TAKEN", error: `${host} is already turned on for SED CMS on another lead.` })
         : answer(500, { error: "The CMS link could not be saved. Try again." });
     }
+    if (reclaimed) {
+      const { error: reclaimError } = await admin.from("activity_log").insert({
+        user_id: user.id,
+        action: "sedcms.link_reclaimed",
+        entity_type: "lead",
+        entity_id: reclaimed.link.leadId,
+        old_value: { leadId: reclaimed.link.leadId, host: reclaimed.link.host },
+        new_value: { leadId, host },
+      });
+      if (reclaimError) console.warn(`[sedcms] the sedcms.link_reclaimed row for lead ${reclaimed.link.leadId} was not written`);
+    }
+    const reclaimedFrom = reclaimed ? { reclaimedFrom: reclaimed.link.leadId } : {};
     const { error: auditError } = await admin.from("activity_log").insert(
       link
-        ? { user_id: user.id, action: "sedcms.host_confirmed", entity_type: "lead", entity_id: leadId, old_value: { host: link.host }, new_value: { host } }
-        : { user_id: user.id, action: "sedcms.linked", entity_type: "lead", entity_id: leadId, new_value: { host } },
+        ? { user_id: user.id, action: "sedcms.host_confirmed", entity_type: "lead", entity_id: leadId, old_value: { host: link.host }, new_value: { host, ...reclaimedFrom } }
+        : { user_id: user.id, action: "sedcms.linked", entity_type: "lead", entity_id: leadId, new_value: { host, ...reclaimedFrom } },
     );
     if (auditError) console.warn(`[sedcms] the ${link ? "sedcms.host_confirmed" : "sedcms.linked"} row for lead ${leadId} was not written`);
   }

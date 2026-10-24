@@ -19,7 +19,9 @@ import { leadHost, type SedcmsLead } from "./lead";
  *     internal route that touches the site is a 409 HOST_CHANGED until a
  *     manager confirms the new address (which updates the link);
  *   - one active link per lead, and one per site (www. or not), so one
- *     site is never linked to two leads.
+ *     site is never linked to two leads. A soft-deleted lead's link gives its
+ *     site up to a manager who links another lead there (revokeLink first,
+ *     then the new link; the old one is put back if the new one fails).
  * On a linked lead, moving website_link to another host needs studio.manage
  * (websiteMoveRefusal), and so does replacing, moving or taking down its site
  * (linkedSiteRefusal); every write of website_link then tells the managers
@@ -67,18 +69,65 @@ export async function readLink(admin: SupabaseClient, leadId: string): Promise<L
   }
 }
 
-/** The other lead whose active link holds the site at `host` (www. or not), if any. */
-export async function siteHolder(admin: SupabaseClient, host: string, leadId: string): Promise<{ ok: true; leadId: string | null } | { ok: false }> {
+/** Another lead's active link at a site, and whether that lead is soft-deleted (known to be: its row says so). */
+export interface SiteHolder {
+  link: SedcmsLink;
+  leadDeleted: boolean;
+}
+
+/** The other lead's active link that holds the site at `host` (www. or not), if any. */
+export async function siteHolder(admin: SupabaseClient, host: string, leadId: string): Promise<{ ok: true; holder: SiteHolder | null } | { ok: false }> {
   const key = siteKey(host);
   try {
     const { data, error } = await admin.from("sedcms_links").select(LINK_COLUMNS).in("host", [key, `www.${key}`]).is("revoked_at", null);
     if (error || !Array.isArray(data)) return { ok: false };
     const links = data.map(asLink);
     if (links.some((l) => l === null)) return { ok: false };
-    const other = (links as SedcmsLink[]).find((l) => l.leadId !== leadId);
-    return { ok: true, leadId: other?.leadId ?? null };
+    const others = (links as SedcmsLink[]).filter((l) => l.leadId !== leadId);
+    if (others.length === 0) return { ok: true, holder: null };
+    if (others.length > 1) return { ok: false }; // the one-per-site index allows one: refuse to guess
+    const { data: lead, error: leadError } = await admin.from("leads").select("id, deleted_at").eq("id", others[0].leadId).maybeSingle();
+    if (leadError) return { ok: false };
+    // Only a lead known to be soft-deleted gives its site up; one that can't be found does not.
+    const deletedAt = (lead as { deleted_at?: unknown } | null)?.deleted_at;
+    return { ok: true, holder: { link: others[0], leadDeleted: deletedAt !== null && deletedAt !== undefined } };
   } catch {
     return { ok: false };
+  }
+}
+
+/**
+ * End a soft-deleted lead's link so another lead can take its site: only
+ * that link, only while it is still active. The time it was ended, which
+ * restoreLink needs to put it back.
+ */
+export async function revokeLink(admin: SupabaseClient, link: SedcmsLink, userId: string): Promise<{ ok: true; revokedAt: string } | { ok: false }> {
+  const revokedAt = new Date().toISOString();
+  try {
+    const { data, error } = await admin
+      .from("sedcms_links")
+      .update({ revoked_at: revokedAt, revoked_by: userId })
+      .eq("id", link.id)
+      .is("revoked_at", null)
+      .select("id");
+    return !error && Array.isArray(data) && data.length === 1 ? { ok: true, revokedAt } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Put back a link revokeLink ended, when the link that was to replace it failed. False when it couldn't be. */
+export async function restoreLink(admin: SupabaseClient, link: SedcmsLink, revokedAt: string): Promise<boolean> {
+  try {
+    const { data, error } = await admin
+      .from("sedcms_links")
+      .update({ revoked_at: null, revoked_by: null })
+      .eq("id", link.id)
+      .eq("revoked_at", revokedAt)
+      .select("id");
+    return !error && Array.isArray(data) && data.length === 1;
+  } catch {
+    return false;
   }
 }
 

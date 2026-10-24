@@ -101,7 +101,7 @@ describe("probe-lead-binding, inverted: website_link alone authorises nothing", 
     expect(hosts.da.text(`${daDocroot("acme-roofing")}/index.html`)).toBe("<h1>Acme Roofing</h1>");
     expect(hosts.calls).toHaveLength(0);
     // ...and the victim's site can't be confirmed for it: one site, one lead
-    expect(await siteHolder(state.db!.client, STAGING, OTHER_LEAD)).toEqual({ ok: true, leadId: VICTIM_LEAD });
+    expect(await siteHolder(state.db!.client, STAGING, OTHER_LEAD)).toEqual({ ok: true, holder: { link: expect.objectContaining({ leadId: VICTIM_LEAD, host: STAGING }), leadDeleted: false } });
     expect((await moveLink(state.db!.client, (await linked(OTHER_LEAD))!, STAGING, "manager-1")).ok).toBe(false);
   });
 
