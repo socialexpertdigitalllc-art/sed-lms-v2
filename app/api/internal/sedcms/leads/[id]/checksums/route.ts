@@ -3,7 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { siteFilesFor } from "@/lib/sedcms/files";
 import { READ_DEADLINE_MS, Deadline } from "@/lib/sedcms/deadline";
 import { readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
-import { expectHost, loadLead } from "@/lib/sedcms/lead";
+import { loadLead } from "@/lib/sedcms/lead";
+import { linkedHost } from "@/lib/sedcms/links";
 import { cmsPathAllowed } from "@/lib/sedcms/paths";
 import { CHECKSUMS_MAX_PATHS, checksums, hostingFailure, siteRefusalResponse } from "@/lib/sedcms/read";
 
@@ -19,7 +20,8 @@ const Body = z.object({ host: z.string().max(253), paths: z.array(z.string().max
  * sha256 of each path (null: no such file), at most 100, for the CMS's
  * "Check" after a publish that ended with no outcome. Signed by the CMS; no
  * session. Every path must pass the shared path rules (422 REFUSED, before
- * any hosting call); 409 HOST_CHANGED when the lead's site moved.
+ * any hosting call). Only the host SED CMS is linked at (lib/sedcms/links.ts):
+ * 404 NO_LEAD, or 409 HOST_CHANGED when that isn't `host` or the site moved.
  */
 export async function POST(req: Request, ctx: Ctx) {
   // No host call starts after 100 s, under the CMS's 120 s (lib/sedcms/deadline.ts).
@@ -39,9 +41,10 @@ async function readWithin(req: Request, ctx: Ctx, deadline: Deadline) {
   if (!paths.every((p) => cmsPathAllowed(p))) return sedcmsError(422, "REFUSED", "A path is not one the CMS may read.");
   const { id } = await ctx.params;
 
-  const found = await loadLead(createAdminClient(), id);
+  const admin = createAdminClient();
+  const found = await loadLead(admin, id);
   if (!found.ok) return found.response;
-  const at = expectHost(found.lead, host);
+  const at = await linkedHost(admin, found.lead, host);
   if (!at.ok) return at.response;
 
   const site = await siteFilesFor(at.host);

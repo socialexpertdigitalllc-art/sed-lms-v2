@@ -103,7 +103,7 @@ function fakeAdmin(rows: Record<string, Record<string, unknown> | null>) {
     from(table: string) {
       const chain = (result: unknown) => {
         const c: Record<string, unknown> = {};
-        for (const m of ["eq", "or", "order", "select"]) c[m] = () => c;
+        for (const m of ["eq", "is", "or", "order", "select"]) c[m] = () => c;
         c.maybeSingle = async () => ({ data: result, error: null });
         c.single = async () => ({ data: result, error: result ? null : { message: "not found" } });
         c.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>

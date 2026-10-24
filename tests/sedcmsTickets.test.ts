@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { memorySupabase, type MemoryDb } from "./helpers/memorySupabase";
 import { withEnv } from "./helpers/fakeSiteHosts";
-import { TEST_SECRET, leadPath, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
+import { TEST_SECRET, leadPath, linkRow, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
 import { isTicketEligible } from "@/lib/tickets/logic";
 
 /**
@@ -78,6 +78,12 @@ beforeEach(() => {
     lead_tickets: [],
     ticket_items: [],
     activity_log: [],
+    // SED CMS is on for each (a ticket checks the link, not its host)
+    sedcms_links: [
+      linkRow(LEAD, "acme-roofing.dmviral.com"),
+      linkRow(NOT_READY_LEAD, "not-ready.dmviral.com"),
+      linkRow(OTHER_LEAD, "other-co.dmviral.com"),
+    ],
   });
   state.fromCalls = 0;
   state.notified = [];

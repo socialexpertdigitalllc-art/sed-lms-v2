@@ -33,6 +33,7 @@ import {
 import { normalizeTargetDomain } from "@/lib/site-studio/deploy/transfer";
 import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
 import { findOrTrackStaging, goLiveOnDomain, recordSiteOnDomain } from "@/lib/site-studio/deploy/golive";
+import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
 import { toCents, type ClientDomainRow, type DomainRegistrar } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -470,6 +471,7 @@ export async function assignDomain(
   // if the lead has none.
   if (row.status === "connected" && !(lead as { website_link: string | null }).website_link) {
     await admin.from("leads").update({ website_link: `https://${row.domain}` }).eq("id", leadId);
+    await noteWebsiteLinkChange(admin, { leadId, before: null, after: `https://${row.domain}`, actorId });
   }
   await logAssign(admin, actorId, row, leadId);
   return { ok: true, domain: data as ClientDomainRow, kick };

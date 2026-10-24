@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { linkedSiteRefusal, noteWebsiteLinkChange } from "@/lib/sedcms/links";
 import { notify } from "@/lib/notifications/notify";
 import { daConfigured, subFromWebsiteLink, deleteSubdomain } from "@/lib/template-engine/directadmin";
 import { hostingerConfigured } from "@/lib/hostinger/client";
@@ -58,6 +59,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       .eq("id", gen.lead_id)
       .maybeSingle();
     if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+    // Moving the site to a domain moves its address: on a lead SED CMS is
+    // turned on for, that is a manager's call (lib/sedcms/links.ts).
+    const linkedRefusal = await linkedSiteRefusal(admin, gen.lead_id, perms);
+    if (linkedRefusal) return NextResponse.json({ error: linkedRefusal.error }, { status: linkedRefusal.status });
 
     const now = new Date().toISOString();
     const pushed = await pushStagingToDomain({ admin, sub, domain, nowIso: now });
@@ -87,6 +92,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       .eq("status", "deployed");
     const priorLink = lead.website_link;
     await admin.from("leads").update({ website_link: url }).eq("id", gen.lead_id);
+    await noteWebsiteLinkChange(admin, { leadId: gen.lead_id, before: priorLink, after: url, actorId: user.id });
 
     let subdomainDeleted = false;
     if (pushed.settled) {

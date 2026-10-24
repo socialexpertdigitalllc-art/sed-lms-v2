@@ -5,6 +5,7 @@ import { resolveSubdomain, reusableSubdomain, InvalidSlugError } from "./slug";
 import { baseSubdomain, firstFreeVersion } from "./naming";
 import { claimedByAnotherLead } from "./claimed";
 import { ensureSubdomain } from "./ensureSubdomain";
+import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
 
 /**
  * The exact DirectAdmin surface this service needs, injected so tests never
@@ -256,6 +257,7 @@ export async function deployRun(
     if (leadUpdErr) {
       return fail(500, `Deployed to ${url}, but could not update the lead's website_link: ${leadUpdErr.message}. The site IS live.`);
     }
+    await noteWebsiteLinkChange(admin, { leadId: run.lead_id, after: url, actorId: actorUserId });
 
     const { error: logErr } = await admin.from("activity_log").insert({
       user_id: actorUserId,

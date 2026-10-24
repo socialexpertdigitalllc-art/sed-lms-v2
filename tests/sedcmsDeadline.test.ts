@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { memorySupabase, type MemoryDb } from "./helpers/memorySupabase";
 import { HG_FILES, daDocroot, fakeHostEnv, installFakeHosts, withEnv, type FakeHosts } from "./helpers/fakeSiteHosts";
-import { TEST_SECRET, leadPath, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
+import { TEST_SECRET, leadPath, linkRow, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
 import { APPLY_DEADLINE_MS, Deadline, HOST_CALL_TIMEOUT_MS, READ_DEADLINE_MS } from "@/lib/sedcms/deadline";
 import { applyChanges, type DecodedChange } from "@/lib/sedcms/apply";
 import { SiteFilesError, siteFilesFor, type CallLimits, type SiteFiles } from "@/lib/sedcms/files";
@@ -409,6 +409,7 @@ describe("the read routes stop at 100 s", () => {
   beforeEach(() => {
     state.db = memorySupabase({
       leads: [{ id: LEAD, business_name: "Acme", business_email: null, status: "Ready", website_link: `https://${STAGING}`, deleted_at: null }],
+      sedcms_links: [linkRow(LEAD, STAGING)],
     });
   });
 

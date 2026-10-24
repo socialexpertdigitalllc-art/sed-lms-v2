@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { memorySupabase, type MemoryDb } from "./helpers/memorySupabase";
 import { daDocroot, fakeHostEnv, installFakeHosts, withEnv } from "./helpers/fakeSiteHosts";
-import { TEST_SECRET, leadPath, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
+import { SEDCMS_UNIQUE, TEST_SECRET, leadPath, linkRow, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
 import { SiteFilesError, type SiteFiles } from "@/lib/sedcms/files";
 import { cmsPathAllowed } from "@/lib/sedcms/paths";
 
@@ -139,7 +139,15 @@ beforeEach(() => {
       { id: "d3", domain: "nozone.com", lead_id: NO_ZONE_LEAD, status: "live", cf_zone_id: null },
     ],
     activity_log: [],
-  });
+    sedcms_links: [
+      linkRow(LEAD, HOST),
+      linkRow(OTHER_LEAD, OTHER_HOST),
+      linkRow(STAGING_LEAD, STAGING),
+      linkRow(PROTECTED_LEAD, "sedsolutions.online"),
+      linkRow(NO_ZONE_LEAD, NO_ZONE_HOST),
+      linkRow(WP_LEAD, "wp-client.com"),
+    ],
+  }, {}, SEDCMS_UNIQUE);
   state.fromCalls = 0;
   state.siteFilesCalls = 0;
   state.purges = [];

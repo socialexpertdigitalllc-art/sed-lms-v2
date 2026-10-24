@@ -17,6 +17,7 @@ import { nudgeWaitingDomain } from "@/lib/domains/service";
 import { processDomains } from "@/lib/domains/processor";
 import { kickLeadDomainChecks } from "@/lib/domains/leadCheck";
 import { realPipelineDeps } from "@/lib/domains/deps";
+import { noteWebsiteLinkChange, websiteMoveRefusal } from "@/lib/sedcms/links";
 
 /** Fields only an Admin-department member may change (see the PATCH gate). */
 const ADMIN_ONLY_FIELDS = ["agent_id", "closed_by", "rating"] as const;
@@ -154,6 +155,17 @@ export async function PATCH(
     return NextResponse.json({ error: CLOSED_BY_MESSAGE }, { status: 422 });
   }
 
+  // SED CMS writes to a linked lead's website: moving its address to another
+  // host is a manager's call (studio.manage), whatever else this route allows
+  // (a status change carries website_link). Unlinked leads are as before.
+  const beforeLink = (before.website_link ?? null) as string | null;
+  const nextLink = parsed.data.website_link as string | null | undefined;
+  const linkChanged = nextLink !== undefined && nextLink !== beforeLink;
+  if (linkChanged) {
+    const refusal = await websiteMoveRefusal(admin, id, beforeLink, nextLink, perms);
+    if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
+  }
+
   let { error } = await admin.from("leads").update(parsed.data).eq("id", id);
   // Migration 0073 not applied yet — save what the schema can take rather than
   // failing the whole edit. See lib/leads/lateColumns.ts.
@@ -165,6 +177,10 @@ export async function PATCH(
       return NextResponse.json({ error: READY_GUARD_MESSAGE }, { status: 422 });
     }
     return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  if (linkChanged) {
+    await noteWebsiteLinkChange(admin, { leadId: id, before: beforeLink, after: nextLink ?? null, actorId: user.id });
   }
 
   const changedKeys = Object.keys(parsed.data);

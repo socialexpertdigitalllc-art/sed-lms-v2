@@ -4,6 +4,7 @@ import { subFromWebsiteLink, deleteSubdomain, subdomainExists } from "@/lib/temp
 import { siteHostFrom } from "./liveFiles";
 import { adoptSubdomain } from "./manage";
 import { probeSite, pushStagingToDomain } from "./transfer";
+import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
 
 export type GoLiveResult =
   | {
@@ -93,7 +94,10 @@ export async function goLiveOnDomain(input: {
     .eq("id", id)
     .eq("status", "live");
   const priorLink = lead?.website_link ?? null;
-  if (leadId) await admin.from("leads").update({ website_link: url }).eq("id", leadId);
+  if (leadId) {
+    await admin.from("leads").update({ website_link: url }).eq("id", leadId);
+    await noteWebsiteLinkChange(admin, { leadId, before: priorLink, after: url, actorId });
+  }
   await admin.from("builder_runs").update({ deployed_url: url, updated_at: now }).eq("deployed_url", priorUrl);
 
   // The staging copy is the fallback until Hostinger confirms the files are in
@@ -265,6 +269,7 @@ export async function recordSiteOnDomain(input: {
   const prior = lead.website_link ?? null;
   if ((siteHostFrom(prior ?? "") ?? "").replace(/^www\./, "") === domain) return; // already pointing here
   await admin.from("leads").update({ website_link: url }).eq("id", leadId);
+  await noteWebsiteLinkChange(admin, { leadId, before: prior, after: url, actorId });
   await admin.from("activity_log").insert({
     user_id: actorId,
     action: "lead.website_on_domain",

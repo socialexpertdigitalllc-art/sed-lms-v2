@@ -3,6 +3,7 @@ import { resolveSubdomain, reusableSubdomain, InvalidSlugError } from "@/lib/sit
 import { baseSubdomain, firstFreeVersion } from "@/lib/site-studio/deploy/naming";
 import { claimedByAnotherLead } from "@/lib/site-studio/deploy/claimed";
 import { ensureSubdomain } from "@/lib/site-studio/deploy/ensureSubdomain";
+import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
 import { BUILDER_SITES_BUCKET } from "./run";
 
 /**
@@ -255,6 +256,7 @@ export async function deployBuilderRun(
     if (leadUpdErr) {
       return fail(500, `Deployed to ${url}, but could not update the lead's website_link: ${leadUpdErr.message}. The site IS live.`);
     }
+    await noteWebsiteLinkChange(admin, { leadId, after: url, actorId: actorUserId });
 
     const { error: logErr } = await admin.from("activity_log").insert({
       user_id: actorUserId,

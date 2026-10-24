@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { daConfigured, deleteSubdomain, subdomainExists } from "@/lib/template-engine/directadmin";
+import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -56,6 +57,7 @@ export async function POST(req: Request) {
         if (row.lead_id) {
           // clear the lead link only if it still points at this site
           await admin.from("leads").update({ website_link: null }).eq("id", row.lead_id).eq("website_link", row.url ?? url);
+          await noteWebsiteLinkChange(admin, { leadId: row.lead_id, actorId: auth.userId });
         }
       }
     }

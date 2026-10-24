@@ -14,6 +14,7 @@ import {
 import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import { baseSubdomain, parseVersion, firstFreeVersion } from "@/lib/site-studio/deploy/naming";
 import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
+import { linkedSiteRefusal, noteWebsiteLinkChange } from "@/lib/sedcms/links";
 
 export type ShuffleResult =
   | { ok: true; url: string; subdomain: string; oldDeleted: boolean }
@@ -30,10 +31,13 @@ export type ShuffleResult =
  * call it by the SITE the button is bound to (see `findLiveDeploymentBySite`)
  * — the same rule as the upload icon, so a tech never picks a target off the
  * board and a shuffle can never land on the wrong lead's site.
+ *
+ * `perms`, when the door lets in more than studio.manage: a lead SED CMS is
+ * turned on for is then refused before anything moves (lib/sedcms/links.ts).
  */
 export async function shuffleDeployment(
   admin: SupabaseClient,
-  args: { id: string; actorId: string },
+  args: { id: string; actorId: string; perms?: ReadonlySet<string> },
 ): Promise<ShuffleResult> {
   if (!daConfigured()) return { ok: false, status: 422, error: "DirectAdmin is not configured." };
 
@@ -54,6 +58,11 @@ export async function shuffleDeployment(
   const lead = (Array.isArray(row.leads) ? row.leads[0] : row.leads) as
     | { business_name: string; agent_id: string | null; closed_by: string | null }
     | null;
+
+  if (row.lead_id && args.perms) {
+    const refusal = await linkedSiteRefusal(admin, row.lead_id as string, args.perms);
+    if (refusal) return { ok: false, status: refusal.status, error: refusal.error };
+  }
 
   // Next free versioned name. Base comes from the lead's business name when
   // linked, else from the current label; the old name itself is never reused.
@@ -122,6 +131,7 @@ export async function shuffleDeployment(
   }
   if (row.lead_id) {
     await admin.from("leads").update({ website_link: newUrl }).eq("id", row.lead_id);
+    await noteWebsiteLinkChange(admin, { leadId: row.lead_id as string, after: newUrl, actorId: args.actorId });
   }
   await admin.from("builder_runs").update({ deployed_url: newUrl, updated_at: now }).eq("deployed_url", row.url);
 

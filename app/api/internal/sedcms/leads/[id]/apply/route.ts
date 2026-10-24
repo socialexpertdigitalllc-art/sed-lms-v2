@@ -4,7 +4,8 @@ import { applyChanges, decodeChanges, logApply, purgeWritten, withSiteLock } fro
 import { APPLY_DEADLINE_MS, Deadline } from "@/lib/sedcms/deadline";
 import { siteFilesFor } from "@/lib/sedcms/files";
 import { isUuid, readSignedJson, sedcmsError, sedcmsJson } from "@/lib/sedcms/http";
-import { expectHost, loadLead } from "@/lib/sedcms/lead";
+import { loadLead } from "@/lib/sedcms/lead";
+import { linkedHost } from "@/lib/sedcms/links";
 import { siteRefusalResponse } from "@/lib/sedcms/read";
 
 export const runtime = "nodejs";
@@ -36,7 +37,9 @@ const Body = z
  *
  *   200 { results: [{ path, outcome: written | unchanged, sha256 }], purged }
  *   409 CONFLICT { files: [{ path, expectedSha256, liveSha256 }] } — nothing written
- *   409 HOST_CHANGED { host } — the lead's site moved
+ *   404 NO_LEAD — no such lead, or SED CMS isn't turned on for it
+ *   409 HOST_CHANGED { host } — not the host SED CMS is linked at, or the
+ *       lead's site moved since (lib/sedcms/links.ts)
  *   422 REFUSED — a path rule, a size, a protected or non-static site
  *   502 HOSTING { results, failed: { path, step } } — what was written before
  *       a host failed, or before the deadline stopped the apply
@@ -67,7 +70,7 @@ async function applyWithin(req: Request, ctx: Ctx, deadline: Deadline) {
   const admin = createAdminClient();
   const found = await loadLead(admin, id);
   if (!found.ok) return found.response;
-  const at = expectHost(found.lead, host);
+  const at = await linkedHost(admin, found.lead, host);
   if (!at.ok) return at.response;
   if (decoded.changes.length === 0) return sedcmsJson(200, { results: [], purged: false });
 

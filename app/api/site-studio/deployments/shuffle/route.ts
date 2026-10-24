@@ -41,7 +41,9 @@ export async function POST(req: Request) {
     );
   }
 
-  const result = await shuffleDeployment(admin, { id: deployment.id, actorId: user.id });
+  // tickets.resolve lets in more than the board's operators: a lead SED CMS is
+  // turned on for is then a manager's call (lib/sedcms/links.ts).
+  const result = await shuffleDeployment(admin, { id: deployment.id, actorId: user.id, perms });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json({ ok: true, url: result.url, subdomain: result.subdomain, oldDeleted: result.oldDeleted });
 }

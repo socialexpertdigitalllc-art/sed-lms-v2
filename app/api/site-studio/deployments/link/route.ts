@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { notify } from "@/lib/notifications/notify";
 import { adoptSubdomain, retireOtherLiveRows } from "@/lib/site-studio/deploy/manage";
+import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -72,6 +73,7 @@ export async function POST(req: Request) {
 
   const { error: leadErr } = await admin.from("leads").update({ website_link: row.url }).eq("id", leadId);
   if (leadErr) return NextResponse.json({ error: `Linked, but could not update the lead's website link: ${leadErr.message}` }, { status: 500 });
+  await noteWebsiteLinkChange(admin, { leadId, actorId: auth.userId });
 
   await admin.from("activity_log").insert({
     user_id: auth.userId,

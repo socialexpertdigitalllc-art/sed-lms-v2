@@ -82,7 +82,8 @@ describe("POST /api/site-studio/deployments/shuffle", () => {
     const res = await call("HTTPS://Green-Lawnv1.dmviral.com/");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, url: "https://green-lawnv2.dmviral.com" });
-    expect(holder.shuffleCalls).toEqual([{ id: "dep-1", actorId: "tech-1" }]);
+    // with the caller's permissions: tickets.resolve alone may not move a site SED CMS is on for (lib/sedcms/links.ts)
+    expect(holder.shuffleCalls).toEqual([{ id: "dep-1", actorId: "tech-1", perms: new Set(["tickets.resolve"]) }]);
   });
 
   it("404s a site that is not a live deployment, before anything is moved", async () => {

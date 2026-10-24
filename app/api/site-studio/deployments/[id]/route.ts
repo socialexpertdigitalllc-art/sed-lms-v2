@@ -4,6 +4,7 @@ import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { deleteSubdomain, subFromWebsiteLink } from "@/lib/template-engine/directadmin";
 import { hostingerConfigured, deleteWebsite } from "@/lib/hostinger/client";
 import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
+import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -130,6 +131,7 @@ export async function DELETE(req: Request, ctx: Ctx) {
     } else if (lead && lead.website_link === row.url) {
       const { error: clearErr } = await admin.from("leads").update({ website_link: null }).eq("id", row.lead_id);
       if (clearErr) warning = `Site removed, but clearing the lead link failed: ${clearErr.message}`;
+      else await noteWebsiteLinkChange(admin, { leadId: row.lead_id, actorId: auth.userId });
     }
   }
 

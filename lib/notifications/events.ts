@@ -269,6 +269,16 @@ export const NOTIFICATION_EVENTS = [
     availableRoles: ["lead_agent"],
     timingMode: "delay",
   },
+  {
+    key: "sedcms_host_changed",
+    label: "SED CMS paused (website address changed)",
+    description: "A lead SED CMS is turned on for now has another website address, so the CMS can't change its site until a manager confirms the new address with Open in CMS.",
+    defaultLeadTimeMinutes: 0,
+    hasTiming: false,
+    bell: "website",
+    availableRoles: [],
+    timingMode: "delay",
+  },
 ] as const;
 
 export type NotificationEventKey = (typeof NOTIFICATION_EVENTS)[number]["key"];

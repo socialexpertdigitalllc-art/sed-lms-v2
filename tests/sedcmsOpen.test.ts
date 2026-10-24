@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { memorySupabase, type MemoryDb } from "./helpers/memorySupabase";
 import { withEnv } from "./helpers/fakeSiteHosts";
+import { SEDCMS_DEFAULTS, SEDCMS_UNIQUE, linkRow } from "./helpers/sedcmsRoutes";
 import { CMS_MINT_PATH, CMS_MINT_TIMEOUT_MS, cmsConfig, mintCmsLink } from "@/lib/sedcms/cms";
 
 /**
@@ -10,6 +11,11 @@ import { CMS_MINT_PATH, CMS_MINT_TIMEOUT_MS, cmsConfig, mintCmsLink } from "@/li
  * sign-in link for that developer (POST {SEDCMS_URL}/api/auth/lms-sso/mint
  * with its API key), and hands the browser only a link on the CMS's own
  * address. The CMS is a stubbed fetch here.
+ *
+ * It is also where SED CMS is turned on for a lead (lib/sedcms/links.ts):
+ * only a manager (studio.manage), after a plain-words confirmation, at the
+ * lead's current host; and where a manager confirms a linked lead's new
+ * address.
  */
 
 const state = vi.hoisted(() => ({
@@ -36,6 +42,10 @@ const USER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const LEAD = "11111111-1111-4111-8111-111111111111";
 const HIDDEN_LEAD = "22222222-2222-4222-8222-222222222222";
 const DELETED_LEAD = "33333333-3333-4333-8333-333333333333";
+const NEW_LEAD = "44444444-4444-4444-8444-444444444444";
+const MOVED_LEAD = "55555555-5555-4555-8555-555555555555";
+const NO_SITE_LEAD = "66666666-6666-4666-8666-666666666666";
+const TWIN_LEAD = "77777777-7777-4777-8777-777777777777";
 const TOKEN = "q8Zr1tZ7m3X0kVYp2L5nA9sD4fG6hJ8kL0zX2cV4bN6";
 const LINK = `${CMS}/api/auth/lms-sso/redeem?token=${TOKEN}`;
 
@@ -80,9 +90,18 @@ beforeEach(() => {
     leads: [
       { id: LEAD, business_name: "Acme", website_link: "https://acme.dmviral.com", deleted_at: null },
       { id: DELETED_LEAD, business_name: "Gone", website_link: null, deleted_at: "2026-10-01T00:00:00Z" },
+      { id: NEW_LEAD, business_name: "Bright Smile Dental", website_link: "https://www.brightsmile.com/", deleted_at: null },
+      { id: MOVED_LEAD, business_name: "Moved Co", website_link: "https://movedv2.dmviral.com", deleted_at: null },
+      { id: NO_SITE_LEAD, business_name: "No Site", website_link: null, deleted_at: null },
+      { id: TWIN_LEAD, business_name: "Twin", website_link: "https://acme.dmviral.com/", deleted_at: null },
     ],
   });
-  state.admin = memorySupabase({ activity_log: [] });
+  // SED CMS is on for LEAD (where the mint tests start) and was on for MOVED_LEAD at its old address
+  state.admin = memorySupabase(
+    { activity_log: [], sedcms_links: [linkRow(LEAD, "acme.dmviral.com"), linkRow(MOVED_LEAD, "moved.dmviral.com")] },
+    SEDCMS_DEFAULTS,
+    SEDCMS_UNIQUE,
+  );
 });
 afterEach(() => {
   restoreEnv();
@@ -261,5 +280,156 @@ describe("the CMS link's configuration (lib/sedcms/cms.ts)", () => {
     );
     const result = await mintCmsLink({ origin: CMS, apiKey: API_KEY }, { lmsUserId: USER, leadId: LEAD }, { timeoutMs: 20 });
     expect(result).toMatchObject({ ok: false, kind: "unavailable" });
+  });
+});
+
+describe("turning SED CMS on for a lead (lib/sedcms/links.ts)", () => {
+  const links = () => state.admin!.tables.sedcms_links.filter((r) => r.revoked_at == null);
+  const linkOf = (leadId: string) => links().filter((r) => r.lead_id === leadId);
+  const audit = (action: string) => state.admin!.tables.activity_log.filter((r) => r.action === action);
+
+  it("asks a manager to confirm in plain words first, and links nothing until they do", async () => {
+    const calls = cms(() => minted());
+    const res = await open({ leadId: NEW_LEAD });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      code: "CONFIRM_LINK",
+      host: "www.brightsmile.com",
+      message: "Turn on SED CMS for Bright Smile Dental at www.brightsmile.com? The CMS will be able to change this website's files.",
+    });
+    expect(linkOf(NEW_LEAD)).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("confirming records the link at the lead's current host, audits it, then mints", async () => {
+    const calls = cms(() => minted());
+    const res = await open({ leadId: NEW_LEAD, confirmHost: "www.brightsmile.com" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ url: LINK });
+    expect(linkOf(NEW_LEAD)).toEqual([expect.objectContaining({ lead_id: NEW_LEAD, host: "www.brightsmile.com", linked_by: USER, revoked_at: null })]);
+    expect(audit("sedcms.linked")).toEqual([
+      expect.objectContaining({ user_id: USER, entity_type: "lead", entity_id: NEW_LEAD, new_value: { host: "www.brightsmile.com" } }),
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ lmsUserId: USER, leadId: NEW_LEAD });
+    // and the next open goes straight to the CMS
+    expect((await open({ leadId: NEW_LEAD })).status).toBe(200);
+    expect(audit("sedcms.linked")).toHaveLength(1);
+  });
+
+  it("a confirmation of another host than the lead's current one asks again, about the current one", async () => {
+    cms(() => minted());
+    const res = await open({ leadId: NEW_LEAD, confirmHost: "old-brightsmile.dmviral.com" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "CONFIRM_LINK", host: "www.brightsmile.com" });
+    expect(linkOf(NEW_LEAD)).toHaveLength(0);
+  });
+
+  it("only studio.manage may link: tickets.resolve alone is refused, confirmation or not", async () => {
+    const calls = cms(() => minted());
+    state.perms = new Set(["tickets.resolve"]);
+    for (const body of [{ leadId: NEW_LEAD }, { leadId: NEW_LEAD, confirmHost: "www.brightsmile.com" }]) {
+      const res = await open(body);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ code: "NOT_LINKED", error: expect.stringContaining("A manager must open it in the CMS first") });
+    }
+    expect(linkOf(NEW_LEAD)).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    // ...while a linked lead whose host still matches opens as before
+    expect((await open({ leadId: LEAD })).status).toBe(200);
+  });
+
+  it("a site another lead holds can't be linked again, www. or not", async () => {
+    const calls = cms(() => minted());
+    for (const body of [{ leadId: TWIN_LEAD }, { leadId: TWIN_LEAD, confirmHost: "acme.dmviral.com" }]) {
+      const res = await open(body);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ code: "HOST_TAKEN", error: "acme.dmviral.com is already turned on for SED CMS on another lead." });
+    }
+    // brightsmile.com held by another lead blocks www.brightsmile.com
+    state.admin!.tables.sedcms_links.push(linkRow(DELETED_LEAD, "brightsmile.com"));
+    const res = await open({ leadId: NEW_LEAD, confirmHost: "www.brightsmile.com" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("HOST_TAKEN");
+    expect(linkOf(TWIN_LEAD)).toHaveLength(0);
+    expect(linkOf(NEW_LEAD)).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("the database refuses a second link to one site, or to one lead, even past the check (the unique indexes)", async () => {
+    const { createLink } = await import("@/lib/sedcms/links");
+    const db = state.admin!.client;
+    expect(await createLink(db, TWIN_LEAD, "www.acme.dmviral.com", USER)).toEqual({ ok: false, taken: true });
+    expect(await createLink(db, LEAD, "other.dmviral.com", USER)).toEqual({ ok: false, taken: true });
+    expect(await createLink(db, NEW_LEAD, "www.brightsmile.com", USER)).toEqual({ ok: true });
+    expect(links()).toHaveLength(3);
+  });
+
+  it("a changed address: a developer is told a manager must confirm it, and nothing is minted", async () => {
+    const calls = cms(() => minted());
+    state.perms = new Set(["tickets.resolve"]);
+    const res = await open({ leadId: MOVED_LEAD, confirmHost: "movedv2.dmviral.com" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      code: "HOST_CHANGED",
+      error: "The website address changed from moved.dmviral.com to movedv2.dmviral.com. A manager must confirm the new address.",
+    });
+    expect(linkOf(MOVED_LEAD)).toEqual([expect.objectContaining({ host: "moved.dmviral.com" })]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a manager confirms the new address: the link moves, old -> new is audited, then it mints", async () => {
+    const calls = cms(() => minted());
+    const before = linkOf(MOVED_LEAD)[0].id;
+    const asked = await open({ leadId: MOVED_LEAD });
+    expect(asked.status).toBe(409);
+    expect(await asked.json()).toEqual({
+      code: "CONFIRM_HOST_CHANGE",
+      host: "movedv2.dmviral.com",
+      from: "moved.dmviral.com",
+      message:
+        "The website address changed from moved.dmviral.com to movedv2.dmviral.com. Confirm the new address? The CMS will be able to change this website's files.",
+    });
+    expect(calls).toHaveLength(0);
+    const res = await open({ leadId: MOVED_LEAD, confirmHost: "movedv2.dmviral.com" });
+    expect(res.status).toBe(200);
+    expect(linkOf(MOVED_LEAD)).toEqual([expect.objectContaining({ id: before, host: "movedv2.dmviral.com", linked_by: USER })]);
+    expect(audit("sedcms.host_confirmed")).toEqual([
+      expect.objectContaining({
+        user_id: USER,
+        entity_id: MOVED_LEAD,
+        old_value: { host: "moved.dmviral.com" },
+        new_value: { host: "movedv2.dmviral.com" },
+      }),
+    ]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a lead with no website address is a 422, and nothing is minted", async () => {
+    const calls = cms(() => minted());
+    const res = await open({ leadId: NO_SITE_LEAD });
+    expect(res.status).toBe(422);
+    expect((await res.json()).code).toBe("NO_SITE");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is a 503 while migration 0094 isn't applied, and links nothing", async () => {
+    const calls = cms(() => minted());
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const real = state.admin!;
+    const missing = { data: null, error: { message: 'relation "public.sedcms_links" does not exist' } };
+    state.admin = {
+      ...real,
+      client: {
+        from: (table: string) =>
+          table === "sedcms_links" ? { select: () => ({ eq: () => ({ is: () => ({ maybeSingle: async () => missing }) }) }) } : real.client.from(table),
+      } as never,
+    };
+    const res = await open({ leadId: NEW_LEAD, confirmHost: "www.brightsmile.com" });
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe("CMS_NOT_READY");
+    expect(calls).toHaveLength(0);
+    expect(err.mock.calls.flat().join(" ")).toContain("migration 0094");
+    err.mockRestore();
   });
 });

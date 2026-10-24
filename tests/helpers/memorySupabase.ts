@@ -7,6 +7,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * upsert; eq (a jsonb key too: "col->>key", as text) / neq / in / is / lt / lte / gt / gte / ilike / or(eq|ilike) /
  * not(in); order, limit, range, single / maybeSingle. Rows live in plain
  * arrays the test can read back. Not a general PostgREST clone.
+ *
+ * `unique` declares unique indexes (a partial one returns null for the rows
+ * it doesn't cover): a write that would break one changes nothing and
+ * answers Postgres's 23505, as the real table would.
  */
 
 type Row = Record<string, unknown>;
@@ -45,6 +49,9 @@ function orFilter(expr: string): Filter {
   return (r) => clauses.some((f) => f(r));
 }
 
+/** A unique index: the key a row is unique by, or null when the index doesn't cover it. */
+export type UniqueIndex = { name: string; key: (row: Row) => string | null };
+
 export interface MemoryDb {
   client: SupabaseClient;
   tables: Record<string, Row[]>;
@@ -52,9 +59,28 @@ export interface MemoryDb {
   writes: [string, string, unknown][];
 }
 
-export function memorySupabase(initial: Record<string, Row[]> = {}, defaults: Record<string, () => Row> = {}): MemoryDb {
+export function memorySupabase(
+  initial: Record<string, Row[]> = {},
+  defaults: Record<string, () => Row> = {},
+  unique: Record<string, UniqueIndex[]> = {},
+): MemoryDb {
   const tables: Record<string, Row[]> = Object.fromEntries(Object.entries(initial).map(([k, v]) => [k, v.map((r) => ({ ...r }))]));
   const writes: [string, string, unknown][] = [];
+
+  /** The first unique index the table's rows, as they would be, break. */
+  function violated(table: string, rows: Row[]): string | null {
+    for (const index of unique[table] ?? []) {
+      const seen = new Set<string>();
+      for (const r of rows) {
+        const k = index.key(r);
+        if (k === null) continue;
+        if (seen.has(k)) return index.name;
+        seen.add(k);
+      }
+    }
+    return null;
+  }
+  const duplicate = (name: string) => ({ data: null, error: { code: "23505", message: `duplicate key value violates unique constraint "${name}"` } });
 
   function from(table: string) {
     const rows = () => (tables[table] ??= []);
@@ -134,24 +160,34 @@ export function memorySupabase(initial: Record<string, Row[]> = {}, defaults: Re
       }
       if (op === "insert" || op === "upsert") {
         const added: Row[] = [];
+        const merged: [Row, Row][] = [];
         for (const r of payload) {
           const row: Row = { id: randomUUID(), created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...(defaults[table]?.() ?? {}), ...r };
           if (op === "upsert" && upsertOpts.onConflict) {
             const keys = upsertOpts.onConflict.split(",").map((k) => k.trim());
-            const existing = rows().find((x) => keys.every((k) => x[k] === row[k]));
+            const existing = [...rows(), ...added].find((x) => keys.every((k) => x[k] === row[k]));
             if (existing) {
-              if (!upsertOpts.ignoreDuplicates) Object.assign(existing, r);
+              if (!upsertOpts.ignoreDuplicates) merged.push([existing, r]);
               continue;
             }
           }
-          rows().push(row);
           added.push(row);
         }
+        const after = rows().map((x) => {
+          const m = merged.find(([e]) => e === x);
+          return m ? { ...x, ...m[1] } : x;
+        });
+        const broken = violated(table, [...after, ...added]);
+        if (broken) return duplicate(broken);
+        for (const [existing, r] of merged) Object.assign(existing, r);
+        rows().push(...added);
         writes.push([table, op, payload]);
         return returning || single ? shape(added) : { data: null, error: null };
       }
       if (op === "update") {
         const list = matched();
+        const broken = violated(table, rows().map((r) => (list.includes(r) ? { ...r, ...patch } : r)));
+        if (broken) return duplicate(broken);
         for (const r of list) Object.assign(r, patch);
         writes.push([table, "update", patch]);
         return returning || single ? shape(list) : { data: null, error: null };

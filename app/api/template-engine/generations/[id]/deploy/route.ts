@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { linkedSiteRefusal, noteWebsiteLinkChange } from "@/lib/sedcms/links";
 import { notify } from "@/lib/notifications/notify";
 import {
   daConfigured,
@@ -63,6 +64,10 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     .eq("id", gen.lead_id)
     .maybeSingle();
   if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  // A deploy replaces the lead's site and may move its address: on a lead SED
+  // CMS is turned on for, that is a manager's call (lib/sedcms/links.ts).
+  const linkedRefusal = await linkedSiteRefusal(admin, gen.lead_id, perms);
+  if (linkedRefusal) return NextResponse.json({ error: linkedRefusal.error }, { status: linkedRefusal.status });
 
   // step machinery — appends to the generation's timeline with the same
   // write-through the runner uses (previous deploy attempts are pruned)
@@ -222,6 +227,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     await failStep(linkErr.message);
     return NextResponse.json({ error: `Deployed, but saving the lead link failed: ${linkErr.message}` }, { status: 500 });
   }
+  await noteWebsiteLinkChange(admin, { leadId: gen.lead_id, before: lead.website_link, after: url, actorId: user.id });
   await admin.from("activity_log").insert({
     user_id: user.id,
     action: "lead.website_link_set",

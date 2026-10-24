@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { linkedSiteRefusal, noteWebsiteLinkChange } from "@/lib/sedcms/links";
 import { daConfigured, deleteSubdomain, subFromWebsiteLink } from "@/lib/template-engine/directadmin";
 
 export const runtime = "nodejs";
@@ -43,6 +44,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   if (!sub) {
     return NextResponse.json({ error: `Deployed URL is not on ${domain} — take it down manually` }, { status: 422 });
   }
+  // On a lead SED CMS is turned on for, taking its site down is a manager's call (lib/sedcms/links.ts).
+  const linkedRefusal = await linkedSiteRefusal(admin, gen.lead_id, perms);
+  if (linkedRefusal) return NextResponse.json({ error: linkedRefusal.error }, { status: linkedRefusal.status });
 
   const removed = await deleteSubdomain(sub);
   if (removed.error) {
@@ -73,6 +77,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     } else {
       const { error: clearErr } = await admin.from("leads").update({ website_link: null }).eq("id", gen.lead_id);
       if (clearErr) warning = `Site removed, but clearing the lead link failed: ${clearErr.message}`;
+      else await noteWebsiteLinkChange(admin, { leadId: gen.lead_id, before: lead.website_link, after: null, actorId: user.id });
     }
   }
 

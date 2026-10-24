@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { memorySupabase, type MemoryDb } from "./helpers/memorySupabase";
 import { HG_ROOT, daDocroot, fakeHostEnv, installFakeHosts, withEnv, type FakeHosts } from "./helpers/fakeSiteHosts";
-import { TEST_SECRET, leadPath, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
+import { SEDCMS_UNIQUE, TEST_SECRET, leadPath, linkRow, routeCtx, signedRequest } from "./helpers/sedcmsRoutes";
 
 /**
  * The CMS's read endpoints (launch plan L3 and "The CMS <-> LMS contract"):
@@ -11,8 +11,9 @@ import { TEST_SECRET, leadPath, routeCtx, signedRequest } from "./helpers/sedcms
  *   POST /api/internal/sedcms/leads/{id}/live-files  { host }
  *   POST /api/internal/sedcms/leads/{id}/checksums   { host, paths }
  * Every route: the signature first (nothing is read before it), then the
- * lead (deleted ones are gone), then its current host against the one the
- * CMS expects. The hosts are faked in memory behind a stubbed fetch.
+ * lead (deleted ones are gone), then its SED CMS link (lib/sedcms/links.ts):
+ * the linked host, which must still be the lead's current one and the one
+ * the CMS expects. The hosts are faked in memory behind a stubbed fetch.
  */
 
 const state = vi.hoisted(() => ({ db: null as MemoryDb | null, fromCalls: 0 }));
@@ -37,6 +38,7 @@ const PROTECTED_LEAD = "44444444-4444-4444-8444-444444444444";
 const NO_SITE_LEAD = "55555555-5555-4555-8555-555555555555";
 const DELETED_LEAD = "66666666-6666-4666-8666-666666666666";
 const UNKNOWN_LEAD = "77777777-7777-4777-8777-777777777777";
+const UNLINKED_LEAD = "88888888-8888-4888-8888-888888888888";
 
 const STAGING = "acme-roofing.dmviral.com";
 const docroot = daDocroot("acme-roofing");
@@ -59,6 +61,18 @@ function leads() {
     lead(PROTECTED_LEAD, "https://sedsolutions.online"),
     lead(NO_SITE_LEAD, null),
     lead(DELETED_LEAD, `https://${STAGING}`, { deleted_at: "2026-10-01T00:00:00Z" }),
+    lead(UNLINKED_LEAD, "https://unlinked.dmviral.com"),
+  ];
+}
+
+/** SED CMS turned on for each lead at its host (the one with no site, at the host it had). */
+function links() {
+  return [
+    linkRow(STAGING_LEAD, STAGING),
+    linkRow(CUSTOM_LEAD, "www.client.com"),
+    linkRow(WP_LEAD, "wp-client.com"),
+    linkRow(PROTECTED_LEAD, "sedsolutions.online"),
+    linkRow(NO_SITE_LEAD, "gone.dmviral.com"),
   ];
 }
 
@@ -71,7 +85,7 @@ let hosts: FakeHosts;
 
 beforeEach(() => {
   restoreEnv = withEnv({ ...fakeHostEnv(), SEDCMS_LMS_SECRET: TEST_SECRET });
-  state.db = memorySupabase({ leads: leads() });
+  state.db = memorySupabase({ leads: leads(), sedcms_links: links() }, {}, SEDCMS_UNIQUE);
   state.fromCalls = 0;
   hosts = installFakeHosts({
     websites: [
@@ -128,8 +142,8 @@ describe("every read route: signature first", () => {
     expect(state.fromCalls).toBe(0);
   });
 
-  it.each(routes)("%s: a deleted, unknown or malformed lead is a 404 NO_LEAD", async (endpoint, handler, body) => {
-    for (const id of [DELETED_LEAD, UNKNOWN_LEAD, "not-a-uuid"]) {
+  it.each(routes)("%s: a deleted, unknown, malformed or unlinked lead is a 404 NO_LEAD", async (endpoint, handler, body) => {
+    for (const id of [DELETED_LEAD, UNKNOWN_LEAD, "not-a-uuid", UNLINKED_LEAD]) {
       const res = await call(handler, id, endpoint, body);
       expect(res.status, id).toBe(404);
       expect(await res.json()).toEqual({ code: "NO_LEAD", message: expect.any(String) });
@@ -166,10 +180,17 @@ describe("HOST_CHANGED", () => {
     expect(hosts.calls).toHaveLength(0);
   });
 
-  it("answers 409 with host null when the lead has no site any more", async () => {
-    const res = await call(liveFilesPOST, NO_SITE_LEAD, "live-files", { host: STAGING });
-    expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ code: "HOST_CHANGED", host: null, message: expect.any(String) });
+  it("answers 409 with host null when the lead has no site any more, on every route", async () => {
+    for (const [handler, endpoint, body] of [
+      [summaryPOST, "summary", {}],
+      [liveFilesPOST, "live-files", { host: "gone.dmviral.com" }],
+      [checksumsPOST, "checksums", { host: "gone.dmviral.com", paths: ["index.html"] }],
+    ] as const) {
+      const res = await call(handler, NO_SITE_LEAD, endpoint, body);
+      expect(res.status, endpoint).toBe(409);
+      expect(await res.json()).toEqual({ code: "HOST_CHANGED", host: null, linkedHost: "gone.dmviral.com", needsConfirmation: true, message: expect.any(String) });
+    }
+    expect(hosts.calls).toHaveLength(0);
   });
 });
 
@@ -200,7 +221,6 @@ describe("summary", () => {
     });
     expect(await (await call(summaryPOST, WP_LEAD, "summary", {})).json()).toMatchObject({ host: "wp-client.com", hostKind: "custom", isStatic: false });
     expect(await (await call(summaryPOST, PROTECTED_LEAD, "summary", {})).json()).toMatchObject({ host: "sedsolutions.online", hostKind: "custom", isStatic: false });
-    expect(await (await call(summaryPOST, NO_SITE_LEAD, "summary", {})).json()).toMatchObject({ host: null, hostKind: null, isStatic: false });
   });
 
   it("is a 502 HOSTING when Hostinger can't be read, rather than a wrong isStatic", async () => {

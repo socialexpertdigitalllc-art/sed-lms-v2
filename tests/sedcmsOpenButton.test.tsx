@@ -74,6 +74,92 @@ describe("OpenInCmsButton", () => {
   });
 });
 
+describe("OpenInCmsButton: turning SED CMS on for a lead", () => {
+  const CONFIRM = {
+    code: "CONFIRM_LINK",
+    host: "www.brightsmile.com",
+    message: "Turn on SED CMS for Bright Smile Dental at www.brightsmile.com? The CMS will be able to change this website's files.",
+  };
+
+  function stubAnswers(...answers: [number, unknown][]) {
+    const fetchMock = vi.fn(async () => {
+      const [status, body] = answers.shift() ?? [500, {}];
+      return Response.json(body, { status });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const sent = (fetchMock: ReturnType<typeof vi.fn>, i: number) => JSON.parse(String((fetchMock.mock.calls[i] as unknown as [string, RequestInit])[1].body));
+
+  it("shows the LMS's plain-words question, and only its confirm button sends confirmHost, then follows the link", async () => {
+    const fetchMock = stubAnswers([409, CONFIRM], [200, { url: LINK }]);
+    const navigate = vi.fn();
+    render(
+      <ToastProvider>
+        <OpenInCmsButton leadId={LEAD} navigate={navigate} />
+      </ToastProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open in CMS" }));
+    const dialog = await screen.findByRole("dialog", { name: "Turn on SED CMS?" });
+    expect(dialog).toHaveTextContent(CONFIRM.message);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sent(fetchMock, 0)).toEqual({ leadId: LEAD });
+
+    fireEvent.click(screen.getByRole("button", { name: "Turn on SED CMS for www.brightsmile.com" }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(LINK));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sent(fetchMock, 1)).toEqual({ leadId: LEAD, confirmHost: "www.brightsmile.com" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("Cancel sends nothing more and goes nowhere", async () => {
+    const fetchMock = stubAnswers([409, CONFIRM]);
+    const navigate = vi.fn();
+    render(
+      <ToastProvider>
+        <OpenInCmsButton leadId={LEAD} navigate={navigate} />
+      </ToastProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open in CMS" }));
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("a changed address names the new one; a developer's refusal is only a message", async () => {
+    const message = "The website address changed from moved.dmviral.com to movedv2.dmviral.com. Confirm the new address? The CMS will be able to change this website's files.";
+    const fetchMock = stubAnswers([409, { code: "CONFIRM_HOST_CHANGE", host: "movedv2.dmviral.com", from: "moved.dmviral.com", message }], [200, { url: LINK }]);
+    const navigate = vi.fn();
+    const view = render(
+      <ToastProvider>
+        <OpenInCmsButton leadId={LEAD} navigate={navigate} />
+      </ToastProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open in CMS" }));
+    expect(await screen.findByRole("dialog", { name: "Confirm the new website address?" })).toHaveTextContent(message);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm movedv2.dmviral.com" }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(LINK));
+    expect(sent(fetchMock, 1)).toEqual({ leadId: LEAD, confirmHost: "movedv2.dmviral.com" });
+    view.unmount();
+
+    const refusal = "The website address changed from moved.dmviral.com to movedv2.dmviral.com. A manager must confirm the new address.";
+    stubAnswers([409, { code: "HOST_CHANGED", error: refusal }]);
+    const navigate2 = vi.fn();
+    render(
+      <ToastProvider>
+        <OpenInCmsButton leadId={LEAD} navigate={navigate2} />
+      </ToastProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open in CMS" }));
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(navigate2).not.toHaveBeenCalled();
+  });
+});
+
 describe("where the button shows", () => {
   const ticket: Ticket = {
     id: "tk-1",

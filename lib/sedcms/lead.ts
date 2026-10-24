@@ -8,11 +8,12 @@ import { isUuid, sedcmsError } from "./http";
 /**
  * The lead a CMS site is linked to, and where its site lives now. SERVER ONLY.
  *
- * The LMS has no sites table: leads.website_link is the only pointer to a
- * lead's site, and it changes (shuffle, a new version, a move to a custom
- * domain). So the CMS sends the host it expects with every call, and a lead
- * that now points elsewhere is a 409 HOST_CHANGED carrying the current host.
- * The host is resolved the LMS's way, with siteHostFrom.
+ * leads.website_link is the LMS's pointer to a lead's site, and it changes
+ * (shuffle, a new version, a move to a custom domain). It is resolved the
+ * LMS's way, with siteHostFrom; but it never decides on its own where the CMS
+ * may write: the lead's SED CMS link does (lib/sedcms/links.ts), and a lead
+ * whose website_link resolves elsewhere is a 409 HOST_CHANGED until a manager
+ * confirms the new address.
  */
 
 export interface SedcmsLead {
@@ -53,15 +54,6 @@ export function hostKindOf(host: string | null): "staging" | "custom" | null {
   return daDomain && subFromWebsiteLink(`https://${host}`, daDomain) ? "staging" : "custom";
 }
 
-/** The lead's current host, when it is the one the CMS expects; else 409 HOST_CHANGED. */
-export function expectHost(lead: SedcmsLead, expected: string): { ok: true; host: string } | { ok: false; response: NextResponse } {
-  const host = leadHost(lead);
-  if (host === null || host !== expected) {
-    return { ok: false, response: sedcmsError(409, "HOST_CHANGED", "The lead's website is not at that address any more.", { host }) };
-  }
-  return { ok: true, host };
-}
-
 export interface LeadSummary {
   leadId: string;
   businessName: string;
@@ -73,15 +65,11 @@ export interface LeadSummary {
   isStatic: boolean;
 }
 
-/** The summary, or null when the hosting couldn't be asked (a 502, not a guess). */
-export async function leadSummary(lead: SedcmsLead): Promise<LeadSummary | null> {
-  const host = leadHost(lead);
-  let isStatic = false;
-  if (host) {
-    const site = await resolveSite(host);
-    if (!site.ok && site.code === "HOSTING") return null;
-    isStatic = site.ok;
-  }
+/** The summary of a linked lead at its linked `host`, or null when the hosting couldn't be asked (a 502, not a guess). */
+export async function leadSummary(lead: SedcmsLead, host: string): Promise<LeadSummary | null> {
+  const site = await resolveSite(host);
+  if (!site.ok && site.code === "HOSTING") return null;
+  const isStatic = site.ok;
   return {
     leadId: lead.id,
     businessName: lead.business_name,
