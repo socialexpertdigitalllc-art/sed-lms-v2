@@ -21,7 +21,9 @@ import { leadHost, type SedcmsLead } from "./lead";
  *   - one active link per lead, and one per site (www. or not), so one
  *     site is never linked to two leads.
  * On a linked lead, moving website_link to another host needs studio.manage
- * (websiteMoveRefusal), and the managers are told (noteWebsiteLinkChange).
+ * (websiteMoveRefusal), and so does replacing, moving or taking down its site
+ * (linkedSiteRefusal); every write of website_link then tells the managers
+ * when the CMS is paused (noteWebsiteLinkChange).
  */
 
 export interface SedcmsLink {

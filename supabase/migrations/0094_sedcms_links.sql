@@ -2,7 +2,9 @@
 -- (lib/sedcms/links.ts, lib/sedcms/requests.ts).
 -- WRITTEN, NOT APPLIED: applying it to the production database needs Aqib's
 -- explicit yes. Until it is applied, every internal SED CMS route answers
--- 500 (no link can be read), so nothing is written to any site.
+-- 503 NOT_CONFIGURED and Open in CMS 503 CMS_NOT_READY (no link can be
+-- read), so nothing is read or written on any site; website_link edits work
+-- as before (no lead can be linked yet).
 -- ADDITIVE ONLY (shared prod DB): two new tables and one notification rule, no drops.
 --
 -- sedcms_links: a manager's decision that SED CMS may change ONE lead's
