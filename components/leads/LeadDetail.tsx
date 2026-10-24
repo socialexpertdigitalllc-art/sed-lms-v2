@@ -90,6 +90,7 @@ export function LeadDetail({
   receipts = [],
   receiptSender = null,
   openReceiptOnLoad = false,
+  cmsReady = false,
 }: {
   lead: Lead;
   /** Submission + every status change, oldest first (lead_status_events). */
@@ -134,6 +135,8 @@ export function LeadDetail({
   receiptSender?: string | null;
   /** Opened from the "receipt needed" bell (?receipt=new). */
   openReceiptOnLoad?: boolean;
+  /** SED CMS is connected and set up (lib/sedcms/cms.ts cmsOpenReady): only then is "Open in CMS" shown. */
+  cmsReady?: boolean;
 }) {
   const { has } = usePermissions();
   const companyTz = useCompanyTimezone();
@@ -388,10 +391,12 @@ export function LeadDetail({
                             iconSize={13}
                             onShuffled={() => router.refresh()}
                           />
-                          <OpenInCmsButton leadId={lead.id}
-                            className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
-                            iconSize={13}
-                          />
+                          {cmsReady && (
+                            <OpenInCmsButton leadId={lead.id}
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-faint hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
+                              iconSize={13}
+                            />
+                          )}
                         </>
                       )}
                     </span>

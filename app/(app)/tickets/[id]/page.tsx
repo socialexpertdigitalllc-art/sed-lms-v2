@@ -5,6 +5,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { techMembers } from "@/lib/tickets/notify";
 import { TicketDetail } from "@/components/tickets/TicketDetail";
+import { cmsOpenReady } from "@/lib/sedcms/cms";
 import type { Ticket, TicketItem, TicketAttachment } from "@/lib/tickets/types";
 
 export default async function TicketDetailPage({
@@ -141,6 +142,8 @@ export default async function TicketDetailPage({
   // Mirrors the agent-runs routes' permission gate — viewers without it
   // (sales, management) must not mount a panel whose every fetch 403s.
   const canViewAgentRuns = perms.has("tickets.resolve") || perms.has("studio.manage");
+  // "Open in CMS" shows only once SED CMS is connected and set up (migration 0094).
+  const cmsReady = canViewAgentRuns && Boolean(lead.website_link) ? await cmsOpenReady(admin) : false;
 
   return (
     <TicketDetail
@@ -154,6 +157,7 @@ export default async function TicketDetailPage({
       canViewAgentRuns={canViewAgentRuns}
       isCreator={ticket.created_by === user.id}
       siteUpdates={siteUpdates}
+      cmsReady={cmsReady}
     />
   );
 }

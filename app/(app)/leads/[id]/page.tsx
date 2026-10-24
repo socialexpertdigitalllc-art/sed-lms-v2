@@ -16,6 +16,7 @@ import { domainForLead, suggestQuery } from "@/lib/domains/service";
 import { leadExactDomain, loadLeadDomainCheck } from "@/lib/domains/leadCheck";
 import { registrarSandbox } from "@/lib/cloudflare/client";
 import { receiptSenderAddress } from "@/lib/receipts/settings";
+import { cmsOpenReady } from "@/lib/sedcms/cms";
 import type { ReceiptRow } from "@/lib/receipts/types";
 
 export default async function LeadDetailPage({
@@ -226,6 +227,11 @@ export default async function LeadDetailPage({
     receiptSender = sender;
   }
 
+  // "Open in CMS" shows only once SED CMS is connected and set up (migration
+  // 0094), asked only for someone who could see it.
+  const cmsReady =
+    (perms.has("tickets.resolve") || perms.has("studio.manage")) && Boolean(lead.website_link) ? await cmsOpenReady(admin) : false;
+
   return (
     <LeadDetail
       lead={lead}
@@ -257,6 +263,7 @@ export default async function LeadDetailPage({
       receipts={receipts}
       receiptSender={receiptSender}
       openReceiptOnLoad={receiptParam === "new"}
+      cmsReady={cmsReady}
     />
   );
 }

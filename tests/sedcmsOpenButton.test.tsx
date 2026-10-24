@@ -180,7 +180,7 @@ describe("where the button shows", () => {
     escalated_at: null,
   };
 
-  function ticketPage(canViewAgentRuns: boolean, website_link: string | null) {
+  function ticketPage(canViewAgentRuns: boolean, website_link: string | null, cmsReady = true) {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ runs: [] })));
     return render(
       <ToastProvider>
@@ -194,6 +194,7 @@ describe("where the button shows", () => {
           canResolve={false}
           canViewAgentRuns={canViewAgentRuns}
           isCreator={false}
+          cmsReady={cmsReady}
         />
       </ToastProvider>,
     );
@@ -205,6 +206,11 @@ describe("where the button shows", () => {
     expect(screen.getByRole("button", { name: "Open in CMS" })).toBeInTheDocument();
   });
 
+  it("on a ticket: not until the CMS is connected (lib/sedcms/cms.ts cmsOpenReady), whatever the permission", () => {
+    ticketPage(true, "https://acme.dmviral.com", false);
+    expect(screen.queryByRole("button", { name: "Open in CMS" })).toBeNull();
+  });
+
   it("on a ticket: not without the permission, nor without a website", () => {
     const a = ticketPage(false, "https://acme.dmviral.com");
     expect(screen.queryByRole("button", { name: "Open in CMS" })).toBeNull();
@@ -213,14 +219,18 @@ describe("where the button shows", () => {
     expect(screen.queryByRole("button", { name: "Open in CMS" })).toBeNull();
   });
 
-  it("on a lead: beside the site-file icons, inside the studio.manage / tickets.resolve gate", () => {
+  it("on a lead: beside the site-file icons, inside the studio.manage / tickets.resolve gate, once the CMS is connected", () => {
     const src = readFileSync("components/leads/LeadDetail.tsx", "utf8");
     expect(src).toContain('const canSiteAgent = has("tickets.resolve") || has("studio.manage");');
+    expect(src).toContain("cmsReady = false,");
     const display = src.slice(src.indexOf('label="Website link"'), src.indexOf('label="Logo link"'));
     const gate = display.indexOf("{canSiteAgent && (");
+    const ready = display.indexOf("{cmsReady && (");
     const button = display.indexOf("<OpenInCmsButton leadId={lead.id}");
     expect(gate).toBeGreaterThan(-1);
-    expect(button).toBeGreaterThan(gate);
+    expect(ready).toBeGreaterThan(gate);
+    expect(button).toBeGreaterThan(ready);
     expect(display.indexOf("lead.website_link ? (")).toBeLessThan(gate);
+    expect(src.split("<OpenInCmsButton").length - 1).toBe(1);
   });
 });

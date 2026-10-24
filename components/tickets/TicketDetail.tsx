@@ -45,6 +45,7 @@ export function TicketDetail({
   canViewAgentRuns,
   isCreator,
   siteUpdates = [],
+  cmsReady = false,
 }: {
   ticket: Ticket;
   items: TicketItem[];
@@ -58,6 +59,8 @@ export function TicketDetail({
   isCreator: boolean;
   /** Website uploads pinned to this ticket, newest first (upload proof). */
   siteUpdates?: SiteUpdate[];
+  /** SED CMS is connected and set up (lib/sedcms/cms.ts cmsOpenReady): only then is "Open in CMS" shown. */
+  cmsReady?: boolean;
 }) {
   const router = useRouter();
 
@@ -231,8 +234,8 @@ export function TicketDetail({
                     />
                   </>
                 )}
-                {/* studio.manage or tickets.resolve, like the AI developer panel */}
-                {canViewAgentRuns && (
+                {/* studio.manage or tickets.resolve, like the AI developer panel; once SED CMS is connected */}
+                {canViewAgentRuns && cmsReady && (
                   <OpenInCmsButton
                     leadId={lead.id}
                     className="grid h-6 w-6 place-items-center rounded text-text-muted hover:bg-surface-2 hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45"
