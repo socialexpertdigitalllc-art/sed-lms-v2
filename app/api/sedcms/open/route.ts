@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
 import { cmsConfig, mintCmsLink } from "@/lib/sedcms/cms";
-import { isPlainHost } from "@/lib/sedcms/files";
+import { isPlainHost, isProtectedSite } from "@/lib/sedcms/files";
 import { isUuid } from "@/lib/sedcms/http";
 import { createLink, hostChangedMessage, moveLink, readLink, siteHolder } from "@/lib/sedcms/links";
 
@@ -98,6 +98,9 @@ export async function POST(req: Request) {
       return link
         ? answer(409, { code: "HOST_CHANGED", error: hostChangedMessage(link.host, host) })
         : answer(403, { code: "NOT_LINKED", error: "SED CMS isn't turned on for this lead yet. A manager must open it in the CMS first." });
+    }
+    if (isProtectedSite(host)) {
+      return answer(422, { code: "PROTECTED", error: `${host} is a protected company website: SED CMS can't change it.` });
     }
     const holder = await siteHolder(admin, host, leadId);
     if (!holder.ok) return answer(500, { error: "The CMS link could not be checked. Try again." });

@@ -405,6 +405,21 @@ describe("turning SED CMS on for a lead (lib/sedcms/links.ts)", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("a protected company website can't be linked (PROTECTED_DOMAINS, www. or not)", async () => {
+    const calls = cms(() => minted());
+    const restore = withEnv({ PROTECTED_DOMAINS: "sedsolutions.online" });
+    try {
+      state.rls!.tables.leads.push({ id: "88888888-8888-4888-8888-888888888888", business_name: "SED", website_link: "https://www.sedsolutions.online", deleted_at: null });
+      const res = await open({ leadId: "88888888-8888-4888-8888-888888888888", confirmHost: "www.sedsolutions.online" });
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ code: "PROTECTED", error: "www.sedsolutions.online is a protected company website: SED CMS can't change it." });
+      expect(links()).toHaveLength(2);
+      expect(calls).toHaveLength(0);
+    } finally {
+      restore();
+    }
+  });
+
   it("a lead with no website address is a 422, and nothing is minted", async () => {
     const calls = cms(() => minted());
     const res = await open({ leadId: NO_SITE_LEAD });

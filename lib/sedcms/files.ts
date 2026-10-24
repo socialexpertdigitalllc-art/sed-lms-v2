@@ -28,7 +28,7 @@ import {
   uploadDaFile,
 } from "@/lib/template-engine/directadmin";
 import { hostCandidates } from "@/lib/site-studio/deploy/liveFiles";
-import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
+import { isProtectedDomain, protectedDomains } from "@/lib/site-studio/deploy/protected";
 import type { Deadline } from "./deadline";
 import { MAX_FILE_BYTES, cmsPathAllowed } from "./paths";
 
@@ -410,6 +410,32 @@ export function isPlainHost(host: unknown): host is string {
   return labels.length >= 2 && labels.every((l) => LABEL.test(l));
 }
 
+/** The names one site is served under: the host, its apex and its www. twin. */
+function siteNames(host: string): string[] {
+  const apex = host.replace(/^www[.]/, "");
+  return [...new Set([host, apex, `www.${apex}`])];
+}
+
+/**
+ * Is the site at `host` a protected company website? Every name it is served
+ * under (the host, its apex, its www. twin) is checked against
+ * PROTECTED_DOMAINS, exact or as a subdomain of an entry. For a staging site
+ * the staging apex (DA_DOMAIN) protects only itself and its www. twin, as
+ * every staging site is under it; any other entry counts in full, so a
+ * protected subdomain of DA_DOMAIN stays protected.
+ */
+export function isProtectedSite(host: string): boolean {
+  const daDomain = (process.env.DA_DOMAIN ?? "").toLowerCase();
+  const names = siteNames(host);
+  const staging = daDomain !== "" && subFromWebsiteLink(`https://${host}`, daDomain) !== null;
+  if (!staging) return names.some((name) => isProtectedDomain(name));
+  if (names.includes(daDomain)) return true;
+  const entries = protectedDomains().filter((d) => d !== daDomain);
+  return names.some((name) => entries.some((d) => name === d || name.endsWith(`.${d}`)));
+}
+
+const protectedRefusal = (host: string): SiteRefusal => ({ ok: false, status: 403, code: "PROTECTED", error: `${host} is a protected company domain.` });
+
 /** Which host serves the site at `host`, or why the CMS may not touch it. */
 export async function resolveSite(host: string): Promise<SiteResolution> {
   if (!isPlainHost(host)) return { ok: false, status: 422, code: "NOT_STATIC", error: "That is not a website address the CMS can edit." };
@@ -418,13 +444,12 @@ export async function resolveSite(host: string): Promise<SiteResolution> {
   const sub = daDomain ? subFromWebsiteLink(`https://${host}`, daDomain) : null;
   if (sub) {
     if (!LABEL.test(sub)) return { ok: false, status: 422, code: "NOT_STATIC", error: "That is not a website address the CMS can edit." };
+    if (isProtectedSite(host)) return protectedRefusal(host);
     if (!daConfigured()) return { ok: false, status: 502, code: "HOSTING", error: "The staging hosting is not configured on the LMS." };
     return { ok: true, kind: "staging", host, sub };
   }
 
-  if (isProtectedDomain(host)) {
-    return { ok: false, status: 403, code: "PROTECTED", error: `${host} is a protected company domain.` };
-  }
+  if (isProtectedSite(host)) return protectedRefusal(host);
   if (!hostingerConfigured()) return { ok: false, status: 502, code: "HOSTING", error: "The hosting is not configured on the LMS." };
 
   for (const candidate of hostCandidates(host)) {
