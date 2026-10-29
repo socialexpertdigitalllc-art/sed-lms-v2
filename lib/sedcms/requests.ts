@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMissingSedcmsTables } from "./links";
 
 /**
- * The request ids SED CMS has used (migration 0094, sedcms_requests).
+ * The request ids SED CMS has used (migration 0096, sedcms_requests).
  * SERVER ONLY.
  *
  * A request id is claimed with an insert BEFORE anything is written, and the

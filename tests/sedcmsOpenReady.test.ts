@@ -6,7 +6,7 @@ import { cmsOpenReady } from "@/lib/sedcms/cms";
 
 /**
  * "Open in CMS" shows only once the CMS is connected (SEDCMS_URL and
- * SEDCMS_API_KEY valid) and migration 0094 is applied, so between the LMS's
+ * SEDCMS_API_KEY valid) and migration 0096 is applied, so between the LMS's
  * deploy and the Studio's launch nobody sees a button that could only answer
  * "not connected". The route keeps its 503s as a backstop
  * (tests/sedcmsOpen.test.ts).
@@ -32,7 +32,7 @@ function admin(answer: { error: { message: string } | null } | "throws" = { erro
 }
 
 describe("cmsOpenReady", () => {
-  it("is true when the CMS link is configured and migration 0094's table answers", async () => {
+  it("is true when the CMS link is configured and migration 0096's table answers", async () => {
     const a = admin();
     expect(await cmsOpenReady(a.client, CMS)).toBe(true);
     expect(a.asked).toEqual(["sedcms_links"]);
@@ -53,7 +53,7 @@ describe("cmsOpenReady", () => {
     }
   });
 
-  it("is false while migration 0094 isn't applied", async () => {
+  it("is false while migration 0096 isn't applied", async () => {
     for (const message of ['relation "public.sedcms_links" does not exist', "Could not find the table 'public.sedcms_links' in the schema cache"]) {
       expect(await cmsOpenReady(admin({ error: { message } }).client, CMS), message).toBe(false);
     }

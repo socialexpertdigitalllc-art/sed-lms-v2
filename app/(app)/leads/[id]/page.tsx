@@ -228,7 +228,7 @@ export default async function LeadDetailPage({
   }
 
   // "Open in CMS" shows only once SED CMS is connected and set up (migration
-  // 0094), asked only for someone who could see it.
+  // 0096), asked only for someone who could see it.
   const cmsReady =
     (perms.has("tickets.resolve") || perms.has("studio.manage")) && Boolean(lead.website_link) ? await cmsOpenReady(admin) : false;
 

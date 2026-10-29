@@ -6,7 +6,7 @@ import { sedcmsError } from "./http";
 import { leadHost, type SedcmsLead } from "./lead";
 
 /**
- * Which leads SED CMS may touch, and where (migration 0094, sedcms_links).
+ * Which leads SED CMS may touch, and where (migration 0096, sedcms_links).
  * SERVER ONLY.
  *
  * leads.website_link alone never decides where the CMS writes: it is free
@@ -38,12 +38,12 @@ export type LinkRead = { ok: true; link: SedcmsLink | null } | { ok: false; miss
 
 const LINK_COLUMNS = "id, lead_id, host";
 
-/** One site whatever its www.: the key of migration 0094's one-per-site index. */
+/** One site whatever its www.: the key of migration 0096's one-per-site index. */
 export function siteKey(host: string): string {
   return host.replace(/^www\./, "");
 }
 
-/** Migration 0094 not applied yet: the tables aren't there. */
+/** Migration 0096 not applied yet: the tables aren't there. */
 export function isMissingSedcmsTables(error: { message?: unknown } | null | undefined): boolean {
   const msg = typeof error?.message === "string" ? error.message : "";
   return /sedcms_(links|requests)/.test(msg) && /(does not exist|schema cache|could not find)/i.test(msg);
@@ -182,7 +182,7 @@ export function hostChangedMessage(from: string, to: string | null): string {
 
 function linkReadRefusal(read: { missingTable: boolean }): NextResponse {
   if (read.missingTable) {
-    console.error("[sedcms] the sedcms_links table is missing: migration 0094 is not applied");
+    console.error("[sedcms] the sedcms_links table is missing: migration 0096 is not applied");
     return sedcmsError(503, "NOT_CONFIGURED", "The LMS is not set up to take CMS requests.");
   }
   console.error("[sedcms] a lead's SED CMS link could not be read");
@@ -244,7 +244,7 @@ export type MoveRefusal = { status: 403 | 503; error: string };
  * Why this user may not move, replace or take down the website of `leadId`,
  * or null when they may: on a lead SED CMS is turned on for, that is a
  * manager's call (studio.manage); unlinked leads are as before. Fails closed
- * (503) when the link can't be read, except while migration 0094 isn't
+ * (503) when the link can't be read, except while migration 0096 isn't
  * applied, when no lead can be linked.
  */
 export async function linkedSiteRefusal(admin: SupabaseClient, leadId: string, perms: ReadonlySet<string>): Promise<MoveRefusal | null> {

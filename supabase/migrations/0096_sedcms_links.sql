@@ -1,10 +1,12 @@
--- 0094_sedcms_links.sql — which leads SED CMS may touch, and where
+-- 0096_sedcms_links.sql — which leads SED CMS may touch, and where
 -- (lib/sedcms/links.ts, lib/sedcms/requests.ts).
--- WRITTEN, NOT APPLIED: applying it to the production database needs Aqib's
--- explicit yes. Until it is applied, every internal SED CMS route answers
--- 503 NOT_CONFIGURED and Open in CMS 503 CMS_NOT_READY (no link can be
--- read), so nothing is read or written on any site; website_link edits work
--- as before (no lead can be linked yet).
+-- APPLIED to production on 2026-10-24 with Aqib's yes, recorded in the
+-- database's history as 0094_sedcms_links (version 20261024135131). It was
+-- written as 0094; main's 0094_leads_rls_initplan.sql took that number in
+-- the meantime, so the file is 0096 here. Never apply it again. Where it
+-- isn't applied, every internal SED CMS route answers 503 NOT_CONFIGURED and
+-- Open in CMS 503 CMS_NOT_READY (no link can be read), so nothing is read or
+-- written on any site; website_link edits work as before.
 -- ADDITIVE ONLY (shared prod DB): two new tables and one notification rule, no drops.
 --
 -- sedcms_links: a manager's decision that SED CMS may change ONE lead's

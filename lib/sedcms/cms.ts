@@ -66,7 +66,7 @@ export function cmsConfig(env: Env = process.env): CmsConfig {
 
 /**
  * Should "Open in CMS" show at all? Only when the CMS link is configured
- * (cmsConfig) and migration 0094's tables are there: between the LMS's
+ * (cmsConfig) and migration 0096's tables are there: between the LMS's
  * deploy and the Studio's launch, staff never see a button that could only
  * answer "not connected". Anything that can't be checked counts as not
  * ready. The route keeps its own 503s anyway.

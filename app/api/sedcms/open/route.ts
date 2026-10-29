@@ -92,7 +92,7 @@ export async function POST(req: Request) {
   const admin = createAdminClient();
   const linked = await readLink(admin, leadId);
   if (!linked.ok) {
-    if (linked.missingTable) console.error("[sedcms] Open in CMS: the sedcms_links table is missing (migration 0094 is not applied)");
+    if (linked.missingTable) console.error("[sedcms] Open in CMS: the sedcms_links table is missing (migration 0096 is not applied)");
     return answer(503, { code: "CMS_NOT_READY", error: "SED CMS isn't set up in the LMS yet." });
   }
   const link = linked.link;

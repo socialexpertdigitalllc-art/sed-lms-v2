@@ -215,7 +215,7 @@ describe("lib/sedcms/links.ts", () => {
     expect(await linkedSiteRefusal(db(), LINKED, new Set(["tickets.resolve"]))).toEqual({ status: 403, error: MOVE_NEEDS_MANAGER });
   });
 
-  it("fails closed when the link can't be read, except while migration 0094 isn't applied", async () => {
+  it("fails closed when the link can't be read, except while migration 0096 isn't applied", async () => {
     const answering = (error: { message: string }) =>
       ({ from: () => ({ select: () => ({ eq: () => ({ is: () => ({ maybeSingle: async () => ({ data: null, error }) }) }) }) }) }) as never;
     const perms = new Set(["tickets.resolve"]);

@@ -142,7 +142,7 @@ export default async function TicketDetailPage({
   // Mirrors the agent-runs routes' permission gate — viewers without it
   // (sales, management) must not mount a panel whose every fetch 403s.
   const canViewAgentRuns = perms.has("tickets.resolve") || perms.has("studio.manage");
-  // "Open in CMS" shows only once SED CMS is connected and set up (migration 0094).
+  // "Open in CMS" shows only once SED CMS is connected and set up (migration 0096).
   const cmsReady = canViewAgentRuns && Boolean(lead.website_link) ? await cmsOpenReady(admin) : false;
 
   return (

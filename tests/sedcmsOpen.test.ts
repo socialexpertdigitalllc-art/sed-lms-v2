@@ -448,7 +448,7 @@ describe("turning SED CMS on for a lead (lib/sedcms/links.ts)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("is a 503 while migration 0094 isn't applied, and links nothing", async () => {
+  it("is a 503 while migration 0096 isn't applied, and links nothing", async () => {
     const calls = cms(() => minted());
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const real = state.admin!;
@@ -464,7 +464,7 @@ describe("turning SED CMS on for a lead (lib/sedcms/links.ts)", () => {
     expect(res.status).toBe(503);
     expect((await res.json()).code).toBe("CMS_NOT_READY");
     expect(calls).toHaveLength(0);
-    expect(err.mock.calls.flat().join(" ")).toContain("migration 0094");
+    expect(err.mock.calls.flat().join(" ")).toContain("migration 0096");
     err.mockRestore();
   });
 });

@@ -8,7 +8,7 @@ import type { SiteFiles } from "@/lib/sedcms/files";
 
 /**
  * A request id is single-use in the database (lib/sedcms/requests.ts,
- * migration 0094's sedcms_requests): the security review's M2. The replay
+ * migration 0096's sedcms_requests): the security review's M2. The replay
  * cache is per process, and a rollback puts back exactly the bytes an old
  * apply expected, so a captured apply replayed on the other LMS process
  * passed the checksum guard and undid the rollback (probe-replay-two-processes,
@@ -195,7 +195,7 @@ describe("an apply's request id is single-use", () => {
     expect(site.writes).toBe(1);
   });
 
-  it("when the id can't be recorded nothing is read or written: 500, or 503 while migration 0094 isn't applied", async () => {
+  it("when the id can't be recorded nothing is read or written: 500, or 503 while migration 0096 isn't applied", async () => {
     const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
     const reads = vi.spyOn(site, "read");
     state.failClaim = { message: "canceling statement due to statement timeout" };

@@ -7,7 +7,7 @@ import { SEDCMS_DEFAULTS, SEDCMS_UNIQUE, TEST_SECRET, leadPath, linkRow, routeCt
 
 /**
  * Which leads SED CMS may touch, and where (lib/sedcms/links.ts, migration
- * 0094): the security review's I1 and I2. leads.website_link alone never
+ * 0096): the security review's I1 and I2. leads.website_link alone never
  * authorises a read or a write; a manager's link does, at one host, and a
  * changed host stops everything until a manager confirms it. Real
  * siteFilesFor, real DirectAdmin and Hostinger clients, the repo's fake hosts.
@@ -150,7 +150,7 @@ describe("an unlinked lead is a 404 NO_LEAD on every route", () => {
     expect((await call(handler, VICTIM_LEAD, endpoint, body)).status).toBe(404);
   });
 
-  it.each(routes)("%s: a 503 NOT_CONFIGURED while migration 0094 isn't applied", async (endpoint, handler, body) => {
+  it.each(routes)("%s: a 503 NOT_CONFIGURED while migration 0096 isn't applied", async (endpoint, handler, body) => {
     world(`https://${OTHER_STAGING}`, []);
     const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
     const real = state.db!;
