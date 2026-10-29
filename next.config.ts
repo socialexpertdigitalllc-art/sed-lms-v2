@@ -19,6 +19,13 @@ const nextConfig: NextConfig = {
     // drops the cache, so changes still show at once. 180 s for static
     // segments is the documented default pairing.
     staleTimes: { dynamic: 30, static: 180 },
+    // Build workers. Next defaults to one per CPU less one: 63 on Hostinger's
+    // build host. Each worker loads Next's native binding, which starts its
+    // own thread pool, and from Next 16.4 that crossed the host's thread
+    // limit: the 2026-10-29 build aborted in "Collecting page data using 63
+    // workers" with "OS can't spawn worker thread (os error 11)". 4 builds
+    // the 190 routes in seconds all the same.
+    cpus: 4,
   },
   images: {
     // Thumbnails for the image picker. See lib/images/hosts.ts for the
