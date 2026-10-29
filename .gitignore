@@ -75,3 +75,6 @@ backups/
 
 # built Site Builder template zips + covers (npm run build:site-template)
 /site-builder-templates/dist/
+
+# Session scratch written by the anchor-memory plugin hook, not project content
+.anchor/

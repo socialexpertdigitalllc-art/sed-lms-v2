@@ -1,14 +1,42 @@
 import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
+import { ttlCached, ttlInvalidate } from "@/lib/cache/ttl";
 import { resolvePermissions, type OverrideRow } from "./types";
+
+/**
+ * How long a resolved permission set is reused across requests. Permissions
+ * change only through the admin screens (and SED AI's permission cards), and
+ * every one of those writers calls invalidateUserPermissions(), so on the
+ * instance that made the change the new set is live at once; other cluster
+ * workers catch up within this window.
+ */
+const PERMS_TTL_MS = 30_000;
 
 /**
  * Resolve the effective permission set for a user (server-side).
  * Fetches department permissions (via the user's department memberships)
  * and user overrides, then composes them with the pure resolver.
- * Wrapped in React's request-level cache so layout and page share one lookup.
+ *
+ * Two cache layers: React's request-level cache so layout, page and the API
+ * routes a render fans out to share one lookup, and a short process-level TTL
+ * across requests. The second one matters most: this resolver is three
+ * round-trips (department_members → department_permissions → overrides) and
+ * ran ~5,600 times a day on prod — one of the top database consumers, all of
+ * it re-reading rows that change a few times a month.
+ *
+ * The returned Set is SHARED between callers — treat it as read-only.
  */
-export const getUserPermissions = cache(async (userId: string): Promise<Set<string>> => {
+export const getUserPermissions = cache(
+  async (userId: string): Promise<Set<string>> =>
+    ttlCached("user-perms", userId, PERMS_TTL_MS, () => loadUserPermissions(userId)),
+);
+
+/** Drop one user's cached set, or everyone's (a department's permissions changed). */
+export function invalidateUserPermissions(userId?: string): void {
+  ttlInvalidate("user-perms", userId);
+}
+
+async function loadUserPermissions(userId: string): Promise<Set<string>> {
   const supabase = await createClient();
 
   // department permissions for every department the user belongs to
@@ -34,4 +62,4 @@ export const getUserPermissions = cache(async (userId: string): Promise<Set<stri
     .eq("user_id", userId);
 
   return resolvePermissions(deptPermKeys, (overrides ?? []) as OverrideRow[]);
-});
+}

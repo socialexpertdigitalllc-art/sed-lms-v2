@@ -6,6 +6,8 @@ import type { Lead } from "@/lib/leads/types";
 import { StatusPill } from "@/components/leads/StatusPill";
 import { formatCompactCurrency, initials } from "@/lib/leads/format";
 import { getUserDirectory } from "@/lib/users/directory";
+import { fetchAllRows } from "@/lib/supabase/fetchAll";
+import { BY_AGENT_LEAD_SELECT } from "@/lib/dashboard/columns";
 
 export default async function ByAgentPage() {
   const supabase = await createClient();
@@ -18,7 +20,16 @@ export default async function ByAgentPage() {
   if (!perms.has("analytics.by_agent")) redirect("/dashboard");
 
   const [{ data: leadsData }, agents] = await Promise.all([
-    supabase.from("leads").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
+    // Six columns, every page (PostgREST returns at most 1,000 rows per call).
+    fetchAllRows<Pick<Lead, "id" | "agent_id" | "business_name" | "status" | "price_quoted" | "created_at">>((from, to) =>
+      supabase
+        .from("leads")
+        .select(BY_AGENT_LEAD_SELECT)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+        .order("id")
+        .range(from, to),
+    ),
     getUserDirectory(),
   ]);
   const leads = (leadsData ?? []) as Lead[];

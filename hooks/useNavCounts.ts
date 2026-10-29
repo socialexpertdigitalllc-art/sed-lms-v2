@@ -80,9 +80,13 @@ export function useNavCounts(): Record<string, number> {
     let cancelled = false;
     const channel = supabase.channel("rt-nav-counts");
 
+    // A hidden tab ignores realtime bumps entirely — the visibilitychange
+    // tick above refetches the moment it is looked at, so nothing is lost and
+    // a background tab no longer joins the herd every time a lead changes.
     const bump = () => {
+      if (document.visibilityState !== "visible") return;
       if (t) clearTimeout(t);
-      t = setTimeout(() => setRefreshTick((n) => n + 1), 400);
+      t = setTimeout(() => setRefreshTick((n) => n + 1), 1_500);
     };
 
     (async () => {

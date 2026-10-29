@@ -3,10 +3,44 @@
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { resolveClickTarget } from "@/lib/activity/track";
+import { ACTIVITY_LOG_PAUSED, ACTIVITY_HEARTBEAT_MS } from "@/lib/activity/config";
 
 type Ev = { type: "page_view" | "click" | "focus"; path?: string; label?: string; meta?: Record<string, string> };
 
+/**
+ * While the tracker is paused (lib/activity/config.ts) only presence is
+ * reported: one tiny POST a minute, visible tabs only, no events.
+ */
+function HeartbeatOnly() {
+  useEffect(() => {
+    const beat = () => {
+      if (document.visibilityState !== "visible") return;
+      fetch("/api/activity/track", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ events: [], heartbeat: true }),
+        keepalive: true,
+      }).catch(() => {});
+    };
+    beat();
+    const interval = setInterval(beat, ACTIVITY_HEARTBEAT_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") beat();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+  return null;
+}
+
 export function ActivityTracker() {
+  return ACTIVITY_LOG_PAUSED ? <HeartbeatOnly /> : <EventTracker />;
+}
+
+function EventTracker() {
   const pathname = usePathname();
   const queue = useRef<Ev[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);

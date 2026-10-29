@@ -8,7 +8,7 @@ import {
   CreditCard, Bell, LayoutList, ListChecks, Sparkles, Globe, Bot, LineChart, Cog,
   Users, Building, ShieldCheck, ScrollText, Upload, Puzzle, BellRing, Pin, PinOff,
   Settings, LayoutTemplate, Library, Mail, FileText, Inbox, MailCheck, Cpu, Wand2, Hammer, Images,
-  ClipboardList, ChevronDown, Plus, Earth, SearchCheck,
+  ClipboardList, ChevronDown, Plus, Earth, SearchCheck, Star,
   type LucideIcon,
 } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -34,6 +34,8 @@ const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, perm: "analytics.view" },
   { href: "/leads", label: "Leads", icon: Building2, perm: "leads.view", quickAction: { href: "/leads/new", label: "New lead", perm: "leads.create" } },
   { href: "/leads/follow-ups", label: "Follow-ups", icon: PhoneCall, perm: "leads.view" },
+  // Premium leads, by priority. Admins star leads; closers view.
+  { href: "/hitlist", label: "HitList", icon: Star, perm: "hitlist.view" },
   { href: "/tickets", label: "Tickets", icon: Ticket, perm: "tickets.view" },
   { href: "/by-agent", label: "By Agent", icon: BarChart3, perm: "analytics.by_agent" },
   { href: "/reports/agent", label: "Agent Report", icon: ClipboardList, perm: "reports.agent_periodic" },

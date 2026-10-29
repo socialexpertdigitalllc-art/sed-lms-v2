@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserPermissions } from "@/lib/permissions/resolver";
+import { getUserPermissions, invalidateUserPermissions } from "@/lib/permissions/resolver";
 import { isKnownPermissionKey } from "@/lib/permissions/constants";
 
 export async function POST(
@@ -38,6 +38,8 @@ export async function POST(
       { onConflict: "user_id,permission_key" }
     );
   }
+  // The change must be live on this instance at once, not after the TTL.
+  invalidateUserPermissions(id);
 
   return NextResponse.json({ ok: true });
 }

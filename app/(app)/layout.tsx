@@ -30,16 +30,17 @@ export default async function AppLayout({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const perms = await getUserPermissions(user.id);
-  const branding = await getBranding();
-  // Cached (60s TTL) — month filters and counts follow the company calendar.
-  const companyTz = companyTimezone(await getAppSettings().then((s) => s.work_timezone).catch(() => null));
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("display_name, ui_preferences")
-    .eq("id", user.id)
-    .single();
+  // Four independent reads, one round-trip's worth of waiting. They were
+  // awaited one after another — four network hops to a database in another
+  // region (~300 ms each) before any page could even start rendering.
+  const [perms, branding, workTimezone, { data: profile }] = await Promise.all([
+    getUserPermissions(user.id),
+    getBranding(),
+    // Cached (60s TTL) — month filters and counts follow the company calendar.
+    getAppSettings().then((s) => s.work_timezone).catch(() => null),
+    supabase.from("profiles").select("display_name, ui_preferences").eq("id", user.id).single(),
+  ]);
+  const companyTz = companyTimezone(workTimezone);
 
   const uiPrefs = (profile?.ui_preferences as Record<string, unknown>) ?? {};
   const sidebarPinned = (uiPrefs.sidebarPinned as boolean | undefined) ?? false;

@@ -98,11 +98,13 @@ export const PERMISSIONS = [
   { key: "assistant.use", name: "Use SED Assistant", category: "assistant" },
   { key: "assistant.act", name: "Use SED AI Action Mode", category: "assistant", is_sensitive: true },
   { key: "assistant.actions.manage", name: "Manage SED AI Actions", category: "assistant", is_sensitive: true },
+  { key: "hitlist.view", name: "View HitList", category: "hitlist" },
+  { key: "hitlist.manage", name: "Add / Remove HitList Leads", category: "hitlist", is_sensitive: true },
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number]["key"];
 
-export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard", "payments", "templates", "mail", "contracts", "integrations", "forms", "domains", "website", "assistant"] as const;
+export const PERMISSION_CATEGORIES = ["leads", "pre_leads", "analytics", "ai_tools", "admin", "tickets", "feedback", "dashboard", "payments", "templates", "mail", "contracts", "integrations", "forms", "domains", "website", "assistant", "hitlist"] as const;
 
 /**
  * Is this a grantable permission key? The static catalog plus the per-lead-

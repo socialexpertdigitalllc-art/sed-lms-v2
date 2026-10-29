@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import "@/lib/tables/columnMeta";
-import { Download, ArrowUp, ArrowDown, ExternalLink, Users, FilterX } from "lucide-react";
+import { Download, ArrowUp, ArrowDown, ExternalLink, Users, FilterX, Star } from "lucide-react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -60,9 +60,14 @@ import { SavedViews } from "@/components/common/SavedViews";
 import { useTableKeyboardNav } from "@/hooks/useTableKeyboardNav";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
+import { HitStarButton, HitStars, HitPriorityPopover, STAR_LEVELS, starsLabel } from "./HitlistStar";
+import { useHitlist } from "@/hooks/useHitlist";
+import type { HitlistMap } from "@/lib/hitlist/store";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tags: "", month: "", from: "", to: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
-const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc"];
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tags: "", hit: "", month: "", from: "", to: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
+// The HitList tab: the same table, highest priority first.
+const HITLIST_DEFAULTS = { ...LEADS_DEFAULTS, sort: "hitlist:desc" };
+const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc", "hitlist:desc"];
 
 export function LeadsTable({
   leads,
@@ -75,6 +80,9 @@ export function LeadsTable({
   currentUserId,
   contractSentLeadIds = [],
   teamAgentIds = [],
+  hitlist,
+  canManageHitlist = false,
+  mode = "leads",
 }: {
   leads: Lead[];
   agentNameById: Record<string, string>;
@@ -90,7 +98,21 @@ export function LeadsTable({
    * closer). Drives the "My team" scope — see the chip in the toolbar.
    */
   teamAgentIds?: string[];
+  /** Lead id → hit-list stars (1–5). Present only for hitlist.view. */
+  hitlist?: HitlistMap;
+  /** hitlist.manage (Admin): add / remove / re-rate with the star. */
+  canManageHitlist?: boolean;
+  /** "hitlist" = the HitList tab: only hit-listed leads, by priority. */
+  mode?: "leads" | "hitlist";
 }) {
+  const isHitlistPage = mode === "hitlist";
+  const canViewHit = hitlist !== undefined;
+  const canManageHit = canViewHit && canManageHitlist;
+  const tableKey = isHitlistPage ? "hitlist" : "leads";
+  const { map: hitMap, setPriority: setHit } = useHitlist(hitlist);
+  // The priority popup (admin's empty-star click). Local state only, so it
+  // opens on the click itself — no request before it shows.
+  const [hitPick, setHitPick] = useState<{ lead: Lead; anchor: HTMLElement } | null>(null);
   const { has, all } = usePermissions();
   const tagById = useMemo(() => Object.fromEntries(tags.map((t) => [t.id, t])), [tags]);
   // Only the caller's OWN tags are appliable via bulk (user-scoped tags).
@@ -99,6 +121,8 @@ export function LeadsTable({
   const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   const visible = useMemo(() => visibleStatuses(all), [all]);
   useRealtimeRefresh("leads");
+  // Another admin's star shows up here too (RLS: hitlist.view only).
+  useRealtimeRefresh("lead_hitlist");
   const canCreate = has("leads.create");
   const canChangeStatus = has("leads.status_change");
   const canFollowUp = has("leads.followup");
@@ -120,7 +144,7 @@ export function LeadsTable({
     const d = new Date();
     const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     a.href = url;
-    a.download = `leads_${stamp}.csv`;
+    a.download = `${isHitlistPage ? "hitlist" : "leads"}_${stamp}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -139,7 +163,7 @@ export function LeadsTable({
   const router = useRouter();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const [urlState, setUrlState] = useViewState(LEADS_DEFAULTS);
+  const [urlState, setUrlState] = useViewState(isHitlistPage ? HITLIST_DEFAULTS : LEADS_DEFAULTS);
   const tz = useCompanyTimezone();
   const { q, status, agent, type, sort, page, size } = urlState;
   const canScopeMonth = has("analytics.view_all_agents");
@@ -156,11 +180,15 @@ export function LeadsTable({
   const platformSel = useMemo(() => (urlState.platform ? urlState.platform.split(",") : []), [urlState.platform]);
   // The follow-up status pill (Pickup / No Pickup) as a filter.
   const fuSel = useMemo(() => (urlState.fu ? urlState.fu.split(",") : []), [urlState.fu]);
+  // Hit-list filter: "all" (any star) and/or star levels "5".."1".
+  const hitSel = useMemo(() => (canViewHit && urlState.hit ? urlState.hit.split(",") : []), [canViewHit, urlState.hit]);
   // A closer's table defaults to THEIR OWN leads; the team is opt-in behind
   // the "My team" chip, which then adds their agents' leads to their own.
   // Applied BEFORE every other filter and count, so the status tabs, the
   // agent list and the export all describe the set on screen.
-  const isCloser = teamAgentIds.length > 0;
+  // The HitList tab shows every hit-listed lead the viewer can see; the
+  // closer's own-leads default belongs to the Leads tab.
+  const isCloser = !isHitlistPage && teamAgentIds.length > 0;
   const teamScope = isCloser && urlState.scope === "team";
   const teamIds = useMemo(
     () => new Set<string>([currentUserId, ...teamAgentIds]),
@@ -169,15 +197,22 @@ export function LeadsTable({
   // Any non-default filter — drives a visible "Clear filters" escape so a
   // persisted filter can never silently hide leads.
   const filtersActive =
-    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.platform !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.month !== "" || urlState.from !== "" || urlState.to !== "" || teamScope;
+    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.platform !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.hit !== "" || urlState.month !== "" || urlState.from !== "" || urlState.to !== "" || teamScope;
   const clearFilters = () =>
-    setUrlState({ q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tags: "", month: "", from: "", to: "", scope: "", page: "0" });
+    setUrlState({ q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tags: "", hit: "", month: "", from: "", to: "", scope: "", page: "0" });
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
+    // A saved "hit list" sort means nothing without the hit list.
+    if (id === "hitlist" && !canViewHit) return [];
     return id ? [{ id, desc: dir !== "asc" }] : [];
-  }, [sort]);
+  }, [sort, canViewHit]);
   const pagination = useMemo(() => ({ pageIndex: Math.max(0, Number(page) || 0), pageSize: Math.max(1, Number(size) || 15) }), [page, size]);
-  const columnVisibility = useMemo<VisibilityState>(() => ({ ...(columnPrefs.leads ?? {}), region: false, tags: false, fu_status: false, platform: false }), [columnPrefs]);
+  // The Priority column shows on the HitList tab; on Leads it only carries
+  // the filter and the sort (the star beside the name is the read-out).
+  const columnVisibility = useMemo<VisibilityState>(
+    () => ({ ...(columnPrefs[tableKey] ?? {}), region: false, tags: false, fu_status: false, platform: false, ...(isHitlistPage ? {} : { hitlist: false }) }),
+    [columnPrefs, tableKey, isHitlistPage],
+  );
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const f: ColumnFiltersState = [];
     if (status !== "All") f.push({ id: "status", value: status });
@@ -187,18 +222,21 @@ export function LeadsTable({
     if (fuSel.length) f.push({ id: "fu_status", value: fuSel });
     if (regionSel.length) f.push({ id: "region", value: regionSel });
     if (tagSel.length) f.push({ id: "tags", value: tagSel });
+    if (hitSel.length) f.push({ id: "hitlist", value: hitSel });
     return f;
-  }, [status, agentSel, typeSel, platformSel, fuSel, regionSel, tagSel]);
+  }, [status, agentSel, typeSel, platformSel, fuSel, regionSel, tagSel, hitSel]);
 
   const scopedLeads = useMemo(
     () =>
       leads.filter((l) => {
+        // Un-starring on the HitList tab takes the row off at once.
+        if (isHitlistPage && !hitMap[l.id]) return false;
         if (!inMonth(l.created_at, month, tz)) return false;
         if (!inRange(l.created_at, from, to)) return false;
         if (!isCloser) return true;
         return teamScope ? Boolean(l.agent_id && teamIds.has(l.agent_id)) : l.agent_id === currentUserId;
       }),
-    [leads, month, from, to, isCloser, teamScope, teamIds, currentUserId],
+    [leads, month, from, to, tz, isCloser, teamScope, teamIds, currentUserId, isHitlistPage, hitMap],
   );
 
   const statusCounts = useMemo(() => {
@@ -253,6 +291,17 @@ export function LeadsTable({
     }
     return c;
   }, [scopedLeads]);
+
+  const hitCounts = useMemo(() => {
+    const c: Record<string, number> = { all: 0 };
+    for (const l of scopedLeads) {
+      const p = hitMap[l.id];
+      if (!p) continue;
+      c.all += 1;
+      c[String(p)] = (c[String(p)] ?? 0) + 1;
+    }
+    return c;
+  }, [scopedLeads, hitMap]);
 
   const columns = useMemo<ColumnDef<Lead>[]>(
     () => [
@@ -373,6 +422,15 @@ export function LeadsTable({
           return (
             <div className="min-w-0">
               <div className="font-medium text-text truncate flex items-center gap-1">
+                {canViewHit && (
+                  <HitStarButton
+                    priority={hitMap[c.row.original.id]}
+                    canManage={canManageHit}
+                    businessName={c.row.original.business_name}
+                    onAdd={(anchor) => setHitPick({ lead: c.row.original, anchor })}
+                    onRemove={() => setHit(c.row.original.id, null)}
+                  />
+                )}
                 <Link
                   href={`/leads/${c.row.original.id}`}
                   onClick={(e) => e.stopPropagation()}
@@ -408,6 +466,30 @@ export function LeadsTable({
           );
         },
       },
+      ...(canViewHit
+        ? [{
+            // Hit-list priority. Visible on the HitList tab (admins re-rate
+            // with one click); on Leads it carries the filter and the sort.
+            id: "hitlist",
+            header: "Priority",
+            accessorFn: (row) => hitMap[row.id] ?? 0,
+            sortDescFirst: true,
+            filterFn: (row, id, value: string[]) => {
+              if (!value?.length) return true;
+              const p = row.getValue<number>(id);
+              return p > 0 && (value.includes("all") || value.includes(String(p)));
+            },
+            cell: (c) => {
+              const p = c.getValue<number>();
+              if (!p) return <span className="text-text-faint">—</span>;
+              return (
+                <span onClick={(e) => e.stopPropagation()} className="whitespace-nowrap">
+                  <HitStars value={p} onPick={canManageHit ? (k) => setHit(c.row.original.id, k) : undefined} />
+                </span>
+              );
+            },
+          } as ColumnDef<Lead>]
+        : []),
       {
         accessorKey: "business_phone",
         header: "Phone",
@@ -526,7 +608,7 @@ export function LeadsTable({
         ),
       },
     ],
-    [agentNameById, canChangeStatus, canFollowUp, canSiteAgent, canBulk, canViewTags, tagById, sentContractSet, router]
+    [agentNameById, canChangeStatus, canFollowUp, canSiteAgent, canBulk, canViewTags, tagById, sentContractSet, router, canViewHit, canManageHit, hitMap, setHit]
   );
 
   const table = useReactTable({
@@ -538,7 +620,7 @@ export function LeadsTable({
     onRowSelectionChange: setRowSelection,
     onColumnVisibilityChange: (updater) => {
       const next = typeof updater === "function" ? updater(columnVisibility) : updater;
-      setTableColumns("leads", next);
+      setTableColumns(tableKey, next);
     },
     onGlobalFilterChange: (updater) => {
       const next = typeof updater === "function" ? (updater as (o: string) => string)(q) : (updater as string);
@@ -575,7 +657,7 @@ export function LeadsTable({
   const { highlightedIndex } = useTableKeyboardNav({
     count: rows.length,
     searchInputRef,
-    enabled: !modalLead && !followUpLead,
+    enabled: !modalLead && !followUpLead && !hitPick,
     onOpen: (i) => {
       const id = rows[i]?.original.id;
       if (id) router.push(`/leads/${id}`);
@@ -586,6 +668,7 @@ export function LeadsTable({
     },
   });
   const filteredCount = table.getFilteredRowModel().rows.length;
+  const closeHitPick = useCallback(() => setHitPick(null), []);
   const selectedRows = table.getSelectedRowModel().rows;
   const selectedLeads = selectedRows.map((r) => r.original);
   const selectedIds = selectedLeads.map((l) => l.id);
@@ -595,10 +678,16 @@ export function LeadsTable({
       {/* header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <h1 className="text-xl font-semibold text-text">Leads</h1>
+          {isHitlistPage ? (
+            <h1 className="text-xl font-semibold text-text inline-flex items-center gap-2">
+              <Star className="w-5 h-5 text-amber-400 fill-amber-400" /> HitList
+            </h1>
+          ) : (
+            <h1 className="text-xl font-semibold text-text">Leads</h1>
+          )}
           <p className="text-sm text-text-muted mt-0.5">{filteredCount} of {scopedLeads.length} shown</p>
         </div>
-        {canCreate && (
+        {canCreate && !isHitlistPage && (
           <Link href="/leads/new" className="bg-accent text-white rounded-md px-4 py-2 text-sm font-semibold hover:bg-accent-ink transition-colors">
             + New Lead
           </Link>
@@ -669,6 +758,17 @@ export function LeadsTable({
           selected={fuSel}
           onChange={(next) => setUrlState({ fu: next.join(","), page: "0" })}
         />
+        {canViewHit && (
+          <MultiSelect
+            label={isHitlistPage ? "Stars" : "Hit list"}
+            options={[
+              ...(isHitlistPage ? [] : [{ value: "all", label: "All hit list", count: hitCounts.all ?? 0 }]),
+              ...STAR_LEVELS.map((k) => ({ value: String(k), label: starsLabel(k), count: hitCounts[String(k)] ?? 0 })),
+            ]}
+            selected={hitSel}
+            onChange={(next) => setUrlState({ hit: next.join(","), page: "0" })}
+          />
+        )}
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(","), page: "0" })} />
         {canViewTags && (
           <TagFilter
@@ -698,6 +798,7 @@ export function LeadsTable({
           <option value="follow_up_time:asc">Follow-up time</option>
           <option value="rating:desc">Rating</option>
           <option value="business_name:asc">Alphabetical</option>
+          {canViewHit && <option value="hitlist:desc">Hit list priority</option>}
           {!SORT_PRESETS.includes(sort) && <option value={sort}>Custom</option>}
         </Select>
         {canExport && (
@@ -717,9 +818,9 @@ export function LeadsTable({
         <DensityToggle />
         <ColumnsMenu table={table} />
         <SavedViews
-          path="/leads"
-          getQuery={() => buildQuery("", LEADS_DEFAULTS, urlState)}
-          onApply={(params) => setUrlState({ ...LEADS_DEFAULTS, ...params })}
+          path={isHitlistPage ? "/hitlist" : "/leads"}
+          getQuery={() => buildQuery("", isHitlistPage ? HITLIST_DEFAULTS : LEADS_DEFAULTS, urlState)}
+          onApply={(params) => setUrlState({ ...(isHitlistPage ? HITLIST_DEFAULTS : LEADS_DEFAULTS), ...params })}
         />
       </div>
 
@@ -749,7 +850,11 @@ export function LeadsTable({
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={columns.length}><EmptyState icon={Users} title="No leads found" hint="Try adjusting filters or search." /></td></tr>
+                <tr><td colSpan={columns.length}>{isHitlistPage && scopedLeads.length === 0 && !filtersActive ? (
+                  <EmptyState icon={Star} title="The hit list is empty" hint={canManageHit ? "Click the star beside a business name in Leads to add it." : "Admins add premium leads here with the star in Leads."} />
+                ) : (
+                  <EmptyState icon={Users} title="No leads found" hint="Try adjusting filters or search." />
+                )}</td></tr>
               ) : (
                 rows.map((row, i) => (
                   <tr
@@ -814,6 +919,18 @@ export function LeadsTable({
           </div>
         )}
       </div>
+
+      {hitPick && (
+        <HitPriorityPopover
+          anchor={hitPick.anchor}
+          businessName={hitPick.lead.business_name}
+          onClose={closeHitPick}
+          onPick={(p) => {
+            setHit(hitPick.lead.id, p);
+            setHitPick(null);
+          }}
+        />
+      )}
 
       {modalLead && (
         <StatusChangeModal
