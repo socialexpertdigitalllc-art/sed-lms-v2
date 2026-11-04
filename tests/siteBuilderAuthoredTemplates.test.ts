@@ -64,8 +64,8 @@ const SPECS: Spec[] = [
     fonts: ["fonts/inter.woff2", "fonts/instrument-serif.woff2", "fonts/instrument-serif-italic.woff2"],
     // #f3efe7 is the warm paper every light shade is mixed from.
     hexAllowed: ["#fff", "#000", "#f07f2e", "#b9520f", "#0f2236", "#f3efe7", "#b91c1c"],
-    // The home hero's fixed background video and three photo clips (about 5.4MB of MP4) ship with every site.
-    maxZipMB: 12,
+    // The home hero's fixed background video and two photo clips (about 2.6MB of MP4) ship with every site.
+    maxZipMB: 8,
   },
 ];
 

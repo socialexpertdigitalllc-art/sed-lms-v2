@@ -35,6 +35,10 @@ function previewHeaders(contentType: string): HeadersInit {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "SAMEORIGIN",
     "Cache-Control": "private, max-age=0, must-revalidate",
+    // The sandboxed page has an opaque ("null") origin, so to it every file here is cross-origin:
+    // the browser drops fonts without this header, and WebGL templates (SD Home) may only draw
+    // photos and video fetched with CORS. Media and fonts only; "*" never carries cookies.
+    ...(/^(font|image|video)\//.test(contentType) && { "Access-Control-Allow-Origin": "*" }),
   };
 }
 

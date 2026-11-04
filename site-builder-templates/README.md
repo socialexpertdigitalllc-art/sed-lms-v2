@@ -95,11 +95,16 @@ generated; the next run built from it uses the new files.
 ## SD Home: the fixed hero video and the 3D engine
 
 SD Home is a quick-launch template: the home page hero plays the **same background video on
-every site** (there is no video library yet). `script.js` writes the video into the empty
-`[data-hero-media]` element, so a page rewrite can neither change nor drop it, and the comment at
-the top of `components.js` tells the model to leave that element alone. The hero video and three
-photo clips (about 5.4MB of MP4) ship in every site, which is why its zip is allowed 12MB in the
-template test instead of 2MB.
+every site** (there is no video library yet), looping on its own. `script.js` writes the video
+into the empty `[data-hero-media]` element, so a page rewrite can neither change nor drop it, and
+the comment at the top of `components.js` tells the model to leave that element alone. The hero
+video and two photo clips (about 2.6MB of MP4) ship in every site, which is why its zip is
+allowed 8MB in the template test instead of 2MB.
+
+**Previews.** The LMS previews sit in a sandbox with no origin of its own, where WebGL may only
+draw files fetched with CORS. The preview routes send `Access-Control-Allow-Origin: *` for that;
+`script.js` checks once on a sandboxed page and, if CORS is not available, runs without WebGL so
+the photos and the hero video stay plain elements rather than disappearing.
 
 Everything else is the builder's to change. The WebGL scenes read each photo from the `<img>` on
 the page; a template photo uses its own depth map (`media/…/name-depth.webp`), any other photo

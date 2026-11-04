@@ -325,7 +325,7 @@
   .hero.is-gl .hero__media { background: transparent; }
   .hero__poster, .hero__video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   .hero__video { opacity: 0; filter: saturate(1.06) contrast(1.04); transition: opacity 1.2s var(--ease); }
-  body[data-tier="1"] .hero.is-video .hero__video { opacity: 1; }
+  .hero.is-video:not(.is-gl) .hero__video { opacity: 1; }
   .hero.is-gl .hero__poster { opacity: 0; }
   .hero__plane { position: absolute; inset: 0; }
   .hero__media::after {
@@ -415,8 +415,9 @@
   .service__list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; margin: 28px 0 32px; padding: 0; list-style: none; border-top: 1px solid var(--line); }
   .service__list li { padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; color: var(--mute); }
   .service__media { width: 100%; aspect-ratio: 4 / 3; max-height: 74vh; margin: 0; }
-  body[data-tier="0"] .services__stage, html:not(.js) .services__stage { height: auto; min-height: 0; overflow: visible; }
-  body[data-tier="0"] .service, html:not(.js) .service { position: relative; padding: 64px 0; }
+  /* Until (or unless) the engine rolls the box, the services are a plain list. */
+  .services__stage:not(.is-rolling) { height: auto; min-height: 0; overflow: visible; }
+  .services__stage:not(.is-rolling) .service { position: relative; padding: 64px 0; }
   @media (max-width: 900px) {
     .services__stage { min-height: 560px; }
     .service__inner { grid-template-columns: 1fr; align-content: center; gap: 18px; padding-top: 48px; padding-bottom: 24px; }

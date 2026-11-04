@@ -1420,6 +1420,9 @@ hi.core.Tween;
    template's own depth map only for the template's own photos, make a soft depth
    map for any other photo, and take their colours from the CSS theme. */
 var sdCache = {};
+// Set by script.js: gl = may the WebGL layer run; cors = load every photo and clip in CORS mode, because the
+// page has no origin of its own (the LMS preview is a sandbox) and WebGL may only draw what CORS allowed.
+var sdMode = { gl: true, cors: false };
 function sdColor(prop) {
   if (prop in sdCache) return sdCache[prop];
   let out = null;
@@ -1456,6 +1459,10 @@ function sdText(el, sel) {
   return n ? n.textContent.trim().replace(/\s+/g, ` `) : ``;
 }
 function sdCors(img, src) {
+  if (sdMode.cors) {
+    img.crossOrigin = `anonymous`;
+    return;
+  }
   try {
     new URL(src, location.href).origin !== location.origin && (img.crossOrigin = `anonymous`);
   } catch {
@@ -1500,7 +1507,7 @@ function gi() {
   let l2 = /SwiftShader|llvmpipe|Software|Microsoft Basic Render/i.test(s2), u2 = /Intel.*\b(HD|UHD|Iris)\b|Mali-[GT]?[1-6]\d\b|Adreno \(TM\) [1-5]\d\d|Apple A(8|9|10)\b/i.test(s2), d2 = 2;
   e21 || r2 || i2 || !c2 || l2 ? d2 = 0 : (t2 || a2 <= 3 || o2 <= 2) && (d2 = 1);
   let f2 = d2 === 2 ? Math.min(window.devicePixelRatio || 1, u2 ? 1 : 1.5) : 1;
-  return { level: d2, gpu: s2, weakGpu: u2, coarse: t2, reduced: e21, dpr: f2, scrub: d2 === 2, dust: d2 === 2, grain: d2 >= 1 };
+  return { level: d2, gpu: s2, weakGpu: u2, coarse: t2, reduced: e21, dpr: f2, scrub: false, dust: d2 === 2, grain: d2 >= 1 };
 }
 function _i(e21, t2) {
   let n2 = 0, r2 = performance.now(), i2 = [], a2 = [], o2 = (e22, o3) => {
@@ -1524,7 +1531,7 @@ function vi({ el: e21, tier: t2 }) {
     let r3 = document.createElement(`source`);
     r3.src = n2.dataset.loopMp4, r3.type = `video/mp4`, n2.append(r3), n2.loop = true;
   }
-  n2.preload = `auto`, n2.load();
+  sdMode.cors && (n2.crossOrigin = `anonymous`), n2.preload = `auto`, n2.load();
   let i2 = () => {
     r2.ready || (r2.ready = true, isFinite(n2.duration) && n2.duration > 0 && (r2.duration = n2.duration), e21.classList.add(`is-video`), r2.mode === `idle` && (n2.playbackRate = t2.scrub ? 0.85 : 1, n2.play().catch(() => {
     }), r2.mode = `play`));
@@ -3742,7 +3749,7 @@ function Ks({ canvas: e21, tier: t2, hero: n2 }) {
     }, T3 = () => {
       if (C3.video) return C3.video;
       let t4 = document.createElement(`video`);
-      t4.muted = true, t4.loop = true, t4.playsInline = true, t4.preload = `auto`;
+      t4.muted = true, t4.loop = true, t4.playsInline = true, t4.preload = `auto`, sdMode.cors && (t4.crossOrigin = `anonymous`);
       let r3 = document.createElement(`source`);
       return r3.src = e22.dataset.videoMp4, r3.type = `video/mp4`, t4.append(r3), t4.addEventListener(`loadedmetadata`, () => {
         p3.uVideoRes.value = [t4.videoWidth, t4.videoHeight];
@@ -3854,7 +3861,7 @@ function Ks({ canvas: e21, tier: t2, hero: n2 }) {
   let D2 = { rectOf: d2, near: f2, loadImage: g2, loadPD: g2pd, imageTex: h2, makeTex: m2, quad: a2, draw: v2, stackFor: w2, pointer: s2, vp: o2, state: c2, coarse: l2 };
   document.querySelectorAll(`[data-gl]`).forEach((e22) => {
     let n3 = e22.dataset.gl, a3 = null;
-    n3 === `hero` ? t2.scrub && (a3 = x2(e22)) : n3 === `depth` ? a3 = b2(e22) : n3 === `reveal` ? a3 = S2(e22) : n3 === `card` ? a3 = E2(e22) : n3 === `model` ? a3 = Ds({ gl: i2, renderer: r2, el: e22, ctx: D2 }) : n3 === `voices` ? a3 = Fs({ gl: i2, el: e22, ctx: D2 }) : n3 === `wall` && (a3 = Hs({ gl: i2, el: e22, ctx: D2 })), a3 && u2.push(a3);
+    n3 === `hero` ? t2.level === 2 && (a3 = x2(e22)) : n3 === `depth` ? a3 = b2(e22) : n3 === `reveal` ? a3 = S2(e22) : n3 === `card` ? a3 = E2(e22) : n3 === `model` ? a3 = Ds({ gl: i2, renderer: r2, el: e22, ctx: D2 }) : n3 === `voices` ? a3 = Fs({ gl: i2, el: e22, ctx: D2 }) : n3 === `wall` && (a3 = Hs({ gl: i2, el: e22, ctx: D2 })), a3 && u2.push(a3);
   });
   function O2() {
     o2.w = innerWidth, o2.h = innerHeight, r2.setSize(o2.w, o2.h);
@@ -3862,6 +3869,13 @@ function Ks({ canvas: e21, tier: t2, hero: n2 }) {
   O2(), addEventListener(`resize`, O2);
   function k2(e22, t3) {
     if (!c2.enabled) return;
+    try {
+      k2frame(e22, t3);
+    } catch (err) {
+      j2(), document.body.dataset.tier = `0`, console.warn(`[gl] off:`, err && err.message);
+    }
+  }
+  function k2frame(e22, t3) {
     c2.time = e22, c2.dt = Math.min(t3 || 16.7, 100), s2.sx = Us(s2.sx, (s2.x / Math.max(o2.w, 1) - 0.5) * 2, 0.05) || 0, s2.sy = Us(s2.sy, (s2.y / Math.max(o2.h, 1) - 0.5) * 2, 0.05) || 0, T2();
     let n3 = false, r3 = [];
     for (let e23 of u2) e23.update() && (r3.push(e23), n3 = true);
@@ -5301,7 +5315,7 @@ function jf({ tier: e21, hero: t2 }) {
   d2.add(`(min-width: 320px)`, () => {
     if (n2 || !f2 || p2.length < 2) return;
     let e22 = p2.length, t3 = { progress: 0, n: e22, cards: p2 };
-    f2.__cube = t3;
+    f2.__cube = t3, f2.classList.add(`is-rolling`);
     let o3 = i2(`[data-cube-dots] button`);
     hi.set(p2, { transformOrigin: `50% 0%`, yPercent: 100, rotateX: -90, z: 0, "--dim": 0.7 }), hi.set(p2[0], { transformOrigin: `50% 100%`, yPercent: 0, rotateX: 0, "--dim": 0 });
     let s3 = 0, c3 = false, l3 = null, u3 = (t4, n3) => {
@@ -5336,7 +5350,7 @@ function jf({ tier: e21, hero: t2 }) {
       let t5 = d3.scrollTrigger, r3 = t5.start + (t5.end - t5.start) * (n3 / (e22 - 1));
       a2 ? a2.scrollTo(r3, { duration: 1.2 }) : window.scrollTo(0, r3);
     })), r2(`.service__body`, p2[0]) && hi.from(Array.from(r2(`.service__body`, p2[0]).children), { y: 36, opacity: 0, duration: 1, stagger: 0.08, ease: `power3.out`, scrollTrigger: { trigger: f2, start: `top 60%`, once: true } }), () => {
-      f2.__cube = null;
+      f2.__cube = null, f2.classList.remove(`is-rolling`);
     };
   });
   let m2 = i2(`[data-plan-step]`), h2 = i2(`[data-step]`), g2 = i2(`[data-plan-legend] span`), _2 = r2(`[data-model]`), v2 = _2 && _2.__model;
@@ -5435,12 +5449,14 @@ ${a2(`message`)}`].filter(Boolean);
   });
 }
 // Started by script.js once the page's builder hooks are in place (see the top of script.js).
-function sdStart() {
+function sdStart(mode) {
+Object.assign(sdMode, mode || {});
 document.documentElement.classList.add(`js`);
 var Ff = gi();
 document.body.dataset.tier = String(Ff.level), location.hash === `#debug` && (console.info(`[tier]`, Ff), window.__gsap = hi);
 var If = vi({ el: document.querySelector(`[data-hero]`), tier: Ff }), Lf = null;
-if (Ff.level > 0) {
+if (Ff.level > 0 && !sdMode.gl) document.body.dataset.tier = `0`;
+else if (Ff.level > 0) {
   let e21 = performance.now();
   Lf = Ks({ canvas: document.getElementById(`gl`), tier: Ff, hero: If }), Lf || (document.body.dataset.tier = `0`), location.hash === `#debug` && console.info(`[gl init]`, Math.round(performance.now() - e21), `ms`);
 }

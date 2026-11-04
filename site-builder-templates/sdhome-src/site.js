@@ -161,7 +161,7 @@
      only while it still shows that photo, so a swapped photo never plays
      somebody else's kitchen.
      ------------------------------------------------------------------------ */
-  var HERO = { poster: "media/hero/hero-poster.webp", scrub: "media/hero/hero-scrub.mp4", loop: "media/hero/hero-loop.mp4" };
+  var HERO = { poster: "media/hero/hero-poster.webp", loop: "media/hero/hero-loop.mp4" };
   var CLIPS = {
     "media/kitchen/kitchen-island.webp": "media/hero/hero-loop.mp4",
     "media/floors/floor-install.webp": "media/flooring/flooring-loop.mp4",
@@ -184,7 +184,7 @@
     box.classList.add("hero__media");
     box.setAttribute("aria-hidden", "true");
     box.innerHTML = '<img class="hero__poster" src="' + HERO.poster + '" alt="" width="1600" height="900" fetchpriority="high" decoding="async">' +
-      '<video class="hero__video" muted playsinline preload="none" data-scrub="' + HERO.scrub + '" data-loop-mp4="' + HERO.loop + '"></video>' +
+      '<video class="hero__video" muted playsinline preload="none" data-loop-mp4="' + HERO.loop + '"></video>' +
       '<div class="hero__plane" data-gl="hero"></div>';
     var v = $("video", box);
     if (v) { v.muted = true; v.defaultMuted = true; }
@@ -392,6 +392,21 @@
     });
   }
 
+  /* The LMS previews pages in a sandbox with no origin of its own. There WebGL may draw a photo
+     only if it was fetched with CORS, so test once whether the server allows that: if it does,
+     the engine loads everything in CORS mode; if not, it runs without WebGL (photos and the hero
+     video stay plain elements). A normal site needs no test. */
+  function webglMode(done) {
+    if (window.origin !== "null") { done({ gl: true, cors: false }); return; }
+    var img = new Image(), settled = false;
+    function finish(ok) { if (settled) return; settled = true; done({ gl: ok, cors: ok }); }
+    img.crossOrigin = "anonymous";
+    img.onload = function () { finish(true); };
+    img.onerror = function () { finish(false); };
+    setTimeout(function () { finish(false); }, 4000);
+    img.src = HERO.poster + "?cors-check";
+  }
+
   function canAnimate() {
     return !!(window.SDHomeEngine && window.matchMedia && window.IntersectionObserver && window.requestAnimationFrame && doc.body);
   }
@@ -408,19 +423,18 @@
     safe(initForms);
     safe(initYear);
     safe(initQuickBar);
-    var started = false;
-    if (canAnimate()) {
+    if (!canAnimate()) { safe(staticPage); return; }
+    webglMode(function (mode) {
       try {
         safe(pageFurniture);
         $$("[data-count]").forEach(function (el) { el.setAttribute("data-final", el.textContent); el.textContent = "0"; });
-        window.SDHomeEngine.start();
-        started = true;
+        window.SDHomeEngine.start(mode);
         safe(revealFirstScreen);
       } catch (e) {
         if (window.console) console.warn(e);
+        safe(staticPage);
       }
-    }
-    if (!started) safe(staticPage);
+    });
   }
 
   window.SDHome = { boot: function () { if (doc.body) boot(); else doc.addEventListener("DOMContentLoaded", boot); }, icons: drawIcons, names: function () { return Object.keys(ICONS); } };
