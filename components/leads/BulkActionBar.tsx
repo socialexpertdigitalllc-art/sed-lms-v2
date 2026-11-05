@@ -9,6 +9,7 @@ import { toggleTag } from "@/lib/leads/tagFilter";
 import { tagColor } from "@/lib/leads/tagColors";
 import { Select } from "@/components/common/Select";
 import { useToast } from "@/components/common/Toast";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 type BulkAction = "status" | "assign" | "archive" | "tag";
 
@@ -74,6 +75,7 @@ export function BulkActionBar({
       }
       onClear();
       router.refresh();
+      syncLeadsNow({ tags: true });
       toast({ kind: "success", title: `Updated ${selectedIds.length} lead(s)` });
     } catch {
       setErr("Network error");

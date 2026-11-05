@@ -1,15 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { dashboardVisibility, anyDashboardVisible } from "@/lib/dashboard/visibility";
-import type { Lead } from "@/lib/leads/types";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { visibleStatuses } from "@/lib/leads/categories";
-import { buildRegionFacets } from "@/lib/geo/regions";
-import { DashboardBoard } from "@/components/dashboard/DashboardBoard";
+import { LiveDashboardBoard } from "@/components/dashboard/LiveDashboardBoard";
 import { getUserDirectory } from "@/lib/users/directory";
 import { getTeamAgentIds } from "@/lib/teams/closers";
 import { fetchAllRows } from "@/lib/supabase/fetchAll";
-import { DASHBOARD_LEAD_SELECT, type DashboardLead } from "@/lib/dashboard/columns";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -38,28 +35,20 @@ export default async function DashboardPage() {
       .sort((a, b) => a.display_name.localeCompare(b.display_name));
   })();
 
-  // Independent reads fire together; salesUsers resolves in parallel.
-  // Leads: only the columns the metrics read (see lib/dashboard/columns.ts),
-  // and every page of them — PostgREST caps one response at 1,000 rows.
-  const [{ data: leadsData }, agents, { data: followUps }, { data: tickets }, salesUsers] =
-    await Promise.all([
-      fetchAllRows<DashboardLead>((from, to) =>
-        supabase
-          .from("leads")
-          .select(DASHBOARD_LEAD_SELECT)
-          .is("deleted_at", null)
-          .order("created_at", { ascending: false })
-          .order("id")
-          .range(from, to),
-      ),
-      getUserDirectory(),
-      supabase.from("lead_follow_ups").select("fu_status, lead_id"),
-      supabase.from("lead_tickets").select("status, due_date, created_at, resolved_at, lead_id"),
-      salesUsersPromise,
-    ]);
-  // The board's helpers are typed on the full Lead; they only touch the
-  // columns selected above (the type above is the contract that keeps it so).
-  const leads = (leadsData ?? []) as unknown as Lead[];
+  // Independent reads fire together; salesUsers resolves in parallel. The
+  // leads come from the live leads store in the browser (hooks/useLiveLeads.ts)
+  // — read once, then only what changes — so they are not read here.
+  // Follow-ups come in pages: PostgREST caps one response at 1,000 rows, and
+  // the table is past that (2,404 rows on 2026-11-05 — the pickup-rate and
+  // follow-up numbers were counting only the first 1,000).
+  const [agents, { data: followUps }, { data: tickets }, salesUsers] = await Promise.all([
+    getUserDirectory(),
+    fetchAllRows<{ fu_status: string; lead_id: string }>((from, to) =>
+      supabase.from("lead_follow_ups").select("fu_status, lead_id").order("id").range(from, to),
+    ),
+    supabase.from("lead_tickets").select("status, due_date, created_at, resolved_at, lead_id"),
+    salesUsersPromise,
+  ]);
   const agentNameById: Record<string, string> = {};
   for (const a of agents ?? []) agentNameById[a.id] = a.display_name ?? "—";
 
@@ -81,19 +70,16 @@ export default async function DashboardPage() {
     );
   }
 
-  const facets = buildRegionFacets(leads);
   // Sales agents reporting to this viewer — empty unless they are a closer.
   const teamAgentIds = user ? await getTeamAgentIds(admin, user.id) : [];
 
   return (
-    <DashboardBoard
-      leads={leads}
+    <LiveDashboardBoard
       followUps={followUps ?? []}
       tickets={tickets ?? []}
       agentNameById={agentNameById}
       flags={flags}
       visible={visible}
-      facets={facets}
       now={new Date().toISOString()}
       canScopeMonth={perms.has("analytics.view_all_agents")}
       currentUserId={user?.id ?? ""}

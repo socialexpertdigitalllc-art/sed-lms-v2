@@ -7,6 +7,7 @@ import { isGoogleProfileLink } from "@/lib/photo-capture/googleLink";
 import { usePhotoExtension } from "@/hooks/usePhotoExtension";
 import { ExtensionInstallCard } from "./ExtensionInstallCard";
 import { useToast } from "@/components/common/Toast";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 type Candidate = {
   id: string;
@@ -169,6 +170,7 @@ export function LeadPhotoPicker({
     setSelected(new Set());
     await load();
     router.refresh();
+    syncLeadsNow();
   }
 
   if (!profileLink) return null;

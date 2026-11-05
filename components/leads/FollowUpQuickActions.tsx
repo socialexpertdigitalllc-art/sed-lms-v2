@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Check, X } from "lucide-react";
 import { useToast } from "@/components/common/Toast";
 import { QUICK_NO_PICKUP_MS } from "@/lib/leads/followups";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 /**
  * The two outcomes of a call, one click each.
@@ -54,6 +55,7 @@ export function FollowUpQuickActions({
       }
       toast({ kind: "success", title: `No Pickup logged`, body: `${businessName} — retry in 24h` });
       router.refresh();
+      syncLeadsNow();
     } catch {
       toast({ kind: "error", title: "Network error — try again" });
     } finally {

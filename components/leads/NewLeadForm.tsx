@@ -54,6 +54,7 @@ import { EmailFieldVerify } from "@/components/email-verify/EmailFieldVerify";
 import { ColorSchemeField } from "@/components/leads/ColorSchemeField";
 import { useColorSchemeCheck } from "@/hooks/useColorSchemeCheck";
 import { MAX_COLORS, MIN_COLORS } from "@/lib/leads/colorScheme";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -326,6 +327,7 @@ export function NewLeadForm({
 
     router.push(`/leads/${id}`);
     router.refresh();
+    syncLeadsNow();
   }
 
   const showAssignment = canAssign || canSetStatus;

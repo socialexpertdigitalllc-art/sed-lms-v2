@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { subscribeLeadsTicks } from "@/lib/realtime/leadsTicks";
 
 // Every table whose row count feeds a sidebar badge. Some may not be in the
 // realtime publication — subscribing is harmless if no events arrive; the
 // mount fetch still seeds the counts either way.
+// `leads` is not here: lead changes arrive as the database's broadcast tick
+// (lib/realtime/leadsTicks.ts), which costs the same for every tab instead of
+// a row-level-security check per listening tab.
 const COUNT_TABLES = [
-  "leads",
   "lead_tickets",
   "feedback",
   "pre_leads",
@@ -98,10 +101,14 @@ export function useNavCounts(): Record<string, number> {
       }
       channel.subscribe();
     })();
+    const unsubscribeLeads = subscribeLeadsTicks((kind) => {
+      if (kind === "leads") bump();
+    });
 
     return () => {
       cancelled = true;
       if (t) clearTimeout(t);
+      unsubscribeLeads();
       supabase.removeChannel(channel);
     };
   }, []);

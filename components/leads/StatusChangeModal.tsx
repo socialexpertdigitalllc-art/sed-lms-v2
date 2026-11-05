@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 export function StatusChangeModal({
   leadId,
@@ -51,6 +52,7 @@ export function StatusChangeModal({
     onClose();
     onSaved?.(status);
     router.refresh();
+    syncLeadsNow();
   }
 
   return (

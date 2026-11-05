@@ -51,6 +51,7 @@ import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 import { ReceiptModal } from "@/components/receipts/ReceiptModal";
 import { LeadReceiptsCard } from "@/components/receipts/LeadReceiptsCard";
 import type { ReceiptRow } from "@/lib/receipts/types";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -204,6 +205,7 @@ export function LeadDetail({
     }
     toast({ kind: "success", title: "Tags updated" });
     router.refresh();
+    syncLeadsNow();
   }
   const removeTag = (id: string) => saveTags(toggleTag(tagIds, id));
   const addTag = (id: string) => { if (id && !tagIds.includes(id)) saveTags(toggleTag(tagIds, id)); };
@@ -234,6 +236,7 @@ export function LeadDetail({
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "Save failed");
     router.refresh();
+    syncLeadsNow();
   }
 
   const nz = (v: string) => v.trim() || null;
@@ -518,6 +521,7 @@ export function LeadDetail({
                       : undefined,
                   });
                   router.refresh();
+                  syncLeadsNow();
                 }}
               />
               {isAdmin && history.events.length > 0 && (

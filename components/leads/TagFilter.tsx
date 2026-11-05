@@ -6,6 +6,7 @@ import type { LeadTag } from "@/lib/leads/types";
 import { tagColor, TAG_COLOR_KEYS } from "@/lib/leads/tagColors";
 import { toggleTag, canApplyTag } from "@/lib/leads/tagFilter";
 import { TagSharingModal } from "./TagSharingModal";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 export function TagFilter({ tags, selected, canManage, canShare, userId, onChange }: {
   tags: LeadTag[];
@@ -48,6 +49,7 @@ export function TagFilter({ tags, selected, canManage, canShare, userId, onChang
       setName("");
       setColor("slate");
       router.refresh();
+      syncLeadsNow({ tags: true });
     } else {
       const j = await res.json().catch(() => ({}));
       setErr(j.error ?? "Could not create tag");
@@ -63,6 +65,7 @@ export function TagFilter({ tags, selected, canManage, canShare, userId, onChang
       // Drop it from the active selection too so a stale id can't linger.
       if (selected.includes(id)) onChange(selected.filter((s) => s !== id));
       router.refresh();
+      syncLeadsNow({ tags: true });
     }
   }
 

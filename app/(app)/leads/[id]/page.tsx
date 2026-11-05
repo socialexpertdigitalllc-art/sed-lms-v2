@@ -4,6 +4,7 @@ import { getUserPermissions } from "@/lib/permissions/resolver";
 import { isAdminMember } from "@/lib/permissions/isAdminMember";
 import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { LeadDetail } from "@/components/leads/LeadDetail";
+import { LeadLiveRefresh } from "@/components/leads/LeadLiveRefresh";
 import type { Lead } from "@/lib/leads/types";
 import type { LeadFollowUp } from "@/lib/leads/followups";
 import type { Ticket, TicketItem } from "@/lib/tickets/types";
@@ -233,6 +234,9 @@ export default async function LeadDetailPage({
     (perms.has("tickets.resolve") || perms.has("studio.manage")) && Boolean(lead.website_link) ? await cmsOpenReady(admin) : false;
 
   return (
+    <>
+    {/* Someone else changes this lead → the page refreshes itself. */}
+    <LeadLiveRefresh leadId={lead.id} updatedAt={lead.updated_at} tagIds={leadTagIds} />
     <LeadDetail
       lead={lead}
       statusHistory={statusHistory}
@@ -265,5 +269,6 @@ export default async function LeadDetailPage({
       openReceiptOnLoad={receiptParam === "new"}
       cmsReady={cmsReady}
     />
+    </>
   );
 }

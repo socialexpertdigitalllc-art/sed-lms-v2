@@ -120,8 +120,9 @@ export function LeadsTable({
   const sentContractSet = useMemo(() => new Set(contractSentLeadIds), [contractSentLeadIds]);
   const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
   const visible = useMemo(() => visibleStatuses(all), [all]);
-  useRealtimeRefresh("leads");
-  // Another admin's star shows up here too (RLS: hitlist.view only).
+  // The leads themselves stay current through the live leads store
+  // (hooks/useLiveLeads.ts) that feeds `leads`. Another admin's star shows up
+  // here too (RLS: hitlist.view only); that page refresh is small now.
   useRealtimeRefresh("lead_hitlist");
   const canCreate = has("leads.create");
   const canChangeStatus = has("leads.status_change");

@@ -17,8 +17,8 @@ import { bucketOf, groupByBucket, isSpecificActive } from "@/lib/leads/followups
 import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
 import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
-import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { useViewState } from "@/hooks/useViewState";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 import { useToast } from "@/components/common/Toast";
 import { inputCls } from "@/components/forms/Field";
 import { cn } from "@/lib/utils";
@@ -62,7 +62,7 @@ export function FollowUpQueue({
 }) {
   const { has, all } = usePermissions();
   const { toast } = useToast();
-  useRealtimeRefresh("leads");
+  // `leads` stays current through the live leads store (hooks/useLiveLeads.ts).
   const canFollowUp = has("leads.followup");
   const settable = settableStatuses(all);
   const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
@@ -88,7 +88,10 @@ export function FollowUpQueue({
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) toast({ kind: "error", title: body.error ?? `Could not move to ${status}` });
-      else toast({ kind: "success", title: `${lead.business_name} moved to ${status}` });
+      else {
+        toast({ kind: "success", title: `${lead.business_name} moved to ${status}` });
+        syncLeadsNow();
+      }
     } catch {
       toast({ kind: "error", title: "Network error — try again" });
     } finally {

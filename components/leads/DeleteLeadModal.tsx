@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 export function DeleteLeadModal({
   leadId,
@@ -32,6 +33,7 @@ export function DeleteLeadModal({
     }
     router.push("/leads");
     router.refresh();
+    syncLeadsNow();
   }
 
   return (

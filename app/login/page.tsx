@@ -1,5 +1,6 @@
 import { getBranding } from "@/lib/settings/appSettings";
 import { LoginForm } from "./LoginForm";
+import { ClearLeadsCache } from "@/components/leads/ClearLeadsCache";
 
 // Branding is admin-editable at any time (company name / logo); without this,
 // getBranding() (no cookies()/headers() touch) lets Next statically prerender
@@ -8,5 +9,10 @@ export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
   const branding = await getBranding();
-  return <LoginForm branding={branding} />;
+  return (
+    <>
+      <ClearLeadsCache />
+      <LoginForm branding={branding} />
+    </>
+  );
 }

@@ -9,6 +9,7 @@ import { inOffset } from "@/lib/dates/datetimeLocal";
 import { DateTimeField } from "@/components/common/DateTimeField";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { inputCls } from "@/components/forms/Field";
+import { syncLeadsNow } from "@/hooks/useLiveLeads";
 
 const QUICK_MINUTE_PRESETS = [15, 30, 60, 120] as const;
 
@@ -114,6 +115,7 @@ export function FollowUpModal({
     }
     onClose();
     router.refresh();
+    syncLeadsNow();
   }
 
   const labelCls = "block text-[10px] uppercase tracking-wide text-text-faint mb-1";
