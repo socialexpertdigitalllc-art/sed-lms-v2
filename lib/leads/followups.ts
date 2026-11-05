@@ -50,7 +50,7 @@ export function nextStreak(prev: number, fu_status: string): number {
   return fu_status === "No Pickup" ? prev + 1 : 0;
 }
 
-/** How long a "specific time" claim stays true after it was recorded. */
+/** How long a "specific time" follow-up stays Specific after its follow-up time. */
 export const SPECIFIC_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** The next follow-up a Cross (quick No Pickup) schedules: one day out. */
@@ -58,6 +58,8 @@ export const QUICK_NO_PICKUP_MS = 24 * 60 * 60 * 1000;
 
 type SpecificScope = {
   follow_up_is_specific?: boolean | null;
+  /** The follow-up time the client asked for — leads.follow_up_time. */
+  follow_up_time?: string | null;
   /** When the current schedule was recorded — leads.follow_up_set_at. */
   follow_up_set_at?: string | null;
 };
@@ -65,20 +67,25 @@ type SpecificScope = {
 /**
  * Is this lead STILL a specific-time follow-up?
  *
- * "The client asked for 3:15pm Tuesday" is only true for as long as nobody has
- * had to reschedule around it. Once a day passes with no new follow-up logged,
- * the exact time the client named is stale and the lead rejoins the ordinary
- * queue — otherwise the Specific filter silently fills up with appointments
- * that were never kept, which is the opposite of what an agent works it for.
+ * "The client asked for 6pm Monday" stays true until 24 hours AFTER 6pm
+ * Monday: the agent has the whole appointment and the day after it to make
+ * the call. Measured from the follow-up time, never from when it was saved —
+ * a follow-up saved Friday 5pm for Monday 6pm must not drop out on Saturday
+ * 5pm, before the appointment even arrives (bug report 2026-11-05). Once that
+ * day has passed with no new follow-up logged, the lead rejoins the ordinary
+ * queue, so the Specific filter doesn't fill up with appointments that were
+ * never kept. A reschedule moves the follow-up time, and the clock with it.
  *
- * A missing `follow_up_set_at` never expires: rows written before migration
- * 0073 (and any environment where it has not been applied) have no recorded
- * time to measure from, and dropping their badge would read as data loss.
+ * With no follow-up time on the row it falls back to the save time
+ * (`follow_up_set_at`); with neither it never expires — rows written before
+ * migration 0073 have nothing to measure from, and dropping their badge would
+ * read as data loss.
  */
 export function isSpecificActive(lead: SpecificScope, now: Date = new Date()): boolean {
   if (!lead.follow_up_is_specific) return false;
-  if (!lead.follow_up_set_at) return true;
-  const t = new Date(lead.follow_up_set_at).getTime();
+  const anchor = lead.follow_up_time || lead.follow_up_set_at;
+  if (!anchor) return true;
+  const t = new Date(anchor).getTime();
   if (Number.isNaN(t)) return true;
   return now.getTime() - t < SPECIFIC_TTL_MS;
 }

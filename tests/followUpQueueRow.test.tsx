@@ -110,20 +110,23 @@ describe("Follow-ups row", () => {
 });
 
 describe("Specific badge decay on the queue", () => {
-  const recent = new Date(Date.now() - 60_000).toISOString();
-  const aged = new Date(Date.now() - SPECIFIC_TTL_MS - 60_000).toISOString();
+  // Measured from the FOLLOW-UP time: a day after the appointment, not a day
+  // after it was saved.
+  const soon = new Date(Date.now() + 3 * 86_400_000).toISOString();
+  const savedLongAgo = new Date(Date.now() - 2 * SPECIFIC_TTL_MS).toISOString();
+  const pastADay = new Date(Date.now() - SPECIFIC_TTL_MS - 60_000).toISOString();
 
   // The row badge and the toolbar filter both read "Specific"; the badge is the
   // one that explains itself in a title, so target that.
   const badge = () => screen.queryByTitle(/asked for this exact time/i);
 
-  it("badges a specific follow-up logged within the day", () => {
-    mount([lead({ follow_up_is_specific: true, follow_up_set_at: recent })]);
+  it("badges a specific follow-up whose time is still ahead, however long ago it was saved", () => {
+    mount([lead({ follow_up_is_specific: true, follow_up_set_at: savedLongAgo, follow_up_time: soon })]);
     expect(badge()).toBeInTheDocument();
   });
 
-  it("drops the badge once the day has passed", () => {
-    mount([lead({ follow_up_is_specific: true, follow_up_set_at: aged })]);
+  it("drops the badge once a day has passed since the follow-up time", () => {
+    mount([lead({ follow_up_is_specific: true, follow_up_set_at: savedLongAgo, follow_up_time: pastADay })]);
     expect(badge()).not.toBeInTheDocument();
   });
 
@@ -134,8 +137,8 @@ describe("Specific badge decay on the queue", () => {
 
   it("counts only the still-active ones on the Specific filter", () => {
     mount([
-      lead({ id: "a", follow_up_is_specific: true, follow_up_set_at: recent }),
-      lead({ id: "b", business_name: "Bayside", follow_up_is_specific: true, follow_up_set_at: aged }),
+      lead({ id: "a", follow_up_is_specific: true, follow_up_set_at: savedLongAgo, follow_up_time: soon }),
+      lead({ id: "b", business_name: "Bayside", follow_up_is_specific: true, follow_up_set_at: savedLongAgo, follow_up_time: pastADay }),
     ]);
     expect(screen.getByRole("button", { name: /^Specific \(1\)$/ })).toBeInTheDocument();
   });
