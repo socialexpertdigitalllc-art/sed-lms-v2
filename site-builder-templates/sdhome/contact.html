@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contact Us | Homeward Maintenance &amp; Repairs</title>
+<meta name="description" content="Request a quote from Homeward. Call, email or send the form and we will get back to you to talk through the job and the price.">
+<meta name="theme-color" content="#0f2236">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Contact Us | Homeward Maintenance &amp; Repairs">
+<meta property="og:description" content="Tell us what needs doing.">
+<link rel="stylesheet" href="style.css">
+<script src="components.js"></script>
+<script src="script.js" defer></script>
+</head>
+<body>
+<app-header></app-header>
+
+<main id="main">
+
+  <!-- QUOTE REQUEST: a finished room behind a glass card in 3D. The card tilts with the cursor,
+       its layers sit at different depths and a light follows the pointer across it. -->
+  <section class="cta cta--page" data-theme="dark">
+    <div class="cta__media" aria-hidden="true" data-cta-media>
+      <img src="media/living/living-sofa.webp" alt="" fetchpriority="high" decoding="async" width="1600" height="900">
+      <video muted playsinline loop preload="none" data-bg-video></video>
+    </div>
+    <div class="cta__inner ui">
+      <div class="cta__copy">
+        <p class="eyebrow" data-reveal>Contact us</p>
+        <h1 class="cta__title" data-reveal>Tell us what <em>needs</em> doing.</h1>
+        <p data-reveal>A short note is enough. Call, or send the form and we will get back to you to talk through the job and the price.</p>
+        <ul class="cta__contact" data-reveal>
+          <li><span>Call</span><a href="tel:5551234567">(555) 123-4567</a></li>
+          <li><span>Email</span><a href="mailto:hello@homeward.example">hello@homeward.example</a></li>
+          <li><span>Serving</span>The greater metro area</li>
+        </ul>
+      </div>
+      <form class="form" id="contact-form" action="https://api.web3forms.com/submit" method="POST" data-sb-form data-form-box data-reveal data-stack>
+        <input type="hidden" name="access_key" value="YOUR_ACCESS_KEY_HERE">
+        <input type="hidden" name="subject" value="New quote request from the website">
+        <input type="hidden" name="from_name" value="Website quote request">
+        <input type="checkbox" name="botcheck" class="hp" style="display:none" tabindex="-1" autocomplete="off">
+        <div class="form__card" data-light>
+          <div class="form__sheen" aria-hidden="true"></div>
+          <div class="form__head">
+            <span class="form__kicker">Request a quote</span>
+            <h2>Tell us about the job</h2>
+          </div>
+          <fieldset class="form__pills">
+            <legend>What do you need?</legend>
+            <label><input type="radio" name="service" value="Handyman & repairs" checked><span>Handyman &amp; repairs</span></label>
+            <label><input type="radio" name="service" value="AC & heating"><span>AC &amp; heating</span></label>
+            <label><input type="radio" name="service" value="Painting"><span>Painting</span></label>
+            <label><input type="radio" name="service" value="Floors & tile"><span>Floors &amp; tile</span></label>
+            <label><input type="radio" name="service" value="Kitchen & bath remodels"><span>Kitchen &amp; bath</span></label>
+            <label><input type="radio" name="service" value="Something else"><span>Something else</span></label>
+          </fieldset>
+          <div class="form__grid">
+            <div class="field"><input id="f-name" type="text" name="name" placeholder=" " autocomplete="name" required><label for="f-name">Name</label></div>
+            <div class="field"><input id="f-phone" type="tel" name="phone" placeholder=" " autocomplete="tel" required><label for="f-phone">Phone</label></div>
+            <div class="field"><input id="f-email" type="email" name="email" placeholder=" " autocomplete="email"><label for="f-email">Email (optional)</label></div>
+            <div class="field"><input id="f-zip" type="text" name="zip" placeholder=" " autocomplete="postal-code" inputmode="numeric"><label for="f-zip">ZIP code</label></div>
+            <div class="field field--full"><textarea id="f-msg" name="message" rows="3" placeholder=" "></textarea><label for="f-msg">What needs fixing or doing?</label></div>
+          </div>
+          <div class="form__foot">
+            <button class="btn btn--accent form__submit" type="submit" data-cursor="link">Send my request <i data-i="arrow-right"></i></button>
+            <p class="form__note">Prefer to talk? Call (555) 123-4567.</p>
+          </div>
+          <p class="form-status" role="status" aria-live="polite"></p>
+          <div class="form-success" hidden><i data-i="circle-check"></i><h3>Thank you!</h3><p>Your request is on its way. We will be in touch soon to talk through the job.</p></div>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section class="map-wrap" data-theme="light" aria-label="Map">
+    <div class="map map--wide" data-reveal>
+      <iframe title="Map of our service area" src="https://www.google.com/maps?q=New%20York&amp;output=embed" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+    </div>
+  </section>
+
+</main>
+
+<app-footer></app-footer>
+</body>
+</html>

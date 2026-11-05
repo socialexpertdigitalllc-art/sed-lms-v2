@@ -25,8 +25,14 @@ vi.mock("@/lib/site-builder/templates", async (importOriginal) => ({
       "index.html": '<html><head></head><body><link rel="stylesheet" href="/style.css"><a href="#quote">Quote</a></body></html>',
     },
     pageFiles: ["index.html"],
-    assets: { "style.css": enc.encode("body{color:red}"), "components.js": enc.encode("renderHeader()") },
-    assetFiles: ["style.css", "components.js"],
+    assets: {
+      "style.css": enc.encode("body{color:red}"),
+      "components.js": enc.encode("renderHeader()"),
+      "fonts/a.woff2": enc.encode("wOF2"),
+      "media/a.webp": enc.encode("RIFF"),
+      "media/a.mp4": enc.encode("ftyp"),
+    },
+    assetFiles: ["style.css", "components.js", "fonts/a.woff2", "media/a.webp", "media/a.mp4"],
   }),
 }));
 
@@ -64,6 +70,22 @@ describe("GET /api/site-builder/templates/[id]/preview — signed addresses", ()
     expect(await css.text()).toBe("body{color:red}");
     const js = await GET(new Request("http://x/"), ctx([signed, "components.js"]));
     expect(await js.text()).toBe("renderHeader()");
+  });
+
+  it("serves fonts, photos and video readable from the sandbox's opaque origin, and nothing else", async () => {
+    // The sandboxed page's origin is "null": without CORS the browser drops its fonts, and WebGL
+    // templates may not draw its photos or video.
+    const first = await GET(new Request("http://x/api/site-builder/templates/tpl-1/preview"), ctx(undefined));
+    const signed = first.headers.get("Location")!.split("/preview/")[1].split("/")[0];
+    for (const f of [["fonts", "a.woff2"], ["media", "a.webp"], ["media", "a.mp4"]]) {
+      const res = await GET(new Request("http://x/"), ctx([signed, ...f]));
+      expect(res.status, f.join("/")).toBe(200);
+      expect(res.headers.get("Access-Control-Allow-Origin"), f.join("/")).toBe("*");
+    }
+    for (const f of ["style.css", "components.js", "index.html"]) {
+      const res = await GET(new Request("http://x/"), ctx([signed, f]));
+      expect(res.headers.get("Access-Control-Allow-Origin"), f).toBeNull();
+    }
   });
 
   it("without a session or a valid token, nothing is served", async () => {

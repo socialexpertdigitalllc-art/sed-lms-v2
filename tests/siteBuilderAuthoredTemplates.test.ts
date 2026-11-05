@@ -37,6 +37,8 @@ interface Spec {
   fonts: string[];
   /** Every hex colour the stylesheet may contain: the SITE THEME fallbacks, neutrals, status colours. */
   hexAllowed: string[];
+  /** Zip size cap in MB when a template ships video (default 2). */
+  maxZipMB?: number;
 }
 
 const SPECS: Spec[] = [
@@ -54,6 +56,16 @@ const SPECS: Spec[] = [
     fonts: ["fonts/archivo.woff2", "fonts/geist-mono.woff2"],
     // #f5f2eb is the warm neutral the paper tone is mixed from (a whisper of the brand is mixed in on top).
     hexAllowed: ["#fff", "#000", "#ff5a1f", "#ffc83d", "#14110f", "#f5f2eb", "#166534", "#b91c1c"],
+  },
+  {
+    dir: "sdhome",
+    dataGlobal: "SDHOME_SITE",
+    cta: ".cta--band",
+    fonts: ["fonts/inter.woff2", "fonts/instrument-serif.woff2", "fonts/instrument-serif-italic.woff2"],
+    // #f3efe7 is the warm paper every light shade is mixed from.
+    hexAllowed: ["#fff", "#000", "#f07f2e", "#b9520f", "#0f2236", "#f3efe7", "#b91c1c"],
+    // The home hero's fixed background video and two photo clips (about 2.6MB of MP4) ship with every site.
+    maxZipMB: 8,
   },
 ];
 
@@ -106,7 +118,7 @@ describe.each(SPECS)("$dir template", (spec) => {
 
     it("zips reproducibly and stays far under the 25MB upload limit", () => {
       expect(Buffer.compare(Buffer.from(zipTemplateFiles(files)), Buffer.from(zipped))).toBe(0);
-      expect(zipped.length).toBeLessThan(2 * 1024 * 1024);
+      expect(zipped.length).toBeLessThan((spec.maxZipMB ?? 2) * 1024 * 1024);
     });
 
     it("is found by the pipeline's components-file convention", () => {

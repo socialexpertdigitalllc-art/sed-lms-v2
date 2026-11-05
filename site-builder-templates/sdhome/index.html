@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homeward | Home Repairs, Remodeling, Painting &amp; HVAC</title>
+<meta name="description" content="Homeward Maintenance &amp; Repairs: kitchen and bathroom remodeling, painting, floors and tile, AC and heating, and handyman work. Honest work at a fair price.">
+<meta name="theme-color" content="#0f2236">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Homeward Maintenance &amp; Repairs">
+<meta property="og:description" content="Honest home repairs at a fair price. Remodeling, painting, floors and tile, HVAC and handyman work.">
+<link rel="preload" as="image" href="media/hero/hero-poster.webp" fetchpriority="high">
+<link rel="stylesheet" href="style.css">
+<script src="components.js"></script>
+<script src="script.js" defer></script>
+</head>
+<body>
+<app-header></app-header>
+
+<main id="main">
+
+  <!-- HERO: the template's fixed background video (script.js puts it in .hero__media; keep that element empty). -->
+  <section class="hero" data-hero data-theme="dark">
+    <div class="hero__media" data-hero-media></div>
+    <div class="hero__content ui">
+      <p class="eyebrow" data-hero-line>Homeward Maintenance &amp; Repairs</p>
+      <h1 class="hero__title" data-hero-title>Honest home repairs at a <em>fair</em> price.</h1>
+      <p class="hero__sub" data-hero-line>Kitchens and baths, painting, floors and tile, AC and heating, and all the small jobs in between. We can do it all. Just call and ask.</p>
+      <div class="hero__cta" data-hero-line>
+        <a class="btn btn--accent" href="contact.html" data-cursor="link">Get a quote</a>
+        <a class="btn btn--ghost" href="services.html" data-cursor="link">See our services</a>
+      </div>
+    </div>
+    <div class="hero__foot ui" data-hero-foot>
+      <span class="hero__hint"><i></i> Scroll to explore</span>
+      <a class="hero__meta" href="tel:5551234567">Call (555) 123-4567</a>
+    </div>
+  </section>
+
+  <!-- ABOUT: the company story beside a 3D photo stack that tilts toward the cursor -->
+  <section class="about" id="about" data-theme="light">
+    <div class="about__visual">
+      <div class="about__stack" data-stack>
+        <figure class="about__card about__card--big" data-gl="card" data-z="0" data-frame="0" data-shadow="0.22"><img src="media/hvac/hvac-service.webp" alt="A technician checking an outdoor air conditioning unit beside a house" loading="lazy" decoding="async" width="1600" height="1066"></figure>
+        <figure class="about__card about__card--small" data-gl="card" data-z="72" data-frame="8" data-shadow="0.34"><img src="media/handyman/tools.webp" alt="Hand tools laid out on a workbench" loading="lazy" decoding="async" width="1600" height="1066"></figure>
+        <div class="about__badge ui"><strong>1</strong><span>Call does<br>it all</span></div>
+      </div>
+    </div>
+    <div class="about__copy">
+      <p class="eyebrow" data-reveal>About us</p>
+      <h2 data-reveal>We put ourselves in <em>your</em> shoes.</h2>
+      <p data-reveal>We take on just about any job around the house: AC maintenance and repairs, appliance repairs and installs, sinks, faucets, toilets and water heaters, electrical issues, painting and pressure washing, all the way up to full kitchen and bathroom remodels.</p>
+      <p data-reveal>We keep it honest and affordable, and charge a fair price for good work. Call us and ask. It would be our pleasure.</p>
+      <ul class="about__list" data-reveal>
+        <li><i data-i="check"></i>Honest and affordable</li>
+        <li><i data-i="check"></i>Inside and outside the house</li>
+        <li><i data-i="check"></i>Repairs, maintenance and remodels</li>
+        <li><i data-i="check"></i>AC and heating installs and repairs</li>
+      </ul>
+      <div class="about__cta" data-reveal>
+        <a class="btn btn--dark" href="contact.html" data-cursor="link">Get a quote <i data-i="arrow-right"></i></a>
+        <a class="btn btn--outline" href="tel:5551234567" data-cursor="link">Or call (555) 123-4567</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- SERVICES: one face per service; scrolling rolls the box to the next. Add or remove whole <article>s. -->
+  <section class="services" id="services" data-theme="light">
+    <div class="services__head">
+      <p class="eyebrow" data-reveal>What we do</p>
+      <h2 data-reveal>Five trades. <em>One</em> call.</h2>
+    </div>
+    <div class="services__stage" data-cube-stage>
+      <article class="service" data-service>
+        <div class="service__inner">
+          <div class="service__body ui">
+            <span class="service__num">01</span>
+            <h3 class="service__title">Kitchens &amp; baths</h3>
+            <p>Kitchen and bathroom remodeling, from new cabinets, counters and fixtures to tile, showers and vanities. Done carefully, priced fairly and built to be used every day.</p>
+            <ul class="service__list"><li>Kitchen remodeling</li><li>Bathroom remodeling</li><li>Sinks, faucets and disposals</li><li>Toilets and vanities</li></ul>
+            <a class="link" href="contact.html?service=Kitchen%20%26%20bath%20remodels" data-cursor="link">Plan a remodel</a>
+          </div>
+          <figure class="service__media plane" data-gl="depth"><img src="media/kitchen/kitchen-island.webp" alt="A remodeled kitchen with a blue island and brass fixtures" loading="lazy" decoding="async" width="1600" height="900"></figure>
+        </div>
+      </article>
+      <article class="service" data-service>
+        <div class="service__inner">
+          <div class="service__body ui">
+            <span class="service__num">02</span>
+            <h3 class="service__title">Painting</h3>
+            <p>Interior and exterior painting. Walls, ceilings, trim and doors inside; siding, stucco and trim outside, prepped properly so the paint holds up.</p>
+            <ul class="service__list"><li>Interior painting</li><li>Exterior painting</li><li>Prep, patching and caulking</li><li>Pressure washing</li></ul>
+            <a class="link" href="contact.html?service=Painting" data-cursor="link">Get a painting quote</a>
+          </div>
+          <figure class="service__media plane" data-gl="depth"><img src="media/painting/paint-roller.webp" alt="A painter on a step ladder rolling white paint onto a wall" loading="lazy" decoding="async" width="1600" height="1066"></figure>
+        </div>
+      </article>
+      <article class="service" data-service>
+        <div class="service__inner">
+          <div class="service__body ui">
+            <span class="service__num">03</span>
+            <h3 class="service__title">Floors &amp; tile</h3>
+            <p>New floors laid flat and tight, and tile set straight and level. When something is damaged, we replace the boards or tiles so the repair blends in with the rest.</p>
+            <ul class="service__list"><li>Floor installation</li><li>Floor repair</li><li>Tile installation</li><li>Tile repair</li></ul>
+            <a class="link" href="contact.html?service=Floors%20%26%20tile" data-cursor="link">Plan new floors</a>
+          </div>
+          <figure class="service__media plane" data-gl="depth"><img src="media/floors/floor-install.webp" alt="An installer tapping a new plank of flooring into place" loading="lazy" decoding="async" width="1600" height="1066"></figure>
+        </div>
+      </article>
+      <article class="service" data-service>
+        <div class="service__inner">
+          <div class="service__body ui">
+            <span class="service__num">04</span>
+            <h3 class="service__title">AC &amp; heating</h3>
+            <p>Air conditioning and heating installed, repaired and maintained, so the house stays comfortable all year and the system keeps running the way it should.</p>
+            <ul class="service__list"><li>HVAC installation</li><li>HVAC repair</li><li>AC maintenance</li></ul>
+            <a class="link" href="contact.html?service=AC%20%26%20heating" data-cursor="link">Book AC service</a>
+          </div>
+          <figure class="service__media plane" data-gl="depth"><img src="media/hvac/hvac-gauges.webp" alt="A technician testing an outdoor air conditioning unit with a gauge set" loading="lazy" decoding="async" width="1600" height="1137"></figure>
+        </div>
+      </article>
+      <article class="service" data-service>
+        <div class="service__inner">
+          <div class="service__body ui">
+            <span class="service__num">05</span>
+            <h3 class="service__title">Handyman &amp; repairs</h3>
+            <p>The jobs on the list that never get done: caulking, repairs and assembly, appliances, plumbing fixtures and electrical issues. If it is around the house, call and ask.</p>
+            <ul class="service__list"><li>Caulking, repair and assembly</li><li>Appliance repairs and installs</li><li>Water heaters and toilets</li><li>Electrical issues</li></ul>
+            <a class="link" href="contact.html?service=Handyman%20%26%20repairs" data-cursor="link">Send us your list</a>
+          </div>
+          <figure class="service__media plane" data-gl="depth"><img src="media/handyman/handyman-drill.webp" alt="A handyman fixing a fitting to a wall with a drill" loading="lazy" decoding="async" width="1600" height="1067"></figure>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- WORK: a gallery wall of framed photos in three rows (data-row 0, 1, 2) drifting in turns -->
+  <section class="work" id="work" data-theme="light">
+    <div class="work__head">
+      <div>
+        <p class="eyebrow" data-reveal>Around the house</p>
+        <h2 data-reveal>Inside, outside and <em>everything</em> between.</h2>
+      </div>
+      <p class="work__lead" data-reveal>The kind of work we take on, from fresh paint and new floors to AC repairs and remodeled kitchens. Rest on any photo to slow the wall and look closer.</p>
+    </div>
+    <div class="work__wall" data-stack data-gl="wall" aria-label="Gallery of our work">
+      <ul class="work__list">
+        <li class="tile" data-tile data-row="0"><img src="media/kitchen/kitchen-counter.webp" alt="Marble kitchen counter with a brass tap" loading="lazy" decoding="async" width="1600" height="900"><figcaption><strong>Kitchen remodeling</strong><span>Counters and fixtures</span></figcaption></li>
+        <li class="tile" data-tile data-row="0"><img src="media/painting/paint-exterior.webp" alt="Painters on a lift working on the front of townhomes" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>Exterior painting</strong><span>Two-story homes</span></figcaption></li>
+        <li class="tile" data-tile data-row="0"><img src="media/floors/tile-set.webp" alt="A gloved hand setting a large floor tile with leveling clips" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>Tile installation</strong><span>Leveled and spaced</span></figcaption></li>
+        <li class="tile" data-tile data-row="0"><img src="media/hvac/hvac-service.webp" alt="A technician checking an outdoor air conditioning unit" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>AC maintenance</strong><span>Outdoor unit check</span></figcaption></li>
+        <li class="tile" data-tile data-row="0"><img src="media/interiors/bath-mosaic.webp" alt="Bathroom with a double vanity, glass shower and patterned tile" loading="lazy" decoding="async" width="1600" height="1068"><figcaption><strong>Bathroom remodeling</strong><span>Tile floor and glass shower</span></figcaption></li>
+        <li class="tile" data-tile data-row="1"><img src="media/painting/paint-teal-house.webp" alt="A two-story home painted teal with white trim" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>Exterior painting</strong><span>Fresh colors</span></figcaption></li>
+        <li class="tile" data-tile data-row="1"><img src="media/floors/floor-living.webp" alt="A bright living room with new hardwood floors" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>Floor installation</strong><span>Hardwood living room</span></figcaption></li>
+        <li class="tile" data-tile data-row="1"><img src="media/handyman/caulk-window.webp" alt="A gloved hand running a bead of caulk along a window frame" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>Caulking</strong><span>Sealing a window frame</span></figcaption></li>
+        <li class="tile" data-tile data-row="1"><img src="media/floors/tile-shower.webp" alt="A walk-in shower tiled in white behind a glass door" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>Tile installation</strong><span>Walk-in shower</span></figcaption></li>
+        <li class="tile" data-tile data-row="1"><img src="media/handyman/plumbing.webp" alt="Hands tightening a fitting on a water line" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>Plumbing fixtures</strong><span>Sinks and supply lines</span></figcaption></li>
+        <li class="tile" data-tile data-row="2"><img src="media/painting/paint-ladder.webp" alt="A painter on a ladder painting a white wall" loading="lazy" decoding="async" width="1600" height="1068"><figcaption><strong>Interior painting</strong><span>Walls and ceilings</span></figcaption></li>
+        <li class="tile" data-tile data-row="2"><img src="media/hvac/hvac-split.webp" alt="A wall-mounted indoor air conditioning unit" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>HVAC installation</strong><span>Wall-mounted unit</span></figcaption></li>
+        <li class="tile" data-tile data-row="2"><img src="media/handyman/outlet.webp" alt="Gloved hands fixing a power outlet to a wall" loading="lazy" decoding="async" width="1600" height="1067"><figcaption><strong>Electrical issues</strong><span>Outlets and switches</span></figcaption></li>
+        <li class="tile" data-tile data-row="2"><img src="media/handyman/pressure-wash.webp" alt="A worker pressure washing stone steps" loading="lazy" decoding="async" width="1600" height="1482"><figcaption><strong>Pressure washing</strong><span>Steps and walkways</span></figcaption></li>
+        <li class="tile" data-tile data-row="2"><img src="media/handyman/assembly.webp" alt="Gloved hands driving a screw into a furniture panel" loading="lazy" decoding="async" width="1600" height="1066"><figcaption><strong>Assembly</strong><span>Furniture and fixtures</span></figcaption></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- PROCESS: a floor plan (drawn by script.js) builds itself as the five steps scroll by -->
+  <section class="process" id="process" data-theme="light">
+    <div class="process__plan">
+      <div class="model" data-gl="model" data-model aria-hidden="true"></div>
+    </div>
+    <ol class="process__steps">
+      <li class="step ui" data-step><span class="step__num">01</span><h3>Call and ask</h3><p>Tell us what needs doing, big or small. Call or send the form, and we will talk it through with you.</p></li>
+      <li class="step ui" data-step><span class="step__num">02</span><h3>We take a look</h3><p>We come out, look at the job with you and work out the right fix, not the most expensive one.</p></li>
+      <li class="step ui" data-step><span class="step__num">03</span><h3>A fair, honest price</h3><p>You get a straight price before any work starts, and we keep it affordable.</p></li>
+      <li class="step ui" data-step><span class="step__num">04</span><h3>We do the work right</h3><p>Repairs, installs and remodels done carefully, treating your home the way we would want ours treated.</p></li>
+      <li class="step ui" data-step><span class="step__num">05</span><h3>Walk it with you</h3><p>We check the finished job together and clean up after ourselves before we call it done.</p></li>
+    </ol>
+  </section>
+
+  <!-- TRUST: glass stat cards that tilt toward the cursor, under a light that follows it. Facts only. -->
+  <section class="trust" data-theme="dark" data-light>
+    <div class="trust__inner">
+      <div class="trust__head">
+        <div>
+          <p class="eyebrow" data-reveal>Why homeowners call us</p>
+          <h2 data-reveal>Honest work. <em>Fair</em> prices.</h2>
+        </div>
+        <p class="trust__lead" data-reveal>We put ourselves in the customer&rsquo;s shoes: the right fix, explained plainly, at a price that makes sense.</p>
+      </div>
+      <ul class="trust__stats" data-stack>
+        <li class="trust__card" data-reveal><strong><span data-count="5">5</span></strong><span class="trust__label">trades under one roof</span><small>Remodeling, painting, floors and tile, HVAC and handyman work</small></li>
+        <li class="trust__card" data-reveal><strong><span data-count="1">1</span></strong><span class="trust__label">call does it all</span><small>One number for every job</small></li>
+        <li class="trust__card" data-reveal><strong>Fair</strong><span class="trust__label">prices on every job</span><small>Honest and affordable</small></li>
+        <li class="trust__card" data-reveal><strong>HVAC</strong><span class="trust__label">installs and repairs</span><small>Plus regular AC maintenance</small></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- PROMISES: the showroom deck. These are promises in the company's own words, not quotes.
+       For real reviews: give each card data-rating="5" and put the customer's first name in <strong>. -->
+  <section class="voices" id="promise" data-theme="light" data-voices>
+    <div class="voices__head">
+      <p class="eyebrow" data-reveal>The way we work</p>
+      <h2 data-reveal>Four promises on <em>every</em> job.</h2>
+    </div>
+    <div class="voices__deck" data-stack data-gl="voices" data-cursor="link" aria-roledescription="carousel" aria-label="Our promises">
+      <ul class="voices__list">
+        <li class="voice" data-voice><img src="media/handyman/tools.webp" alt="Hand tools on a workbench" loading="lazy" decoding="async" width="1600" height="1066"><blockquote>We tell you what the job really needs, and what it does not.</blockquote><footer><strong>Honest advice</strong><span>Before we start</span></footer></li>
+        <li class="voice" data-voice><img src="media/painting/paint-stucco.webp" alt="A freshly painted stucco wall" loading="lazy" decoding="async" width="1600" height="1066"><blockquote>Affordable and quoted up front, so you know the price before we begin.</blockquote><footer><strong>A fair price</strong><span>On every job</span></footer></li>
+        <li class="voice" data-voice><img src="media/kitchen/kitchen-living.webp" alt="A finished open kitchen and living room" loading="lazy" decoding="async" width="1600" height="900"><blockquote>We treat your home the way we would want our own treated.</blockquote><footer><strong>In your shoes</strong><span>While we work</span></footer></li>
+        <li class="voice" data-voice><img src="media/floors/tile-subway.webp" alt="White subway tile set in straight lines" loading="lazy" decoding="async" width="1600" height="1066"><blockquote>Inside or out, big or small. If it is around the house, it would be our pleasure.</blockquote><footer><strong>We can do it all</strong><span>Just call and ask</span></footer></li>
+      </ul>
+    </div>
+    <div class="voices__nav ui">
+      <button class="voices__arrow" type="button" data-voices-prev aria-label="Previous card" data-cursor="link"><i data-i="chevron-left"></i></button>
+      <span class="voices__count" data-voices-count>01 / 04</span>
+      <button class="voices__arrow" type="button" data-voices-next aria-label="Next card" data-cursor="link"><i data-i="chevron-right"></i></button>
+      <div class="voices__dots" data-voices-dots></div>
+    </div>
+  </section>
+
+  <app-cta></app-cta>
+
+</main>
+
+<app-footer></app-footer>
+</body>
+</html>
