@@ -9,6 +9,7 @@ const TABS = [
   { href: "/ai-tools/site-builder/new", label: "New Site" },
   { href: "/ai-tools/site-builder/runs", label: "Runs" },
   { href: "/ai-tools/site-builder/deployments", label: "Deployments" },
+  { href: "/ai-tools/site-builder/hero-videos", label: "Hero Videos" },
 ] as const;
 
 /** Templates | New Site | Runs | Deployments — mounted at the top of every

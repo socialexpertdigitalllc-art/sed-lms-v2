@@ -572,9 +572,20 @@ export function LeadDetail({
               <RecommendedTemplateField
                 templateId={lead.recommended_template_id}
                 canEdit={canEdit}
-                onChange={async (id) => {
+                leadCategory={lead.category}
+                heroVideo={{
+                  videoId: lead.hero_video_id ?? null,
+                  request: lead.hero_video_request === true,
+                  note: lead.hero_video_note ?? "",
+                }}
+                onChange={async (id, hero) => {
                   try {
-                    await patch({ recommended_template_id: id || null });
+                    await patch({
+                      recommended_template_id: id || null,
+                      ...(hero
+                        ? { hero_video_id: hero.videoId, hero_video_request: hero.request, hero_video_note: hero.note || null }
+                        : {}),
+                    });
                   } catch (e) {
                     toast({ kind: "error", title: "Could not save the template", body: e instanceof Error ? e.message : "Save failed" });
                     throw e;

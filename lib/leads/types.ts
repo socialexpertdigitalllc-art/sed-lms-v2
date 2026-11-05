@@ -99,6 +99,12 @@ export interface Lead {
   category?: string | null;
   /** The template the agent selected with the client (builder_templates.id). */
   recommended_template_id?: string | null;
+  /** Video-hero templates only: the library video for the home hero (hero_videos.id)… */
+  hero_video_id?: string | null;
+  /** …or a request for a new one, resolved by the developer at generation. */
+  hero_video_request?: boolean | null;
+  /** What the client wants the requested video to show. */
+  hero_video_note?: string | null;
   created_by: string | null;
   closed_by: string | null;
   created_at: string;

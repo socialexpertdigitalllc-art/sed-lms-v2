@@ -44,6 +44,7 @@ import { ChipGroup } from "@/components/forms/ChipGroup";
 import { DynamicList } from "@/components/forms/DynamicList";
 import { SocialProfilesField } from "@/components/forms/SocialProfilesField";
 import { TemplateRecommendation } from "@/components/leads/TemplateRecommendation";
+import { HeroVideoChoice } from "@/components/hero-videos/HeroVideoChoice";
 import { AreaChip, CategoryChip } from "@/components/leads/HeaderChips";
 import { stateOfPhone } from "@/lib/geo/areaCodes";
 import { DateTimeField } from "@/components/common/DateTimeField";
@@ -199,7 +200,7 @@ export function NewLeadForm({
     ],
     location: ["has_service_areas", "areas", "services"],
     website: ["client_experience", "specify_pages", "color_scheme", "design_reference_links"],
-    template: ["recommended_template_id"],
+    template: ["recommended_template_id", "hero_video"],
     pricing: ["follow_up_time", "price_quoted", "price_custom", "reference_link"],
     assessment: ["comments", "rating", "fresh_or_followup", "closed_by"],
   };
@@ -665,9 +666,46 @@ export function NewLeadForm({
             <F error={errors.recommended_template_id} label="Choose a template (optional)">
               <TemplateRecommendation
                 value={f.recommended_template_id}
-                onChange={(id) => set("recommended_template_id", id)}
+                onChange={(id, template) => {
+                  // A new template is a new hero-video question: the choice
+                  // made for the previous one never carries over.
+                  setF((p) => ({
+                    ...p,
+                    recommended_template_id: id,
+                    template_hero_video: template?.hero_video === true,
+                    template_name: template?.name ?? "",
+                    hero_video_id: "",
+                    hero_video_request: false,
+                    hero_video_note: "",
+                  }));
+                  setErrors((p) => {
+                    const n = { ...p };
+                    delete n.recommended_template_id;
+                    delete n.hero_video;
+                    return n;
+                  });
+                }}
               />
             </F>
+            {f.template_hero_video && (
+              <HeroVideoChoice
+                key={f.recommended_template_id}
+                autoOpen
+                templateName={f.template_name}
+                leadCategory={f.category}
+                error={errors.hero_video}
+                value={{ videoId: f.hero_video_id || null, request: f.hero_video_request, note: f.hero_video_note }}
+                onChange={(v) => {
+                  setF((p) => ({ ...p, hero_video_id: v.videoId ?? "", hero_video_request: v.request, hero_video_note: v.note }));
+                  setErrors((p) => {
+                    if (!("hero_video" in p)) return p;
+                    const n = { ...p };
+                    delete n.hero_video;
+                    return n;
+                  });
+                }}
+              />
+            )}
           </SectionCard>
 
           <SectionCard n={5} icon={DollarSign} title="Pricing & Follow Up" subtitle="Commercials & next touch" done={sectionDone("pricing")} delay={showAssignment ? 300 : 240}>

@@ -14,8 +14,17 @@
  * machine noise.
  */
 
+import { HERO_MEDIA_SUBDOMAIN } from "@/lib/hero-videos/subdomain";
+
 /** DNS labels are capped at 63 octets; the counter suffix has to fit inside it. */
 const MAX_LABEL = 63;
+
+/**
+ * Company infrastructure living on the staging server, never a client site:
+ * a business that happens to slugify to one of these gets `-2` instead of
+ * being deployed over it.
+ */
+export const RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([HERO_MEDIA_SUBDOMAIN]);
 
 /** Slugified full business name, DNS-safe. "" only if nothing survives. */
 export function baseSubdomain(businessName: string): string {
@@ -72,6 +81,7 @@ export async function firstFreeVersion(
   for (let v = start; v < start + 500; v++) {
     const candidate = versionedSubdomain(base, v);
     if (candidate === opts.skip) continue;
+    if (RESERVED_SUBDOMAINS.has(candidate)) continue;
     if (!(await exists(candidate))) return candidate;
   }
   throw new Error(`No free subdomain for base "${base}"`);

@@ -1,3 +1,5 @@
+import { RESERVED_SUBDOMAINS } from "./naming";
+
 /**
  * Merge DB truth (studio_deployments) with hosting truth (DirectAdmin
  * subdomains + Hostinger domains) into one categorized board list.
@@ -103,6 +105,9 @@ export function buildBoard(
   );
   for (const sub of hostingSubdomains ?? []) {
     if (claimed.has(sub)) continue;
+    // Infrastructure (the shared hero video host), not a client site: listing
+    // it would offer a Delete that takes every site's hero video down.
+    if (RESERVED_SUBDOMAINS.has(sub)) continue;
     rows.push({
       id: null,
       subdomain: sub,

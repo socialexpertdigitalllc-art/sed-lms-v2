@@ -45,6 +45,16 @@ function makeAdmin(opts: { lead: Lead | null; templateIds: string[] }) {
           const row = inserted[inserted.length - 1] ?? {};
           return { data: { id: "run-1", ...row }, error: null };
         },
+        // The hero-video check (lib/hero-videos/library.ts) reads the
+        // template's flag; these templates have no video hero.
+        maybeSingle: async () => {
+          if (table === "builder_templates") {
+            const wanted = chain.__wantedTemplateId as string | undefined;
+            const found = wanted && opts.templateIds.includes(wanted);
+            return { data: found ? { id: wanted, name: "T", hero_video: false } : null, error: null };
+          }
+          return { data: null, error: null };
+        },
       });
       // Capture the id the route filters templates by.
       chain.eq = (col: string, val: unknown) => {

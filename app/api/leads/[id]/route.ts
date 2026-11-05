@@ -18,6 +18,10 @@ import { processDomains } from "@/lib/domains/processor";
 import { kickLeadDomainChecks } from "@/lib/domains/leadCheck";
 import { realPipelineDeps } from "@/lib/domains/deps";
 import { noteWebsiteLinkChange, websiteMoveRefusal } from "@/lib/sedcms/links";
+import { normalizeHeroChoice } from "@/lib/hero-videos/library";
+
+/** Fields that decide the lead's hero video (see the video-hero check in PATCH). */
+const HERO_KEYS = ["recommended_template_id", "hero_video_id", "hero_video_request", "hero_video_note"] as const;
 
 /** Fields only an Admin-department member may change (see the PATCH gate). */
 const ADMIN_ONLY_FIELDS = ["agent_id", "closed_by", "rating"] as const;
@@ -164,6 +168,20 @@ export async function PATCH(
   if (linkChanged) {
     const refusal = await websiteMoveRefusal(admin, id, beforeLink, nextLink, perms);
     if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
+  }
+
+  // A video-hero template (SD Home) needs a hero video or a request for one.
+  // Judged on the lead as it will BE (this patch over the stored row), and
+  // normalised: another template clears the choice, a request clears the id.
+  if (HERO_KEYS.some((k) => parsed.data[k] !== undefined)) {
+    const merged = { ...(before as Record<string, unknown>), ...parsed.data } as Record<string, unknown>;
+    const hero = await normalizeHeroChoice(admin, merged.recommended_template_id as string | null, {
+      hero_video_id: (merged.hero_video_id as string | null) ?? null,
+      hero_video_request: merged.hero_video_request === true,
+      hero_video_note: (merged.hero_video_note as string | null) ?? null,
+    });
+    if (!hero.ok) return NextResponse.json({ error: hero.error }, { status: 422 });
+    Object.assign(parsed.data, hero.fields);
   }
 
   let { error } = await admin.from("leads").update(parsed.data).eq("id", id);

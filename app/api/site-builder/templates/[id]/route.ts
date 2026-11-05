@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardAny, guardError } from "@/lib/site-studio/service/guard";
-import { deleteTemplate, updateTemplate, COVER_TYPES, TEMPLATE_CATALOGUE_PERMS } from "@/lib/site-builder/templates";
+import { deleteTemplate, loadTemplateBundle, updateTemplate, COVER_TYPES, TEMPLATE_CATALOGUE_PERMS } from "@/lib/site-builder/templates";
+import { injectHeroVideo } from "@/lib/hero-videos/inject";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -79,6 +80,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
 
   const body = await req.json().catch(() => ({}));
+  if (typeof body?.hero_video === "boolean") {
+    return patchHeroVideo(id, body.hero_video, auth.userId);
+  }
   if (typeof body?.in_service !== "boolean") {
     return NextResponse.json({ error: "in_service must be true or false" }, { status: 422 });
   }
@@ -116,6 +120,46 @@ export async function PATCH(req: Request, ctx: Ctx) {
     entity_id: id,
   });
 
+  return NextResponse.json({ template: data });
+}
+
+/**
+ * JSON `{ hero_video }`: does this template's home hero play a library video?
+ * Turning it on is refused unless the template's files carry a hero video
+ * slot (lib/hero-videos/inject.ts) — otherwise every lead would be asked for a
+ * video the built site could never show.
+ */
+async function patchHeroVideo(id: string, on: boolean, userId: string | null) {
+  const admin = createAdminClient();
+  if (on) {
+    let bundle;
+    try {
+      bundle = await loadTemplateBundle(admin, id);
+    } catch {
+      return NextResponse.json({ error: "Template not found" }, { status: 404 });
+    }
+    const probe = injectHeroVideo(
+      { ...bundle.assets, ...Object.fromEntries(Object.entries(bundle.pages).map(([f, html]) => [f, new TextEncoder().encode(html)])) },
+      "https://example.invalid/probe.mp4",
+    );
+    if (probe.replaced === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "This template has no hero video slot — its hero needs a <video data-hero-video> element, or a script with `var HERO = { loop: \"…\" }` like SD Home.",
+        },
+        { status: 422 },
+      );
+    }
+  }
+  const { data, error } = await admin.from("builder_templates").update({ hero_video: on }).eq("id", id).select("*").single();
+  if (error || !data) return NextResponse.json({ error: error?.message ?? "Update failed" }, { status: 400 });
+  await admin.from("activity_log").insert({
+    user_id: userId,
+    action: on ? "site_builder.template.hero_video_on" : "site_builder.template.hero_video_off",
+    entity_type: "builder_template",
+    entity_id: id,
+  });
   return NextResponse.json({ template: data });
 }
 

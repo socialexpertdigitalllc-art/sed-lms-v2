@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { LayoutTemplate, Loader2, Pencil, X } from "lucide-react";
 import { TemplateCard, type TemplateCardRow } from "@/components/site-builder/TemplateCard";
 import { TemplateRecommendation } from "@/components/leads/TemplateRecommendation";
+import { HeroVideoChoice } from "@/components/hero-videos/HeroVideoChoice";
+import { EMPTY_HERO_VIDEO, HeroVideoGallery, type HeroVideoValue } from "@/components/hero-videos/HeroVideoGallery";
 
 /**
  * The template sales recommended for this lead, on the lead screen.
@@ -18,11 +20,18 @@ export function RecommendedTemplateField({
   templateId,
   canEdit,
   onChange,
+  heroVideo = EMPTY_HERO_VIDEO,
+  leadCategory,
 }: {
   templateId: string | null | undefined;
   canEdit: boolean;
-  /** Persists the new id ("" clears it). Should reject on failure. */
-  onChange: (id: string) => Promise<void>;
+  /** Persists the new id ("" clears it), with the hero video choice when the
+   *  template plays one (SD Home) — the two are saved together, because the
+   *  server refuses a video-hero template without its video. Should reject on failure. */
+  onChange: (id: string, hero?: HeroVideoValue) => Promise<void>;
+  /** The lead's current hero video choice (video-hero templates only). */
+  heroVideo?: HeroVideoValue;
+  leadCategory?: string | null;
 }) {
   // Keyed by the id it was fetched for, so a changed id simply reads as
   // "not loaded yet" — no state to reset in the effect.
@@ -33,6 +42,8 @@ export function RecommendedTemplateField({
   } | null>(null);
   const [picking, setPicking] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** A video-hero template picked, waiting for its video before anything is saved. */
+  const [pendingHero, setPendingHero] = useState<TemplateCardRow | null>(null);
 
   useEffect(() => {
     if (!templateId) return;
@@ -62,11 +73,12 @@ export function RecommendedTemplateField({
   const template = current?.template ?? null;
   const state = current ? current.status : "loading";
 
-  async function save(id: string) {
+  async function save(id: string, hero?: HeroVideoValue) {
     setSaving(true);
     try {
-      await onChange(id);
+      await (hero ? onChange(id, hero) : onChange(id));
       setPicking(false);
+      setPendingHero(null);
     } finally {
       setSaving(false);
     }
@@ -92,13 +104,22 @@ export function RecommendedTemplateField({
       </div>
 
       {picking ? (
-        <TemplateRecommendation value={templateId ?? ""} onChange={(id) => void save(id)} />
+        <TemplateRecommendation
+          value={templateId ?? ""}
+          onChange={(id, t) => {
+            // A video-hero template needs its video first: the gallery opens,
+            // and only its confirmation saves template + video together.
+            if (t?.hero_video && id !== templateId) setPendingHero(t);
+            else void save(id);
+          }}
+        />
       ) : templateId ? (
         state === "loading" ? (
           <p className="flex items-center gap-2 py-3 text-sm text-text-muted">
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Loading template…
           </p>
         ) : template ? (
+          <div className="space-y-3">
           <div className="max-w-xs">
             <TemplateCard
               template={template}
@@ -118,6 +139,16 @@ export function RecommendedTemplateField({
               }
             />
           </div>
+          {template.hero_video && (
+            <HeroVideoChoice
+              value={heroVideo}
+              canEdit={canEdit}
+              templateName={template.name}
+              leadCategory={leadCategory}
+              onChange={(v) => save(template.id, v)}
+            />
+          )}
+          </div>
         ) : (
           <p className="rounded-md border border-border bg-surface-2 px-3 py-3 text-sm text-text-muted">
             {state === "missing"
@@ -130,6 +161,16 @@ export function RecommendedTemplateField({
           <LayoutTemplate className="h-4 w-4 shrink-0 text-text-faint" aria-hidden />
           No template was recommended for this lead.
         </div>
+      )}
+
+      {pendingHero && (
+        <HeroVideoGallery
+          value={EMPTY_HERO_VIDEO}
+          templateName={pendingHero.name}
+          leadCategory={leadCategory}
+          onClose={() => !saving && setPendingHero(null)}
+          onConfirm={(v) => void save(pendingHero.id, v).catch(() => {})}
+        />
       )}
     </div>
   );

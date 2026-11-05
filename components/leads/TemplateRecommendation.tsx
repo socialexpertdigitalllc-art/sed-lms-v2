@@ -16,7 +16,9 @@ export function TemplateRecommendation({
   onChange,
 }: {
   value: string;
-  onChange: (id: string) => void;
+  /** `template` is the picked row ("" / null on deselect) — the lead form
+   *  reads its `hero_video` flag to ask for a hero video. */
+  onChange: (id: string, template: TemplateCardRow | null) => void;
 }) {
   const [templates, setTemplates] = useState<TemplateCardRow[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -82,7 +84,7 @@ export function TemplateRecommendation({
               key={t.id}
               template={t}
               selected={value === t.id}
-              onSelect={() => onChange(value === t.id ? "" : t.id)}
+              onSelect={() => (value === t.id ? onChange("", null) : onChange(t.id, t))}
             />
           ))}
         </div>

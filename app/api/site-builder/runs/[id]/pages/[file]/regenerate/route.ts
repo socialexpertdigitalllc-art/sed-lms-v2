@@ -6,6 +6,7 @@ import { productionSiteBuildCall } from "@/lib/site-builder/generate";
 import { regeneratePage, buildBrief, assembleZip, findComponentsFile, siteSweep, outputPathFor, BUILDER_SITES_BUCKET, type PageState } from "@/lib/site-builder/run";
 import { clearLive, recordOutput } from "@/lib/site-builder/liveProgress";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
+import { heroVideoUrlForRun } from "@/lib/hero-videos/library";
 
 export const runtime = "nodejs";
 /** One page, but the same paced-and-retried AI call the full generation makes
@@ -72,6 +73,16 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!run.lead_id) return NextResponse.json({ error: "This run has no lead" }, { status: 422 });
   const { data: lead } = await admin.from("leads").select("*").eq("id", run.lead_id).single();
   if (!lead) return NextResponse.json({ error: "This run's lead no longer exists" }, { status: 422 });
+
+  // A video-hero template re-packs with the lead's CURRENT hero video, so a
+  // video swapped on the New Site screen reaches the site on the next
+  // regenerate. Checked before the AI call: no video, no spend.
+  let heroVideoUrl: string | null;
+  try {
+    heroVideoUrl = await heroVideoUrlForRun(admin, run.template_id, lead as Record<string, unknown>);
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : "This lead has no hero video" }, { status: 422 });
+  }
 
   let bundle;
   try {
@@ -229,7 +240,7 @@ export async function POST(req: Request, ctx: Ctx) {
     baseAssets[original.file] = new TextEncoder().encode(original.source);
   }
 
-  const zipBytes = assembleZip(baseAssets, newPages);
+  const zipBytes = assembleZip(baseAssets, newPages, heroVideoUrl ? { heroVideoUrl } : {});
   const { error: upErr } = await admin.storage
     .from(BUILDER_SITES_BUCKET)
     .upload(outputPath, zipBytes, { contentType: "application/zip", upsert: true });

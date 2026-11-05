@@ -1,4 +1,5 @@
 import { zipFromMap } from "@/lib/site-studio/zip";
+import { injectHeroVideo } from "@/lib/hero-videos/inject";
 import { buildDossier } from "@/lib/site-studio/run/dossier";
 import { rewriteFormTargets, isSweepableFile } from "./formRelay";
 import { generatePage, generateNewPage, generateComponents, type AiCall } from "./generate";
@@ -332,12 +333,32 @@ export function allFailuresTerminal(pages: Record<string, PageState>): boolean {
  *  every template asset untouched. A successful "component" entry overrides
  *  the template's own copy of that file (same key). A failed page is simply
  *  absent from the zip until the operator regenerates it — no placeholder,
- *  no fallback to the template's own (wrong-business) copy of that page. */
-export function assembleZip(assets: Record<string, Uint8Array>, pages: Record<string, PageState>): Uint8Array {
-  const files: Record<string, Uint8Array> = { ...assets };
+ *  no fallback to the template's own (wrong-business) copy of that page.
+ *
+ *  `heroVideoUrl` (video-hero templates only) points the home hero at the
+ *  lead's library video on the shared media host — by URL, so no site ever
+ *  carries a copy (lib/hero-videos/inject.ts). Applied here, last, so it
+ *  covers the template's scripts AND the generated pages, and every path that
+ *  re-packs a run (full run, per-page regenerate) gets it. */
+export function assembleZip(
+  assets: Record<string, Uint8Array>,
+  pages: Record<string, PageState>,
+  opts: { heroVideoUrl?: string } = {},
+): Uint8Array {
+  let files: Record<string, Uint8Array> = { ...assets };
   const encoder = new TextEncoder();
   for (const [file, state] of Object.entries(pages)) {
     if (state.status === "ok" && state.html !== undefined) files[file] = encoder.encode(state.html);
+  }
+  if (opts.heroVideoUrl) {
+    const injected = injectHeroVideo(files, opts.heroVideoUrl);
+    if (injected.replaced === 0) {
+      throw new Error(
+        "This template is marked as having a video hero, but its files have no hero video slot " +
+          "(a `var HERO = { loop: … }` script or a <video data-hero-video> element). Fix the template, or untick its video hero.",
+      );
+    }
+    files = injected.files;
   }
   return zipFromMap(files);
 }
@@ -380,6 +401,8 @@ export interface RunSiteArgs {
    * whatever specification it was first started with.
    */
   resume?: Record<string, PageState>;
+  /** The lead's hero video (video-hero templates only) — see `assembleZip`. */
+  heroVideoUrl?: string;
 }
 
 export interface RunSiteResult {
@@ -584,7 +607,7 @@ export async function runSite(args: RunSiteArgs): Promise<RunSiteResult> {
     }
   }
 
-  return { ok: true, pages, zipBytes: assembleZip(baseAssets, pages) };
+  return { ok: true, pages, zipBytes: assembleZip(baseAssets, pages, { heroVideoUrl: args.heroVideoUrl }) };
 }
 
 export interface RegeneratePageArgs {

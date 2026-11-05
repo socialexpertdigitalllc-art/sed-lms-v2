@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
+import { heroVideoUrlForRun } from "@/lib/hero-videos/library";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -85,6 +86,14 @@ export async function POST(req: Request) {
 
   const { data: template } = await admin.from("builder_templates").select("id").eq("id", templateId).single();
   if (!template) return NextResponse.json({ error: "Template not found" }, { status: 404 });
+
+  // A video-hero template needs the lead's hero video settled first — refused
+  // here, with what to do, rather than as a failed run a minute later.
+  try {
+    await heroVideoUrlForRun(admin, templateId, lead as Record<string, unknown>);
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : "This lead has no hero video" }, { status: 422 });
+  }
 
   const { data: run, error: insErr } = await admin
     .from("builder_runs")

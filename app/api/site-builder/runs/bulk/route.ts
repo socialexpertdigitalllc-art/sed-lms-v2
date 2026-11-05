@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { guard, guardError } from "@/lib/site-studio/service/guard";
+import { heroVideoUrlForRun, templateHasHeroVideo } from "@/lib/hero-videos/library";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -60,10 +61,13 @@ export async function POST(req: Request) {
   // deleted), and which already have an active run.
   const { data: leadRows } = await admin
     .from("leads")
-    .select("id, business_name")
+    .select("id, business_name, hero_video_id, hero_video_request")
     .in("id", leadIds)
     .is("deleted_at", null);
   const leadById = new Map((leadRows ?? []).map((l) => [l.id as string, l]));
+  // A video-hero template (SD Home) cannot build a lead with no hero video —
+  // such leads are skipped with the reason instead of queued to fail.
+  const videoHero = (await templateHasHeroVideo(admin, templateId))?.hero === true;
 
   const { data: activeRows } = await admin
     .from("builder_runs")
@@ -94,6 +98,14 @@ export async function POST(req: Request) {
     if (activeLeadIds.has(leadId)) {
       results.push({ lead_id: leadId, skipped: "this lead already has a run queued or generating" });
       continue;
+    }
+    if (videoHero) {
+      try {
+        await heroVideoUrlForRun(admin, templateId, leadById.get(leadId) as Record<string, unknown>);
+      } catch {
+        results.push({ lead_id: leadId, skipped: "this template plays a hero video and the lead has none yet — set it on the New Site screen" });
+        continue;
+      }
     }
 
     // `images: []` per the bulk spec: bulk runs use whatever the prompts

@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils";
 import { SmartImage, prefetchImages } from "@/components/common/SmartImage";
 import { BuilderImagePicker, type PickedImage } from "@/components/site-builder/BuilderImagePicker";
 import type { BuilderTemplateRow } from "@/components/site-builder/TemplatesBoard";
+import { DeveloperHeroVideo } from "@/components/hero-videos/DeveloperHeroVideo";
+import { useHeroVideos } from "@/components/hero-videos/useHeroVideos";
 
 /** Only the fields this screen actually reads off a lead row — see
  *  `lib/site-studio/run/dossier.ts`'s own rule on why a generation launcher
@@ -30,6 +32,11 @@ interface LeadOption {
   image_links: string[] | null;
   /** The template the agent picked with the client on the submission form. */
   recommended_template_id: string | null;
+  category?: string | null;
+  /** Video-hero templates: the lead's library video, or sales' request for a new one. */
+  hero_video_id?: string | null;
+  hero_video_request?: boolean | null;
+  hero_video_note?: string | null;
 }
 
 /** One thumbnail on the image screen. `kind: "manual"` is a candidate added
@@ -193,6 +200,15 @@ export function NewSiteFlow() {
     return eligibleLeads.filter((l) => l.business_name.toLowerCase().includes(q));
   }, [eligibleLeads, leadQuery]);
   const selectedLead = useMemo(() => eligibleLeads.find((l) => l.id === selectedLeadId) ?? null, [eligibleLeads, selectedLeadId]);
+
+  // Video-hero templates (SD Home) build only once the lead has its hero
+  // video — chosen by sales, or supplied here for a requested one.
+  const { videos: heroVideos } = useHeroVideos();
+  const selectedTemplate = useMemo(() => (templates ?? []).find((t) => t.id === templateId) ?? null, [templates, templateId]);
+  const heroNeeded = selectedTemplate?.hero_video === true;
+  const heroReady =
+    !heroNeeded ||
+    (!!selectedLead?.hero_video_id && (heroVideos ?? []).some((v) => v.id === selectedLead.hero_video_id));
 
   /**
    * What to say about the sales recommendation, if anything.
@@ -431,6 +447,7 @@ export function NewSiteFlow() {
   async function generate() {
     if (!selectedLead) { toast({ kind: "error", title: "Pick a lead first" }); return; }
     if (!templateId) { toast({ kind: "error", title: "Pick a template first" }); return; }
+    if (!heroReady) { toast({ kind: "error", title: "Set the hero video first — this template plays one behind its hero" }); return; }
     if (heroSelected.size > HERO_PICK_LIMIT) {
       toast({ kind: "error", title: `Pick at most ${HERO_PICK_LIMIT} hero images` });
       return;
@@ -599,6 +616,21 @@ export function NewSiteFlow() {
           </select>
         )}
       </section>
+
+      {heroNeeded && selectedLead && selectedTemplate ? (
+        <section className="rounded-lg border border-border bg-surface p-4">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-faint">Hero video</h3>
+          <DeveloperHeroVideo
+            lead={selectedLead}
+            templateName={selectedTemplate.name}
+            onAssigned={(video) =>
+              setLeads((prev) =>
+                (prev ?? []).map((l) => (l.id === selectedLead.id ? { ...l, hero_video_id: video.id, hero_video_request: false } : l)),
+              )
+            }
+          />
+        </section>
+      ) : null}
 
       {/* 3. Images */}
       <section className="rounded-lg border border-border bg-surface p-4">
@@ -797,7 +829,12 @@ export function NewSiteFlow() {
             </span>
           </span>
         </label>
-        <button className={btnPrimary} onClick={() => void generate()} disabled={submitting || !selectedLead || !templateId}>
+        <button
+          className={btnPrimary}
+          onClick={() => void generate()}
+          disabled={submitting || !selectedLead || !templateId || !heroReady}
+          title={!heroReady ? "Set the hero video first" : undefined}
+        >
           {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
           Generate
         </button>

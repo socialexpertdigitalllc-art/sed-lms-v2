@@ -17,6 +17,7 @@ import {
 } from "@/lib/site-builder/run";
 import { probeQuota } from "@/lib/ai-tools/providers/quota";
 import { clearLive, recordOutput } from "@/lib/site-builder/liveProgress";
+import { heroVideoUrlForRun } from "@/lib/hero-videos/library";
 import type { SuppliedImage } from "@/lib/site-builder/prompt";
 
 /**
@@ -238,6 +239,10 @@ export async function generateRunNow(
     const { data: lead } = await admin.from("leads").select("*").eq("id", run.lead_id).is("deleted_at", null).single();
     if (!lead) throw new Error("This run's lead no longer exists");
 
+    // Video-hero templates (SD Home): the lead's library video goes into the
+    // site's hero slot by URL. A lead with no usable video fails the run HERE,
+    // with what to do about it, before a single AI call is paid for.
+    const heroVideoUrl = await heroVideoUrlForRun(admin, run.template_id as string, lead as Record<string, unknown>);
     const bundle = await loadTemplateBundle(admin, run.template_id as string);
     const brief = buildBrief(lead as Record<string, unknown>);
     // Form Relay: every generation carries the lead's own endpoint (created
@@ -354,6 +359,7 @@ export async function generateRunNow(
         // untouched; only the rest is regenerated. On a first pass this is
         // the row's stored pages (`{}` on a first run).
         resume: latestPages,
+        ...(heroVideoUrl ? { heroVideoUrl } : {}),
       });
       latestPages = result.pages;
 

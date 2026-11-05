@@ -21,6 +21,8 @@ export interface BuilderTemplateRow {
   in_service: boolean;
   created_by: string | null;
   created_at: string;
+  /** The home hero plays a library video (migration 0097). */
+  hero_video?: boolean;
 }
 
 /**

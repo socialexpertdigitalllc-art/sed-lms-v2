@@ -543,12 +543,20 @@ export function siteFolderFor(sub: string): string {
 type DaStep = { ok: true } | { ok: false; message: string };
 
 /** Upload bytes as absDir/name, replacing one of that name (the verified
- *  upload, `dir` param). 30 s. Only ever a temporary file of SED CMS's. */
-export async function uploadDaFile(absDir: string, name: string, bytes: Uint8Array, type = "application/octet-stream"): Promise<DaStep> {
+ *  upload, `dir` param). 30 s unless `opts.timeoutMs` says otherwise — a
+ *  SED CMS temporary file needs no more; a hero video (lib/hero-videos)
+ *  passes a longer budget for its few megabytes. */
+export async function uploadDaFile(
+  absDir: string,
+  name: string,
+  bytes: Uint8Array,
+  type = "application/octet-stream",
+  opts: { timeoutMs?: number } = {},
+): Promise<DaStep> {
   const fd = new FormData();
   fd.append("file", new File([new Uint8Array(bytes)], name, { type }));
   const q = new URLSearchParams({ dir: absDir, name, overwrite: "true" }).toString();
-  const r = await daJson(`/api/filemanager-actions/upload?${q}`, { method: "POST", form: fd, timeoutMs: SINGLE_FILE_TIMEOUT_MS });
+  const r = await daJson(`/api/filemanager-actions/upload?${q}`, { method: "POST", form: fd, timeoutMs: opts.timeoutMs ?? SINGLE_FILE_TIMEOUT_MS });
   return r.ok ? { ok: true } : { ok: false, message: `upload: ${jsonErrorMessage(r)}` };
 }
 

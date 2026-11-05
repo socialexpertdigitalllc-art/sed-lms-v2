@@ -46,6 +46,12 @@ export const leadFieldsSchema = z.object({
   about_business: optional(z.string().max(4000).nullable()),
   developer_instructions: optional(z.string().max(8000).nullable()),
   recommended_template_id: optional(z.string().uuid().nullable()),
+  // Video-hero templates only (builder_templates.hero_video): a library video,
+  // or a request for a new one with what the client wants. The API routes
+  // normalise these against the template (lib/hero-videos/library.ts).
+  hero_video_id: optional(z.string().uuid().nullable()),
+  hero_video_request: z.boolean().optional(),
+  hero_video_note: optional(z.string().max(1000).nullable()),
   social_profiles: z
     .array(
       z.object({

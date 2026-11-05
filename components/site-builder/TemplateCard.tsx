@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, FileText, ImageOff, Layers } from "lucide-react";
+import { ExternalLink, FileText, Film, ImageOff, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface TemplateCardRow {
@@ -10,6 +10,8 @@ export interface TemplateCardRow {
   asset_files: string[];
   cover_image_path: string | null;
   in_service?: boolean;
+  /** The home hero plays a library video (builder_templates.hero_video). */
+  hero_video?: boolean;
 }
 
 export const templateCoverUrl = (id: string) => `/api/site-builder/templates/${id}/cover`;
@@ -98,6 +100,11 @@ export function TemplateCard({
               <Layers className="h-3.5 w-3.5 text-text-faint" aria-hidden />
               {assets} asset{assets === 1 ? "" : "s"}
             </span>
+            {template.hero_video && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 font-medium text-accent-ink">
+                <Film className="h-3 w-3" aria-hidden /> Video hero
+              </span>
+            )}
           </div>
         </div>
 

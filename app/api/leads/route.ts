@@ -12,6 +12,7 @@ import { enqueueLeadIfReady } from "@/lib/ai-tools/queue";
 import { findCollisions, type DupRow } from "@/lib/leads/duplicate";
 import { recordStatusChange } from "@/lib/leads/statusEvents";
 import { blamesLateColumn, withoutLateColumns } from "@/lib/leads/lateColumns";
+import { normalizeHeroChoice } from "@/lib/hero-videos/library";
 
 /** The schema's optional-string fields type-check as `unknown` (zod preprocess quirk); narrow defensively. */
 const asStr = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -83,6 +84,21 @@ export async function POST(req: Request) {
   }
 
   const admin = createAdminClient();
+
+  // A video-hero template (SD Home) needs a hero video or a request for one —
+  // the form's gallery enforces it; this is the same rule for every caller.
+  const hero = await normalizeHeroChoice(admin, payload.recommended_template_id as string | null, {
+    hero_video_id: (payload.hero_video_id as string | null | undefined) ?? null,
+    hero_video_request: payload.hero_video_request === true,
+    hero_video_note: (payload.hero_video_note as string | null | undefined) ?? null,
+  });
+  if (!hero.ok) {
+    return NextResponse.json(
+      { error: hero.error, issues: { formErrors: [], fieldErrors: { hero_video: [hero.error] } } },
+      { status: 422 }
+    );
+  }
+  Object.assign(payload, hero.fields);
 
   if (!(await isAllowedClosedBy(admin, user.id, payload.closed_by))) {
     return NextResponse.json({ error: CLOSED_BY_MESSAGE }, { status: 422 });

@@ -11,6 +11,7 @@ export interface EditableTemplate {
   id: string;
   name: string;
   cover_image_path: string | null;
+  hero_video?: boolean;
 }
 
 /**
@@ -33,22 +34,37 @@ export function TemplateEditModal({
   const [name, setName] = useState(template.name);
   const [cover, setCover] = useState<File | null>(null);
   const [zip, setZip] = useState<File | null>(null);
+  const [heroVideo, setHeroVideo] = useState(template.hero_video === true);
   const [saving, setSaving] = useState(false);
 
   const renamed = name.trim() !== template.name && name.trim().length > 0;
-  const dirty = renamed || !!cover || !!zip;
+  const heroChanged = heroVideo !== (template.hero_video === true);
+  const filesDirty = renamed || !!cover || !!zip;
+  const dirty = filesDirty || heroChanged;
 
   async function save() {
     if (!dirty) return;
     setSaving(true);
     try {
-      const fd = new FormData();
-      if (renamed) fd.append("name", name.trim());
-      if (cover) fd.append("cover", cover);
-      if (zip) fd.append("file", zip);
-      const res = await fetch(`/api/site-builder/templates/${template.id}`, { method: "PATCH", body: fd });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error ?? "Could not save the template");
+      if (filesDirty) {
+        const fd = new FormData();
+        if (renamed) fd.append("name", name.trim());
+        if (cover) fd.append("cover", cover);
+        if (zip) fd.append("file", zip);
+        const res = await fetch(`/api/site-builder/templates/${template.id}`, { method: "PATCH", body: fd });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error ?? "Could not save the template");
+      }
+      // After the files: a replaced zip is what the hero-slot check reads.
+      if (heroChanged) {
+        const res = await fetch(`/api/site-builder/templates/${template.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hero_video: heroVideo }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error ?? "Could not change the video hero setting");
+      }
       toast({ kind: "success", title: `Saved "${name.trim()}"` });
       onSaved();
     } catch (e) {
@@ -124,6 +140,23 @@ export function TemplateEditModal({
               what they built; the next run uses the new files.
             </p>
           </div>
+
+          <label className="flex items-start gap-2.5 text-sm text-text">
+            <input
+              type="checkbox"
+              className="accent-accent mt-0.5 h-4 w-4 shrink-0"
+              checked={heroVideo}
+              onChange={(e) => setHeroVideo(e.target.checked)}
+              disabled={saving}
+            />
+            <span>
+              Hero plays a library video
+              <span className="block text-[11px] text-text-faint">
+                Sales pick the video from the Hero Videos gallery when they choose this template, and every site built
+                from it embeds that one shared copy. Needs a hero video slot in the template&apos;s files.
+              </span>
+            </span>
+          </label>
         </div>
 
         <div className="mt-5 flex justify-end gap-2">

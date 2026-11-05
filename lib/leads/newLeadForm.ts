@@ -64,6 +64,15 @@ export interface NewLeadFormState {
   social_profiles: SocialProfile[];
   /** builder_templates.id the agent picked with the client. Optional. */
   recommended_template_id: string;
+  /** UI only: the picked template plays a video in its hero (builder_templates.hero_video)… */
+  template_hero_video: boolean;
+  /** UI only: …and its name, for the gallery's wording. */
+  template_name: string;
+  /** Video-hero templates: the library video chosen in the gallery… */
+  hero_video_id: string;
+  /** …or a request for a new one, with what it should show. */
+  hero_video_request: boolean;
+  hero_video_note: string;
   comments: string;
   rating: number;
   fresh_or_followup: string;
@@ -110,6 +119,11 @@ export function emptyNewLead(status: string): NewLeadFormState {
     developer_instructions: "",
     social_profiles: [],
     recommended_template_id: "",
+    template_hero_video: false,
+    template_name: "",
+    hero_video_id: "",
+    hero_video_request: false,
+    hero_video_note: "",
     comments: "",
     rating: 0,
     fresh_or_followup: "",
@@ -223,7 +237,10 @@ export function validateNewLead(
   if (f.site_type === "Redesign" && ref && !/^https?:\/\/.+/.test(ref))
     e.reference_link = "Enter a valid reference site URL.";
   // The template is optional: when the agent leaves it blank, the build
-  // picks one from the brief.
+  // picks one from the brief. A video-hero template (SD Home) is not complete
+  // without its hero video — chosen from the gallery, or requested.
+  if (f.template_hero_video && !f.hero_video_id && !f.hero_video_request)
+    e.hero_video = "Choose the hero video for this template, or request a new one.";
   if (!f.comments.trim()) e.comments = "Please enter comments about the client.";
   if (f.rating === 0) e.rating = "Please rate the lead.";
   if (!f.fresh_or_followup) e.fresh_or_followup = "Please select Fresh or Follow Up.";
@@ -291,6 +308,10 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     about_business: f.about_business.trim() || null,
     developer_instructions: f.developer_instructions.trim() || null,
     recommended_template_id: f.recommended_template_id || null,
+    // Only a video-hero template carries a choice; the API re-checks it.
+    hero_video_id: f.template_hero_video && !f.hero_video_request ? f.hero_video_id || null : null,
+    hero_video_request: f.template_hero_video && f.hero_video_request,
+    hero_video_note: f.template_hero_video && f.hero_video_request ? f.hero_video_note.trim() || null : null,
     social_profiles: socials.length ? socials : null,
     comments: f.comments.trim() || null,
     closed_by: f.closed_by === "self" ? (opts?.userId ?? null) : f.closed_by || null,

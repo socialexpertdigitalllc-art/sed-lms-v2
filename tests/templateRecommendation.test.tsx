@@ -57,11 +57,12 @@ describe("TemplateRecommendation", () => {
     await screen.findByText("Plumber Pro");
 
     fireEvent.click(screen.getByRole("button", { name: "Select Plumber Pro" }));
-    expect(onChange).toHaveBeenCalledWith("t-1");
+    // The picked row rides along: the lead form reads its hero_video flag.
+    expect(onChange).toHaveBeenCalledWith("t-1", expect.objectContaining({ id: "t-1" }));
 
     rerender(<TemplateRecommendation value="t-1" onChange={onChange} />);
     fireEvent.click(screen.getByRole("button", { name: "Select Plumber Pro" }));
-    expect(onChange).toHaveBeenLastCalledWith("");
+    expect(onChange).toHaveBeenLastCalledWith("", null);
   });
 
   it("marks the chosen card as selected", async () => {

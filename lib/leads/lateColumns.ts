@@ -17,6 +17,10 @@ export const LATE_LEAD_COLUMNS = [
   "recommended_template_id",
   "custom_area",
   "category",
+  // 0097 (hero video library)
+  "hero_video_id",
+  "hero_video_request",
+  "hero_video_note",
 ] as const;
 
 /**
