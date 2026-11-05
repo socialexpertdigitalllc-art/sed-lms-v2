@@ -12,10 +12,10 @@ vi.mock("@/hooks/useLiveLeads", () => ({
 }));
 
 // ── LeadLiveRefresh: the open lead page refreshing itself ──
-const ticks = vi.hoisted(() => ({ fn: null as null | ((k: "leads" | "tags") => void), reconnect: null as null | (() => void) }));
+const ticks = vi.hoisted(() => ({ fn: null as null | ((k: "leads" | "tags" | "other") => void), reconnect: null as null | (() => void) }));
 vi.mock("@/lib/realtime/leadsTicks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/realtime/leadsTicks")>()),
-  subscribeLeadsTicks: (fn: (k: "leads" | "tags") => void, onReconnect?: () => void) => {
+  subscribeLeadsTicks: (fn: (k: "leads" | "tags" | "other") => void, onReconnect?: () => void) => {
     ticks.fn = fn;
     ticks.reconnect = onReconnect ?? null;
     return () => {
@@ -94,10 +94,26 @@ describe("toSyncRow / tickKind", () => {
     expect(toSyncRow({ id: "y", lead_tag_links: null }).tag_ids).toEqual([]);
   });
 
-  it("a lead_tag_links tick is a tags tick; anything else is a leads tick", () => {
+  it("a lead_tag_links tick is a tags tick, a leads tick is leads, other tables are 'other'", () => {
     expect(tickKind({ table: "lead_tag_links", op: "INSERT" })).toBe("tags");
     expect(tickKind({ table: "leads", op: "UPDATE" })).toBe("leads");
+    expect(tickKind({ table: "lead_tickets", op: "UPDATE" })).toBe("other");
+    expect(tickKind({ table: "lead_follow_ups", op: "INSERT" })).toBe("other");
+    // An unlabelled tick is treated as a leads change (safe: a delta read).
     expect(tickKind(null)).toBe("leads");
+  });
+
+  it("a tick for another table never reaches the open lead page", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    db.reads = 0;
+    render(<LeadLiveRefresh leadId="L1" updatedAt="2026-11-05T10:00:00Z" tagIds={[]} />);
+    ticks.fn!("other");
+    await act(async () => {
+      vi.advanceTimersByTime(LEAD_PAGE_CHECK_DELAY_MS * 2);
+    });
+    expect(db.reads).toBe(0);
+    vi.useRealTimers();
   });
 });
 

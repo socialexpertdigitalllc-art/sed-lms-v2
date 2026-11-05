@@ -48,6 +48,7 @@ export function LeadLiveRefresh({ leadId, updatedAt, tagIds }: { leadId: string;
     };
     const unsubscribe = subscribeLeadsTicks(
       (kind) => {
+        if (kind === "other") return;
         pending = true;
         if (kind === "tags") pendingTags = true;
         if (document.visibilityState === "visible") schedule();

@@ -1,8 +1,8 @@
 # Live leads — load once, then only what changed
 
-Added 2026-11-05 (migration 0097). This replaces "rebuild the whole page on
-every change" on the leads screens: **Leads, HitList, Follow-ups, the
-Dashboard and the lead page.**
+Added 2026-11-05 (migrations 0097, 0098). This replaces "rebuild the whole
+page on every change" on the leads screens: **Leads, HitList, Follow-ups, the
+Dashboard, By Agent and the lead page.**
 
 ## Why
 
@@ -31,6 +31,13 @@ lead page did not update by themselves at all.
 5. **The lead page** checks just that lead's `updated_at` on a tick, and
    refreshes itself only when it moved or its tags changed.
 6. **Sidebar badges** recount on the same tick.
+7. **Follow-ups** (the Dashboard's pickup and follow-up numbers) are a second
+   live copy of the same kind. Follow-ups are only ever added, so its cursor
+   is `created_at`. It is saved as `followups:<user id>` and synced on a
+   `lead_follow_ups` tick.
+8. **Tickets** on the Dashboard are a small table: the page sends them, and
+   the browser re-reads them on a `lead_tickets` tick
+   (`hooks/useTickRefetch.ts`).
 
 ### Timing
 
@@ -71,16 +78,20 @@ lead page did not update by themselves at all.
   `components/leads/LeadLiveRefresh.tsx`.
 - The pages (`app/(app)/leads`, `hitlist`, `leads/follow-ups`, `dashboard`)
   no longer read the leads list on the server.
-- `supabase/migrations/0097_leads_live_ticks.sql`: the tick triggers and the
-  `updated_at` index.
+- `components/leads/ByAgentBoard.tsx`: By Agent on the live copy.
+- `hooks/useTickRefetch.ts`: re-read a small table on its tick.
+- `supabase/migrations/0097_leads_live_ticks.sql`: the tick triggers on
+  `leads` and `lead_tag_links`, and the `updated_at` index.
+  `0098_followups_tickets_live_ticks.sql` adds `lead_follow_ups` and
+  `lead_tickets`.
 
-## Not live yet (phase 2)
+## Still on the older pattern
 
-- The Dashboard's follow-up and ticket numbers update on the next visit,
-  not live. Its lead numbers are live.
-- Pre-leads, Tickets, Feedback and By Agent still use the older
-  refresh-the-page pattern.
-- HitList star changes still refresh the (now small) leads page.
+Pre-leads, the Tickets queue and Feedback still refresh their page on a
+change. Their tables are small, so this stays cheap. HitList star changes
+also refresh the (now small) leads page. The Tickets queue applies its own
+visibility rules on the server, so moving it to the browser needs those rules
+first.
 
 ## When something goes wrong
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   LeadsSync,
+  LiveSync,
   createSyncScheduler,
   permissionFingerprint,
   CACHE_VERSION,
@@ -425,5 +426,64 @@ describe("sync scheduler — when a tick turns into a sync", () => {
     sch.onVisible();
     fireAll();
     expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("live store — an append-only table (follow-ups: created_at cursor)", () => {
+  type Fu = { id: string; created_at: string; fu_status: string; lead_id: string };
+  function fuDb(initial: Fu[]) {
+    const db = { rows: [...initial], reads: { page: 0, since: 0 }, lastSince: "" };
+    const source = {
+      async page(from: number, to: number) {
+        db.reads.page++;
+        return [...db.rows].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(from, to + 1);
+      },
+      async changedSince(since: string, from: number, to: number) {
+        db.reads.since++;
+        db.lastSince = since;
+        return db.rows.filter((r) => r.created_at > since).slice(from, to + 1);
+      },
+      async count() {
+        return db.rows.length;
+      },
+      async ids(from: number, to: number) {
+        return db.rows.map((r) => r.id).sort().slice(from, to + 1);
+      },
+      async byIds(ids: string[]) {
+        return db.rows.filter((r) => ids.includes(r.id));
+      },
+    };
+    return { db, source };
+  }
+  const fu = (id: string, minute: number): Fu => ({ id, created_at: iso(T0 + minute * 60_000), fu_status: "Pickup", lead_id: "L" });
+
+  it("a new follow-up arrives through a 'created since' read; the cursor follows created_at", async () => {
+    const { db, source } = fuDb([fu("f1", 1), fu("f2", 5)]);
+    const s = new LiveSync<Fu>(source, null, "followups:u", "fp", { cursorField: "created_at" });
+    await s.start();
+    db.rows.push(fu("f3", 20));
+    await s.sync();
+    expect(s.getSnapshot().leads.map((r) => r.id)).toEqual(["f3", "f2", "f1"]);
+    expect(db.reads.page).toBe(1);
+    // The cursor moved to f3's created_at, so the next read starts there (minus the overlap).
+    await s.sync();
+    expect(db.lastSince).toBe(iso(T0 + 20 * 60_000 - OVERLAP_MS));
+  });
+
+  it("a removed follow-up is dropped by the count check", async () => {
+    const { db, source } = fuDb([fu("f1", 1), fu("f2", 5)]);
+    const s = new LiveSync<Fu>(source, null, "followups:u", "fp", { cursorField: "created_at" });
+    await s.start();
+    db.rows = db.rows.filter((r) => r.id !== "f1");
+    await s.sync();
+    expect(s.getSnapshot().leads.map((r) => r.id)).toEqual(["f2"]);
+  });
+
+  it("a store without tag links ignores a tags sync", async () => {
+    const { source } = fuDb([fu("f1", 1)]);
+    const s = new LiveSync<Fu>(source, null, "followups:u", "fp", { cursorField: "created_at" });
+    await s.start();
+    await s.sync({ tags: true });
+    expect(s.getSnapshot().status).toBe("ready");
   });
 });

@@ -6,7 +6,6 @@ import { visibleStatuses } from "@/lib/leads/categories";
 import { LiveDashboardBoard } from "@/components/dashboard/LiveDashboardBoard";
 import { getUserDirectory } from "@/lib/users/directory";
 import { getTeamAgentIds } from "@/lib/teams/closers";
-import { fetchAllRows } from "@/lib/supabase/fetchAll";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -36,16 +35,12 @@ export default async function DashboardPage() {
   })();
 
   // Independent reads fire together; salesUsers resolves in parallel. The
-  // leads come from the live leads store in the browser (hooks/useLiveLeads.ts)
-  // — read once, then only what changes — so they are not read here.
-  // Follow-ups come in pages: PostgREST caps one response at 1,000 rows, and
-  // the table is past that (2,404 rows on 2026-11-05 — the pickup-rate and
-  // follow-up numbers were counting only the first 1,000).
-  const [agents, { data: followUps }, { data: tickets }, salesUsers] = await Promise.all([
+  // leads and the follow-ups come from the live stores in the browser
+  // (hooks/useLiveLeads.ts) — read once, then only what changes — so neither
+  // is read here. Tickets are a small table: sent here, and re-read in the
+  // browser when one changes (hooks/useTickRefetch.ts).
+  const [agents, { data: tickets }, salesUsers] = await Promise.all([
     getUserDirectory(),
-    fetchAllRows<{ fu_status: string; lead_id: string }>((from, to) =>
-      supabase.from("lead_follow_ups").select("fu_status, lead_id").order("id").range(from, to),
-    ),
     supabase.from("lead_tickets").select("status, due_date, created_at, resolved_at, lead_id"),
     salesUsersPromise,
   ]);
@@ -75,7 +70,6 @@ export default async function DashboardPage() {
 
   return (
     <LiveDashboardBoard
-      followUps={followUps ?? []}
       tickets={tickets ?? []}
       agentNameById={agentNameById}
       flags={flags}

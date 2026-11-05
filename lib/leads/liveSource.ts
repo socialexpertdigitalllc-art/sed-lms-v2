@@ -1,7 +1,7 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/client";
-import type { CachedLeads, LeadsCache, LeadsSource, SyncRow, TagLink } from "./liveSync";
+import type { CachedRows, LeadsSource, LiveCache, LiveRow, SyncRow, TagLink } from "./liveSync";
 
 /**
  * The live leads store's reads, straight from the browser to Supabase with the
@@ -79,8 +79,10 @@ export function supabaseLeadsSource(client = createClient()): LeadsSource {
 
 const DB_NAME = "sed-lms";
 const STORE = "kv";
-/** Every saved leads copy is keyed `leads:<user id>`. */
+/** Every saved leads copy is keyed `leads:<user id>`, follow-ups `followups:<user id>`. */
 export const LEADS_CACHE_PREFIX = "leads:";
+export const FOLLOWUPS_CACHE_PREFIX = "followups:";
+const CACHE_PREFIXES = [LEADS_CACHE_PREFIX, FOLLOWUPS_CACHE_PREFIX];
 
 function openDb(): Promise<IDBDatabase | null> {
   return new Promise((resolve) => {
@@ -108,14 +110,15 @@ function done(tx: IDBTransaction): Promise<void> {
 }
 
 /** IndexedDB-backed copy. Every failure (private mode, quota, blocked) reads as "no copy". */
-export const idbLeadsCache: LeadsCache = {
+export function idbLiveCache<R extends LiveRow>(): LiveCache<R> {
+  return {
   async load(key) {
     const db = await openDb();
     if (!db) return null;
     try {
-      return await new Promise<CachedLeads | null>((resolve) => {
+      return await new Promise<CachedRows<R> | null>((resolve) => {
         const req = db.transaction(STORE, "readonly").objectStore(STORE).get(key);
-        req.onsuccess = () => resolve((req.result as CachedLeads | undefined) ?? null);
+        req.onsuccess = () => resolve((req.result as CachedRows<R> | undefined) ?? null);
         req.onerror = () => resolve(null);
       });
     } catch {
@@ -135,9 +138,12 @@ export const idbLeadsCache: LeadsCache = {
       db.close();
     }
   },
-};
+  };
+}
 
-/** Forget every saved leads copy on this browser (sign-in page, sign-out). */
+export const idbLeadsCache: LiveCache<SyncRow> = idbLiveCache<SyncRow>();
+
+/** Forget every saved copy (leads, follow-ups) on this browser (sign-in page). */
 export async function clearLeadsCache(): Promise<void> {
   const db = await openDb();
   if (!db) return;
@@ -146,7 +152,7 @@ export async function clearLeadsCache(): Promise<void> {
     const store = tx.objectStore(STORE);
     const req = store.getAllKeys();
     req.onsuccess = () => {
-      for (const k of req.result) if (String(k).startsWith(LEADS_CACHE_PREFIX)) store.delete(k);
+      for (const k of req.result) if (CACHE_PREFIXES.some((p) => String(k).startsWith(p))) store.delete(k);
     };
     await done(tx);
   } catch {
@@ -154,4 +160,48 @@ export async function clearLeadsCache(): Promise<void> {
   } finally {
     db.close();
   }
+}
+
+// ── Follow-ups (append-only: a follow-up is logged, never edited) ───────────
+
+/** The columns the Dashboard's follow-up numbers read. */
+export type FollowUpLive = { id: string; created_at: string; fu_status: string; lead_id: string | null };
+const FU_SELECT = "id, created_at, fu_status, lead_id";
+
+export function supabaseFollowUpsSource(client = createClient()): import("./liveSync").LiveSource<FollowUpLive> {
+  return {
+    async page(from, to) {
+      const res = await client
+        .from("lead_follow_ups")
+        .select(FU_SELECT)
+        .order("created_at", { ascending: false })
+        .order("id")
+        .range(from, to);
+      return check<FollowUpLive[]>(res);
+    },
+    async changedSince(sinceIso, from, to) {
+      const res = await client
+        .from("lead_follow_ups")
+        .select(FU_SELECT)
+        .gt("created_at", sinceIso)
+        .order("created_at")
+        .order("id")
+        .range(from, to);
+      return check<FollowUpLive[]>(res);
+    },
+    async count() {
+      const res = await client.from("lead_follow_ups").select("id", { count: "exact", head: true });
+      if (res.error) throw new Error(res.error.message);
+      return res.count ?? 0;
+    },
+    async ids(from, to) {
+      const res = await client.from("lead_follow_ups").select("id").order("id").range(from, to);
+      return check<{ id: string }[]>(res).map((r) => r.id);
+    },
+    async byIds(ids) {
+      if (!ids.length) return [];
+      const res = await client.from("lead_follow_ups").select(FU_SELECT).in("id", ids);
+      return check<FollowUpLive[]>(res);
+    },
+  };
 }

@@ -28,7 +28,7 @@ function Loading() {
   );
 }
 
-function Failed({ error, retry }: { error: string | null; retry: () => void }) {
+export function LiveLoadFailed({ error, retry }: { error: string | null; retry: () => void }) {
   return (
     <div role="alert" className="bg-surface border border-border rounded-lg p-8 text-center">
       <AlertTriangle className="w-6 h-6 mx-auto text-dropped-fg" />
@@ -48,7 +48,7 @@ function Failed({ error, retry }: { error: string | null; retry: () => void }) {
 /** Renders `children(leads)` once the live copy has data; a skeleton or a retry before. */
 export function LiveLeadsGate({ children, loading }: { children: (leads: Lead[]) => ReactNode; loading?: ReactNode }) {
   const { status, leads, error, retry } = useLiveLeads();
-  if (status === "error") return <Failed error={error} retry={retry} />;
+  if (status === "error") return <LiveLoadFailed error={error} retry={retry} />;
   if (status !== "ready") return <>{loading ?? <Loading />}</>;
   return <>{children(leads)}</>;
 }

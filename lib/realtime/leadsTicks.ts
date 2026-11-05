@@ -23,8 +23,11 @@ import { createClient } from "@/lib/supabase/client";
 export const LEADS_TICK_TOPIC = "lms:leads";
 export const LEADS_TICK_EVENT = "changed";
 
-export type TickKind = "leads" | "tags";
-type TickListener = (kind: TickKind) => void;
+/** "leads" / "tags" for the leads store; "other" for any other table that ticks
+ *  (lead_follow_ups, lead_tickets — migration 0098), whose own stores look at
+ *  the table name. */
+export type TickKind = "leads" | "tags" | "other";
+type TickListener = (kind: TickKind, table: string) => void;
 
 const listeners = new Set<TickListener>();
 const reconnectListeners = new Set<() => void>();
@@ -32,10 +35,16 @@ let channel: RealtimeChannel | null = null;
 let client: ReturnType<typeof createClient> | null = null;
 let subscribedOnce = false;
 
+/** Which table a broadcast payload announces (an unlabelled tick counts as leads). */
+export function tickTable(payload: unknown): string {
+  const table = (payload as { table?: unknown } | null)?.table;
+  return typeof table === "string" && table ? table : "leads";
+}
+
 /** Which kind of change a broadcast payload announces. */
 export function tickKind(payload: unknown): TickKind {
-  const table = (payload as { table?: unknown } | null)?.table;
-  return table === "lead_tag_links" ? "tags" : "leads";
+  const table = tickTable(payload);
+  return table === "lead_tag_links" ? "tags" : table === "leads" ? "leads" : "other";
 }
 
 function open() {
@@ -44,8 +53,10 @@ function open() {
   channel = client.channel(LEADS_TICK_TOPIC);
   channel
     .on("broadcast", { event: LEADS_TICK_EVENT }, (msg) => {
-      const kind = tickKind((msg as { payload?: unknown }).payload);
-      for (const fn of listeners) fn(kind);
+      const payload = (msg as { payload?: unknown }).payload;
+      const kind = tickKind(payload);
+      const table = tickTable(payload);
+      for (const fn of listeners) fn(kind, table);
     })
     .subscribe((status) => {
       if (status !== "SUBSCRIBED") return;

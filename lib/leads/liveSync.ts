@@ -26,6 +26,16 @@ import type { Lead } from "@/lib/leads/types";
  * own beyond the debounced cache save — so it is fully testable with fakes.
  */
 
+/** Any row a live store can keep: an id, a creation time, and optionally an
+ *  edit time, a soft-delete mark and tag ids. */
+export type LiveRow = {
+  id: string;
+  created_at: string;
+  updated_at?: string | null;
+  deleted_at?: string | null;
+  tag_ids?: string[];
+};
+
 /** A lead row as the store keeps it. `deleted_at` set = soft-deleted. */
 export type SyncRow = Lead & { deleted_at?: string | null };
 
@@ -33,41 +43,45 @@ export type TagLink = { lead_id: string; tag_id: string };
 
 /** Where the rows come from (the browser Supabase client in the app). Every
  *  read runs under the viewer's own row-level security. */
-export interface LeadsSource {
-  /** Visible, not-deleted leads, one inclusive page, newest first (created_at desc, id). */
-  page(from: number, to: number): Promise<SyncRow[]>;
-  /** Visible rows changed after `sinceIso`, deleted ones INCLUDED, one page ordered by updated_at, id. */
-  changedSince(sinceIso: string, from: number, to: number): Promise<SyncRow[]>;
-  /** How many visible, not-deleted leads there are right now. */
+export interface LiveSource<R extends LiveRow> {
+  /** Visible, not-deleted rows, one inclusive page, newest first (created_at desc, id). */
+  page(from: number, to: number): Promise<R[]>;
+  /** Visible rows changed (or, for an append-only table, created) after
+   *  `sinceIso`, deleted ones INCLUDED, one page ordered by that column, id. */
+  changedSince(sinceIso: string, from: number, to: number): Promise<R[]>;
+  /** How many visible, not-deleted rows there are right now. */
   count(): Promise<number>;
-  /** Visible, not-deleted lead ids, one page ordered by id. */
+  /** Visible, not-deleted ids, one page ordered by id. */
   ids(from: number, to: number): Promise<string[]>;
-  /** These visible leads, in full. */
-  byIds(ids: string[]): Promise<SyncRow[]>;
-  /** Every tag link the viewer can see, one page. */
-  tagLinks(from: number, to: number): Promise<TagLink[]>;
+  /** These visible rows, in full. */
+  byIds(ids: string[]): Promise<R[]>;
+  /** Every tag link the viewer can see, one page (leads only). */
+  tagLinks?(from: number, to: number): Promise<TagLink[]>;
 }
+export type LeadsSource = LiveSource<SyncRow>;
 
-export interface CachedLeads {
+export interface CachedRows<R extends LiveRow> {
   v: number;
   fingerprint: string;
   cursor: string | null;
   savedAt: number;
-  rows: SyncRow[];
+  rows: R[];
 }
+export type CachedLeads = CachedRows<SyncRow>;
 
 /** The browser copy between visits (IndexedDB in the app). */
-export interface LeadsCache {
-  load(key: string): Promise<CachedLeads | null>;
-  save(key: string, value: CachedLeads): Promise<void>;
+export interface LiveCache<R extends LiveRow> {
+  load(key: string): Promise<CachedRows<R> | null>;
+  save(key: string, value: CachedRows<R>): Promise<void>;
 }
+export type LeadsCache = LiveCache<SyncRow>;
 
 export type LiveStatus = "idle" | "loading" | "ready" | "error";
 
-export interface LiveSnapshot {
+export interface LiveSnapshot<R extends LiveRow = Lead> {
   status: LiveStatus;
   /** Newest first: created_at desc, then id — the order the pages always used. */
-  leads: Lead[];
+  leads: R[];
   /** The last sync's error. Kept alongside data when a background sync fails. */
   error: string | null;
   /** True while showing the saved copy before the first sync has confirmed it. */
@@ -88,6 +102,9 @@ export const CACHE_VERSION = 1;
 export const BY_IDS_CHUNK = 100;
 
 export type SyncOptions = {
+  /** Which column moves when a row changes: `updated_at` (default) or, for an
+   *  append-only table with no edit time, `created_at`. */
+  cursorField?: "updated_at" | "created_at";
   now?: () => number;
   saveDelayMs?: number;
   setTimer?: (fn: () => void, ms: number) => unknown;
@@ -102,7 +119,7 @@ function sameTags(a: string[] | undefined, b: string[] | undefined): boolean {
   return true;
 }
 
-function byNewest(a: Lead, b: Lead): number {
+function byNewest(a: LiveRow, b: LiveRow): number {
   if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
@@ -120,11 +137,11 @@ async function allPages<T>(page: (from: number, to: number) => Promise<T[]>): Pr
   }
 }
 
-export class LeadsSync {
-  private rows = new Map<string, SyncRow>();
+export class LiveSync<R extends LiveRow> {
+  private rows = new Map<string, R>();
   /** Newest updated_at seen, in ms. Null until the first full read. */
   private cursor: number | null = null;
-  private snapshot: LiveSnapshot = { status: "idle", leads: [], error: null, fromCache: false };
+  private snapshot: LiveSnapshot<R> = { status: "idle", leads: [], error: null, fromCache: false };
   private listeners = new Set<() => void>();
   private running: Promise<void> | null = null;
   private again = false;
@@ -136,23 +153,25 @@ export class LeadsSync {
   private readonly saveDelayMs: number;
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
   private readonly clearTimer: (t: unknown) => void;
+  private readonly cursorField: "updated_at" | "created_at";
   /** When the last sync finished (ms) — for "sync again on focus if stale". */
   lastSyncAt = 0;
 
   constructor(
-    private readonly src: LeadsSource,
-    private readonly cache: LeadsCache | null,
+    private readonly src: LiveSource<R>,
+    private readonly cache: LiveCache<R> | null,
     private readonly key: string,
     private readonly fingerprint: string,
     opts: SyncOptions = {},
   ) {
+    this.cursorField = opts.cursorField ?? "updated_at";
     this.now = opts.now ?? Date.now;
     this.saveDelayMs = opts.saveDelayMs ?? 1500;
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
   }
 
-  getSnapshot = (): LiveSnapshot => this.snapshot;
+  getSnapshot = (): LiveSnapshot<R> => this.snapshot;
 
   subscribe = (fn: () => void): (() => void) => {
     this.listeners.add(fn);
@@ -168,7 +187,7 @@ export class LeadsSync {
   }
 
   private async boot(): Promise<void> {
-    let cached: CachedLeads | null = null;
+    let cached: CachedRows<R> | null = null;
     try {
       cached = (await this.cache?.load(this.key)) ?? null;
     } catch {
@@ -244,7 +263,7 @@ export class LeadsSync {
     for (const r of rows) {
       if (r.deleted_at) continue;
       this.rows.set(r.id, r);
-      const t = Date.parse(r.updated_at ?? r.created_at);
+      const t = this.stamp(r);
       if (!Number.isNaN(t) && t > max) max = t;
     }
     // An empty list still needs a cursor, or every sync would re-read everything.
@@ -259,11 +278,16 @@ export class LeadsSync {
     return this.apply(rows);
   }
 
+  /** The row's position on the cursor's clock. */
+  private stamp(r: R): number {
+    return Date.parse((this.cursorField === "updated_at" ? r.updated_at : null) ?? r.created_at);
+  }
+
   /** Merge rows; true when anything on screen would change. */
-  private apply(rows: SyncRow[]): boolean {
+  private apply(rows: R[]): boolean {
     let changed = false;
     for (const r of rows) {
-      const t = Date.parse(r.updated_at ?? "");
+      const t = this.stamp(r);
       if (!Number.isNaN(t) && (this.cursor === null || t > this.cursor)) this.cursor = t;
       if (r.deleted_at) {
         if (this.rows.delete(r.id)) changed = true;
@@ -297,7 +321,9 @@ export class LeadsSync {
 
   /** A tag was added or removed somewhere: re-read the (small) tag link list. */
   private async refreshTags(): Promise<boolean> {
-    const links = await allPages((f, t) => this.src.tagLinks(f, t));
+    const tagLinks = this.src.tagLinks?.bind(this.src);
+    if (!tagLinks) return false;
+    const links = await allPages((f, t) => tagLinks(f, t));
     const byLead = new Map<string, string[]>();
     for (const l of links) {
       const list = byLead.get(l.lead_id);
@@ -314,10 +340,10 @@ export class LeadsSync {
     return changed;
   }
 
-  private publish(patch: Partial<Omit<LiveSnapshot, "leads">>, rowsChanged = false): void {
+  private publish(patch: Partial<Omit<LiveSnapshot<R>, "leads">>, rowsChanged = false): void {
     if (this.disposed) return;
     const leads = rowsChanged || this.snapshot.status !== "ready" ? [...this.rows.values()].sort(byNewest) : this.snapshot.leads;
-    const next: LiveSnapshot = { ...this.snapshot, ...patch, leads };
+    const next: LiveSnapshot<R> = { ...this.snapshot, ...patch, leads };
     const same =
       next.status === this.snapshot.status &&
       next.error === this.snapshot.error &&
@@ -360,6 +386,9 @@ export class LeadsSync {
     this.listeners.clear();
   }
 }
+
+/** The leads store: a LiveSync over lead rows (with tags). */
+export class LeadsSync extends LiveSync<SyncRow> {}
 
 /** Identifies "same person, same permissions" for the saved copy. A
  *  permission change throws the copy away and reads afresh. */
