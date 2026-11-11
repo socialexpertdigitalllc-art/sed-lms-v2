@@ -1,5 +1,6 @@
 -- 0099_everything_live_ticks.sql — every table a screen shows announces its changes.
--- ADDITIVE ONLY (shared prod DB): two functions, triggers, one trigger swapped.
+-- ADDITIVE ONLY (shared prod DB): three functions, triggers, one trigger swapped
+-- (create or replace trigger: re-runnable, no drops).
 --
 -- Each table gets its own Realtime topic, 'lms:t:<table>', so a screen only
 -- hears about the tables it shows (components/layout/LiveRouteRefresh.tsx and
@@ -85,8 +86,7 @@ revoke all on function public.broadcast_row_tick() from public, anon, authentica
 revoke all on function public.broadcast_table_tick() from public, anon, authenticated;
 revoke all on function public.broadcast_leads_row_tick() from public, anon, authenticated;
 
-drop trigger if exists trg_lead_tickets_live_tick on public.lead_tickets;
-create trigger trg_lead_tickets_live_tick
+create or replace trigger trg_lead_tickets_live_tick
   after insert or update or delete on public.lead_tickets
   for each row execute function public.broadcast_leads_row_tick();
 
@@ -109,15 +109,13 @@ declare
   statement_tables text[] := array['activity_log','builder_runs','assistant_actions'];
 begin
   foreach t in array row_tables loop
-    execute format('drop trigger if exists %I on public.%I', 'trg_' || t || '_live_tick', t);
     execute format(
-      'create trigger %I after insert or update or delete on public.%I for each row execute function public.broadcast_row_tick()',
+      'create or replace trigger %I after insert or update or delete on public.%I for each row execute function public.broadcast_row_tick()',
       'trg_' || t || '_live_tick', t);
   end loop;
   foreach t in array statement_tables loop
-    execute format('drop trigger if exists %I on public.%I', 'trg_' || t || '_live_tick', t);
     execute format(
-      'create trigger %I after insert or update or delete on public.%I for each statement execute function public.broadcast_table_tick()',
+      'create or replace trigger %I after insert or update or delete on public.%I for each statement execute function public.broadcast_table_tick()',
       'trg_' || t || '_live_tick', t);
   end loop;
 end $$;
