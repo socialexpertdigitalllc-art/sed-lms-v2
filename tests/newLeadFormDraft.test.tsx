@@ -163,14 +163,51 @@ describe("New Lead form — category and instructions", () => {
     expect(screen.getByText(/Please choose the business category/)).toBeTruthy();
   });
 
-  it("instructions are added one item at a time, with a 50-word counter", () => {
+  it("instructions are added one item at a time, with a 20-word / 146-character counter", () => {
     render(<NewLeadForm {...props} />);
     const list = screen.getByTestId("instructions-list");
     fireEvent.change(within(list).getByLabelText("Instruction 1"), { target: { value: "Sticky header on mobile" } });
     fireEvent.click(within(list).getByRole("button", { name: /Add instruction/ }));
     const second = within(list).getByLabelText("Instruction 2");
-    fireEvent.change(second, { target: { value: Array.from({ length: 51 }, () => "word").join(" ") } });
-    expect(within(list).getByText(/51\/50 words/)).toBeTruthy();
-    expect(within(list).getByText(/4\/50 words/)).toBeTruthy();
+    fireEvent.change(second, { target: { value: Array.from({ length: 21 }, () => "word").join(" ") } });
+    expect(within(list).getByText(/21\/20 words/)).toBeTruthy();
+    expect(within(list).getByText(/4\/20 words · 23\/146 characters/)).toBeTruthy();
+    expect(within(list).getByLabelText("Instruction 1")).toHaveAttribute("maxLength", "146");
+  });
+});
+
+describe("New Lead form — No Platform and See Instructions", () => {
+  it("No Platform hides the link and platform choices and lets the lead through without them", async () => {
+    putDraft({ ...validDraft(), platform: "", business_profile_link: "" });
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) =>
+      String(url) === "/api/leads" ? new Response(JSON.stringify({ id: "x", body: init?.body })) : new Response("{}"),
+    ));
+    render(<NewLeadForm {...props} />);
+    fireEvent.click(screen.getByLabelText("No Platform"));
+    expect(screen.queryByPlaceholderText(/Paste the profile link/i)).toBeNull();
+    expect(screen.getByTestId("no-platform-note")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /Submit Lead/ })[0]);
+    });
+    const call = (fetch as unknown as { mock: { calls: [RequestInfo, RequestInit?][] } }).mock.calls.find(([u]) => String(u) === "/api/leads");
+    expect(call).toBeTruthy();
+    expect(JSON.parse(String(call![1]!.body))).toMatchObject({ no_platform: true, platform: null, business_profile_link: null });
+  });
+
+  it("See Instructions swaps the colour box for a note, and asks for the ideas in the instructions", async () => {
+    putDraft({ ...validDraft(), color_scheme: "" });
+    render(<NewLeadForm {...props} />);
+    fireEvent.click(screen.getByLabelText("See Instructions"));
+    expect(screen.getByTestId("color-see-instructions-note")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /Submit Lead/ })[0]);
+    });
+    expect(screen.getByText(/Add the client's colour ideas here/)).toBeTruthy();
+  });
+
+  it("a new form starts with Service Areas = No and Direct Line saved = Yes", () => {
+    render(<NewLeadForm {...props} />);
+    const pressed = screen.getAllByRole("button", { pressed: true }).map((b) => b.textContent);
+    expect(pressed).toEqual(expect.arrayContaining(["No", "Yes"]));
   });
 });

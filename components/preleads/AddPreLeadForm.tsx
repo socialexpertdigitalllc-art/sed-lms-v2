@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Briefcase, Building2, CalendarClock, ArrowLeft, Check, AlertTriangle } from "lucide-react";
-import { DateTimeField } from "@/components/common/DateTimeField";
+import { DateTimePicker } from "@/components/common/DateTimeField";
 import {
   LEAD_CATEGORIES,
   SERVICE_OFFERED,
@@ -271,7 +271,7 @@ export function AddPreLeadForm({ canOverrideDuplicate }: { canOverrideDuplicate:
                 <input type="number" min={0} step="0.01" value={f.pricing} onChange={(e) => set("pricing", e.target.value)} placeholder="Estimated value" className={inputCls} />
               </F>
               <F error={errors.follow_up_time} label="Follow-up Date & Time" required>
-                <DateTimeField aria-label="Follow-up" value={f.follow_up_time} onChange={(v) => set("follow_up_time", v)} className={inputCls} />
+                <DateTimePicker aria-label="Follow-up" value={f.follow_up_time} onChange={(v) => set("follow_up_time", v)} className={inputCls} />
               </F>
               <F error={errors.lead_category} label="Lead Category" required>
                 <select value={f.lead_category} onChange={(e) => set("lead_category", e.target.value)} className={inputCls}>

@@ -36,8 +36,11 @@ export function leadPayloadErrors(p: Payload, now: Date = new Date()): Record<st
   if (instrErr) e.developer_instructions = instrErr;
   if (!PHONE_RE.test(text(p.business_phone))) e.business_phone = "Enter a valid phone: (252) 401-2775";
   if (p.no_email !== true && !EMAIL_RE.test(text(p.business_email))) e.business_email = "Enter a valid email address (or mark the lead as having no email).";
-  if (!text(p.platform)) e.platform = "Select a platform.";
-  if (!text(p.business_profile_link)) e.business_profile_link = "Profile link is required.";
+  // "No Platform" ticked: no listing, so neither is expected.
+  if (p.no_platform !== true) {
+    if (!text(p.platform)) e.platform = "Select a platform.";
+    if (!text(p.business_profile_link)) e.business_profile_link = "Profile link is required.";
+  }
   if (typeof p.has_service_areas !== "boolean") e.has_service_areas = "Say whether the business has service areas.";
   if (p.has_service_areas === true && list(p.service_areas).length === 0) e.service_areas = "At least one service area is required.";
   if (list(p.services).length === 0) e.services = "At least one service is required.";
@@ -47,11 +50,17 @@ export function leadPayloadErrors(p: Payload, now: Date = new Date()): Record<st
   const pages = typeof p.num_webpages === "number" ? p.num_webpages : 0;
   if (pages < 1 || list(p.specify_pages).length === 0) e.specify_pages = "Select at least one page.";
 
-  const scheme = text(p.color_scheme);
-  const colors = parseColorScheme(scheme).length;
-  if (!scheme) e.color_scheme = "Color scheme is required.";
-  else if (colors < MIN_COLORS) e.color_scheme = `Enter at least ${MIN_COLORS} colours.`;
-  else if (colors > MAX_COLORS) e.color_scheme = `Enter at most ${MAX_COLORS} colours.`;
+  // "See Instructions" ticked: no colours — the ideas must be in the instructions.
+  if (p.color_see_instructions === true) {
+    if (parseInstructions(text(p.developer_instructions)).length === 0)
+      e.developer_instructions = "Add the client's colour ideas to the developer instructions.";
+  } else {
+    const scheme = text(p.color_scheme);
+    const colors = parseColorScheme(scheme).length;
+    if (!scheme) e.color_scheme = "Color scheme is required.";
+    else if (colors < MIN_COLORS) e.color_scheme = `Enter at least ${MIN_COLORS} colours.`;
+    else if (colors > MAX_COLORS) e.color_scheme = `Enter at most ${MAX_COLORS} colours.`;
+  }
 
   if (list(p.design_reference_links).some((u) => !URL_RE.test(String(u).trim()))) e.design_reference_links = "Enter valid URLs.";
 

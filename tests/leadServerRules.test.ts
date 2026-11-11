@@ -104,8 +104,24 @@ describe("server-side New Lead rules — category and developer instructions", (
   it("instructions arrive as a list; an item over 50 words is refused", () => {
     const ok = buildLeadPayload(validForm({ developer_instructions: ["Sticky header", "Team photo on About"] }), { userId: "u1" });
     expect(leadPayloadErrors(ok, NOW)).toEqual({});
-    const long = Array.from({ length: 51 }, (_, i) => `w${i}`).join(" ");
+    const long = Array.from({ length: 21 }, (_, i) => `w${i}`).join(" ");
     const bad = buildLeadPayload(validForm({ developer_instructions: ["Fine", long] }), { userId: "u1" });
-    expect(leadPayloadErrors(bad, NOW).developer_instructions).toMatch(/Instruction 2 is 51 words/);
+    expect(leadPayloadErrors(bad, NOW).developer_instructions).toMatch(/Instruction 2 is 21 words/);
+  });
+});
+
+describe("server-side New Lead rules — No Platform and See Instructions", () => {
+  it("No Platform: no platform or link needed", () => {
+    const p = buildLeadPayload(validForm({ no_platform: true, platform: "", business_profile_link: "" }), { userId: "u1" });
+    expect(leadPayloadErrors(p, NOW)).toEqual({});
+    const without = { ...p, no_platform: false };
+    expect(Object.keys(leadPayloadErrors(without, NOW))).toEqual(expect.arrayContaining(["platform", "business_profile_link"]));
+  });
+
+  it("See Instructions: no colours needed, but instructions are", () => {
+    const ok = buildLeadPayload(validForm({ color_see_instructions: true, color_scheme: "", developer_instructions: ["Pastel blues"] }), { userId: "u1" });
+    expect(leadPayloadErrors(ok, NOW)).toEqual({});
+    const none = buildLeadPayload(validForm({ color_see_instructions: true, color_scheme: "", developer_instructions: [""] }), { userId: "u1" });
+    expect(leadPayloadErrors(none, NOW).developer_instructions).toMatch(/colour ideas/);
   });
 });

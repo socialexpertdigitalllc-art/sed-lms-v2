@@ -2,11 +2,11 @@
 
 import { Plus, X } from "lucide-react";
 import { inputCls } from "@/components/forms/Field";
-import { MAX_INSTRUCTION_ITEMS, MAX_INSTRUCTION_WORDS, wordCount } from "@/lib/leads/devInstructions";
+import { MAX_INSTRUCTION_CHARS, MAX_INSTRUCTION_ITEMS, MAX_INSTRUCTION_WORDS, wordCount } from "@/lib/leads/devInstructions";
 
 /**
  * Instructions for the developer, one item at a time: each item is a line of
- * at most 50 words, numbered as the developer will read it. "Add instruction"
+ * at most 20 words and 146 characters, numbered as the developer will read it. "Add instruction"
  * adds the next item; the × removes one. Enter in an item jumps to a new one.
  */
 export function InstructionsList({ items, onChange }: { items: string[]; onChange: (items: string[]) => void }) {
@@ -26,7 +26,7 @@ export function InstructionsList({ items, onChange }: { items: string[]; onChang
     <div className="space-y-2" data-testid="instructions-list">
       {list.map((item, i) => {
         const words = wordCount(item);
-        const over = words > MAX_INSTRUCTION_WORDS;
+        const over = words > MAX_INSTRUCTION_WORDS || item.length > MAX_INSTRUCTION_CHARS;
         return (
           <div key={i} className="flex items-start gap-2">
             <span className="mt-2 w-6 shrink-0 text-right font-mono text-xs text-text-faint">{i + 1}.</span>
@@ -34,6 +34,7 @@ export function InstructionsList({ items, onChange }: { items: string[]; onChang
               <textarea
                 value={item}
                 rows={1}
+                maxLength={MAX_INSTRUCTION_CHARS}
                 aria-label={`Instruction ${i + 1}`}
                 placeholder={i === 0 ? "e.g., Keep the booking button in the header on mobile" : "Next instruction"}
                 onChange={(e) => setAt(i, e.target.value)}
@@ -46,7 +47,8 @@ export function InstructionsList({ items, onChange }: { items: string[]; onChang
                 className={inputCls + " min-h-[38px] resize-y" + (over ? " border-dropped-fg focus:ring-dropped-fg" : "")}
               />
               <div className={"mt-0.5 text-right text-[11px] " + (over ? "font-medium text-dropped-fg" : "text-text-faint")}>
-                {words}/{MAX_INSTRUCTION_WORDS} words{over ? " — shorten this one or split it in two" : ""}
+                {words}/{MAX_INSTRUCTION_WORDS} words · {item.length}/{MAX_INSTRUCTION_CHARS} characters
+                {over ? " — shorten this one or split it in two" : ""}
               </div>
             </div>
             <button

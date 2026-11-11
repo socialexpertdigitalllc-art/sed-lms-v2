@@ -6,7 +6,7 @@ import { endsFollowUps, validateFollowUp } from "@/lib/leads/followups";
 import { settableStatuses } from "@/lib/leads/categories";
 import { usePermissions } from "@/hooks/usePermissions";
 import { inOffset } from "@/lib/dates/datetimeLocal";
-import { DateTimeField } from "@/components/common/DateTimeField";
+import { DateTimePicker } from "@/components/common/DateTimeField";
 import { RadioPillGroup } from "@/components/forms/RadioPillGroup";
 import { inputCls } from "@/components/forms/Field";
 import { syncLeadsNow } from "@/hooks/useLiveLeads";
@@ -212,7 +212,7 @@ export function FollowUpModal({
                   </button>
                 ))}
               </div>
-              <DateTimeField
+              <DateTimePicker
                 aria-label="Next follow-up"
                 className={inputCls}
                 value={next_follow_up_time}

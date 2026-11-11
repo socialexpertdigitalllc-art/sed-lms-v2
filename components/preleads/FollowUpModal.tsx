@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { DateTimeField } from "@/components/common/DateTimeField";
+import { DateTimePicker } from "@/components/common/DateTimeField";
 import { useRouter } from "next/navigation";
 import {
   PreLead,
@@ -183,7 +183,7 @@ export function FollowUpModal({
                 ))}
               </div>
               <div className="mt-1.5">
-                <DateTimeField
+                <DateTimePicker
                   aria-label="Follow-up"
                   value={followUpTime}
                   onChange={(v) => {

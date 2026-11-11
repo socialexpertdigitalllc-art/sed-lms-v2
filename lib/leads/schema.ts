@@ -24,6 +24,8 @@ export const leadFieldsSchema = z.object({
 
   site_type: optional(z.enum(SITE_TYPES).nullable()),
   platform: optStr,
+  /** "No Platform" ticked: no listing, so platform and profile link are empty on purpose. */
+  no_platform: z.boolean().optional(),
   custom_area: optStr,
   category: optStr,
   services: z.array(z.string()).nullable().optional(),
@@ -33,6 +35,8 @@ export const leadFieldsSchema = z.object({
   num_webpages: optInt,
   specify_pages: z.array(z.string()).nullable().optional(),
   color_scheme: optStr,
+  /** "See Instructions" ticked: colour ideas are in developer_instructions. */
+  color_see_instructions: z.boolean().optional(),
 
   price_quoted: optNum,
   yearly_price: optStr,

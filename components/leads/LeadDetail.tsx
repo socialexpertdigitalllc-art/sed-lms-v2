@@ -478,7 +478,13 @@ export function LeadDetail({
                 }
               />
               <FieldRow label="Site type" value={lead.site_type ?? ""} type="select" options={[{ value: "", label: "—" }, ...SITE_TYPES.map((s) => ({ value: s, label: s }))]} canEdit={canEdit} onSave={(v) => patch({ site_type: v || null })} />
-              <FieldRow label="Platform" value={lead.platform ?? ""} canEdit={canEdit} onSave={(v) => patch({ platform: nz(v) })} />
+              <FieldRow
+                label="Platform"
+                value={lead.platform ?? ""}
+                display={!lead.platform && lead.no_platform ? muted("No platform — the business has no listing") : undefined}
+                canEdit={canEdit}
+                onSave={(v) => patch({ platform: nz(v) })}
+              />
               <FieldRow label="Price quoted" value={lead.price_quoted?.toString() ?? ""} type="number" display={lead.price_quoted != null ? formatCurrency(lead.price_quoted) : undefined} canEdit={canEdit} onSave={(v) => patch({ price_quoted: num(v) })} />
               {addOns.length > 0 ? (
                 <FieldRow
@@ -551,7 +557,9 @@ export function LeadDetail({
                     ? muted("Was: same as logo — set explicit colours")
                     : lead.color_scheme
                       ? <ColorSchemeSwatches value={lead.color_scheme} />
-                      : undefined
+                      : lead.color_see_instructions
+                        ? muted("See instructions — the client's colour ideas are in Instructions for developer")
+                        : undefined
                 }
                 canEdit={canEdit}
                 onSave={(v) => patch({ color_scheme: nz(v) })}

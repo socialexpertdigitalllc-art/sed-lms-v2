@@ -46,7 +46,7 @@ import { SocialProfilesField } from "@/components/forms/SocialProfilesField";
 import { TemplateRecommendation } from "@/components/leads/TemplateRecommendation";
 import { AreaChip, CategoryChip } from "@/components/leads/HeaderChips";
 import { stateOfPhone } from "@/lib/geo/areaCodes";
-import { DateTimeField } from "@/components/common/DateTimeField";
+import { DateTimePicker } from "@/components/common/DateTimeField";
 import { ConditionalBlock } from "@/components/forms/ConditionalBlock";
 import { RatingGroup } from "@/components/forms/RatingGroup";
 import { SectionCard, FieldBlock as F, FieldError, SummaryRow } from "@/components/forms/formShell";
@@ -187,6 +187,29 @@ function NewLeadFormBody({
   }
   const detectedPlatform = platformFromLink(f.business_profile_link);
 
+  /** "No Platform": the business has no listing, so platform and link aren't asked for. */
+  function toggleNoPlatform(on: boolean) {
+    set("no_platform", on);
+    setErrors((p) => {
+      const n = { ...p };
+      delete n.platform;
+      delete n.business_profile_link;
+      delete n.other_platform;
+      return n;
+    });
+  }
+
+  /** "See Instructions": no colours; the client's colour ideas go in the developer instructions. */
+  function toggleColorSeeInstructions(on: boolean) {
+    set("color_see_instructions", on);
+    setErrors((p) => {
+      const n = { ...p };
+      delete n.color_scheme;
+      delete n.developer_instructions;
+      return n;
+    });
+  }
+
   /** Throw the draft away on purpose: every field back to blank. */
   function clearForm() {
     if (!window.confirm("Clear every field of this lead? What you've filled in will be deleted.")) return;
@@ -311,7 +334,7 @@ function NewLeadFormBody({
     // down the check reports `aiUnavailable` and the deterministic rules —
     // already inside validateNewLead / the hook's issues — are the whole gate.
     colorCheck.checkNow();
-    if (colorBlocked && !errs.color_scheme) {
+    if (colorBlocked && !errs.color_scheme && !f.color_see_instructions) {
       errs.color_scheme = colorCheck.issues[0] ?? "That is not a usable colour scheme.";
     }
     setErrors(errs);
@@ -673,7 +696,22 @@ function NewLeadFormBody({
                 )}
               </F>
             </div>
-            <F error={errors.platform} label="Platform" required hint="Paste the profile link — the platform fills in by itself from the link's website.">
+            <F error={errors.platform} label="Platform" required={!f.no_platform} hint={f.no_platform ? undefined : "Paste the profile link — the platform fills in by itself from the link's website."}>
+              <label className="mb-1.5 flex items-center gap-1.5 text-xs text-text-muted">
+                <input
+                  type="checkbox"
+                  checked={f.no_platform}
+                  onChange={(e) => toggleNoPlatform(e.target.checked)}
+                  className="accent-accent"
+                />
+                No Platform
+              </label>
+              {f.no_platform ? (
+                <p className="rounded-md bg-surface-2 px-3 py-2 text-xs text-text-muted" data-testid="no-platform-note">
+                  This business has no listing on Google, Yelp or anywhere else.
+                </p>
+              ) : (
+              <>
               <div className="mb-3" data-error={errors.business_profile_link ? "true" : undefined}>
                 <input value={f.business_profile_link} onChange={(e) => setProfileLink(e.target.value)} placeholder="Paste the profile link (Google Maps, Yelp, …)" className={inputCls} />
                 <FieldError error={errors.business_profile_link} />
@@ -690,6 +728,8 @@ function NewLeadFormBody({
                   <FieldError error={errors.other_platform} />
                 </div>
               </ConditionalBlock>
+              </>
+              )}
             </F>
             <F error={errors.social_profiles} label="Social Profiles (optional)" hint="Add as many as the business has.">
               <SocialProfilesField values={f.social_profiles} onChange={(v) => set("social_profiles", v)} />
@@ -746,13 +786,34 @@ function NewLeadFormBody({
               </ConditionalBlock>
             </F>
             <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
-              <F error={errors.color_scheme} label="Color Scheme" required hint={`${MIN_COLORS}–${MAX_COLORS} colours. Enter the client's main colour and we'll recommend the match.`}>
-                <ColorSchemeField
-                  value={f.color_scheme}
-                  onChange={(v) => set("color_scheme", v)}
-                  check={colorCheck}
-                  context={colorContext}
-                />
+              <F
+                error={errors.color_scheme}
+                label="Color Scheme"
+                required={!f.color_see_instructions}
+                hint={f.color_see_instructions ? undefined : `${MIN_COLORS}–${MAX_COLORS} colours. Enter the client's main colour and we'll recommend the match.`}
+              >
+                <label className="mb-1.5 flex items-center gap-1.5 text-xs text-text-muted">
+                  <input
+                    type="checkbox"
+                    checked={f.color_see_instructions}
+                    onChange={(e) => toggleColorSeeInstructions(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  See Instructions
+                </label>
+                {f.color_see_instructions ? (
+                  <p className="rounded-md bg-surface-2 px-3 py-2 text-xs text-text-muted" data-testid="color-see-instructions-note">
+                    No set colours — the developer will follow the client&apos;s colour ideas. Add them to{" "}
+                    <span className="font-medium text-text">Instructions for Developer</span> below.
+                  </p>
+                ) : (
+                  <ColorSchemeField
+                    value={f.color_scheme}
+                    onChange={(v) => set("color_scheme", v)}
+                    check={colorCheck}
+                    context={colorContext}
+                  />
+                )}
               </F>
               <F error={errors.logo_link} label="Logo Link">
                 <label className="mb-1.5 flex items-center gap-1.5 text-xs text-text-muted">
@@ -794,7 +855,7 @@ function NewLeadFormBody({
             <F
               error={errors.developer_instructions}
               label="Instructions for Developer (optional)"
-              hint="One instruction per item, up to 50 words each — anything you promised the client that the build has to honour. The developer gets them as a numbered list."
+              hint="One instruction per item, up to 20 words (146 characters) each — anything you promised the client that the build has to honour. The developer gets them as a numbered list."
             >
               <div data-error={errors.developer_instructions ? "true" : undefined}>
                 <InstructionsList items={f.developer_instructions} onChange={(v) => set("developer_instructions", v)} />
@@ -813,7 +874,7 @@ function NewLeadFormBody({
 
           <SectionCard n={5} icon={DollarSign} title="Pricing & Follow Up" subtitle="Commercials & next touch" done={sectionDone("pricing")} delay={showAssignment ? 300 : 240}>
             <F error={errors.follow_up_time} label="Follow Up Time" required>
-              <DateTimeField aria-label="Follow up" value={f.follow_up_time} onChange={(v) => set("follow_up_time", v)} className={inputCls} />
+              <DateTimePicker aria-label="Follow up" value={f.follow_up_time} onChange={(v) => set("follow_up_time", v)} className={inputCls} />
             </F>
             <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
               <F error={errors.price_quoted} label="Price Quoted" required>

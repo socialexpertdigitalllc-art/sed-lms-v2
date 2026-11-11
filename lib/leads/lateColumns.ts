@@ -17,6 +17,8 @@ export const LATE_LEAD_COLUMNS = [
   "recommended_template_id",
   "custom_area",
   "category",
+  "no_platform",
+  "color_see_instructions",
 ] as const;
 
 /**

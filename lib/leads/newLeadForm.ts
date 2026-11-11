@@ -1,6 +1,6 @@
 import { PHONE_RE } from "@/lib/forms/phone";
 import { MAX_COLORS, MIN_COLORS, parseColorScheme } from "@/lib/leads/colorScheme";
-import { formatInstructions, instructionsError } from "@/lib/leads/devInstructions";
+import { formatInstructions, instructionItems, instructionsError } from "@/lib/leads/devInstructions";
 import type { AddOn, SocialProfile } from "@/lib/leads/types";
 
 export const PAGE_OPTIONS = [
@@ -31,6 +31,8 @@ export interface NewLeadFormState {
   business_email: string;
   platform: string;
   other_platform: string;
+  /** "No Platform": the business has no listing anywhere. */
+  no_platform: boolean;
   /** Manual area (US state) override — the customer whose phone's area code
    *  is not where they actually are. Optional; empty = derive from phone. */
   custom_area: string;
@@ -45,6 +47,8 @@ export interface NewLeadFormState {
   specify_pages: string[];
   other_page: string;
   color_scheme: string;
+  /** "See Instructions": colour ideas are in the developer instructions instead. */
+  color_see_instructions: boolean;
   logo_link: string;
   logo_via_sms: boolean;
   image_links: string[];
@@ -85,17 +89,20 @@ export function emptyNewLead(status: string): NewLeadFormState {
     business_email: "",
     platform: "",
     other_platform: "",
+    no_platform: false,
     custom_area: "",
     category: "",
     business_profile_link: "",
     map_embed_link: "",
-    has_service_areas: "",
+    // Most businesses have none: "No" is the starting answer.
+    has_service_areas: "No",
     areas: [],
     services: [""],
     client_experience: "",
     specify_pages: ["Home"],
     other_page: "",
     color_scheme: "",
+    color_see_instructions: false,
     logo_link: "",
     logo_via_sms: false,
     image_links: [""],
@@ -106,7 +113,7 @@ export function emptyNewLead(status: string): NewLeadFormState {
     price_custom: "",
     yearly_price: "",
     yearly_custom: "",
-    direct_line_saved: "",
+    direct_line_saved: "Yes",
     reference_link: "",
     about_business: "",
     developer_instructions: [""],
@@ -173,10 +180,12 @@ export function validateNewLead(
     e.business_phone = "Enter a valid phone: (252) 401-2775";
   if (!f.no_email && !EMAIL_RE.test(f.business_email.trim()))
     e.business_email = "Enter a valid email address.";
-  if (!f.platform) e.platform = "Please select a platform.";
-  if (!f.business_profile_link.trim()) e.business_profile_link = "Profile link is required.";
-  if (f.platform === "Other" && !f.other_platform.trim())
-    e.other_platform = "Platform name is required when selecting Other.";
+  if (!f.no_platform) {
+    if (!f.platform) e.platform = "Please select a platform, or tick No Platform.";
+    if (!f.business_profile_link.trim()) e.business_profile_link = "Profile link is required.";
+    if (f.platform === "Other" && !f.other_platform.trim())
+      e.other_platform = "Platform name is required when selecting Other.";
+  }
   const instrErr = instructionsError(f.developer_instructions);
   if (instrErr) e.developer_instructions = instrErr;
   if (!f.has_service_areas) e.has_service_areas = "Please indicate if there are service areas.";
@@ -203,10 +212,17 @@ export function validateNewLead(
   // colour alone leaves every button, heading and accent on the site to the
   // generator's guess, which is how leads arrived with a single hex and a site
   // came back looking nothing like the client's brand.
-  const colorCount = parseColorScheme(f.color_scheme).length;
-  if (!f.color_scheme.trim()) e.color_scheme = "Color scheme is required.";
-  else if (colorCount < MIN_COLORS) e.color_scheme = `Enter at least ${MIN_COLORS} colours.`;
-  else if (colorCount > MAX_COLORS) e.color_scheme = `Enter at most ${MAX_COLORS} colours.`;
+  // "See Instructions": no colours, the ideas are in the developer
+  // instructions — which then must hold at least one item.
+  if (f.color_see_instructions) {
+    if (instructionItems(f.developer_instructions).length === 0)
+      e.developer_instructions = "Add the client's colour ideas here — Color Scheme says to see the instructions.";
+  } else {
+    const colorCount = parseColorScheme(f.color_scheme).length;
+    if (!f.color_scheme.trim()) e.color_scheme = "Color scheme is required, or tick See Instructions.";
+    else if (colorCount < MIN_COLORS) e.color_scheme = `Enter at least ${MIN_COLORS} colours.`;
+    else if (colorCount > MAX_COLORS) e.color_scheme = `Enter at most ${MAX_COLORS} colours.`;
+  }
 
   for (const u of f.design_reference_links) {
     const t = u.trim();
@@ -257,8 +273,9 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     business_phone: f.business_phone.trim() || null,
     no_email: f.no_email,
     business_email: f.no_email ? null : f.business_email.trim() || null,
-    business_profile_link: f.business_profile_link.trim() || null,
-    platform: f.platform === "Other" ? f.other_platform.trim() || null : f.platform || null,
+    business_profile_link: f.no_platform ? null : f.business_profile_link.trim() || null,
+    platform: f.no_platform ? null : f.platform === "Other" ? f.other_platform.trim() || null : f.platform || null,
+    no_platform: f.no_platform,
     custom_area: f.custom_area.trim() || null,
     category: f.category.trim() || null,
     map_embed_link: f.map_embed_link.trim() || null,
@@ -270,7 +287,8 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     specify_pages: pages.length ? pages : null,
     // Always explicit now — new leads never claim "same as logo".
     color_same_as_logo: false,
-    color_scheme: f.color_scheme.trim() || null,
+    color_scheme: f.color_see_instructions ? null : f.color_scheme.trim() || null,
+    color_see_instructions: f.color_see_instructions,
     logo_via_sms: f.logo_via_sms,
     logo_link: f.logo_via_sms ? null : f.logo_link.trim() || null,
     design_reference_links: designRefs.length ? designRefs : null,

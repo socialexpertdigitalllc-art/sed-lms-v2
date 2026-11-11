@@ -6,10 +6,13 @@
  * `new Date(value)`, the follow-up presets — had to change.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { useState } from "react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import {
   DatePicker,
   DateTimeField,
+  DateTimePicker,
+  nextRoundTime,
   TimeField,
   formatDateLabel,
   parseDateValue,
@@ -123,5 +126,71 @@ describe("DateTimeField", () => {
     expect(screen.getByRole("button", { name: "Due date" })).toHaveTextContent("Dec 25, 2026");
     expect(screen.getByLabelText("Hour")).toHaveValue("6");
     expect(screen.getByLabelText("AM or PM")).toHaveValue("PM");
+  });
+});
+
+describe("DateTimePicker — the time is picked inside the calendar", () => {
+  function Harness({ initial = "" }: { initial?: string }) {
+    const [v, setV] = useState(initial);
+    return (
+      <>
+        <DateTimePicker aria-label="Follow up" value={v} onChange={setV} />
+        <output data-testid="v">{v}</output>
+      </>
+    );
+  }
+  const val = () => screen.getByTestId("v").textContent;
+
+  it("one field: opens a calendar that also has hour, minutes and AM/PM", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Follow up" }));
+    const dialog = screen.getByRole("dialog", { name: "Choose a date and time" });
+    expect(within(dialog).getByLabelText("Hour")).toBeTruthy();
+    expect(within(dialog).getByLabelText("Minutes")).toBeTruthy();
+    expect(within(dialog).getByLabelText("AM or PM")).toBeTruthy();
+    expect(screen.queryByPlaceholderText("hh")).toBeNull(); // no separate typed time boxes
+  });
+
+  it("picking a day fills a time at once; changing the time updates the value; Done closes", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Follow up" }));
+    const dialog = screen.getByRole("dialog", { name: "Choose a date and time" });
+    const day = within(dialog).getAllByRole("button").find((b) => /\d+, \d{4}$/.test(b.getAttribute("aria-label") ?? ""))!;
+    fireEvent.click(day);
+    expect(val()).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    const datePart = val()!.slice(0, 10);
+    fireEvent.change(within(dialog).getByLabelText("Hour"), { target: { value: "3" } });
+    fireEvent.change(within(dialog).getByLabelText("Minutes"), { target: { value: "30" } });
+    fireEvent.change(within(dialog).getByLabelText("AM or PM"), { target: { value: "PM" } });
+    expect(val()).toBe(`${datePart}T15:30`);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Choose a date and time" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Follow up" }).textContent).toMatch(/3:30 PM/);
+  });
+
+  it("12 AM is midnight and 12 PM is noon", () => {
+    render(<Harness initial="2026-11-20T09:00" />);
+    fireEvent.click(screen.getByRole("button", { name: "Follow up" }));
+    const dialog = screen.getByRole("dialog", { name: "Choose a date and time" });
+    fireEvent.change(within(dialog).getByLabelText("Hour"), { target: { value: "12" } });
+    expect(val()).toBe("2026-11-20T00:00");
+    fireEvent.change(within(dialog).getByLabelText("AM or PM"), { target: { value: "PM" } });
+    expect(val()).toBe("2026-11-20T12:00");
+  });
+
+  it("shows an existing value, keeps an odd minute, and can be cleared", () => {
+    render(<Harness initial="2026-11-20T14:07" />);
+    expect(screen.getByRole("button", { name: "Follow up" }).textContent).toMatch(/Nov 20, 2026 · 2:07 PM/);
+    fireEvent.click(screen.getByRole("button", { name: "Follow up" }));
+    expect((screen.getByLabelText("Minutes") as HTMLSelectElement).value).toBe("7");
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear date and time" }));
+    expect(val()).toBe("");
+  });
+
+  it("nextRoundTime rounds up to the next whole 5 minutes", () => {
+    expect(nextRoundTime(new Date(2026, 10, 20, 9, 2))).toBe("09:05");
+    expect(nextRoundTime(new Date(2026, 10, 20, 9, 5))).toBe("09:10");
+    expect(nextRoundTime(new Date(2026, 10, 20, 23, 58))).toBe("00:00");
   });
 });

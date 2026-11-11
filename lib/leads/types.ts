@@ -57,6 +57,8 @@ export interface Lead {
   map_embed_link: string | null;
   site_type: string | null;
   platform: string | null;
+  /** The business has no listing: platform and profile link empty on purpose (migration 0100). */
+  no_platform?: boolean | null;
   services: string[] | null;
   service_areas: string[] | null;
   has_service_areas: boolean | null;
@@ -64,6 +66,8 @@ export interface Lead {
   num_webpages: number | null;
   specify_pages: string[] | null;
   color_scheme: string | null;
+  /** Colour ideas are in developer_instructions instead (migration 0100). */
+  color_see_instructions?: boolean | null;
   color_same_as_logo: boolean | null;
   add_ons: AddOn[] | null;
   price_quoted: number | null;

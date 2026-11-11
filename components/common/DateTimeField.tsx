@@ -71,11 +71,11 @@ const POP_H = 340;
 /** Fixed-position coordinates for a popover under (or, near the bottom of
  *  the viewport, above) its anchor. Portalled to <body> so a modal's
  *  overflow clipping can never cut the calendar off. */
-function popoverPosition(anchor: HTMLElement): { top: number; left: number } {
+function popoverPosition(anchor: HTMLElement, popH: number = POP_H): { top: number; left: number } {
   const r = anchor.getBoundingClientRect();
   const below = r.bottom + 6;
-  const fitsBelow = below + POP_H <= window.innerHeight;
-  const top = fitsBelow || r.top - POP_H - 6 < 0 ? below : r.top - POP_H - 6;
+  const fitsBelow = below + popH <= window.innerHeight;
+  const top = fitsBelow || r.top - popH - 6 < 0 ? below : Math.max(8, r.top - popH - 6);
   const left = Math.max(8, Math.min(r.left, window.innerWidth - POP_W - 8));
   return { top, left };
 }
@@ -84,10 +84,13 @@ function Calendar({
   value,
   onPick,
   onClear,
+  frameless = false,
 }: {
   value: string;
   onPick: (v: string) => void;
   onClear: () => void;
+  /** Inside another popover (the date-and-time picker): no border or shadow of its own. */
+  frameless?: boolean;
 }) {
   const selected = parseDateValue(value);
   const now = new Date();
@@ -107,7 +110,11 @@ function Calendar({
   const todayValue = toDateValue(now);
 
   return (
-    <div className="w-[288px] rounded-lg border border-border bg-surface p-3 shadow-lg" role="dialog" aria-label="Choose a date">
+    <div
+      className={frameless ? "w-[288px]" : "w-[288px] rounded-lg border border-border bg-surface p-3 shadow-lg"}
+      role={frameless ? undefined : "dialog"}
+      aria-label={frameless ? undefined : "Choose a date"}
+    >
       <div className="mb-2 flex items-center justify-between">
         <button
           type="button"
@@ -494,5 +501,209 @@ export function DateTimeField({
         }}
       />
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Date and time in one calendar                                       */
+/* ------------------------------------------------------------------ */
+
+const POP_H_WITH_TIME = 430;
+const MINUTE_STEP = 5;
+
+/** "Nov 12, 2026 · 3:30 PM" for a `YYYY-MM-DDTHH:MM` value; "" otherwise. */
+export function formatDateTimeLabel(v: string): string {
+  const i = v.indexOf("T");
+  if (i === -1) return "";
+  const d = formatDateLabel(v.slice(0, i));
+  const t = parseTimeValue(v.slice(i + 1, i + 6));
+  if (!d || !t) return "";
+  return `${d} · ${t.h12}:${pad(t.minute)} ${t.period}`;
+}
+
+/** The next whole 5 minutes from now, as `HH:MM` — the time a fresh pick starts at. */
+export function nextRoundTime(now: Date = new Date()): string {
+  const d = new Date(now.getTime());
+  d.setSeconds(0, 0);
+  d.setMinutes(Math.ceil((d.getMinutes() + 1) / MINUTE_STEP) * MINUTE_STEP);
+  return toTimeValue(d);
+}
+
+/**
+ * Date AND time from one field: the calendar opens with the time under the
+ * days (hour, minutes, AM/PM), so nothing has to be typed separately. Picking
+ * a day with no time yet starts at the next whole 5 minutes; every change is
+ * emitted at once; Done (or a click outside) closes it. Value
+ * `YYYY-MM-DDTHH:MM`, local — the same as DateTimeField, so callers swap freely.
+ */
+export function DateTimePicker({
+  value,
+  onChange,
+  className,
+  disabled,
+  placeholder = "Pick date & time",
+  "aria-label": ariaLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  className?: string;
+  disabled?: boolean;
+  placeholder?: string;
+  "aria-label"?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const close = () => {
+    setOpen(false);
+    setPos(null);
+  };
+
+  const i = value.indexOf("T");
+  const date = i === -1 ? "" : value.slice(0, i);
+  const time = i === -1 ? "" : value.slice(i + 1, i + 6);
+  const t = parseTimeValue(time);
+
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      if (anchor.current) setPos(popoverPosition(anchor.current, POP_H_WITH_TIME));
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (anchor.current?.contains(target) || pop.current?.contains(target)) return;
+      setOpen(false);
+      setPos(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        setPos(null);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const emit = (d: string, tm: string) => onChange(d && tm ? `${d}T${tm}` : "");
+  const setTimeParts = (h12: number, minute: number, period: "AM" | "PM") => {
+    const tm = `${pad((h12 % 12) + (period === "PM" ? 12 : 0))}:${pad(minute)}`;
+    emit(date || toDateValue(new Date()), tm);
+  };
+  const minutes = Array.from({ length: 60 / MINUTE_STEP }, (_, k) => k * MINUTE_STEP);
+  if (t && !minutes.includes(t.minute)) minutes.push(t.minute);
+  minutes.sort((a, b) => a - b);
+  const label = formatDateTimeLabel(value);
+  const sel = cn(fieldBase, "px-2 py-1.5 text-sm");
+
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        disabled={disabled}
+        onClick={() => (open ? close() : setOpen(true))}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        data-datetime-picker
+        data-value={value}
+        className={cn(fieldBase, "flex w-full items-center gap-2 px-3 py-2 text-left", className)}
+      >
+        <CalendarDays className="h-4 w-4 shrink-0 text-text-faint" aria-hidden />
+        <span className={cn("flex-1 truncate", !label && "text-text-faint")}>{label || placeholder}</span>
+        {label && !disabled && (
+          <span
+            role="button"
+            aria-label="Clear date and time"
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange("");
+            }}
+            className="rounded p-0.5 text-text-faint hover:bg-surface-2 hover:text-text"
+          >
+            <X className="h-3.5 w-3.5" />
+          </span>
+        )}
+      </button>
+      {open && pos && typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={pop}
+            role="dialog"
+            aria-label="Choose a date and time"
+            style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 1000 }}
+            className="rounded-lg border border-border bg-surface p-3 shadow-lg"
+          >
+            <Calendar
+              frameless
+              value={date}
+              onPick={(d) => emit(d, time || nextRoundTime())}
+              onClear={() => onChange("")}
+            />
+            <div className="mt-2 border-t border-border pt-2">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-text-faint">Time</div>
+              <div className="flex items-center gap-1.5">
+                <Select
+                  aria-label="Hour"
+                  value={t ? String(t.h12) : ""}
+                  onChange={(e) => setTimeParts(Number(e.target.value), t?.minute ?? 0, t?.period ?? "AM")}
+                  className={sel}
+                >
+                  {!t && <option value="">hh</option>}
+                  {Array.from({ length: 12 }, (_, k) => k + 1).map((h) => (
+                    <option key={h} value={h}>{h}</option>
+                  ))}
+                </Select>
+                <span className="text-sm text-text-faint">:</span>
+                <Select
+                  aria-label="Minutes"
+                  value={t ? String(t.minute) : ""}
+                  onChange={(e) => setTimeParts(t?.h12 ?? 12, Number(e.target.value), t?.period ?? "AM")}
+                  className={sel}
+                >
+                  {!t && <option value="">mm</option>}
+                  {minutes.map((m) => (
+                    <option key={m} value={m}>{pad(m)}</option>
+                  ))}
+                </Select>
+                <Select
+                  aria-label="AM or PM"
+                  value={t?.period ?? "AM"}
+                  onChange={(e) => setTimeParts(t?.h12 ?? 12, t?.minute ?? 0, e.target.value as "AM" | "PM")}
+                  className={sel}
+                >
+                  <option value="AM">AM</option>
+                  <option value="PM">PM</option>
+                </Select>
+                <button
+                  type="button"
+                  onClick={close}
+                  className="ml-auto rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-ink"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }

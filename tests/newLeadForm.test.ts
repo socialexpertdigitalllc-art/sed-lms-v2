@@ -412,12 +412,35 @@ describe("validateNewLead — category and developer instructions", () => {
     expect(validateNewLead({ ...validState(), category: "  " }, NOW).category).toMatch(/category/i);
   });
 
-  it("instructions are optional, one item at a time, each at most 50 words", () => {
+  it("instructions are optional, one item at a time, each at most 20 words", () => {
     expect(validateNewLead({ ...validState(), developer_instructions: [""] }, NOW)).toEqual({});
-    const fifty = Array.from({ length: 50 }, () => "word").join(" ");
-    expect(validateNewLead({ ...validState(), developer_instructions: [fifty] }, NOW)).toEqual({});
-    expect(validateNewLead({ ...validState(), developer_instructions: [fifty + " more"] }, NOW).developer_instructions).toMatch(
-      /Instruction 1 is 51 words/,
+    const twenty = Array.from({ length: 20 }, () => "word").join(" ");
+    expect(validateNewLead({ ...validState(), developer_instructions: [twenty] }, NOW)).toEqual({});
+    expect(validateNewLead({ ...validState(), developer_instructions: [twenty + " more"] }, NOW).developer_instructions).toMatch(
+      /Instruction 1 is 21 words/,
     );
+  });
+
+  it("No Platform: platform and profile link are not asked for, and are saved empty", () => {
+    const f = { ...validState(), no_platform: true, platform: "", business_profile_link: "" };
+    expect(validateNewLead(f, NOW)).toEqual({});
+    const p = buildLeadPayload({ ...f, platform: "Google", business_profile_link: "https://x.com/y" });
+    expect(p).toMatchObject({ no_platform: true, platform: null, business_profile_link: null });
+  });
+
+  it("See Instructions: no colours needed, but the instructions must hold the ideas", () => {
+    const f = { ...validState(), color_see_instructions: true, color_scheme: "" };
+    expect(validateNewLead({ ...f, developer_instructions: [""] }, NOW).developer_instructions).toMatch(/colour ideas/);
+    expect(validateNewLead({ ...f, developer_instructions: ["Warm earthy tones, no neon"] }, NOW)).toEqual({});
+    const p = buildLeadPayload({ ...f, color_scheme: "#000, #fff", developer_instructions: ["Warm earthy tones"] });
+    expect(p).toMatchObject({ color_see_instructions: true, color_scheme: null, developer_instructions: "1. Warm earthy tones" });
+  });
+
+  it("new forms start with Service Areas = No and Direct Line saved = Yes", () => {
+    const f = emptyNewLead("Not Ready");
+    expect(f.has_service_areas).toBe("No");
+    expect(f.direct_line_saved).toBe("Yes");
+    expect(f.no_platform).toBe(false);
+    expect(f.color_see_instructions).toBe(false);
   });
 });
