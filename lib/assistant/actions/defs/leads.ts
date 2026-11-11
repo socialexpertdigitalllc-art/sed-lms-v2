@@ -13,6 +13,7 @@ import { formatDateTime, money } from "../fields";
 import { changesOf, displayValue, isStepRef, movedOn, need, needAdmin, plural, str, visibleLead } from "../helpers";
 import { callRoute } from "../invoke";
 import type { ActionContext, ActionDef, CheckResult, FieldSpec, Problem, Values } from "../types";
+import { formatInstructions, toInstructionItems } from "@/lib/leads/devInstructions";
 
 /**
  * Lead actions: create, edit, status, log a call, reschedule, tags, assign,
@@ -102,7 +103,8 @@ export async function leadPayload(v: Values, ctx: ActionContext): Promise<Record
     rating: typeof v.rating === "number" ? v.rating : null,
     fresh_or_followup: v.fresh_or_followup ?? null,
     about_business: str(v.about_business).trim() || null,
-    developer_instructions: str(v.developer_instructions).trim() || null,
+    // Saved as a numbered list of short items, like the New Lead form does.
+    developer_instructions: formatInstructions(toInstructionItems(str(v.developer_instructions))),
     recommended_template_id: typeof v.recommended_template === "string" ? v.recommended_template : null,
     social_profiles: Array.isArray(v.social_profiles) && v.social_profiles.length ? socialProfilesFrom(v.social_profiles as string[]) : null,
     comments: str(v.comments).trim() || null,
@@ -144,7 +146,7 @@ const createFields: FieldSpec[] = [
   { name: "platform", label: "Found on", type: "enum", options: PLATFORM_OPTIONS, required: true, help: "Where their listing is: Google, Yelp or Other." },
   { name: "other_platform", label: "Platform name", type: "text", required: true, showIf: (v) => v.platform === "Other" },
   { name: "business_profile_link", label: "Profile link", type: "url", required: true, help: "Their Google Maps / Yelp listing URL." },
-  { name: "category", label: "Category", type: "text", help: "The kind of business: Plumber, Roofing, Bakery…" },
+  { name: "category", label: "Category", type: "text", required: true, help: "The kind of business: Plumber, Roofing, Bakery…" },
   { name: "custom_area", label: "State (override)", type: "text", help: "Only when the business is not in the state its phone's area code suggests." },
   { name: "map_embed_link", label: "Map embed link", type: "url" },
   { name: "has_service_areas", label: "Has service areas", type: "boolean", required: true, help: "Does the business serve several towns/areas (yes/no)?" },

@@ -15,6 +15,9 @@ import type { BuilderTemplateRow } from "@/components/site-builder/TemplatesBoar
 /** Only the fields this screen actually reads off a lead row — see
  *  `lib/site-studio/run/dossier.ts`'s own rule on why a generation launcher
  *  has no business looking at commercial/internal fields. */
+/** The longest Additional instructions a run takes (the API keeps the same). */
+const INSTRUCTIONS_MAX = 6000;
+
 interface LeadOption {
   id: string;
   business_name: string;
@@ -30,6 +33,8 @@ interface LeadOption {
   image_links: string[] | null;
   /** The template the agent picked with the client on the submission form. */
   recommended_template_id: string | null;
+  /** The agent's "Instructions for Developer" — copied into Additional instructions. */
+  developer_instructions?: string | null;
 }
 
 /** One thumbnail on the image screen. `kind: "manual"` is a candidate added
@@ -149,6 +154,9 @@ export function NewSiteFlow() {
   // remembered between runs.
   const [autoDeploy, setAutoDeploy] = useState(true);
   const [instructions, setInstructions] = useState("");
+  // What we last copied in from a lead, so picking another lead replaces it —
+  // but never text the operator typed themselves.
+  const copiedInstructions = useRef("");
 
   const [needsLoading, setNeedsLoading] = useState(false);
   const [heroCandidates, setHeroCandidates] = useState<DisplayCandidate[]>([]);
@@ -229,6 +237,11 @@ export function NewSiteFlow() {
     // recommendation clears back to "choose", so the previous lead's pick can
     // never quietly carry over onto this one.
     setTemplateId(lead.recommended_template_id ?? "");
+    // The agent's instructions for the developer become the run's Additional
+    // instructions, so what was promised to the client reaches the build.
+    const fromLead = (lead.developer_instructions ?? "").trim().slice(0, INSTRUCTIONS_MAX);
+    setInstructions((cur) => (cur.trim() === "" || cur === copiedInstructions.current ? fromLead : cur));
+    copiedInstructions.current = fromLead;
   }
 
   // Sourcing fires the instant a lead is selected — no search box, no manual
@@ -773,8 +786,8 @@ export function NewSiteFlow() {
           id="builder-instructions"
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
-          maxLength={2000}
-          rows={3}
+          maxLength={INSTRUCTIONS_MAX}
+          rows={instructions.split("\n").length > 3 ? 8 : 3}
           placeholder="e.g. Multilanguage site: English and Spanish, with a toggle in the header"
           className="mt-2 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:ring-2 focus:ring-accent"
         />

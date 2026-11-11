@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -55,18 +55,13 @@ import { ColorSchemeField } from "@/components/leads/ColorSchemeField";
 import { useColorSchemeCheck } from "@/hooks/useColorSchemeCheck";
 import { MAX_COLORS, MIN_COLORS } from "@/lib/leads/colorScheme";
 import { syncLeadsNow } from "@/hooks/useLiveLeads";
+import { InstructionsList } from "@/components/leads/InstructionsList";
+import { platformFromLink } from "@/lib/leads/platformFromLink";
+import { clearLeadDraft, loadLeadDraft, mergeLeadDraft, saveLeadDraft } from "@/lib/leads/leadDraft";
 
 type Agent = { id: string; display_name: string | null };
 
-export function NewLeadForm({
-  agents,
-  canAssign,
-  canSetStatus,
-  salesUsers,
-  addons,
-  currentUserId,
-  canOverrideDuplicate,
-}: {
+type NewLeadFormProps = {
   agents: Agent[];
   canAssign: boolean;
   canSetStatus: boolean;
@@ -74,18 +69,75 @@ export function NewLeadForm({
   addons: AddOn[];
   currentUserId: string;
   canOverrideDuplicate: boolean;
-}) {
+};
+
+const noopSubscribe = () => () => {};
+
+/**
+ * The form renders in the browser only, so it can open with the agent's
+ * unsent draft (lib/leads/leadDraft.ts) already filled in — no flash of an
+ * empty form, no mismatch with a server render that can't see the draft.
+ */
+export function NewLeadForm(props: NewLeadFormProps) {
+  const inBrowser = useSyncExternalStore(noopSubscribe, () => true, () => false);
+  if (!inBrowser) {
+    return <div className="mx-auto max-w-6xl h-96 animate-pulse rounded-2xl border border-border bg-surface" aria-busy="true" />;
+  }
+  return <NewLeadFormBody {...props} />;
+}
+
+function NewLeadFormBody({
+  agents,
+  canAssign,
+  canSetStatus,
+  salesUsers,
+  addons,
+  currentUserId,
+  canOverrideDuplicate,
+}: NewLeadFormProps) {
   const router = useRouter();
   const { toast } = useToast();
   const { all } = usePermissions();
   const settable = useMemo(() => settableStatuses(all), [all]);
   const photoExt = usePhotoExtension();
 
+  const freshForm = () =>
+    emptyNewLead(!canSetStatus || settable.includes("Not Ready") ? "Not Ready" : (settable[0] ?? ""));
+  // A blank form, to tell "nothing typed yet" from a draft worth keeping.
+  const [blank] = useState(() => JSON.stringify(freshForm()));
+  // The unsent lead from last time (a refresh, a closed tab, a failed submit).
+  const [restored, setRestored] = useState(() => loadLeadDraft(currentUserId));
   const [f, setF] = useState<NewLeadFormState>(() =>
-    emptyNewLead(
-      !canSetStatus || settable.includes("Not Ready") ? "Not Ready" : (settable[0] ?? "")
-    )
+    restored ? mergeLeadDraft(freshForm(), restored.form, canSetStatus ? settable : null) : freshForm(),
   );
+
+  // Keep the draft on this device as the agent types, and once more as the
+  // page goes away, until the lead is submitted or the form is cleared.
+  const latest = useRef(f);
+  const submitted = useRef(false);
+  useEffect(() => {
+    latest.current = f;
+    if (submitted.current) return;
+    const t = setTimeout(() => {
+      if (!submitted.current) saveLeadDraft(currentUserId, f, blank);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [f, currentUserId, blank]);
+  useEffect(() => {
+    const flush = () => {
+      if (!submitted.current) saveLeadDraft(currentUserId, latest.current, blank);
+    };
+    const onHidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      flush();
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHidden);
+    };
+  }, [currentUserId, blank]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -107,6 +159,44 @@ export function NewLeadForm({
       delete n[k as string];
       return n;
     });
+  }
+
+  /** The profile link decides the platform: maps.google.com → Google, yelp.com → Yelp, xyz.abc.com → Abc. */
+  function setProfileLink(v: string) {
+    const detected = platformFromLink(v);
+    setF((p) => {
+      const next = { ...p, business_profile_link: v };
+      if (detected === "Google" || detected === "Yelp") {
+        next.platform = detected;
+        next.other_platform = "";
+      } else if (detected) {
+        next.platform = "Other";
+        next.other_platform = detected;
+      }
+      return next;
+    });
+    setErrors((p) => {
+      const n = { ...p };
+      delete n.business_profile_link;
+      if (detected) {
+        delete n.platform;
+        delete n.other_platform;
+      }
+      return n;
+    });
+  }
+  const detectedPlatform = platformFromLink(f.business_profile_link);
+
+  /** Throw the draft away on purpose: every field back to blank. */
+  function clearForm() {
+    if (!window.confirm("Clear every field of this lead? What you've filled in will be deleted.")) return;
+    clearLeadDraft(currentUserId);
+    setF(freshForm());
+    setErrors({});
+    setApiError(null);
+    setOverrideDup(false);
+    setRestored(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   const serviceCount = nonEmpty(f.services).length;
@@ -190,6 +280,7 @@ export function NewLeadForm({
   const liveErrors = useMemo(() => validateNewLead(f), [f]);
   const sectionErrs: Record<string, string[]> = {
     identity: [
+      "category",
       "site_type",
       "business_name",
       "business_phone",
@@ -238,11 +329,22 @@ export function NewLeadForm({
     }
     setBusy(true);
     setApiError(null);
-    const res = await fetch("/api/leads", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...buildLeadPayload(f, { userId: currentUserId }), override: overrideDup }),
-    });
+    // A dropped connection (a VPN, flaky wifi) used to leave the button on
+    // "Submitting…" for good. Now it says so — and the draft is kept.
+    let res: Response;
+    try {
+      res = await fetch("/api/leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...buildLeadPayload(f, { userId: currentUserId }), override: overrideDup }),
+      });
+    } catch {
+      setBusy(false);
+      setApiError(
+        "Couldn't reach the server — check your internet connection (or turn off the VPN) and press Submit again. Everything you filled in is saved on this device.",
+      );
+      return;
+    }
     setBusy(false);
     if (!res.ok) {
       if (res.status === 409) {
@@ -259,6 +361,9 @@ export function NewLeadForm({
       return;
     }
     const { id } = await res.json();
+    // Submitted: the draft has done its job.
+    submitted.current = true;
+    clearLeadDraft(currentUserId);
 
     // Fire-and-forget: the lead is saved either way, and the agent must never
     // wait on a browser capture (the redirect below happens unconditionally,
@@ -403,6 +508,9 @@ export function NewLeadForm({
               <span className="text-text-faint">/{totalSections}</span>
             </div>
             <p className="text-[11px] uppercase tracking-wide text-text-faint">sections ready</p>
+            <button type="button" onClick={clearForm} className="mt-2 text-xs font-medium text-text-muted underline-offset-2 hover:text-dropped-fg hover:underline">
+              Clear form
+            </button>
             <div className="mt-2 h-1.5 w-36 overflow-hidden rounded-full bg-border-subtle">
               <div
                 className="h-full rounded-full bg-accent transition-all duration-500"
@@ -414,8 +522,21 @@ export function NewLeadForm({
       </div>
 
       {apiError && (
-        <div className="mb-4 rounded-lg border border-dropped-fg/20 bg-dropped-bg px-4 py-2.5 text-sm text-dropped-fg">
+        <div className="mb-4 rounded-lg border border-dropped-fg/20 bg-dropped-bg px-4 py-2.5 text-sm text-dropped-fg" role="alert">
           {apiError}
+        </div>
+      )}
+
+      {restored && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent-soft px-4 py-2.5 text-sm text-accent-ink" data-testid="draft-restored">
+          <span>
+            Restored the lead you were filling in (saved{" "}
+            {new Date(restored.savedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}). Submit it, or
+            clear the form to start a new one.
+          </span>
+          <button type="button" onClick={() => setRestored(null)} className="text-xs font-medium underline">
+            OK
+          </button>
         </div>
       )}
 
@@ -470,10 +591,21 @@ export function NewLeadForm({
                   derived={stateOfPhone(f.business_phone)?.state ?? null}
                   onSelect={(v) => set("custom_area", v ?? "")}
                 />
-                <CategoryChip value={f.category || null} onSelect={(v) => set("category", v ?? "")} />
+                <span
+                  data-error={errors.category ? "true" : undefined}
+                  title="Category is required"
+                  className={errors.category ? "rounded-full ring-2 ring-dropped-fg ring-offset-1" : ""}
+                >
+                  <CategoryChip value={f.category || null} onSelect={(v) => set("category", v ?? "")} />
+                </span>
               </>
             }
           >
+            {errors.category && (
+              <p className="-mt-1 mb-3 text-xs font-medium text-dropped-fg">
+                {errors.category} Use the Category chip at the top of this section.
+              </p>
+            )}
             <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
               <F error={errors.site_type} label="Site Type" required>
                 <RadioPillGroup options={SITE_TYPES} value={f.site_type} onChange={(v) => set("site_type", v)} />
@@ -541,12 +673,17 @@ export function NewLeadForm({
                 )}
               </F>
             </div>
-            <F error={errors.platform} label="Platform" required>
-              <RadioPillGroup options={PLATFORM_OPTIONS} value={f.platform} onChange={(v) => set("platform", v)} />
-              <div className="mt-3" data-error={errors.business_profile_link ? "true" : undefined}>
-                <input value={f.business_profile_link} onChange={(e) => set("business_profile_link", e.target.value)} placeholder="Enter profile link" className={inputCls} />
+            <F error={errors.platform} label="Platform" required hint="Paste the profile link — the platform fills in by itself from the link's website.">
+              <div className="mb-3" data-error={errors.business_profile_link ? "true" : undefined}>
+                <input value={f.business_profile_link} onChange={(e) => setProfileLink(e.target.value)} placeholder="Paste the profile link (Google Maps, Yelp, …)" className={inputCls} />
                 <FieldError error={errors.business_profile_link} />
+                {detectedPlatform && (
+                  <p className="mt-1 text-xs text-text-muted" data-testid="platform-detected">
+                    Platform from the link: <span className="font-medium text-text">{detectedPlatform}</span>
+                  </p>
+                )}
               </div>
+              <RadioPillGroup options={PLATFORM_OPTIONS} value={f.platform} onChange={(v) => set("platform", v)} />
               <ConditionalBlock open={f.platform === "Other"} label="Other Platform">
                 <div data-error={errors.other_platform ? "true" : undefined}>
                   <input value={f.other_platform} onChange={(e) => set("other_platform", e.target.value)} placeholder="e.g., Facebook, Instagram, LinkedIn" className={inputCls} />
@@ -657,9 +794,11 @@ export function NewLeadForm({
             <F
               error={errors.developer_instructions}
               label="Instructions for Developer (optional)"
-              hint="Anything you promised the client that the build has to honour."
+              hint="One instruction per item, up to 50 words each — anything you promised the client that the build has to honour. The developer gets them as a numbered list."
             >
-              <textarea value={f.developer_instructions} onChange={(e) => set("developer_instructions", e.target.value)} placeholder="e.g., Keep the booking button in the header on mobile; the owner wants the team photo on the About page, not the hero..." rows={5} maxLength={8000} className={inputCls} />
+              <div data-error={errors.developer_instructions ? "true" : undefined}>
+                <InstructionsList items={f.developer_instructions} onChange={(v) => set("developer_instructions", v)} />
+              </div>
             </F>
           </SectionCard>
 
@@ -804,6 +943,12 @@ export function NewLeadForm({
               </Link>
               <div className="flex-1">{submitBtn}</div>
             </div>
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs text-text-faint">
+              <span>Saved on this device as you type — kept until you submit.</span>
+              <button type="button" onClick={clearForm} className="font-medium text-text-muted hover:text-dropped-fg hover:underline">
+                Clear form
+              </button>
+            </div>
           </div>
         </div>
 
@@ -858,6 +1003,14 @@ export function NewLeadForm({
               >
                 Cancel
               </Link>
+              <button
+                type="button"
+                onClick={clearForm}
+                className="mt-2 block w-full rounded-lg px-4 py-1.5 text-center text-xs font-medium text-text-muted transition-colors hover:bg-dropped-bg hover:text-dropped-fg"
+              >
+                Clear form
+              </button>
+              <p className="mt-2 text-center text-[11px] text-text-faint">Saved on this device as you type — kept until you submit.</p>
             </div>
           </div>
         </aside>

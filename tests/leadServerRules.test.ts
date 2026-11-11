@@ -16,6 +16,7 @@ function validForm(over: Partial<NewLeadFormState> = {}): NewLeadFormState {
     ...emptyNewLead("Not Ready"),
     site_type: "Custom Website",
     business_name: "Jumbo's Pizza",
+    category: "Pizza Restaurant",
     business_phone: "(252) 401-2775",
     business_email: "owner@jumbos.com",
     platform: "Google",
@@ -56,6 +57,7 @@ describe("server-side New Lead rules", () => {
     const p = buildLeadPayload(validForm(), { userId: "u1" }) as Record<string, unknown>;
     const missing: [string, unknown][] = [
       ["business_name", ""],
+      ["category", "  "],
       ["business_phone", "252"],
       ["business_email", "not-an-email"],
       ["site_type", null],
@@ -90,5 +92,20 @@ describe("server-side New Lead rules", () => {
     expect(leadPayloadMessage({ a: "One.", b: "Two." })).toBe("One. Two.");
     expect(leadPayloadMessage({ a: "1.", b: "2.", c: "3.", d: "4.", e: "5." })).toBe("1. 2. 3. (and 2 more)");
     expect(leadPayloadMessage({})).toBe("");
+  });
+});
+
+describe("server-side New Lead rules — category and developer instructions", () => {
+  it("a lead without a category is not created", () => {
+    const p = buildLeadPayload(validForm({ category: "" }), { userId: "u1" });
+    expect(leadPayloadErrors(p, NOW).category).toMatch(/category/i);
+  });
+
+  it("instructions arrive as a list; an item over 50 words is refused", () => {
+    const ok = buildLeadPayload(validForm({ developer_instructions: ["Sticky header", "Team photo on About"] }), { userId: "u1" });
+    expect(leadPayloadErrors(ok, NOW)).toEqual({});
+    const long = Array.from({ length: 51 }, (_, i) => `w${i}`).join(" ");
+    const bad = buildLeadPayload(validForm({ developer_instructions: ["Fine", long] }), { userId: "u1" });
+    expect(leadPayloadErrors(bad, NOW).developer_instructions).toMatch(/Instruction 2 is 51 words/);
   });
 });

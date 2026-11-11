@@ -46,6 +46,7 @@ function ctx(perms: string[] = ["leads.create", "leads.edit", "leads.status_chan
 
 const complete = {
   business_name: "Jumbo's Pizza",
+  category: "Pizza Restaurant",
   business_phone: "252-401-2775",
   business_email: "owner@jumbos.com",
   site_type: "Custom Website",
@@ -96,6 +97,7 @@ describe("lead.create", () => {
       "site_type",
       "platform",
       "business_profile_link",
+      "category",
       "has_service_areas",
       "services",
       "client_experience",

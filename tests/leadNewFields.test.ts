@@ -35,9 +35,12 @@ describe("owner name", () => {
 });
 
 describe("instructions for developer", () => {
-  it("travels to the payload, trimmed", () => {
-    const p = buildLeadPayload({ ...filled(), developer_instructions: "  Keep booking in the header \n" });
-    expect(p.developer_instructions).toBe("Keep booking in the header");
+  it("travels to the payload as a numbered list, each item trimmed, blanks dropped", () => {
+    const p = buildLeadPayload({
+      ...filled(),
+      developer_instructions: ["  Keep booking in the header ", "", "Team photo on About, not the hero"],
+    });
+    expect(p.developer_instructions).toBe("1. Keep booking in the header\n2. Team photo on About, not the hero");
   });
 
   it("is optional", () => {

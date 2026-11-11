@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const leads = [
-  { id: "l1", business_name: "Ace Plumbing", status: "Not Ready", deleted_at: null, business_phone: "555-1111", business_email: "ace@example.com", services: ["Drain cleaning", "Water heaters"], service_areas: ["Downtown"], color_scheme: "navy and orange", specify_pages: ["About"], about_business: "Family owned.", image_links: ["https://example.com/photo1.jpg", "https://example.com/photo2.jpg"] },
+  { id: "l1", business_name: "Ace Plumbing", status: "Not Ready", deleted_at: null, business_phone: "555-1111", business_email: "ace@example.com", services: ["Drain cleaning", "Water heaters"], service_areas: ["Downtown"], color_scheme: "navy and orange", specify_pages: ["About"], about_business: "Family owned.", image_links: ["https://example.com/photo1.jpg", "https://example.com/photo2.jpg"], developer_instructions: "1. Sticky header on mobile\n2. Team photo on About, not the hero" },
   { id: "l2", business_name: "Best Roofing", status: "Contacted", deleted_at: null, business_phone: null, business_email: null, services: [], service_areas: [], color_scheme: null, specify_pages: [], about_business: null, image_links: [] },
 ];
 
@@ -278,5 +278,23 @@ describe("NewSiteFlow", () => {
       const sent = JSON.parse(String((runsCall![1] as RequestInit).body)) as { options: { auto_deploy: boolean } };
       expect(sent.options.auto_deploy).toBe(false);
     });
+  });
+
+  it("the lead's instructions for the developer fill Additional instructions", async () => {
+    stubFetch();
+    render(<NewSiteFlow />);
+    fireEvent.click(await screen.findByText("Ace Plumbing"));
+    const box = screen.getByLabelText(/Additional instructions/) as HTMLTextAreaElement;
+    expect(box.value).toBe("1. Sticky header on mobile\n2. Team photo on About, not the hero");
+  });
+
+  it("never overwrites instructions the operator typed", async () => {
+    stubFetch();
+    render(<NewSiteFlow />);
+    await screen.findByText("Ace Plumbing");
+    const box = screen.getByLabelText(/Additional instructions/) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "Bilingual English/Spanish" } });
+    fireEvent.click(screen.getByText("Ace Plumbing"));
+    expect(box.value).toBe("Bilingual English/Spanish");
   });
 });

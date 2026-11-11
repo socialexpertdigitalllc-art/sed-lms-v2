@@ -14,6 +14,7 @@ function validState(): NewLeadFormState {
     ...emptyNewLead("Not Ready"),
     site_type: "Custom Website",
     business_name: "Acme Plumbing",
+    category: "Plumber",
     business_phone: "(252) 401-2775",
     business_email: "acme@example.com",
     platform: "Google",
@@ -279,6 +280,7 @@ describe("form audit: worst-case submission (every optional skipped)", () => {
       ...emptyNewLead("Not Ready"),
       site_type: "Redesign", // exercises the optional reference_link branch too
       business_name: "Minimal Lead",
+      category: "Roofing", // required since 2026-11-11
       business_phone: "(252) 401-2775",
       no_email: true, // email skipped
       platform: "Google",
@@ -402,5 +404,20 @@ describe("polish-3: buildLeadPayload flags", () => {
       { userId: "user-123" }
     );
     expect(p.closed_by).toBe("11111111-1111-4111-8111-111111111111");
+  });
+});
+
+describe("validateNewLead — category and developer instructions", () => {
+  it("the category is required", () => {
+    expect(validateNewLead({ ...validState(), category: "  " }, NOW).category).toMatch(/category/i);
+  });
+
+  it("instructions are optional, one item at a time, each at most 50 words", () => {
+    expect(validateNewLead({ ...validState(), developer_instructions: [""] }, NOW)).toEqual({});
+    const fifty = Array.from({ length: 50 }, () => "word").join(" ");
+    expect(validateNewLead({ ...validState(), developer_instructions: [fifty] }, NOW)).toEqual({});
+    expect(validateNewLead({ ...validState(), developer_instructions: [fifty + " more"] }, NOW).developer_instructions).toMatch(
+      /Instruction 1 is 51 words/,
+    );
   });
 });

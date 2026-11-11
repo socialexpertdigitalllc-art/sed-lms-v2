@@ -1,5 +1,6 @@
 import { PHONE_RE } from "@/lib/forms/phone";
 import { MAX_COLORS, MIN_COLORS, parseColorScheme } from "@/lib/leads/colorScheme";
+import { instructionsError, parseInstructions } from "@/lib/leads/devInstructions";
 
 /**
  * The New Lead form's rules, enforced on the SERVER — on the payload POST
@@ -29,6 +30,10 @@ export function leadPayloadErrors(p: Payload, now: Date = new Date()): Record<st
   if (!text(p.status)) e.status = "A status is required.";
   if (!text(p.site_type)) e.site_type = "Select a site type.";
   if (!text(p.business_name)) e.business_name = "Business name is required.";
+  if (!text(p.category)) e.category = "Choose the business category.";
+  // Instructions for the developer come as a list: each item at most 50 words.
+  const instrErr = instructionsError(parseInstructions(text(p.developer_instructions)));
+  if (instrErr) e.developer_instructions = instrErr;
   if (!PHONE_RE.test(text(p.business_phone))) e.business_phone = "Enter a valid phone: (252) 401-2775";
   if (p.no_email !== true && !EMAIL_RE.test(text(p.business_email))) e.business_email = "Enter a valid email address (or mark the lead as having no email).";
   if (!text(p.platform)) e.platform = "Select a platform.";

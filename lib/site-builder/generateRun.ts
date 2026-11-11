@@ -251,7 +251,7 @@ export async function generateRunNow(
     // layout wishes, ...) ride on options and reach every prompt via the brief.
     const rawInstructions = (run.options as { instructions?: unknown } | null)?.instructions;
     if (typeof rawInstructions === "string" && rawInstructions.trim()) {
-      brief.instructions = rawInstructions.trim().slice(0, 2000);
+      brief.instructions = rawInstructions.trim().slice(0, 6000);
     }
     const requestedPages = Array.isArray(lead.specify_pages) ? (lead.specify_pages as unknown[]).map(String) : [];
     const images = Array.isArray(run.images) ? (run.images as SuppliedImage[]) : [];

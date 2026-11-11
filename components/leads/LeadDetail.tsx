@@ -52,6 +52,7 @@ import { ReceiptModal } from "@/components/receipts/ReceiptModal";
 import { LeadReceiptsCard } from "@/components/receipts/LeadReceiptsCard";
 import type { ReceiptRow } from "@/lib/receipts/types";
 import { syncLeadsNow } from "@/hooks/useLiveLeads";
+import { parseInstructions } from "@/lib/leads/devInstructions";
 
 type Agent = { id: string; display_name: string | null };
 
@@ -596,7 +597,24 @@ export function LeadDetail({
               <FieldRow className="sm:col-span-2" label="Comments" value={lead.comments ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ comments: nz(v) })} />
               {/* Free-text background the website generator reads as supplied fact. */}
               <FieldRow className="sm:col-span-2" label="About business" value={lead.about_business ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ about_business: nz(v) })} />
-              <FieldRow className="sm:col-span-2" label="Instructions for developer" value={lead.developer_instructions ?? ""} type="textarea" canEdit={canEdit} onSave={(v) => patch({ developer_instructions: nz(v) })} />
+              <FieldRow
+                className="sm:col-span-2"
+                label="Instructions for developer"
+                value={lead.developer_instructions ?? ""}
+                type="textarea"
+                canEdit={canEdit}
+                onSave={(v) => patch({ developer_instructions: nz(v) })}
+                // One instruction per line, shown as the numbered list the developer reads.
+                display={
+                  parseInstructions(lead.developer_instructions).length ? (
+                    <ol className="list-decimal space-y-0.5 pl-5">
+                      {parseInstructions(lead.developer_instructions).map((item, i) => (
+                        <li key={i}>{item}</li>
+                      ))}
+                    </ol>
+                  ) : undefined
+                }
+              />
             </div>
           </SectionCard>
 

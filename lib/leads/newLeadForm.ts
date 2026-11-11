@@ -1,5 +1,6 @@
 import { PHONE_RE } from "@/lib/forms/phone";
 import { MAX_COLORS, MIN_COLORS, parseColorScheme } from "@/lib/leads/colorScheme";
+import { formatInstructions, instructionsError } from "@/lib/leads/devInstructions";
 import type { AddOn, SocialProfile } from "@/lib/leads/types";
 
 export const PAGE_OPTIONS = [
@@ -59,7 +60,8 @@ export interface NewLeadFormState {
   /** Optional free-text background on the business (feeds the website generator). */
   about_business: string;
   /** Optional instructions the build has to honour. */
-  developer_instructions: string;
+  /** Instructions for the developer, one item each (≤ 50 words) — lib/leads/devInstructions.ts. */
+  developer_instructions: string[];
   /** As many of the business's social profiles as it has. */
   social_profiles: SocialProfile[];
   /** builder_templates.id the agent picked with the client. Optional. */
@@ -107,7 +109,7 @@ export function emptyNewLead(status: string): NewLeadFormState {
     direct_line_saved: "",
     reference_link: "",
     about_business: "",
-    developer_instructions: "",
+    developer_instructions: [""],
     social_profiles: [],
     recommended_template_id: "",
     comments: "",
@@ -166,6 +168,7 @@ export function validateNewLead(
   if (!f.status) e.status = "No category available to you.";
   if (!f.site_type) e.site_type = "Please select a site type.";
   if (!f.business_name.trim()) e.business_name = "Business name is required.";
+  if (!f.category.trim()) e.category = "Please choose the business category.";
   if (!PHONE_RE.test(f.business_phone.trim()))
     e.business_phone = "Enter a valid phone: (252) 401-2775";
   if (!f.no_email && !EMAIL_RE.test(f.business_email.trim()))
@@ -174,6 +177,8 @@ export function validateNewLead(
   if (!f.business_profile_link.trim()) e.business_profile_link = "Profile link is required.";
   if (f.platform === "Other" && !f.other_platform.trim())
     e.other_platform = "Platform name is required when selecting Other.";
+  const instrErr = instructionsError(f.developer_instructions);
+  if (instrErr) e.developer_instructions = instrErr;
   if (!f.has_service_areas) e.has_service_areas = "Please indicate if there are service areas.";
   if (f.has_service_areas === "Yes" && nonEmpty(f.areas).length === 0)
     e.areas = "At least one area is required.";
@@ -289,7 +294,7 @@ export function buildLeadPayload(f: NewLeadFormState, opts?: { userId?: string }
     rating: f.rating || null,
     fresh_or_followup: f.fresh_or_followup || null,
     about_business: f.about_business.trim() || null,
-    developer_instructions: f.developer_instructions.trim() || null,
+    developer_instructions: formatInstructions(f.developer_instructions),
     recommended_template_id: f.recommended_template_id || null,
     social_profiles: socials.length ? socials : null,
     comments: f.comments.trim() || null,

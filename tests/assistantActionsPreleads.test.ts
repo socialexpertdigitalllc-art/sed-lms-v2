@@ -319,6 +319,7 @@ describe("prelead.update", () => {
 describe("prelead.convert", () => {
   const PERMS = ["leads.create", "pre_leads.followup"];
   const REST = {
+  category: "Pizza Restaurant",
     client_experience: 12,
     specify_pages: ["Home", "Services", "Contact Us"],
     color_scheme: "#1E40AF, #FFFFFF",
@@ -351,7 +352,8 @@ describe("prelead.convert", () => {
     });
     // Copied values read back like anything the person said.
     expect(n.display.business_phone).toBe("(252) 401-2775");
-    expect(n.missing).toEqual(["client_experience", "specify_pages", "color_scheme", "follow_up_time", "price_quoted", "rating", "fresh_or_followup"]);
+    // A pre-lead has no category; converting asks for it (required since 2026-11-11).
+    expect(n.missing).toEqual(["category", "client_experience", "specify_pages", "color_scheme", "follow_up_time", "price_quoted", "rating", "fresh_or_followup"]);
   });
 
   it("re-checks cleanly on Confirm, in a new request, from the stored values", async () => {
