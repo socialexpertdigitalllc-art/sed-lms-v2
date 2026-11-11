@@ -27,7 +27,7 @@ export const LEADS_TICK_EVENT = "changed";
  *  (lead_follow_ups, lead_tickets — migration 0098), whose own stores look at
  *  the table name. */
 export type TickKind = "leads" | "tags" | "other";
-type TickListener = (kind: TickKind, table: string) => void;
+type TickListener = (kind: TickKind, table: string, payload: Record<string, unknown>) => void;
 
 const listeners = new Set<TickListener>();
 const reconnectListeners = new Set<() => void>();
@@ -49,14 +49,19 @@ export function tickKind(payload: unknown): TickKind {
 
 function open() {
   if (channel || typeof window === "undefined") return;
-  client = createClient();
+  try {
+    client = createClient();
+  } catch {
+    return; // Supabase not configured here (tests, previews): no live ticks, nothing breaks
+  }
   channel = client.channel(LEADS_TICK_TOPIC);
   channel
     .on("broadcast", { event: LEADS_TICK_EVENT }, (msg) => {
       const payload = (msg as { payload?: unknown }).payload;
       const kind = tickKind(payload);
       const table = tickTable(payload);
-      for (const fn of listeners) fn(kind, table);
+      const body = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+      for (const fn of listeners) fn(kind, table, body);
     })
     .subscribe((status) => {
       if (status !== "SUBSCRIBED") return;

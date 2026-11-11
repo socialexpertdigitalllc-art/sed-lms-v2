@@ -1,15 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
-import { subscribeLeadsTicks } from "@/lib/realtime/leadsTicks";
+import { subscribeTableTicks } from "@/lib/realtime/tableTicks";
 
 // Every table whose row count feeds a sidebar badge. Some may not be in the
 // realtime publication — subscribing is harmless if no events arrive; the
 // mount fetch still seeds the counts either way.
-// `leads` is not here: lead changes arrive as the database's broadcast tick
-// (lib/realtime/leadsTicks.ts), which costs the same for every tab instead of
-// a row-level-security check per listening tab.
 const COUNT_TABLES = [
   "lead_tickets",
   "feedback",
@@ -78,38 +74,26 @@ export function useNavCounts(): Record<string, number> {
   }, []);
 
   useEffect(() => {
-    const supabase = createClient();
     let t: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
-    const channel = supabase.channel("rt-nav-counts");
 
-    // A hidden tab ignores realtime bumps entirely — the visibilitychange
-    // tick above refetches the moment it is looked at, so nothing is lost and
-    // a background tab no longer joins the herd every time a lead changes.
+    // A hidden tab ignores bumps entirely — the visibilitychange tick above
+    // refetches the moment it is looked at, so nothing is lost and a
+    // background tab no longer joins the herd every time something changes.
     const bump = () => {
       if (document.visibilityState !== "visible") return;
       if (t) clearTimeout(t);
       t = setTimeout(() => setRefreshTick((n) => n + 1), 1_500);
     };
 
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (cancelled) return;
-      if (data.session) supabase.realtime.setAuth(data.session.access_token);
-      for (const table of COUNT_TABLES) {
-        channel.on("postgres_changes", { event: "*", schema: "public", table }, bump);
-      }
-      channel.subscribe();
-    })();
-    const unsubscribeLeads = subscribeLeadsTicks((kind) => {
-      if (kind === "leads") bump();
-    });
+    // Every count-bearing table announces its changes with a broadcast tick
+    // (migrations 0097–0099; lib/realtime/tableTicks.ts) — the same cost for
+    // every open tab, where postgres_changes ran a row-level-security check
+    // per listening tab for each change.
+    const unsubscribe = subscribeTableTicks(["leads", ...COUNT_TABLES], bump);
 
     return () => {
-      cancelled = true;
       if (t) clearTimeout(t);
-      unsubscribeLeads();
-      supabase.removeChannel(channel);
+      unsubscribe();
     };
   }, []);
 

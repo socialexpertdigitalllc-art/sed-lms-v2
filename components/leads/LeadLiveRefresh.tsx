@@ -4,6 +4,19 @@ import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { subscribeLeadsTicks } from "@/lib/realtime/leadsTicks";
+import { useTableTicks } from "@/hooks/useTableTicks";
+
+/** Tables the lead page shows rows of, beyond the lead itself (matched by lead_id / ticket_id). */
+export const LEAD_PAGE_TABLES = [
+  "lead_tickets",
+  "ticket_items",
+  "contracts",
+  "lead_receipts",
+  "form_endpoints",
+  "form_submissions",
+  "lead_status_events",
+  "lead_hitlist",
+];
 
 /** Wait after a tick before checking, so a burst of changes is one check. */
 export const LEAD_PAGE_CHECK_DELAY_MS = 600;
@@ -14,8 +27,28 @@ export const LEAD_PAGE_CHECK_DELAY_MS = 600;
  * when it moved, or its tags changed — refreshes the page. Hidden tabs wait
  * until they are looked at. The page used to never update by itself.
  */
-export function LeadLiveRefresh({ leadId, updatedAt, tagIds }: { leadId: string; updatedAt: string; tagIds: string[] }) {
+export function LeadLiveRefresh({
+  leadId,
+  updatedAt,
+  tagIds,
+  ticketIds = [],
+}: {
+  leadId: string;
+  updatedAt: string;
+  tagIds: string[];
+  /** This lead's tickets, so a ticked-off item on one of them refreshes the page. */
+  ticketIds?: string[];
+}) {
   const router = useRouter();
+  // Its other rows: tickets and their items, contracts, receipts, forms, the
+  // status history and its HitList star — but never another lead's.
+  const ticketSet = ticketIds.join(",");
+  useTableTicks(LEAD_PAGE_TABLES, () => router.refresh(), {
+    filter: (p) =>
+      p.table === "ticket_items"
+        ? !!p.ticket_id && ticketSet.split(",").includes(p.ticket_id)
+        : p.lead_id === leadId,
+  });
   const seen = useRef({ updatedAt, tags: [...tagIds].sort().join(",") });
   useEffect(() => {
     seen.current = { updatedAt, tags: [...tagIds].sort().join(",") };

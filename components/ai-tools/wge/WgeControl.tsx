@@ -5,7 +5,6 @@ import type { WgeConfig, WgeVariable } from "@/lib/ai-tools/wge-types";
 import { TOOLS, TOOL_IDS } from "@/lib/ai-tools/config";
 import { listTemplateVars } from "@/lib/ai-tools/template";
 import { buildPrompt, EMPTY_INPUT, type GenInput } from "@/lib/ai-tools/prompt";
-import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 
 type Lead = { id: string; business_name: string };
 type Tab = "prompt" | "variables" | "settings" | "queue";
@@ -14,7 +13,8 @@ const inputCls = "w-full px-3 py-2 rounded-md border border-border bg-surface te
 
 export function WgeControl({ initialConfig, leads }: { initialConfig: WgeConfig; leads: Lead[] }) {
   const [tab, setTab] = useState<Tab>("prompt");
-  useRealtimeRefresh("wge_queue");
+  // Live: the layout re-renders this screen when `wge_queue` changes
+  // (components/layout/LiveRouteRefresh.tsx, lib/realtime/liveRoutes.ts).
   const [cfg, setCfg] = useState<WgeConfig>(initialConfig);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);

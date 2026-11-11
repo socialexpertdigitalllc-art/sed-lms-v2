@@ -41,6 +41,15 @@ vi.mock("@/lib/supabase/client", () => ({
     }),
   }),
 }));
+// The lead page's other rows (tickets, contracts, …) arrive through useTableTicks.
+const tableTicks = vi.hoisted(() => ({
+  calls: [] as { tables: string[]; run: () => void; filter?: (p: Record<string, string>) => boolean }[],
+}));
+vi.mock("@/hooks/useTableTicks", () => ({
+  useTableTicks: (tables: string[], run: () => void, opts: { filter?: (p: Record<string, string>) => boolean } = {}) => {
+    tableTicks.calls.push({ tables, run, filter: opts.filter });
+  },
+}));
 const router = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router, usePathname: () => "/leads", useSearchParams: () => new URLSearchParams() }));
 
@@ -182,6 +191,48 @@ describe("LeadLiveRefresh — the open lead page", () => {
     Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
     document.dispatchEvent(new Event("visibilitychange"));
     await settle();
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("LeadLiveRefresh — the lead's other rows", () => {
+  const last = () => tableTicks.calls.at(-1)!;
+  const fire = (p: Record<string, string>) => {
+    const c = last();
+    if (!c.filter || c.filter(p)) c.run();
+  };
+  beforeEach(() => {
+    tableTicks.calls = [];
+    router.refresh.mockClear();
+  });
+
+  it("listens to the tables the lead page shows", () => {
+    render(<LeadLiveRefresh leadId="L1" updatedAt="x" tagIds={[]} ticketIds={["T1"]} />);
+    expect(last().tables).toEqual(
+      expect.arrayContaining(["lead_tickets", "ticket_items", "contracts", "lead_receipts", "form_endpoints", "form_submissions"]),
+    );
+  });
+
+  it("a contract, receipt or ticket for THIS lead refreshes the page", () => {
+    render(<LeadLiveRefresh leadId="L1" updatedAt="x" tagIds={[]} ticketIds={["T1"]} />);
+    fire({ table: "contracts", lead_id: "L1" });
+    fire({ table: "lead_receipts", lead_id: "L1" });
+    fire({ table: "lead_tickets", lead_id: "L1", id: "T9" });
+    expect(router.refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("another lead's rows are ignored", () => {
+    render(<LeadLiveRefresh leadId="L1" updatedAt="x" tagIds={[]} ticketIds={["T1"]} />);
+    fire({ table: "contracts", lead_id: "L2" });
+    fire({ table: "form_submissions", lead_id: "L2" });
+    expect(router.refresh).not.toHaveBeenCalled();
+  });
+
+  it("a ticked-off item on one of this lead's tickets refreshes; another ticket's item does not", () => {
+    render(<LeadLiveRefresh leadId="L1" updatedAt="x" tagIds={[]} ticketIds={["T1", "T2"]} />);
+    fire({ table: "ticket_items", ticket_id: "T9", id: "i1" });
+    expect(router.refresh).not.toHaveBeenCalled();
+    fire({ table: "ticket_items", ticket_id: "T2", id: "i2" });
     expect(router.refresh).toHaveBeenCalledTimes(1);
   });
 });

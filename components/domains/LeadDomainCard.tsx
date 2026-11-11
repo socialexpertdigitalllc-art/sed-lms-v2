@@ -12,6 +12,7 @@ import { PickDomainDialog } from "@/components/domains/PickDialogs";
 import { ExactNameCheck, exactSummary } from "@/components/domains/ExactNameCheck";
 import type { LeadDomainCheck } from "@/lib/domains/leadCheck";
 import { STATUS_LABELS, type ClientDomainRow } from "@/lib/domains/types";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 /**
  * The lead's domain: buy one (Cloudflare by default) or link one we own, then
@@ -46,6 +47,12 @@ export function LeadDomainCard({
 }) {
   const { toast } = useToast();
   const [row, setRow] = useState<ClientDomainRow | null>(initial);
+  // Fresh data from the server (a live refresh) replaces what is shown.
+  const [seenInitial, setSeenInitial] = useState(initial);
+  if (seenInitial !== initial) {
+    setSeenInitial(initial);
+    setRow(initial);
+  }
   const [buyOpen, setBuyOpen] = useState(false);
   const [pickOpen, setPickOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -57,6 +64,8 @@ export function LeadDomainCard({
     const j = await res.json().catch(() => ({}));
     setRow(((j.domains ?? [])[0] as ClientDomainRow | undefined) ?? null);
   }, [leadId]);
+  // Live: this lead's domain changing anywhere reloads the card.
+  useTableTicks(["client_domains"], () => void refresh(), { filter: (p) => p.lead_id === leadId, minGapMs: 10_000 });
 
   // live checklist while the pipeline works; a slow re-check while it waits for the site
   useEffect(() => {

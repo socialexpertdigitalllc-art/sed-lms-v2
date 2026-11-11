@@ -18,7 +18,10 @@ const nextConfig: NextConfig = {
     // browser; a realtime event or a mutation calls router.refresh(), which
     // drops the cache, so changes still show at once. 180 s for static
     // segments is the documented default pairing.
-    staleTimes: { dynamic: 30, static: 180 },
+    // A visited page is kept 5 minutes so going back to it is instant; it is
+    // refreshed in the background on the way (components/layout/LiveRouteRefresh.tsx)
+    // and on every change to what it shows, so it is never shown stale.
+    staleTimes: { dynamic: 300, static: 300 },
     // Build workers. Next defaults to one per CPU less one: 63 on Hostinger's
     // build host. Each worker loads Next's native binding, which starts its
     // own thread pool, and from Next 16.4 that crossed the host's thread

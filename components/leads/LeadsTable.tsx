@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { LeadLink } from "./LeadLink";
 import { useRouter } from "next/navigation";
 import "@/lib/tables/columnMeta";
 import { Download, ArrowUp, ArrowDown, ExternalLink, Users, FilterX, Star } from "lucide-react";
@@ -33,7 +34,6 @@ import { ShuffleSiteButton } from "@/components/common/ShuffleSiteButton";
 import { BulkActionBar } from "./BulkActionBar";
 import { bucketOf, isFollowUpEligible, FU_STATUSES } from "@/lib/leads/followups";
 import { usePermissions } from "@/hooks/usePermissions";
-import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { toCsv, LEAD_CSV_COLUMNS, leadCsvRow } from "@/lib/leads/csv";
 import { leadCopyText } from "@/lib/leads/copyText";
 import { RegionFilter } from "./RegionFilter";
@@ -123,7 +123,8 @@ export function LeadsTable({
   // The leads themselves stay current through the live leads store
   // (hooks/useLiveLeads.ts) that feeds `leads`. Another admin's star shows up
   // here too (RLS: hitlist.view only); that page refresh is small now.
-  useRealtimeRefresh("lead_hitlist");
+  // Live: the layout re-renders this screen when `lead_hitlist` changes
+  // (components/layout/LiveRouteRefresh.tsx, lib/realtime/liveRoutes.ts).
   const canCreate = has("leads.create");
   const canChangeStatus = has("leads.status_change");
   const canFollowUp = has("leads.followup");
@@ -432,13 +433,13 @@ export function LeadsTable({
                     onRemove={() => setHit(c.row.original.id, null)}
                   />
                 )}
-                <Link
+                <LeadLink
                   href={`/leads/${c.row.original.id}`}
                   onClick={(e) => e.stopPropagation()}
                   className="hover:underline truncate"
                 >
                   {c.row.original.business_name}
-                </Link>
+                </LeadLink>
                 <CopyButton value={leadCopyText(c.row.original)} title="Copy all business details" className="shrink-0" />
               </div>
               <div className="text-xs text-text-faint truncate">{c.row.original.business_email ?? ""}</div>
@@ -581,14 +582,14 @@ export function LeadsTable({
             onClick={(e) => e.stopPropagation()}
             className="flex items-center justify-end gap-1 whitespace-nowrap opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
           >
-            <Link
+            <LeadLink
               href={`/leads/${c.row.original.id}`}
               className="text-xs font-medium text-accent-ink px-2 py-1 rounded hover:bg-accent-soft"
               data-track="Open lead"
               data-lead-id={c.row.original.id}
             >
               Detail
-            </Link>
+            </LeadLink>
             {canChangeStatus && (
               <button
                 onClick={() => setModalLead(c.row.original)}

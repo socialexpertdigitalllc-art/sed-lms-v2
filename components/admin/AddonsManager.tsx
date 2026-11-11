@@ -12,6 +12,12 @@ const inputCls =
 export function AddonsManager({ initial }: { initial: Addon[] }) {
   const router = useRouter();
   const [addons, setAddons] = useState<Addon[]>(initial);
+  // Fresh data from the server (a live refresh) replaces what is shown.
+  const [seenInitial, setSeenInitial] = useState(initial);
+  if (seenInitial !== initial) {
+    setSeenInitial(initial);
+    setAddons(initial);
+  }
   const [label, setLabel] = useState("");
   const [price, setPrice] = useState("");
   const [adding, setAdding] = useState(false);

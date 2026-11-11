@@ -13,6 +13,7 @@ import { ToastProvider } from "@/components/common/Toast";
 import { NotificationToaster } from "@/components/layout/NotificationToaster";
 import { PushPrompt } from "@/components/layout/PushPrompt";
 import { TabBadge } from "@/components/layout/TabBadge";
+import { LiveRouteRefresh } from "@/components/layout/LiveRouteRefresh";
 import { VersionBadge } from "@/components/layout/VersionBadge";
 import { AssistantProvider } from "@/providers/AssistantProvider";
 import { AssistantWidget } from "@/components/assistant/AssistantWidget";
@@ -77,6 +78,8 @@ export default async function AppLayout({
           <MilestoneCelebration displayName={profile?.display_name ?? ""} />
           <PushPrompt />
           <TabBadge />
+          {/* Every screen live: re-render on changes to what it shows (lib/realtime/liveRoutes.ts). */}
+          <LiveRouteRefresh />
           <VersionBadge />
         </ToastProvider>
       </ViewScopeProvider>

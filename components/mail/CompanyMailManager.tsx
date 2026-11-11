@@ -42,6 +42,12 @@ export function CompanyMailManager({ initial, owners }: { initial: MailboxListIt
   const router = useRouter();
   const { toast } = useToast();
   const [rows, setRows] = useState<MailboxListItem[]>(initial);
+  // Fresh data from the server (a live refresh) replaces what is shown.
+  const [seenInitial, setSeenInitial] = useState(initial);
+  if (seenInitial !== initial) {
+    setSeenInitial(initial);
+    setRows(initial);
+  }
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const [userId, setUserId] = useState(owners[0]?.id ?? "");

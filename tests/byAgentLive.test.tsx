@@ -7,6 +7,9 @@ vi.mock("@/hooks/useLiveLeads", () => ({
   syncLeadsNow: () => {},
 }));
 
+const router = vi.hoisted(() => ({ prefetch: vi.fn(), push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => router, usePathname: () => "/by-agent", useSearchParams: () => new URLSearchParams() }));
+
 import { ByAgentBoard } from "@/components/leads/ByAgentBoard";
 
 const lead = (id: string, agent: string | null, status: string, price: number) => ({

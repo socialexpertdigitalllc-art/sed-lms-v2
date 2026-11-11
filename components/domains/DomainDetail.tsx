@@ -16,6 +16,7 @@ import { DomainRegistrarPanel } from "@/components/domains/DomainRegistrarPanel"
 import { PickLeadDialog } from "@/components/domains/PickDialogs";
 import { registrarDashboardUrl, type DomainHealth } from "@/lib/domains/types";
 import type { DomainActivity, DomainDetail } from "@/lib/domains/detail";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 const ACTIVITY_WORDS: Record<string, string> = {
   "domain.purchased": "Bought",
@@ -95,6 +96,12 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
   const router = useRouter();
   const { call, busy } = useDomainCall();
   const [detail, setDetail] = useState(initial);
+  // Fresh data from the server (a live refresh) replaces what is shown.
+  const [seenInitial, setSeenInitial] = useState(initial);
+  if (seenInitial !== initial) {
+    setSeenInitial(initial);
+    setDetail(initial);
+  }
   const [now, setNow] = useState(0);
   const [linkOpen, setLinkOpen] = useState(false);
   const [confirmRenew, setConfirmRenew] = useState(false);
@@ -108,6 +115,8 @@ export function DomainDetailView({ initial, canManage, canPurchase }: { initial:
     if (r.ok) setDetail((await r.json()) as DomainDetail);
     setNow(Date.now());
   }, [d.id]);
+  // Live: this domain changing anywhere (a check, a renewal, someone else's edit) reloads it.
+  useTableTicks(["client_domains"], () => void reload(), { filter: (p) => !p.id || p.id === d.id });
 
   useEffect(() => {
     const t = setTimeout(() => setNow(Date.now()), 0);

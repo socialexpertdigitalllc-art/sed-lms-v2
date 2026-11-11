@@ -65,12 +65,17 @@ describe("cmsOpenReady", () => {
   });
 
   it("is what the lead and ticket pages pass down, asked only for someone who could see the button", () => {
-    for (const page of ["app/(app)/leads/[id]/page.tsx", "app/(app)/tickets/[id]/page.tsx"]) {
-      const src = readFileSync(page, "utf8");
-      expect(src, page).toMatch(/const cmsReady =\s[^;]*\? await cmsOpenReady\(admin\) : false;/);
-      expect(src, page).toContain("cmsReady={cmsReady}");
-    }
-    expect(readFileSync("app/(app)/leads/[id]/page.tsx", "utf8")).toMatch(/const cmsReady =\s*\(perms\.has\("tickets\.resolve"\) \|\| perms\.has\("studio\.manage"\)\) && Boolean\(lead\.website_link\)/);
+    // The ticket page asks it inline; the lead page asks it inside its one
+    // parallel batch of reads — both only behind the same gate.
+    const ticket = readFileSync("app/(app)/tickets/[id]/page.tsx", "utf8");
+    expect(ticket).toMatch(/const cmsReady =\s[^;]*\? await cmsOpenReady\(admin\) : false;/);
+    expect(ticket).toContain("cmsReady={cmsReady}");
+    const lead = readFileSync("app/(app)/leads/[id]/page.tsx", "utf8");
+    expect(lead).toMatch(
+      /\(perms\.has\("tickets\.resolve"\) \|\| perms\.has\("studio\.manage"\)\) && Boolean\(lead\.website_link\)\s*\?\s*cmsOpenReady\(admin\)\s*:\s*Promise\.resolve\(false\)/,
+    );
+    expect(lead.match(/cmsOpenReady\(/g)).toHaveLength(1);
+    expect(lead).toContain("cmsReady={cmsReady}");
     expect(readFileSync("app/(app)/tickets/[id]/page.tsx", "utf8")).toMatch(/const cmsReady = canViewAgentRuns && Boolean\(lead\.website_link\)/);
   });
 });

@@ -14,6 +14,7 @@ import { PhoneLink } from "./PhoneLink";
 import { JSON_HEADERS, type CardOp, type CardOpBody, type CardOpResult } from "./useAssistantChat";
 import { useActPermissions } from "./useActPermissions";
 import { MODE_ICON } from "./PermissionModePicker";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 type Row = ActionCard & {
   conversationId: string | null;
@@ -84,6 +85,8 @@ function useList(scope: "mine" | "approvals" | "all", enabled: boolean) {
     },
     [scope],
   );
+  // Live: an action created, decided or run anywhere reloads the first page.
+  useTableTicks(enabled ? ["assistant_actions"] : [], () => void load());
   useEffect(() => {
     if (!enabled) return;
     let alive = true;

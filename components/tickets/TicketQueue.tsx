@@ -8,7 +8,6 @@ import { TICKET_STATUSES, TICKET_CATEGORIES, TICKET_PRIORITIES } from "@/lib/tic
 import { itemProgress, isOverdue } from "@/lib/tickets/logic";
 import { formatDateTime, initials } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
-import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { useViewState } from "@/hooks/useViewState";
 import MultiSelect from "@/components/common/MultiSelect";
 import { Select } from "@/components/common/Select";
@@ -50,7 +49,8 @@ export function TicketQueue({
   initialLeadId?: string | null;
   initialMine?: boolean;
 }) {
-  useRealtimeRefresh("lead_tickets");
+  // Live: the layout re-renders this screen when `lead_tickets` changes
+  // (components/layout/LiveRouteRefresh.tsx, lib/realtime/liveRoutes.ts).
 
   // Only assign/resolve-capable roles (tech, admin, management) are ever
   // assignees, so the "assigned to me" filter is only meaningful for them.

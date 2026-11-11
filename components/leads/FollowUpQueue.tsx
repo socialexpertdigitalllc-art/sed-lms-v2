@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
+import { LeadLink } from "./LeadLink";
 import { Search } from "lucide-react";
 import type { Lead } from "@/lib/leads/types";
 import { SITE_TYPES } from "@/lib/leads/types";
@@ -271,14 +271,14 @@ export function FollowUpQueue({
               Follow Up
             </button>
           )}
-          <Link
+          <LeadLink
             href={`/leads/${lead.id}`}
             className="text-xs font-medium text-accent-ink px-2 py-1 rounded hover:bg-accent-soft"
             data-track="Open lead"
             data-lead-id={lead.id}
           >
             Detail
-          </Link>
+          </LeadLink>
         </div>
       </div>
     );

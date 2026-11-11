@@ -1,8 +1,9 @@
-# Live leads — load once, then only what changed
+# Live data — load once, then only what changed, on every screen
 
-Added 2026-11-05 (migrations 0097, 0098). This replaces "rebuild the whole
-page on every change" on the leads screens: **Leads, HitList, Follow-ups, the
-Dashboard, By Agent and the lead page.**
+Added 2026-11-05 (migrations 0097, 0098, 0099). The leads screens (**Leads,
+HitList, Follow-ups, the Dashboard, By Agent**) keep a live copy of the leads
+in the browser. **Every other screen** re-renders by itself when a table it
+shows changes, and opening a lead is instant.
 
 ## Why
 
@@ -85,19 +86,60 @@ lead page did not update by themselves at all.
   `0098_followups_tickets_live_ticks.sql` adds `lead_follow_ups` and
   `lead_tickets`.
 
-## Still on the older pattern
+## Every other screen (migration 0099)
 
-Pre-leads, the Tickets queue and Feedback still refresh their page on a
-change. Their tables are small, so this stays cheap. HitList star changes
-also refresh the (now small) leads page. The Tickets queue applies its own
-visibility rules on the server, so moving it to the browser needs those rules
-first.
+- Every table a screen shows broadcasts a tick on its own topic,
+  `lms:t:<table>`, so a screen hears only about its own tables. Row ticks
+  carry the row's `id`, `lead_id` and `ticket_id`, and nothing else. Busy
+  tables (`activity_log`, `builder_runs`, `assistant_actions`) send one tick
+  per statement instead.
+- `components/layout/LiveRouteRefresh.tsx` sits in the app layout. For the
+  screen on show it listens to that screen's tables
+  (`lib/realtime/liveRoutes.ts`) and re-renders it from the server when one
+  changes. A burst is one refresh, at most one every 3 s (10 to 30 s for the
+  busiest tables), and nothing happens in a hidden tab until it is looked at.
+  A refresh keeps scroll, filters and anything being typed.
+- Detail pages (a ticket, a pre-lead, a form endpoint, a user) refresh only
+  for their own rows.
+- Screens that load their own data in the browser reload themselves on
+  their table's tick (`hooks/useTableTicks.ts`). These are Domains and a
+  domain's page, Site Builder, Site Studio, SED AI's actions, and a lead's
+  domain card and .com check.
+- `tests/liveRoutes.test.ts` fails if any page in the app has no live rule.
+  A new page must be added to `lib/realtime/liveRoutes.ts`.
+- The sidebar badges recount on the same ticks. The per-viewer
+  `postgres_changes` feeds on those tables are gone. Only the notification
+  bell still uses one.
+
+## Opening a lead
+
+1. **The page's server reads run in parallel.** It used to make about 27
+   database round trips one after another.
+2. **Instant view:** the moment a lead is clicked,
+   `app/(app)/leads/[id]/loading.tsx` shows that lead's real details from the
+   live copy, laid out like the full page. The rest (history, tickets,
+   contracts, actions) fills in when the server's page arrives.
+3. **Prefetch on intent** (`components/leads/LeadLink.tsx`): the pointer
+   resting on a lead for 120 ms, keyboard focus, or the press itself starts
+   loading the full page, so it is usually there before the click lands.
+4. **Revisits are instant.** The browser keeps a visited page for 5 minutes
+   (`staleTimes.dynamic`). `LiveRouteRefresh` refreshes it in the background
+   when you come back, so it is never shown stale.
+
+## Not live, on purpose
+
+- The Agent Report, Verify, Mailbox, Changelog and Docs are on-demand tools.
+  They compute their answer when asked.
+- `app_settings` (tens of thousands of automatic writes a day) and
+  `user_activity` / `user_sessions` (presence) send no ticks. They would
+  flood every listener. The settings forms keep what someone is typing.
 
 ## When something goes wrong
 
 | Symptom | Check |
 |---|---|
 | Changes from others take up to a minute | Ticks aren't arriving. Check that migration 0097's triggers exist (`trg_leads_live_tick`) and that Realtime is healthy. The 60 s floor keeps things correct meanwhile. |
+| Another screen doesn't update by itself | Check its rule in `lib/realtime/liveRoutes.ts` lists the table, and that the table has a `trg_<table>_live_tick` trigger (0099). |
 | "Couldn't load the leads" | The first read failed (network or Supabase). *Try again* retries. |
 | Someone sees a lead they shouldn't | Row-level security on `leads` decides. The browser copy is thrown away on any permission change. |
 | Need to force everyone to re-read | Bump `CACHE_VERSION` in `lib/leads/liveSync.ts` and deploy. |

@@ -7,6 +7,7 @@ import { btnGhostSm } from "@/components/common/buttons";
 import { money } from "@/components/domains/DomainBits";
 import { formatRelative } from "@/lib/leads/format";
 import type { LeadDomainCheck } from "@/lib/domains/leadCheck";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 /** A check's answer in one word and a colour. PURE; tested. */
 export function exactVerdict(check: Pick<LeadDomainCheck, "available" | "reason"> | null): { label: string; tone: PillTone } {
@@ -47,6 +48,12 @@ export function ExactNameCheck({
   onChange?: (check: LeadDomainCheck | null) => void;
 }) {
   const [check, setCheck] = useState<LeadDomainCheck | null>(initial);
+  // Fresh data from the server (a live refresh) replaces what is shown.
+  const [seenInitial, setSeenInitial] = useState(initial);
+  if (seenInitial !== initial) {
+    setSeenInitial(initial);
+    setCheck(initial);
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gaveUp, setGaveUp] = useState(false);
@@ -82,6 +89,21 @@ export function ExactNameCheck({
     }, POLL_MS);
     return () => clearInterval(t);
   }, [waiting, leadId, update]);
+
+  // Live: a new check for this lead (the Ready trigger, the daily refresh,
+  // someone else's "Check again") shows up without a reload.
+  useTableTicks(
+    ["lead_domain_checks"],
+    () => {
+      void fetch(`/api/leads/${leadId}/domain-check`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (j && "check" in j) update((j.check ?? null) as LeadDomainCheck | null);
+        })
+        .catch(() => {});
+    },
+    { filter: (p) => p.lead_id === leadId },
+  );
 
   async function recheck() {
     setBusy(true);

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { LeadLink } from "./LeadLink";
 import { useMemo } from "react";
 import type { Lead } from "@/lib/leads/types";
 import { StatusPill } from "@/components/leads/StatusPill";
@@ -76,9 +76,9 @@ function Cards({ leads, nameById }: { leads: Lead[]; nameById: Record<string, st
                   {c.recent.map((l) => (
                     <tr key={l.id} className="border-t border-border-subtle">
                       <td className="py-2">
-                        <Link href={`/leads/${l.id}`} className="text-text hover:text-accent-ink font-medium">
+                        <LeadLink href={`/leads/${l.id}`} className="text-text hover:text-accent-ink font-medium">
                           {l.business_name}
-                        </Link>
+                        </LeadLink>
                       </td>
                       <td className="py-2"><StatusPill status={l.status} /></td>
                       <td className="py-2 text-right font-mono text-text-muted text-xs">

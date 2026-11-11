@@ -10,6 +10,7 @@ import { TemplateCard } from "./TemplateCard";
 import { TemplateEditModal } from "./TemplateEditModal";
 import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 export interface BuilderTemplateRow {
   id: string;
@@ -60,6 +61,8 @@ export function TemplatesBoard() {
       setLoading(false);
     }
   }, [toast]);
+  // Live: a template added, changed or removed anywhere reloads the board.
+  useTableTicks(["builder_templates"], () => void load());
 
   useEffect(() => { void load(); }, [load]);
 

@@ -11,6 +11,7 @@ import { RelativeTime } from "@/components/common/RelativeTime";
 import { useToast } from "@/components/common/Toast";
 import { cn } from "@/lib/utils";
 import type { BuilderTemplateRow } from "@/components/site-builder/TemplatesBoard";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 type BuilderRunStatus = "queued" | "generating" | "review" | "approved" | "deployed" | "failed";
 
@@ -58,6 +59,8 @@ export function RunsList() {
       setLoading(false);
     }
   }, []);
+  // Live: a run started, progressing or removed anywhere reloads the list.
+  useTableTicks(["builder_runs", "builder_templates"], () => void load(), { minGapMs: 5_000 });
 
   useEffect(() => { void load(); }, [load]);
 

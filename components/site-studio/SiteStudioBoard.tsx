@@ -13,6 +13,7 @@ import type { StudioTemplateStatus } from "@/lib/site-studio/service/types";
 import { statusPill } from "@/lib/site-studio/ui/status";
 import { TemplateCard } from "@/components/site-studio/TemplateCard";
 import { ReviewDrawer } from "@/components/site-studio/ReviewDrawer";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 /** The row shape the list endpoint returns (plus manifest, which the detail
  *  endpoint adds — the board keeps whichever it has). */
@@ -69,6 +70,8 @@ export function SiteStudioBoard() {
       setLoading(false);
     }
   }, [toast]);
+  // Live: a template added, changed or removed anywhere reloads the board.
+  useTableTicks(["studio_templates"], () => void load());
 
   useEffect(() => { void load(); }, [load]);
 

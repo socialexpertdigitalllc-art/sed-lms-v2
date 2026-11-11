@@ -21,6 +21,7 @@ import {
 import { BuyDomainDialog } from "@/components/domains/BuyDomainDialog";
 import { PickLeadDialog } from "@/components/domains/PickDialogs";
 import type { ClientDomainRow, DomainHealth } from "@/lib/domains/types";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 type Row = ClientDomainRow & { leads?: { business_name: string } | null };
 
@@ -84,6 +85,8 @@ export function DomainsBoard() {
       hostingerConfigured: j.hostingerConfigured,
     });
   }, [toast]);
+  // Live: any domain changing (status, health, renewal) reloads the list.
+  useTableTicks(["client_domains"], () => void load(), { minGapMs: 15_000 });
 
   useEffect(() => {
     const t = setTimeout(() => void load(), 0);

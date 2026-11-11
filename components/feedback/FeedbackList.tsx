@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { FEEDBACK_STATUSES, type Feedback, type FeedbackStatus } from "@/lib/feedback/types";
 import { formatDateTime } from "@/lib/leads/format";
 import { inputCls } from "@/components/forms/Field";
-import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import MultiSelect from "@/components/common/MultiSelect";
 
 const STATUS_CLS: Record<FeedbackStatus, string> = {
@@ -41,7 +40,8 @@ export function FeedbackList({
   const router = useRouter();
   // Unconditional (both the personal and manage views get live status updates)
   // — mirrors TicketQueue, which subscribes regardless of the viewer's role.
-  useRealtimeRefresh("feedback");
+  // Live: the layout re-renders this screen when `feedback` changes
+  // (components/layout/LiveRouteRefresh.tsx, lib/realtime/liveRoutes.ts).
 
   const [statusSel, setStatusSel] = useState<string[]>([]);
   const [resolvingId, setResolvingId] = useState<string | null>(null);

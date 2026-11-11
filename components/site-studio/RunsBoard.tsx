@@ -10,6 +10,7 @@ import { RelativeTime } from "@/components/common/RelativeTime";
 import { runStatusPill } from "@/lib/site-studio/ui/status";
 import type { RunStatus } from "@/lib/site-studio/run/types";
 import { RunLaunch } from "@/components/site-studio/RunLaunch";
+import { useTableTicks } from "@/hooks/useTableTicks";
 
 interface RunListRow {
   id: string;
@@ -51,6 +52,8 @@ export function RunsBoard() {
       setLoading(false);
     }
   }, []);
+  // Live: runs and templates changing anywhere reload the board.
+  useTableTicks(["studio_runs", "studio_templates"], () => void load());
 
   useEffect(() => { void load(); }, [load]);
 

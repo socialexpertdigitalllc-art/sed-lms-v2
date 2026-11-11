@@ -22,7 +22,6 @@ import { formatCurrency, formatDateTime } from "@/lib/leads/format";
 import { CategoryPill, PreLeadStatusPill } from "./CategoryPill";
 import { FollowUpModal } from "./FollowUpModal";
 import { usePermissions } from "@/hooks/usePermissions";
-import { useRealtimeRefresh } from "@/hooks/useRealtimeRefresh";
 import { usePageClamp } from "@/hooks/usePageClamp";
 import { noAutoPageReset } from "@/lib/tables/pagination";
 import { useViewState } from "@/hooks/useViewState";
@@ -56,7 +55,8 @@ export function PreLeadsTable({
   const router = useRouter();
   const { has } = usePermissions();
   const { density, columns: columnPrefs, setTableColumns } = useUiPrefs();
-  useRealtimeRefresh("pre_leads");
+  // Live: the layout re-renders this screen when `pre_leads` changes
+  // (components/layout/LiveRouteRefresh.tsx, lib/realtime/liveRoutes.ts).
   const canCreate = has("pre_leads.create");
   const canFollowUp = has("pre_leads.followup");
   const canDelete = has("pre_leads.delete");

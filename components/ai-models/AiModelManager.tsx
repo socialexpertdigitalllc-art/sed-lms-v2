@@ -695,6 +695,12 @@ function TaskRow({ task, onPatch }: { task: AiTaskSetting; onPatch: (key: string
 
 export function AiModelManager({ providers, tasks }: { providers: AiProviderSetting[]; tasks: AiTaskSetting[] }) {
   const [providerRows, setProviderRows] = useState(providers);
+  // Fresh data from the server (a live refresh) replaces what is shown.
+  const [seenProviders, setSeenProviders] = useState(providers);
+  if (seenProviders !== providers) {
+    setSeenProviders(providers);
+    setProviderRows(providers);
+  }
   const [taskRows, setTaskRows] = useState(tasks);
 
   const patchProvider = useCallback((key: string, next: Partial<AiProviderSetting>) => {
