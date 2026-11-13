@@ -5,7 +5,7 @@ import { resolveSubdomain, reusableSubdomain, InvalidSlugError } from "./slug";
 import { baseSubdomain, firstFreeVersion } from "./naming";
 import { claimedByAnotherLead } from "./claimed";
 import { ensureSubdomain } from "./ensureSubdomain";
-import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
+import { currentSiteLink, putSiteInReview } from "@/lib/leads/siteReview";
 
 /**
  * The exact DirectAdmin surface this service needs, injected so tests never
@@ -96,7 +96,9 @@ export async function deployRun(
 
     let resolved: { sub: string; reused: boolean };
     try {
-      const websiteLink = typeof lead.website_link === "string" ? lead.website_link : null;
+      // The site's current address: the one waiting in review, else the
+      // finished link (lib/leads/siteReview.ts).
+      const websiteLink = await currentSiteLink(admin, { id: run.lead_id, website_link: lead.website_link });
       // A FIRST deploy names the site after the business and nothing else —
       // the link goes to the client, and a random tail reads as phishing.
       // `run.site_slug` carries the engine's internal unique id, which is not
@@ -253,11 +255,18 @@ export async function deployRun(
       return fail(500, `Deployed to ${url}, but could not record it on the run: ${runUpdErr.message}. The site IS live.`);
     }
 
-    const { error: leadUpdErr } = await admin.from("leads").update({ website_link: url }).eq("id", run.lead_id);
-    if (leadUpdErr) {
-      return fail(500, `Deployed to ${url}, but could not update the lead's website_link: ${leadUpdErr.message}. The site IS live.`);
+    // The new site waits for the developer: only they see the link until
+    // they finalize it (lib/leads/siteReview.ts).
+    const review = await putSiteInReview(admin, {
+      lead: { id: run.lead_id, business_name: lead.business_name, agent_id: lead.agent_id, closed_by: lead.closed_by },
+      url,
+      source: "site_studio",
+      runId,
+      actorId: actorUserId,
+    });
+    if ("error" in review) {
+      return fail(500, `Deployed to ${url}, but could not hand it to the developer for review: ${review.error}. The site IS live.`);
     }
-    await noteWebsiteLinkChange(admin, { leadId: run.lead_id, after: url, actorId: actorUserId });
 
     const { error: logErr } = await admin.from("activity_log").insert({
       user_id: actorUserId,

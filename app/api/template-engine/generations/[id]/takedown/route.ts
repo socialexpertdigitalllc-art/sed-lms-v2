@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
 import { linkedSiteRefusal, noteWebsiteLinkChange } from "@/lib/sedcms/links";
+import { clearSiteReview } from "@/lib/leads/siteReview";
 import { daConfigured, deleteSubdomain, subFromWebsiteLink } from "@/lib/template-engine/directadmin";
 
 export const runtime = "nodejs";
@@ -80,6 +81,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       else await noteWebsiteLinkChange(admin, { leadId: gen.lead_id, before: lead.website_link, after: null, actorId: user.id });
     }
   }
+
+  // A site still waiting for the developer is gone too: nothing to finalize.
+  await clearSiteReview(admin, { leadId: gen.lead_id, site: gen.deployed_url ?? `https://${sub}.${domain}` });
 
   await admin.from("activity_log").insert({
     user_id: user.id,

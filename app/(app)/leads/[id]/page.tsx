@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
+import { isSiteDeveloper, loadSiteReview } from "@/lib/leads/siteReview";
 import { isAdminMember } from "@/lib/permissions/isAdminMember";
 import { allowedTicketScope, ticketInScope } from "@/lib/tickets/scope";
 import { LeadDetail } from "@/components/leads/LeadDetail";
@@ -151,6 +152,7 @@ export default async function LeadDetailPage({
     exactCheck,
     receiptData,
     cmsReady,
+    siteReviewRow,
   ] = await Promise.all([
     getActiveUsers(),
     followUpsP,
@@ -192,7 +194,14 @@ export default async function LeadDetailPage({
     (perms.has("tickets.resolve") || perms.has("studio.manage")) && Boolean(lead.website_link)
       ? cmsOpenReady(admin)
       : Promise.resolve(false),
+    // A published website waiting for the developer (lib/leads/siteReview.ts).
+    // Read for everyone, but only a developer is ever handed its link.
+    loadSiteReview(admin, id),
   ]);
+  const isDeveloper = isSiteDeveloper(perms);
+  const siteReview = siteReviewRow
+    ? { url: isDeveloper ? siteReviewRow.url : null, published_at: siteReviewRow.published_at }
+    : null;
 
   const leadTagIds = (leadTagRows ?? []).map((r) => r.tag_id as string);
   const canEditClosedBy = perms.has("leads.edit") || isSalesMember;
@@ -249,6 +258,8 @@ export default async function LeadDetailPage({
       receiptSender={receiptSender}
       openReceiptOnLoad={receiptParam === "new"}
       cmsReady={cmsReady}
+      siteReview={siteReview}
+      isSiteDeveloper={isDeveloper}
     />
     </>
   );

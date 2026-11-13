@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserPermissions } from "@/lib/permissions/resolver";
-import { linkedSiteRefusal, noteWebsiteLinkChange } from "@/lib/sedcms/links";
-import { notify } from "@/lib/notifications/notify";
+import { linkedSiteRefusal } from "@/lib/sedcms/links";
+import { currentSiteLink, putSiteInReview } from "@/lib/leads/siteReview";
 import {
   daConfigured,
   createSubdomain,
@@ -114,7 +114,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   // different lead already owns it. Kept to at most one DirectAdmin call so the
   // request stays short (a subdomain LIST of ~700 entries was seconds wasted).
   await begin("deploy:subdomain", "Preparing subdomain");
-  const linkSub = subFromWebsiteLink(typeof lead.website_link === "string" ? lead.website_link : null, domain);
+  // The site's current address: the one waiting in review, else the finished
+  // link (lib/leads/siteReview.ts).
+  const linkSub = subFromWebsiteLink(await currentSiteLink(admin, lead), domain);
   const existsErr = (r: { text: string; details: string }) => /exist/.test(`${r.text} ${r.details}`.toLowerCase());
   let sub: string;
   let existed: boolean;
@@ -222,33 +224,18 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       { status: 409 }
     );
   }
-  const { error: linkErr } = await admin.from("leads").update({ website_link: url }).eq("id", gen.lead_id);
-  if (linkErr) {
-    await failStep(linkErr.message);
-    return NextResponse.json({ error: `Deployed, but saving the lead link failed: ${linkErr.message}` }, { status: 500 });
-  }
-  await noteWebsiteLinkChange(admin, { leadId: gen.lead_id, before: lead.website_link, after: url, actorId: user.id });
-  await admin.from("activity_log").insert({
-    user_id: user.id,
-    action: "lead.website_link_set",
-    entity_type: "lead",
-    entity_id: gen.lead_id,
-    new_value: { website_link: url, generation_id: id },
+  // The new site waits for the developer: only they see the link until they
+  // finalize it (lib/leads/siteReview.ts).
+  const review = await putSiteInReview(admin, {
+    lead,
+    url,
+    source: "template_engine",
+    runId: id,
+    actorId: user.id,
   });
-  if (url !== lead.website_link) {
-    try {
-      await notify(
-        "website_link_added",
-        { leadId: gen.lead_id, lead: { agent_id: lead.agent_id, closed_by: lead.closed_by }, actorId: user.id },
-        {
-          title: "Website live",
-          body: `${lead.business_name}'s website is live: ${url}`,
-          dedupKey: `website_link_added:${gen.lead_id}:${new Date().toISOString()}`,
-          targetUrl: `/leads/${gen.lead_id}`,
-          websiteUrl: url,
-        }
-      );
-    } catch {}
+  if ("error" in review) {
+    await failStep(review.error);
+    return NextResponse.json({ error: `Deployed, but handing it to the developer for review failed: ${review.error}` }, { status: 500 });
   }
   state.currentKey = null;
   await end("done", url); // status/deployed_url were already CAS-flipped above

@@ -50,7 +50,7 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
         title: "Site deployed",
         body: provisioning
           ? `${url} — provisioning, usually live within a minute or two.`
-          : `${url} — saved to the lead's website link.`,
+          : `${url} — waiting for a developer to finalize it before sales see the link.`,
       });
       onChanged();
     } catch {
@@ -132,7 +132,7 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
       {gen.deployed_url ? (
         <p className="inline-flex items-center gap-2 rounded-md border border-ready-fg/20 bg-ready-bg px-3 py-2 text-sm text-ready-fg">
           <Globe className="h-4 w-4" /> Live at <a className="underline" href={gen.deployed_url} target="_blank" rel="noreferrer">{gen.deployed_url}</a>
-          <CopyButton value={gen.deployed_url} title="Copy live URL" />— written to the lead's website link.
+          <CopyButton value={gen.deployed_url} title="Copy live URL" />— the lead gets this link once a developer finalizes it.
         </p>
       ) : null}
 
@@ -169,7 +169,7 @@ export function ReviewPanel({ gen, canDeploy, onChanged }: {
           <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5 shadow-lg">
             <h3 className="text-sm font-semibold text-text">Deploy this site?</h3>
             <p className="mt-2 text-sm text-text-muted">
-              It goes live on a public subdomain and the URL is saved to the lead's website link
+              It goes live on a public subdomain and waits for a developer to finalize it; only then does the lead's website link show it
               {gen.gate_results && !gen.gate_results.ok ? " — and its verification gates FAILED." : "."}
             </p>
             <div className="mt-4 flex justify-end gap-2">

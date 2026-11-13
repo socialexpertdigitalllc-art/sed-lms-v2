@@ -456,7 +456,7 @@ export function BuilderRun({ runId }: { runId: string }) {
       const res = await fetch(`/api/site-builder/runs/${runId}/deploy`, { method: "POST" });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { toast({ kind: "error", title: body.error ?? "Deploy failed" }); return; }
-      toast({ kind: "success", title: `Deployed to ${body.url}` });
+      toast({ kind: "success", title: `Deployed to ${body.url}`, body: "It waits for a developer to finalize it on the lead page — sales see the link after that." });
       if (body.clearWarning) toast({ kind: "info", title: body.clearWarning });
       const fresh = await loadRun();
       if (fresh) setRun(fresh);

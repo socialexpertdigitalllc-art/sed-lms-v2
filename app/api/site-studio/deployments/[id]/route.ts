@@ -5,6 +5,7 @@ import { deleteSubdomain, subFromWebsiteLink } from "@/lib/template-engine/direc
 import { hostingerConfigured, deleteWebsite } from "@/lib/hostinger/client";
 import { isProtectedDomain } from "@/lib/site-studio/deploy/protected";
 import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
+import { clearSiteReview } from "@/lib/leads/siteReview";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -133,6 +134,8 @@ export async function DELETE(req: Request, ctx: Ctx) {
       if (clearErr) warning = `Site removed, but clearing the lead link failed: ${clearErr.message}`;
       else await noteWebsiteLinkChange(admin, { leadId: row.lead_id, actorId: auth.userId });
     }
+    // A site still waiting for the developer is gone too: nothing to finalize.
+    await clearSiteReview(admin, { leadId: row.lead_id, site: row.url });
   }
 
   await admin.from("activity_log").insert({

@@ -25,6 +25,8 @@ export interface FakeAdminState {
   /** Append-only, matching the real `activity_log` table's role everywhere
    *  else in this codebase: a plain insert, never read back by app code. */
   activity_log: Record<string, unknown>[];
+  /** lead_site_reviews (migration 0101), keyed by lead_id: a deploy waits here for the developer. */
+  site_reviews?: Record<string, Record<string, unknown>>;
   /** Test hook: when set and it returns a message for a given bucket/path,
    *  storage.upload() fails with that message instead of writing bytes —
    *  used to prove rehostFromUrl never leaves an orphan studio_assets row
@@ -316,6 +318,36 @@ function deploymentsTable(state: FakeAdminState) {
   };
 }
 
+/** `lead_site_reviews` (lib/leads/siteReview.ts): one row per lead, keyed by lead_id. */
+function siteReviewsTable(state: FakeAdminState) {
+  const rows = () => (state.site_reviews ??= {});
+  const matching = (eqs: [string, unknown][]) => Object.entries(rows()).filter(([, r]) => eqs.every(([c, v]) => r[c] === v));
+  const filtered = (run: (eqs: [string, unknown][]) => unknown) => {
+    const eqs: [string, unknown][] = [];
+    const chain = {
+      eq(col: string, val: unknown) {
+        eqs.push([col, val]);
+        return chain;
+      },
+      maybeSingle: async () => ({ data: matching(eqs)[0]?.[1] ?? null, error: null }),
+      then(resolve: (v: { data: null; error: null }) => unknown, reject?: (e: unknown) => unknown) {
+        run(eqs);
+        return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+      },
+    };
+    return chain;
+  };
+  return {
+    select: () => filtered(() => {}),
+    upsert: async (row: Row) => {
+      rows()[row.lead_id as string] = { ...row };
+      return { data: null, error: null };
+    },
+    update: (patch: Row) => filtered((eqs) => matching(eqs).forEach(([k, r]) => (rows()[k] = { ...r, ...patch }))),
+    delete: () => filtered((eqs) => matching(eqs).forEach(([k]) => delete rows()[k])),
+  };
+}
+
 export function makeFakeAdmin(state: FakeAdminState): SupabaseClient {
   const single = (get: () => Record<string, unknown> | undefined) => ({
     single: async () => {
@@ -407,6 +439,9 @@ export function makeFakeAdmin(state: FakeAdminState): SupabaseClient {
       }
       if (table === "studio_assets") {
         return assetsTable(state);
+      }
+      if (table === "lead_site_reviews") {
+        return siteReviewsTable(state);
       }
       throw new Error(`fakeStudioAdmin: unexpected table "${table}"`);
     },

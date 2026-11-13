@@ -4,6 +4,7 @@ import { guard, guardError } from "@/lib/site-studio/service/guard";
 import { notify } from "@/lib/notifications/notify";
 import { adoptSubdomain, retireOtherLiveRows } from "@/lib/site-studio/deploy/manage";
 import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
+import { clearSiteReview } from "@/lib/leads/siteReview";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -74,6 +75,8 @@ export async function POST(req: Request) {
   const { error: leadErr } = await admin.from("leads").update({ website_link: row.url }).eq("id", leadId);
   if (leadErr) return NextResponse.json({ error: `Linked, but could not update the lead's website link: ${leadErr.message}` }, { status: 500 });
   await noteWebsiteLinkChange(admin, { leadId, actorId: auth.userId });
+  // A developer linked this site by hand: it is the lead's website now.
+  await clearSiteReview(admin, { leadId });
 
   await admin.from("activity_log").insert({
     user_id: auth.userId,

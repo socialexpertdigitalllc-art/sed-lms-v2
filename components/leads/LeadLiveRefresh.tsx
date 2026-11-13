@@ -16,6 +16,7 @@ export const LEAD_PAGE_TABLES = [
   "form_submissions",
   "lead_status_events",
   "lead_hitlist",
+  "lead_site_reviews",
 ];
 
 /** Wait after a tick before checking, so a burst of changes is one check. */

@@ -5,6 +5,7 @@ import { siteHostFrom } from "./liveFiles";
 import { adoptSubdomain } from "./manage";
 import { probeSite, pushStagingToDomain } from "./transfer";
 import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
+import { clearSiteReview } from "@/lib/leads/siteReview";
 
 export type GoLiveResult =
   | {
@@ -97,6 +98,8 @@ export async function goLiveOnDomain(input: {
   if (leadId) {
     await admin.from("leads").update({ website_link: url }).eq("id", leadId);
     await noteWebsiteLinkChange(admin, { leadId, before: priorLink, after: url, actorId });
+    // On the client's own domain the site is final: nothing waits in review.
+    await clearSiteReview(admin, { leadId });
   }
   await admin.from("builder_runs").update({ deployed_url: url, updated_at: now }).eq("deployed_url", priorUrl);
 
@@ -270,6 +273,7 @@ export async function recordSiteOnDomain(input: {
   if ((siteHostFrom(prior ?? "") ?? "").replace(/^www\./, "") === domain) return; // already pointing here
   await admin.from("leads").update({ website_link: url }).eq("id", leadId);
   await noteWebsiteLinkChange(admin, { leadId, before: prior, after: url, actorId });
+  await clearSiteReview(admin, { leadId }); // on the client's own domain: final
   await admin.from("activity_log").insert({
     user_id: actorId,
     action: "lead.website_on_domain",

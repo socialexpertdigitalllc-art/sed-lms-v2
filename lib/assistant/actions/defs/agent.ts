@@ -10,6 +10,7 @@ import { isStepRef, need, str, visibleLead } from "../helpers";
 import { callRoute } from "../invoke";
 import type { ActionContext, ActionDef, CheckResult, FieldSpec, Problem, Values } from "../types";
 import { itemsOf, pickItems } from "./tickets";
+import { currentSiteLink } from "@/lib/leads/siteReview";
 
 /**
  * AI developer actions: send it work (a ticket, or a written task on a lead's
@@ -218,10 +219,12 @@ const agentSend: ActionDef = {
     const problems: Problem[] = [];
     const values: Values = {};
     if (typeof v.ticket === "string" && !isStepRef(v.ticket)) {
-      const { data } = await ctx.admin.from("lead_tickets").select("id, title, status, leads(business_name, website_link)").eq("id", v.ticket).maybeSingle();
-      const t = data as { id: string; title: string | null; status: string; leads: LeadJoin } | null;
+      const { data } = await ctx.admin.from("lead_tickets").select("id, title, status, lead_id, leads(business_name, website_link)").eq("id", v.ticket).maybeSingle();
+      const t = data as { id: string; title: string | null; status: string; lead_id: string | null; leads: LeadJoin } | null;
       if (t) {
-        const lead = joined(t.leads);
+        const joinedLead = joined(t.leads);
+        // The site in review first, else the finished link (lib/leads/siteReview.ts).
+        const lead = joinedLead && t.lead_id ? { ...joinedLead, website_link: await currentSiteLink(ctx.admin, { id: t.lead_id, website_link: joinedLead.website_link }) } : joinedLead;
         values.__name = `${t.title?.trim() || "Ticket"}${lead?.business_name ? ` (${lead.business_name})` : ""}`;
         values.__status = t.status;
         if (t.status !== "Assigned" && t.status !== "In Progress") {
@@ -244,7 +247,9 @@ const agentSend: ActionDef = {
         }
       }
     } else if (typeof v.lead === "string" && !isStepRef(v.lead)) {
-      const lead = await visibleLead<{ business_name: string; website_link: string | null }>(ctx, v.lead, "business_name, website_link");
+      const found = await visibleLead<{ business_name: string; website_link: string | null }>(ctx, v.lead, "business_name, website_link");
+      // The site in review first, else the finished link (lib/leads/siteReview.ts).
+      const lead = found ? { ...found, website_link: await currentSiteLink(ctx.admin, { id: v.lead, website_link: found.website_link }) } : null;
       if (!lead) problems.push({ field: "lead", message: "That lead is not visible to you." });
       else {
         values.__name = lead.business_name;

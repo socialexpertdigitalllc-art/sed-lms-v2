@@ -335,7 +335,7 @@ describe("deployRun", () => {
     expect(outcome.ok).toBe(true);
   });
 
-  it("sets studio_runs.deployed_url and the lead's website_link, and appends an activity_log entry", async () => {
+  it("sets studio_runs.deployed_url, puts the site in review for the developer (NOT on the lead yet), and logs it", async () => {
     const { state, admin } = setup();
     state.runs["run-1"] = baseRun();
     state.leads["lead-1"] = baseLead();
@@ -345,9 +345,25 @@ describe("deployRun", () => {
     if (!outcome.ok) return;
     expect(state.runs["run-1"].deployed_url).toBe(outcome.url);
     expect(state.runs["run-1"].status).toBe("ready"); // no "deployed" status in the machine
-    expect(state.leads["lead-1"].website_link).toBe(outcome.url);
-    expect(state.activity_log).toHaveLength(1);
-    expect(state.activity_log[0]).toMatchObject({ entity_id: "run-1", entity_type: "studio_run" });
+    // Sales must not see a site the developer hasn't finalized.
+    expect(state.leads["lead-1"].website_link).toBeNull();
+    expect(state.site_reviews?.["lead-1"]).toMatchObject({ lead_id: "lead-1", url: outcome.url, source: "site_studio", run_id: "run-1" });
+    expect(state.activity_log.map((a) => a.action)).toEqual(["lead.website_in_review", "studio.run.deployed"]);
+    expect(state.activity_log[1]).toMatchObject({ entity_id: "run-1", entity_type: "studio_run" });
+  });
+
+  it("a redeploy while the site is still in review keeps the review's subdomain", async () => {
+    const { state, admin } = setup();
+    state.runs["run-1"] = baseRun();
+    state.leads["lead-1"] = baseLead(); // nothing finished on the lead yet
+    state.site_reviews = { "lead-1": { lead_id: "lead-1", url: `https://acme-plumbing.${DA_DOMAIN}`, published_at: "2026-11-13T00:00:00Z" } };
+    const { deps } = makeDeps({ subdomainExists: vi.fn(async () => true) });
+    const outcome = await deployRun(admin, "run-1", deps, "user-1");
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.sub).toBe("acme-plumbing");
+    expect(outcome.reused).toBe(true);
+    expect(state.leads["lead-1"].website_link).toBeNull();
   });
 
   it("a failed upload marks studio_deployments failed, leaves the run undeployed, and surfaces the error", async () => {

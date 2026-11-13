@@ -29,6 +29,7 @@ import { DownloadSiteFilesButton } from "@/components/common/DownloadSiteFilesBu
 import { UploadSiteFilesButton } from "@/components/common/UploadSiteFilesButton";
 import { ShuffleSiteButton } from "@/components/common/ShuffleSiteButton";
 import { OpenInCmsButton } from "@/components/leads/OpenInCmsButton";
+import { SiteReviewBox, type SiteReviewView } from "@/components/leads/SiteReviewBox";
 import { FieldRow, type SelectOption } from "@/components/detail/FieldRow";
 import { RatingStars } from "@/components/common/RatingStars";
 import { LeadContractsCard } from "@/components/contracts/LeadContractsCard";
@@ -93,6 +94,8 @@ export function LeadDetail({
   receiptSender = null,
   openReceiptOnLoad = false,
   cmsReady = false,
+  siteReview = null,
+  isSiteDeveloper = false,
 }: {
   lead: Lead;
   /** Submission + every status change, oldest first (lead_status_events). */
@@ -139,6 +142,10 @@ export function LeadDetail({
   openReceiptOnLoad?: boolean;
   /** SED CMS is connected and set up (lib/sedcms/cms.ts cmsOpenReady): only then is "Open in CMS" shown. */
   cmsReady?: boolean;
+  /** A published website waiting for the developer; its url only for developers (lib/leads/siteReview.ts). */
+  siteReview?: SiteReviewView | null;
+  /** Holds tickets.resolve or studio.manage: may see and finalize a site in review. */
+  isSiteDeveloper?: boolean;
 }) {
   const { has } = usePermissions();
   const companyTz = useCompanyTimezone();
@@ -439,14 +446,20 @@ export function LeadDetail({
                 onSave={(next) => patch({ social_profiles: next })}
               />
             </div>
+            {/* A freshly published website waits for the developer: they see
+                the link and Finalize; everyone else sees that it's coming. */}
+            {siteReview ? (
+              <SiteReviewBox leadId={lead.id} review={siteReview} isDeveloper={isSiteDeveloper} hasFinishedLink={!!lead.website_link} />
+            ) : null}
             {/* AI developer, ticketless: direct edits on this site, reviewed
                 before deploy (v2 F5). Sits right under the website link and
-                its file buttons — the same gate as the upload icon. */}
-            {lead.website_link && canSiteAgent ? (
+                its file buttons — the same gate as the upload icon. It works
+                on the site in review first, else the finished one. */}
+            {(siteReview?.url || lead.website_link) && canSiteAgent ? (
               <div className="mt-4">
                 <AgentRunPanel
                   leadId={lead.id}
-                  websiteLink={lead.website_link}
+                  websiteLink={(siteReview?.url || lead.website_link) as string}
                   canViewAgentRuns={canSiteAgent}
                   canResolve={canSiteAgent}
                 />

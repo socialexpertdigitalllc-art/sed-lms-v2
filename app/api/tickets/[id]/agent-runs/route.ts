@@ -13,6 +13,7 @@ import { resolveModelChoice, workerStatus } from "@/lib/site-agent/workerStatus"
 import { composeRunOptions, parseRunOptions } from "@/lib/site-agent/options";
 import { agentPanelContext, defaultModelFrom, getAgentDefaults, insertAgentRun } from "@/lib/site-agent/settings";
 import { minimaxClaim, resolveMinimaxChoice, runClaimedMinimax } from "@/lib/site-agent/minimaxRunner";
+import { currentSiteLink } from "@/lib/leads/siteReview";
 
 export const runtime = "nodejs";
 // fetchLiveSiteZip can take a while on a slow DA archive.
@@ -70,7 +71,11 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: `The ticket is "${ticket.status}" — assign it first.` }, { status: 409 });
   }
   const lead = ticket.lead as unknown as { website_link: string | null } | null;
-  const link = lead?.website_link ?? null;
+  // The site the developer is working on: the one waiting for review first,
+  // else the finished link (lib/leads/siteReview.ts).
+  const link = ticket.lead_id
+    ? await currentSiteLink(admin, { id: ticket.lead_id as string, website_link: lead?.website_link ?? null })
+    : (lead?.website_link ?? null);
   const host = link ? siteHostFrom(link) : null;
   if (!host) return NextResponse.json({ error: "This lead has no website link — nothing to edit." }, { status: 422 });
   // CHECK ORDER IS LOAD-BEARING (same precedence as fetchLiveSiteZip): the

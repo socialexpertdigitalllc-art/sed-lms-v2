@@ -12,6 +12,7 @@ import {
 import { baseSubdomain, firstFreeVersion, nextVersionSubdomain } from "@/lib/site-studio/deploy/naming";
 import { adoptSubdomain } from "@/lib/site-studio/deploy/manage";
 import { noteWebsiteLinkChange } from "@/lib/sedcms/links";
+import { repointSiteReview } from "@/lib/leads/siteReview";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -138,6 +139,8 @@ export async function POST(req: Request) {
         await admin.from("leads").update({ website_link: url }).eq("id", leadId).eq("website_link", oldUrl);
         await noteWebsiteLinkChange(admin, { leadId, actorId: auth.userId });
       }
+      // A site still waiting for the developer follows its new address too.
+      await repointSiteReview(admin, { leadId, fromUrl: oldUrl, toUrl: url });
       await admin.from("builder_runs").update({ deployed_url: url, updated_at: now }).eq("deployed_url", oldUrl);
     } else {
       const adopted = await adoptSubdomain(admin, sub, auth.userId);

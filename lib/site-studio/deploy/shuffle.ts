@@ -15,6 +15,7 @@ import { unzipToMap, zipFromMap } from "@/lib/template-engine/zip";
 import { baseSubdomain, parseVersion, firstFreeVersion } from "@/lib/site-studio/deploy/naming";
 import { siteHostFrom } from "@/lib/site-studio/deploy/liveFiles";
 import { linkedSiteRefusal, noteWebsiteLinkChange } from "@/lib/sedcms/links";
+import { loadSiteReview, repointSiteReview, sameSite } from "@/lib/leads/siteReview";
 
 export type ShuffleResult =
   | { ok: true; url: string; subdomain: string; oldDeleted: boolean }
@@ -43,7 +44,7 @@ export async function shuffleDeployment(
 
   const { data: row } = await admin
     .from("studio_deployments")
-    .select("id, lead_id, subdomain, url, status, leads(business_name, agent_id, closed_by)")
+    .select("id, lead_id, subdomain, url, status, leads(business_name, agent_id, closed_by, website_link)")
     .eq("id", args.id)
     .maybeSingle();
   if (!row) return { ok: false, status: 404, error: "Deployment not found" };
@@ -56,7 +57,7 @@ export async function shuffleDeployment(
   }
 
   const lead = (Array.isArray(row.leads) ? row.leads[0] : row.leads) as
-    | { business_name: string; agent_id: string | null; closed_by: string | null }
+    | { business_name: string; agent_id: string | null; closed_by: string | null; website_link?: string | null }
     | null;
 
   if (row.lead_id && args.perms) {
@@ -129,7 +130,17 @@ export async function shuffleDeployment(
       error: `New site is live at ${newUrl}, but recording it failed: ${updErr.message}. Old subdomain kept.`,
     };
   }
-  if (row.lead_id) {
+  // A site still waiting for the developer just follows its new address: it
+  // stays unseen by sales until it's finalized (lib/leads/siteReview.ts).
+  // On a redesign the finished link can be this same site: that one moves
+  // (and is announced) as before, or sales are left with a dead link.
+  const review = row.lead_id ? await loadSiteReview(admin, row.lead_id as string) : null;
+  const inReview = !!review && sameSite(review.url, String(row.url ?? ""));
+  const finishedHere = !inReview || sameSite(lead?.website_link, String(row.url ?? ""));
+  if (inReview) {
+    await repointSiteReview(admin, { leadId: row.lead_id as string, fromUrl: review.url, toUrl: newUrl });
+  }
+  if (row.lead_id && finishedHere) {
     await admin.from("leads").update({ website_link: newUrl }).eq("id", row.lead_id);
     await noteWebsiteLinkChange(admin, { leadId: row.lead_id as string, after: newUrl, actorId: args.actorId });
   }
@@ -145,7 +156,7 @@ export async function shuffleDeployment(
     new_value: { from: oldSub, to: newSub, old_deleted: !removed.error, lead_id: row.lead_id },
   });
 
-  if (row.lead_id && lead) {
+  if (row.lead_id && lead && finishedHere) {
     try {
       await notify(
         "website_link_added",

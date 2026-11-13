@@ -269,7 +269,9 @@ describe("every write of leads.website_link", () => {
         return { path, writes: src.split("update({ website_link").length - 1, notes: src.split("noteWebsiteLinkChange(").length - 1 };
       })
       .filter((f) => f.writes > 0);
-    expect(writers.length).toBeGreaterThanOrEqual(12);
+    // Publishers no longer write the link themselves: a new site waits for the
+    // developer and lib/leads/siteReview.ts writes it on Finalize.
+    expect(writers.length).toBeGreaterThanOrEqual(10);
     for (const f of writers) expect(f.notes, f.path).toBeGreaterThanOrEqual(f.writes);
   }, 60_000);
 });
