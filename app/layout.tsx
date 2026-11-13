@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { Inter, JetBrains_Mono, Bricolage_Grotesque } from "next/font/google";
-import { getBranding } from "@/lib/settings/appSettings";
+import { getAppSettings, getBranding } from "@/lib/settings/appSettings";
 import { THEME_COOKIE, isThemeChoice, themeAttr } from "@/lib/theme";
 import Script from "next/script";
-import { pakistanTimeScript } from "@/lib/time/pakistanTime";
+import { applyServerTimezone, companyTimeScript } from "@/lib/time/companyTime";
+import { companyTimezone } from "@/lib/analytics/dateScope";
 import { ServerClockSync } from "@/components/time/ServerClockSync";
 import "./globals.css";
 
@@ -46,6 +47,10 @@ export default async function RootLayout({
   // the stylesheet's prefers-color-scheme branch decide (see lib/theme.ts).
   const cookieTheme = (await cookies()).get(THEME_COOKIE)?.value;
   const theme = themeAttr(isThemeChoice(cookieTheme) ? cookieTheme : "system");
+  // The company timezone (Settings; Pacific time): every page and this server
+  // process run on it (lib/time/companyTime.ts). Cached 60s; a typo falls back.
+  const timeZone = companyTimezone(await getAppSettings().then((s) => s.work_timezone).catch(() => null));
+  applyServerTimezone(timeZone);
 
   return (
     <html
@@ -54,12 +59,12 @@ export default async function RootLayout({
       className={`${inter.variable} ${jetbrainsMono.variable} ${bricolage.variable} h-full antialiased`}
     >
       <body className="min-h-full" suppressHydrationWarning>
-        {/* The whole LMS runs on Pakistan time and the server's clock, whatever
-            the device says (lib/time/pakistanTime.ts). Runs before any app code;
-            stamped with the server's time on every page load. */}
-        <Script id="pakistan-time" strategy="beforeInteractive">
+        {/* The whole LMS runs on the company timezone and the server's clock,
+            whatever the device says (lib/time/companyTime.ts). Runs before any
+            app code; stamped with the server's time on every page load. */}
+        <Script id="company-time" strategy="beforeInteractive">
           {/* eslint-disable-next-line react-hooks/purity -- a server component rendered per request (cookies above): the page MUST carry the server's time now */}
-          {pakistanTimeScript(Date.now())}
+          {companyTimeScript(Date.now(), timeZone)}
         </Script>
         <ServerClockSync />
         {children}

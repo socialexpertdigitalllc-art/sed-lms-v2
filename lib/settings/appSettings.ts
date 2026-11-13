@@ -19,7 +19,7 @@ export type AppSettings = {
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
   work_start_time: "09:00",
-  work_timezone: "Asia/Karachi",
+  work_timezone: "America/Los_Angeles",
   idle_timeout_minutes: 15,
   ticket_sla: { Low: 168, Normal: 72, High: 24 },
   ticket_retention_days: 0,

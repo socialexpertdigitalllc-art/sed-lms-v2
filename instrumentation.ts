@@ -3,10 +3,11 @@
 // even if an enqueue kick was lost (e.g., across a restart).
 import { createAdminClient } from "@/lib/supabase/admin";
 
-// The server runs on Pakistan time: everything it renders and every "today"
-// it computes is Asia/Karachi, whatever the host's own timezone
-// (lib/time/pakistanTime.ts). Node picks a runtime change of TZ up at once.
-process.env.TZ = "Asia/Karachi";
+// The server runs on the company timezone (Pacific time; the Settings value
+// is applied below and by the root layout): everything it renders and every
+// "today" it computes is company time, whatever the host's own timezone
+// (lib/time/companyTime.ts). Node picks a runtime change of TZ up at once.
+process.env.TZ = "America/Los_Angeles";
 
 let started = false;
 
@@ -14,6 +15,14 @@ export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   if (started) return; // guard against dev HMR double-registration
   started = true;
+
+  // The company timezone from Settings, if it differs from the default.
+  void import("@/lib/settings/appSettings")
+    .then(async ({ getAppSettings }) => {
+      const [{ companyTimezone }, { applyServerTimezone }] = await Promise.all([import("@/lib/analytics/dateScope"), import("@/lib/time/companyTime")]);
+      applyServerTimezone(companyTimezone((await getAppSettings()).work_timezone));
+    })
+    .catch(() => {});
 
   // pm2 cluster mode (ecosystem.config.cjs) runs N copies of this process
   // behind one port. The pollers below must run in exactly ONE of them, or

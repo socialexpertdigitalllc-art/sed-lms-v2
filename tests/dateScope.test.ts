@@ -42,10 +42,10 @@ describe("months follow the company's calendar, not UTC", () => {
     expect(monthKey("2026-10-31T19:00:00Z", PK)).toBe("2026-11"); // midnight Nov 1 PKT
   });
   it("falls back to Pakistan time for a missing or mistyped zone", () => {
-    expect(DEFAULT_COMPANY_TZ).toBe("Asia/Karachi");
+    expect(DEFAULT_COMPANY_TZ).toBe("America/Los_Angeles");
     expect(companyTimezone("America/New_York")).toBe("America/New_York");
-    expect(companyTimezone("Mars/Olympus")).toBe("Asia/Karachi");
-    expect(companyTimezone("")).toBe("Asia/Karachi");
-    expect(companyTimezone(null)).toBe("Asia/Karachi");
+    expect(companyTimezone("Mars/Olympus")).toBe("America/Los_Angeles");
+    expect(companyTimezone("")).toBe("America/Los_Angeles");
+    expect(companyTimezone(null)).toBe("America/Los_Angeles");
   });
 });

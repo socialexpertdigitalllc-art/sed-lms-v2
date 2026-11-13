@@ -1,8 +1,8 @@
 import type { NextConfig } from "next";
 import { OPTIMIZED_IMAGE_HOSTS } from "./lib/images/hosts";
 
-// Builds and the server run on Pakistan time (lib/time/pakistanTime.ts).
-process.env.TZ = "Asia/Karachi";
+// Builds and the server run on the company timezone, Pacific time (lib/time/companyTime.ts).
+process.env.TZ = "America/Los_Angeles";
 
 const nextConfig: NextConfig = {
   experimental: {

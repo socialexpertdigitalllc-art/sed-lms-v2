@@ -4,11 +4,11 @@ export const MONTH_ALL = "";
 
 /**
  * The company's timezone when nothing else is known (app_settings.work_timezone
- * defaults to it). Month filters and month counts use the COMPANY's calendar:
- * a deal closed at 2am Pakistan time on November 1st is a November deal, even
- * though it is still October 31st in UTC.
+ * defaults to it): Pacific time. Month filters and month counts use the
+ * COMPANY's calendar: a deal closed at 11pm Pacific on October 31st is an
+ * October deal, even though it is already November 1st in UTC.
  */
-export const DEFAULT_COMPANY_TZ = "Asia/Karachi";
+export const DEFAULT_COMPANY_TZ = "America/Los_Angeles";
 
 /** `tz` when it is a real IANA zone, else the default — a typo in settings must not break every page. */
 export function companyTimezone(tz: string | null | undefined): string {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { setServerNow } from "@/lib/time/pakistanTime";
+import { setServerNow } from "@/lib/time/companyTime";
 
 /** Re-check the server's clock this often, and when a tab comes back after a while. */
 const RESYNC_MS = 10 * 60 * 1000;
@@ -9,7 +9,7 @@ const RESYNC_MS = 10 * 60 * 1000;
 const MIN_CHANGE_MS = 2000;
 
 /**
- * Keeps the page's clock on the SERVER's time (lib/time/pakistanTime.ts).
+ * Keeps the page's clock on the SERVER's time (lib/time/companyTime.ts).
  * The page starts stamped with the server time; this refines it over the
  * network (half the round trip added) and corrects it if the device's own
  * clock is changed while the page is open. Renders nothing.
