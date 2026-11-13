@@ -53,6 +53,8 @@ module.exports = {
       time: true,
       env: {
         NODE_ENV: "production",
+        // The LMS runs on Pakistan time (lib/time/pakistanTime.ts).
+        TZ: "Asia/Karachi",
         // Per-worker heap ceiling, below max_memory_restart so V8 collects
         // before pm2 has to recycle.
         NODE_OPTIONS: "--max-old-space-size=1024",

@@ -84,6 +84,9 @@ export async function updateSession(request: NextRequest) {
     // check for updates, and a 307 to /login there would break push.
     path === "/push-sw.js" ||
     path === "/manifest.webmanifest" ||
+    // The server's clock (lib/time/pakistanTime.ts): the login page keeps
+    // Pakistan time too, so it must answer JSON, not redirect.
+    path === "/api/time" ||
     path === "/api/ai-tools/wge/process" ||
     path === "/api/template-engine/process" ||
     path === "/api/notifications/generate" ||

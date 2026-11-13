@@ -3,6 +3,11 @@
 // even if an enqueue kick was lost (e.g., across a restart).
 import { createAdminClient } from "@/lib/supabase/admin";
 
+// The server runs on Pakistan time: everything it renders and every "today"
+// it computes is Asia/Karachi, whatever the host's own timezone
+// (lib/time/pakistanTime.ts). Node picks a runtime change of TZ up at once.
+process.env.TZ = "Asia/Karachi";
+
 let started = false;
 
 export async function register() {

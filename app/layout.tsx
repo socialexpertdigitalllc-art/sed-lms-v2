@@ -3,6 +3,9 @@ import { cookies } from "next/headers";
 import { Inter, JetBrains_Mono, Bricolage_Grotesque } from "next/font/google";
 import { getBranding } from "@/lib/settings/appSettings";
 import { THEME_COOKIE, isThemeChoice, themeAttr } from "@/lib/theme";
+import Script from "next/script";
+import { pakistanTimeScript } from "@/lib/time/pakistanTime";
+import { ServerClockSync } from "@/components/time/ServerClockSync";
 import "./globals.css";
 
 const inter = Inter({
@@ -51,6 +54,14 @@ export default async function RootLayout({
       className={`${inter.variable} ${jetbrainsMono.variable} ${bricolage.variable} h-full antialiased`}
     >
       <body className="min-h-full" suppressHydrationWarning>
+        {/* The whole LMS runs on Pakistan time and the server's clock, whatever
+            the device says (lib/time/pakistanTime.ts). Runs before any app code;
+            stamped with the server's time on every page load. */}
+        <Script id="pakistan-time" strategy="beforeInteractive">
+          {/* eslint-disable-next-line react-hooks/purity -- a server component rendered per request (cookies above): the page MUST carry the server's time now */}
+          {pakistanTimeScript(Date.now())}
+        </Script>
+        <ServerClockSync />
         {children}
       </body>
     </html>

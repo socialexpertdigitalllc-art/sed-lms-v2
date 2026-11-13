@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 import { OPTIMIZED_IMAGE_HOSTS } from "./lib/images/hosts";
 
+// Builds and the server run on Pakistan time (lib/time/pakistanTime.ts).
+process.env.TZ = "Asia/Karachi";
+
 const nextConfig: NextConfig = {
   experimental: {
     // With a middleware/proxy present, Next buffers every request body and
