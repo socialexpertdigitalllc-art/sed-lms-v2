@@ -60,6 +60,7 @@ export class TurnData {
   private directoryP?: Promise<Map<string, DirectoryUser>>;
   private teamP?: Promise<string[]>;
   private readonly followUpsP = new Map<string, Promise<FollowUpRow[]>>();
+  private hitlistP?: Promise<Map<string, number>>;
 
   constructor(private readonly src: { db: SupabaseClient; admin: SupabaseClient; userId: string }) {}
 
@@ -99,6 +100,17 @@ export class TurnData {
     return fetchByIds<FollowUpRow>(leadIds, (chunk) =>
       this.src.db.from("lead_follow_ups").select("lead_id, user_id, fu_status, created_at").in("lead_id", chunk),
     );
+  }
+
+  /**
+   * The HitList: lead id → stars (1–5). Through the person's own client (the
+   * read policy is hitlist.view), or the service role for an admin.
+   */
+  hitlist(asAdmin = false): Promise<Map<string, number>> {
+    this.hitlistP ??= fetchAll<{ lead_id: string; priority: number }>((from, to) =>
+      (asAdmin ? this.src.admin : this.src.db).from("lead_hitlist").select("lead_id, priority").order("lead_id", { ascending: true }).range(from, to),
+    ).then((rows) => new Map(rows.map((r) => [r.lead_id, Number(r.priority)])));
+    return this.hitlistP;
   }
 
   /** The company roster: id → display name. Names only — see lib/users/directory. */

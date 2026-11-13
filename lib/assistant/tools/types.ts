@@ -20,6 +20,8 @@ export interface ToolContext {
   userId: string;
   displayName: string;
   perms: Set<string>;
+  /** An Admin-department member: their assistant reads everything in the LMS (./catalog.ts). */
+  isAdmin?: boolean;
   db: SupabaseClient;
   admin: SupabaseClient;
   /** Company timezone (app_settings.work_timezone). */

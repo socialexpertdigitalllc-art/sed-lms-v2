@@ -8,6 +8,7 @@ import { breakdownLeadsTool, leadDetailsTool, pipelineSummaryTool, searchLeadsTo
 import { preLeadsOverviewTool } from "./preleads";
 import { teamActivityTool, teamPerformanceTool } from "./team";
 import { ticketsOverviewTool } from "./tickets";
+import { DATA_TOOLS } from "./query";
 import { TASK_TOOLS } from "./tasks";
 import { ToolError, type AssistantTool, type ToolContext } from "./types";
 
@@ -54,6 +55,7 @@ export const ALL_TOOLS: AssistantTool[] = [
   ticketsOverviewTool,
   preLeadsOverviewTool,
   teamActivityTool,
+  ...DATA_TOOLS,
   calculateTool,
   saveMemoryTool,
   forgetMemoryTool,

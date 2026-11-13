@@ -15,7 +15,9 @@ import { addDays, localDateKey, previousPeriod } from "../dates";
 import {
   boolArg,
   canonical,
+  canSeeHitlist,
   filterLeads,
+  hitlistOrError,
   intArg,
   LEAD_FILTER_PROPERTIES,
   localStamp,
@@ -86,7 +88,7 @@ export const breakdownLeadsTool: AssistantTool = {
   name: "breakdown_leads",
   label: "Breaking the numbers down",
   description:
-    "Group the visible leads by one dimension and get, per group: leads, count per status, win rate, close rate, closed and recurring revenue, average closed deal, open quoted value, average days to close and average rating. Use it to find patterns: which agent, category, region, site type, service, month/week/day, weekday or rating closes best. Time groups (month/week/day/weekday) use the date chosen by date_field. Weeks start on Monday.",
+    "Group the visible leads by one dimension and get, per group: leads, count per status, win rate, close rate, closed and recurring revenue, average closed deal, open quoted value, average days to close and average rating. Use it to find patterns: which agent, category, region, site type, service, month/week/day, weekday, rating or HitList star level (group_by hitlist) closes best. Time groups (month/week/day/weekday) use the date chosen by date_field. Weeks start on Monday.",
   parameters: {
     type: "object",
     properties: {
@@ -110,7 +112,8 @@ export const breakdownLeadsTool: AssistantTool = {
     const filters = parseLeadFilters(args);
     const result = await filterLeads(filters, ctx);
     const agentName = await ctx.data.names();
-    const rows = breakdown(result.leads, by, { tz: ctx.timezone, dateField: result.dateField, agentName }, sort);
+    const hitlist = by === "hitlist" ? await hitlistOrError(ctx) : undefined;
+    const rows = breakdown(result.leads, by, { tz: ctx.timezone, dateField: result.dateField, agentName, hitlist }, sort);
     const data: Record<string, unknown> = {
       visible_scope: await leadScopeLine(ctx),
       group_by: by,
@@ -133,7 +136,7 @@ export const breakdownLeadsTool: AssistantTool = {
 /* ----------------------------------------------------------------- search */
 
 const FOLLOW_UP_FILTERS = ["overdue", "due_today", "next_7_days", "none_scheduled"] as const;
-const SEARCH_SORTS = ["newest", "oldest", "recently_updated", "follow_up_soonest", "price_high", "rating_high", "no_pickup_streak"] as const;
+const SEARCH_SORTS = ["newest", "oldest", "recently_updated", "follow_up_soonest", "price_high", "rating_high", "no_pickup_streak", "hitlist_stars"] as const;
 
 function matchesText(lead: Lead, q: string): boolean {
   const digits = q.replace(/\D/g, "");
@@ -213,6 +216,8 @@ export const searchLeadsTool: AssistantTool = {
     if (typeof args.max_price === "number") leads = leads.filter((l) => (money(l.price_quoted) ?? Infinity) <= (args.max_price as number));
 
     const sort = typeof args.sort === "string" ? canonical(args.sort, SEARCH_SORTS, "sort") : "newest";
+    // Stars ride along on every row when the person can see the HitList.
+    const stars = sort === "hitlist_stars" ? await hitlistOrError(ctx) : canSeeHitlist(ctx) ? await ctx.data.hitlist(ctx.isAdmin === true).catch(() => null) : null;
     const t = (iso: string | null | undefined, missing: number) => (iso ? new Date(iso).getTime() : missing);
     const sorted = [...leads].sort((a, b) => {
       switch (sort) {
@@ -228,6 +233,8 @@ export const searchLeadsTool: AssistantTool = {
           return (b.rating ?? -1) - (a.rating ?? -1);
         case "no_pickup_streak":
           return (b.no_pickup_streak ?? 0) - (a.no_pickup_streak ?? 0);
+        case "hitlist_stars":
+          return (stars?.get(b.id) ?? 0) - (stars?.get(a.id) ?? 0);
         default:
           return t(b.created_at, 0) - t(a.created_at, 0);
       }
@@ -250,6 +257,7 @@ export const searchLeadsTool: AssistantTool = {
       next_follow_up: localStamp(l.follow_up_time, ctx.timezone),
       last_call: l.last_followup_status,
       no_pickup_streak: l.no_pickup_streak ?? 0,
+      ...(stars ? { hitlist_stars: stars.get(l.id) ?? null } : {}),
       created: localDateKey(l.created_at, ctx.timezone),
       closed: l.closed_at ? localDateKey(l.closed_at, ctx.timezone) : null,
       link: `/leads/${l.id}`,
@@ -349,6 +357,7 @@ export const leadDetailsTool: AssistantTool = {
         .limit(60),
     ]);
 
+    const detailStars = canSeeHitlist(ctx) ? await ctx.data.hitlist(ctx.isAdmin === true).catch(() => null) : null;
     const data: Record<string, unknown> = {
       lead: {
         id: lead.id,
@@ -356,6 +365,7 @@ export const leadDetailsTool: AssistantTool = {
         business_name: lead.business_name,
         owner_name: lead.owner_name ?? null,
         status: lead.status,
+        ...(detailStars ? { hitlist_stars: detailStars.get(lead.id) ?? null, on_hitlist: detailStars.has(lead.id) } : {}),
         agent: agentName(lead.agent_id),
         closed_by: lead.closed_by ? agentName(lead.closed_by) : null,
         phone: lead.business_phone,

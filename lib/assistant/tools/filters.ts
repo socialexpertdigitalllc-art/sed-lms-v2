@@ -35,6 +35,8 @@ export const LEAD_FILTER_PROPERTIES = {
   region: { type: "string", description: "US state, by name or 2-letter code (Texas or TX)." },
   category: { type: "string", description: "Business category, e.g. Plumbing (case-insensitive)." },
   site_type: { type: "string", enum: [...SITE_TYPES], description: "Website type sold." },
+  hitlist: { type: "boolean", description: "true = only leads on the HitList; false = only leads NOT on it." },
+  min_stars: { type: "integer", minimum: 1, maximum: 5, description: "Only HitList leads with at least this many stars (1–5)." },
 };
 
 export interface LeadFilters {
@@ -46,6 +48,9 @@ export interface LeadFilters {
   region?: string;
   category?: string;
   siteType?: string;
+  /** true: only HitList leads; false: only leads not on it. */
+  hitlist?: boolean;
+  minStars?: number;
 }
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -75,7 +80,24 @@ export function parseLeadFilters(args: Record<string, unknown>): LeadFilters {
     region: str(args.region),
     category: str(args.category),
     siteType,
+    ...(typeof args.hitlist === "boolean" || args.hitlist === "true" || args.hitlist === "false"
+      ? { hitlist: args.hitlist === true || args.hitlist === "true" }
+      : {}),
+    ...(args.min_stars !== undefined && args.min_stars !== null && args.min_stars !== "" ? { minStars: intArg(args.min_stars, 1, 1, 5) } : {}),
   };
+}
+
+/** May this person's assistant read the HitList? (the app's own rule: hitlist.view; admins always) */
+export function canSeeHitlist(ctx: Pick<ToolContext, "perms" | "isAdmin">): boolean {
+  return ctx.isAdmin === true || ctx.perms.has("hitlist.view");
+}
+
+/** The HitList (lead id → stars), or a ToolError saying this person can't see it. */
+export async function hitlistOrError(ctx: ToolContext): Promise<Map<string, number>> {
+  if (!canSeeHitlist(ctx)) {
+    throw new ToolError("This person's account does not have access to the HitList, so it cannot be read. Tell them plainly; never guess which leads are on it.");
+  }
+  return ctx.data.hitlist(ctx.isAdmin === true);
 }
 
 /** The period, or a ToolError the model can act on. */
@@ -189,6 +211,19 @@ export async function filterLeads(
   if (f.siteType) {
     leads = leads.filter((l) => l.site_type === f.siteType);
     applied.site_type = f.siteType;
+  }
+  if (f.hitlist !== undefined || f.minStars !== undefined) {
+    const stars = await hitlistOrError(ctx);
+    if (f.minStars !== undefined) {
+      leads = leads.filter((l) => (stars.get(l.id) ?? 0) >= f.minStars!);
+      applied.hitlist = `${f.minStars}+ stars`;
+    } else if (f.hitlist) {
+      leads = leads.filter((l) => stars.has(l.id));
+      applied.hitlist = "on the HitList";
+    } else {
+      leads = leads.filter((l) => !stars.has(l.id));
+      applied.hitlist = "not on the HitList";
+    }
   }
   return { leads, period, dateField: f.dateField, notes, applied };
 }

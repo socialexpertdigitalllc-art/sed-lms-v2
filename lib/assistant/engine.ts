@@ -299,7 +299,8 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
     departmentsOf(admin, userId).catch(() => []),
     data.teamAgentIds(),
     listMessages(admin, userId, conversation.id),
-    canAct ? isAdminMember(admin, userId).catch(() => false) : Promise.resolve(false),
+    // Admins' assistants read everything in the LMS (tools/catalog.ts), in either mode.
+    isAdminMember(admin, userId).catch(() => false),
     // Missing tables (migration 0087 not applied) simply mean no actions yet.
     canAct ? listConversationActions(admin, userId, conversation.id, HISTORY_ACTIONS).catch(() => [] as StoredAction[]) : Promise.resolve([] as StoredAction[]),
     canAct ? getActionSettings(admin) : Promise.resolve(new Map()),
@@ -328,6 +329,7 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
     userId,
     displayName: input.displayName,
     perms: input.perms,
+    isAdmin,
     db: input.db,
     admin,
     timezone,
@@ -364,7 +366,7 @@ export async function runTurn(input: TurnInput): Promise<TurnOutcome> {
       departments,
       timezone,
       now,
-      scope: describeScope({ perms: input.perms, teamSize: teamIds.length }),
+      scope: describeScope({ perms: input.perms, teamSize: teamIds.length, isAdmin }),
       memories,
       act,
       page,

@@ -155,8 +155,8 @@ describe("which tools a user's assistant is given", () => {
     expect(toolsFor(AGENT_PERMS, "act").map((t) => t.name)).not.toContain("prepare_action");
   });
 
-  it("leaves someone with no data permissions only the calculator and their memory", () => {
-    expect(toolsFor(new Set(["assistant.use"])).map((t) => t.name).sort()).toEqual(["calculate", "forget_memory", "save_memory"]);
+  it("leaves someone with no data permissions only the calculator, their memory and the data lookups (which show them only the basics)", () => {
+    expect(toolsFor(new Set(["assistant.use"])).map((t) => t.name).sort()).toEqual(["calculate", "describe_data", "forget_memory", "query_data", "save_memory"]);
   });
 
   it("refuses a tool the user was not given, even if the model names it", async () => {

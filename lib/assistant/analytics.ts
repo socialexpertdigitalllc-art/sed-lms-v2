@@ -123,6 +123,7 @@ export const GROUP_BYS = [
   "fresh_or_followup",
   "rating",
   "service",
+  "hitlist",
 ] as const;
 export type GroupBy = (typeof GROUP_BYS)[number];
 
@@ -132,6 +133,8 @@ export interface GroupContext {
   tz: string;
   dateField: DateField;
   agentName: (id: string | null) => string;
+  /** The HitList (lead id → stars), for group_by hitlist. */
+  hitlist?: Map<string, number>;
 }
 
 function keysOf(lead: Lead, by: GroupBy, ctx: GroupContext): string[] {
@@ -153,6 +156,10 @@ function keysOf(lead: Lead, by: GroupBy, ctx: GroupContext): string[] {
       return [label(lead.fresh_or_followup)];
     case "rating":
       return [typeof lead.rating === "number" ? String(lead.rating) : "(unrated)"];
+    case "hitlist": {
+      const stars = ctx.hitlist?.get(lead.id);
+      return [stars ? `${stars} star${stars === 1 ? "" : "s"}` : "Not on the HitList"];
+    }
     case "service": {
       const services = (lead.services ?? []).map((s) => s.trim()).filter(Boolean);
       return services.length ? [...new Set(services)] : ["(no services listed)"];
@@ -234,7 +241,7 @@ export function breakdown(leads: Lead[], by: GroupBy, ctx: GroupContext, sort?: 
     }
   }
   const rows = [...groups.entries()].map(([key, ls]) => groupRow(key, ls));
-  const effective = sort ?? (TIME_GROUPS.has(by) || by === "weekday" || by === "rating" ? "group" : "leads");
+  const effective = sort ?? (TIME_GROUPS.has(by) || by === "weekday" || by === "rating" || by === "hitlist" ? "group" : "leads");
   const value = (r: GroupRow): number => {
     switch (effective) {
       case "closed":

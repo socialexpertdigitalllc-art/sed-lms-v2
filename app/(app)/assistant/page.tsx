@@ -16,6 +16,7 @@ import { listConversationActions, toCard } from "@/lib/assistant/actions/store";
 import type { ActionCard } from "@/lib/assistant/actions/card";
 import { AssistantApp } from "@/components/assistant/AssistantApp";
 import { latestTask, taskView, type TaskView } from "@/lib/assistant/tasks";
+import { isAdminMember } from "@/lib/permissions/isAdminMember";
 
 export const metadata = { title: DEFAULT_ASSISTANT_NAME };
 
@@ -80,11 +81,14 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
     throw e;
   }
 
-  const teamIds = await getTeamAgentIds(admin, user.id).catch(() => [] as string[]);
+  const [teamIds, isAdmin] = await Promise.all([
+    getTeamAgentIds(admin, user.id).catch(() => [] as string[]),
+    isAdminMember(admin, user.id).catch(() => false),
+  ]);
 
   return (
     <AssistantApp
-      scope={describeScope({ perms, teamSize: teamIds.length })}
+      scope={describeScope({ perms, teamSize: teamIds.length, isAdmin })}
       suggestions={suggestionsFor(perms)}
       initialConversations={conversations}
       initialMemories={memories}

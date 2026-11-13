@@ -1,4 +1,5 @@
 import { visibleStatuses } from "@/lib/leads/categories";
+import { readableDatasets } from "./tools/catalog";
 import { modeInfo, type PermissionMode } from "./actions/permissions";
 import { AI_BRAND, DEFAULT_ASSISTANT_NAME } from "./name";
 import { memoryHandle } from "./store";
@@ -14,14 +15,19 @@ export interface ScopeFacts {
   perms: Set<string>;
   /** Agents reporting to this user (closers). */
   teamSize: number;
+  /** Admin-department member: their assistant reads everything. */
+  isAdmin?: boolean;
 }
 
 /**
  * What this user's assistant can see, in plain words. Shown to the model (so
  * it never claims more) and to the user (so they know what to ask).
  */
-export function describeScope({ perms, teamSize }: ScopeFacts): string[] {
+export function describeScope({ perms, teamSize, isAdmin = false }: ScopeFacts): string[] {
   const lines: string[] = [];
+  if (isAdmin) {
+    lines.push("Everything in the LMS: you are an admin, so every lead, call, ticket, contract, receipt, domain, website, the HitList, the audit trail, sign-ins and app usage are readable.");
+  }
   if (perms.has("leads.view")) {
     const statuses = visibleStatuses(perms);
     const who = perms.has("leads.view_all")
@@ -39,12 +45,15 @@ export function describeScope({ perms, teamSize }: ScopeFacts): string[] {
   if (perms.has("tickets.view")) {
     lines.push(perms.has("tickets.view_all") ? "Tickets: every ticket." : "Tickets: tickets you opened and tickets on your leads.");
   }
+  if (perms.has("hitlist.view") || isAdmin) lines.push("HitList: which leads are on it and their stars (1–5).");
   if (perms.has("pre_leads.view")) lines.push("Pre-leads: the pre-leads your account can open.");
   if (perms.has("contracts.view") || perms.has("contracts.send")) lines.push("Contracts: which were sent, and for how much.");
   if (perms.has("admin.logs.view")) {
     lines.push("Team activity: everyone's sign-ins, attendance, the audit trail of changes, and app usage.");
   }
-  if (!lines.length) lines.push("No business data: your account has no data permissions, so only maths and general advice are available.");
+  if (!lines.length) lines.push("No business data: your account has no data permissions, so only maths, general advice and the basics below are available.");
+  const more = readableDatasets({ perms, isAdmin }).map((d) => d.key);
+  if (more.length) lines.push(`Data you can look up in detail: ${more.join(", ")}.`);
   return lines;
 }
 
@@ -202,8 +211,10 @@ ${p.scope.map((l) => `- ${l}`).join("\n")}
 Nothing else is visible to you. If they ask about data outside this, say plainly that their account does not have access to it — never guess, and never imply you can see more.
 
 ## How to work
-- Before answering any question about their data, get the real numbers with your tools. Never invent, estimate or recall a figure: if a tool did not return it, you do not know it.
+- Before answering any question about their data, get the real numbers with your tools. Never invent, estimate or recall a figure, a name, a list or a status: if a tool did not return it, you do not know it. A wrong answer is far worse than "I couldn't find that".
 - Prefer the most aggregated tool that answers the question: get_pipeline_summary for the big picture, breakdown_leads to compare groups and find patterns, analyze_follow_ups for calling behaviour, search_leads and get_lead_details for specifics. Several lookups in one go are fine.
+- The HitList: the lead tools take hitlist: true (only HitList leads) and min_stars, breakdown_leads can group_by hitlist, and lead results carry their stars. For anything else in the LMS — status history, receipts, contracts, domains, websites, sign-ins, app usage, notifications, website inquiries — use query_data (describe_data lists the datasets and their columns). Check describe_data before ever saying something is not available.
+- When a result is capped, truncated or says rows were left out, say so in your answer instead of presenting it as the full picture.
 - Run every figure you derive rather than read — growth, projections, targets, shares, what-ifs — through calculate.
 - Turn relative dates ("this week", "last month", "Q3") into exact YYYY-MM-DD ranges in the company timezone; weeks start on Monday. To compare periods, look up both (or use compare_previous).
 - If a lookup fails or finds nothing, say so and suggest what to try next.
