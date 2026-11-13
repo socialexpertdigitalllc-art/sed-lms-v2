@@ -10,6 +10,7 @@ in-house.
 | --- | --- |
 | [`lumen/`](./lumen) | Soft and friendly: rounded cards, frosted header, gradient hero, scroll reveals, FAQ accordions, lightbox gallery, sticky call-to-action bar on phones. The safe, familiar look. |
 | [`foundry/`](./foundry) | Editorial and poster-like: giant condensed variable type, hairline rules and mono labels, flat blocks of the client's colour, no cards or gradients. A full-screen menu, a services index whose photos follow the cursor, scroll-lit text, sticky stacking process cards, a fit-to-width footer wordmark and cross-page wipe transitions. The bold look. |
+| [`sdhome/`](./sdhome) | Quick-launch home services site in 3D: a fixed scroll-scrubbed video hero, smooth scroll, WebGL depth parallax on every photo, a photo stack that tilts toward the cursor, services that roll face to face, a drifting gallery wall, a floor plan that builds itself into a 3D room, a showroom card deck and a glass quote card. Warm paper, night sections and a serif display face. |
 
 ## Build and upload
 
@@ -90,6 +91,32 @@ new template):
 Edit the files, run the tests (`npx vitest run tests/siteBuilderLumenTemplate.test.ts`), then
 rebuild and re-upload. Replacing a template's zip on the board does not touch runs already
 generated; the next run built from it uses the new files.
+
+## SD Home: the fixed hero video and the 3D engine
+
+SD Home is a quick-launch template: the home page hero plays the **same background video on
+every site** (there is no video library yet), looping on its own. `script.js` writes the video
+into the empty `[data-hero-media]` element, so a page rewrite can neither change nor drop it, and
+the comment at the top of `components.js` tells the model to leave that element alone. The hero
+video and two photo clips (about 2.6MB of MP4) ship in every site, which is why its zip is
+allowed 8MB in the template test instead of 2MB.
+
+**Previews.** The LMS previews sit in a sandbox with no origin of its own, where WebGL may only
+draw files fetched with CORS. The preview routes send `Access-Control-Allow-Origin: *` for that;
+`script.js` checks once on a sandboxed page and, if CORS is not available, runs without WebGL so
+the photos and the hero video stay plain elements rather than disappearing.
+
+Everything else is the builder's to change. The WebGL scenes read each photo from the `<img>` on
+the page; a template photo uses its own depth map (`media/…/name-depth.webp`), any other photo
+gets a soft generated one, and a photo from a host that refuses cross-origin use stays a plain
+image. A photo clip plays only while its slot still shows the template's photo. Shader and canvas
+colours come from the SITE THEME, like the CSS.
+
+`script.js` is built from [`sdhome-src/`](./sdhome-src): `site.js` (the builder layer: icons,
+menu, forms, the fixed media and page hooks) and `engine.js` (the original site's motion and
+WebGL code with GSAP, Lenis and OGL bundled in). Edit those, then
+`node site-builder-templates/sdhome-src/build.mjs`. Without WebGL, with reduced motion or with no
+script, every section is still a complete static page.
 
 ## Foundry: modern CSS, and how it degrades
 
