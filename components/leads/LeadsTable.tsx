@@ -45,6 +45,8 @@ import { LEAD_ZONES, UNKNOWN_ZONE_LABEL } from "@/lib/geo/timezones";
 import { LINE_LABEL, LINE_UNSET } from "@/lib/hitlist/line";
 import { LineTypeToggle } from "./LineTypeToggle";
 import { useLineTypes } from "@/hooks/useLineTypes";
+import { DeadlineTimer } from "./DeadlineTimer";
+import { useSitesInReview } from "@/hooks/useSitesInReview";
 import { useViewState } from "@/hooks/useViewState";
 import { useCompanyTimezone } from "@/providers/CompanyTimezoneProvider";
 import { buildQuery } from "@/lib/url/buildQuery";
@@ -116,10 +118,16 @@ export function LeadsTable({
   const { map: hitMap, setPriority: setHit } = useHitlist(hitlist);
   // The HitList's Direct Line tag: one click, for anyone who sees the HitList.
   const { lineOf, setLine } = useLineTypes(leads);
+
   // The priority popup (admin's empty-star click). Local state only, so it
   // opens on the click itself — no request before it shows.
   const [hitPick, setHitPick] = useState<{ lead: Lead; anchor: HTMLElement } | null>(null);
   const { has, all } = usePermissions();
+  // Website deadline timers under the date, for Tech and Admin (lib/leads/deadline.ts).
+  const isDeveloper = has("tickets.resolve") || has("studio.manage");
+  const sitesInReview = useSitesInReview(isDeveloper);
+  // Marked SENT here: hide the timer at once (the live store brings the Ready status).
+  const [sentIds, setSentIds] = useState<Set<string>>(() => new Set());
   const tagById = useMemo(() => Object.fromEntries(tags.map((t) => [t.id, t])), [tags]);
   // Only the caller's OWN tags are appliable via bulk (user-scoped tags).
   const ownTagList = useMemo(() => ownTags(tags, currentUserId), [tags, currentUserId]);
@@ -360,7 +368,21 @@ export function LeadsTable({
         accessorKey: "created_at",
         header: "Date",
         meta: { responsiveClass: "hidden md:table-cell" },
-        cell: (c) => <RelativeTime iso={c.getValue<string>()} className="text-text-muted whitespace-nowrap" />,
+        cell: (c) => {
+          const row = c.row.original;
+          return (
+            <div>
+              <RelativeTime iso={c.getValue<string>()} className="text-text-muted whitespace-nowrap" />
+              {isDeveloper && !sentIds.has(row.id) && (
+                <DeadlineTimer
+                  lead={row}
+                  hasWebsite={Boolean(row.website_link) || sitesInReview.has(row.id)}
+                  onSent={() => setSentIds((prev) => new Set(prev).add(row.id))}
+                />
+              )}
+            </div>
+          );
+        },
       },
       {
         accessorKey: "status",
@@ -665,7 +687,7 @@ export function LeadsTable({
         ),
       },
     ],
-    [agentNameById, canChangeStatus, canFollowUp, canSiteAgent, canBulk, canViewTags, tagById, sentContractSet, router, canViewHit, canManageHit, hitMap, setHit, lineOf, setLine]
+    [agentNameById, canChangeStatus, canFollowUp, canSiteAgent, canBulk, canViewTags, tagById, sentContractSet, router, canViewHit, canManageHit, hitMap, setHit, lineOf, setLine, isDeveloper, sentIds, sitesInReview]
   );
 
   const table = useReactTable({
