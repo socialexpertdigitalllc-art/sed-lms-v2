@@ -68,6 +68,8 @@ export interface Lead {
   color_scheme: string | null;
   /** Colour ideas are in developer_instructions instead (migration 0100). */
   color_see_instructions?: boolean | null;
+  /** The HitList's Direct Line tag (migration 0102, lib/hitlist/line.ts); null = not set. */
+  line_type?: "direct" | "not_direct" | null;
   color_same_as_logo: boolean | null;
   add_ons: AddOn[] | null;
   price_quoted: number | null;

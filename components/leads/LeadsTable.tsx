@@ -40,7 +40,11 @@ import { RegionFilter } from "./RegionFilter";
 import { TagFilter } from "./TagFilter";
 import { tagColor } from "@/lib/leads/tagColors";
 import { leadMatchesTags, ownTags } from "@/lib/leads/tagFilter";
-import { buildRegionFacets, leadRegion } from "@/lib/geo/regions";
+import { buildRegionFacets, leadRegion, leadTimezoneGroup } from "@/lib/geo/regions";
+import { LEAD_ZONES, UNKNOWN_ZONE_LABEL } from "@/lib/geo/timezones";
+import { LINE_LABEL, LINE_UNSET } from "@/lib/hitlist/line";
+import { LineTypeToggle } from "./LineTypeToggle";
+import { useLineTypes } from "@/hooks/useLineTypes";
 import { useViewState } from "@/hooks/useViewState";
 import { useCompanyTimezone } from "@/providers/CompanyTimezoneProvider";
 import { buildQuery } from "@/lib/url/buildQuery";
@@ -64,7 +68,7 @@ import { HitStarButton, HitStars, HitPriorityPopover, STAR_LEVELS, starsLabel } 
 import { useHitlist } from "@/hooks/useHitlist";
 import type { HitlistMap } from "@/lib/hitlist/store";
 
-const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tags: "", hit: "", month: "", from: "", to: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
+const LEADS_DEFAULTS = { q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tzone: "", tags: "", hit: "", line: "", month: "", from: "", to: "", scope: "", sort: "created_at:desc", page: "0", size: "15" };
 // The HitList tab: the same table, highest priority first.
 const HITLIST_DEFAULTS = { ...LEADS_DEFAULTS, sort: "hitlist:desc" };
 const SORT_PRESETS = ["created_at:desc", "follow_up_time:asc", "rating:desc", "business_name:asc", "hitlist:desc"];
@@ -110,6 +114,8 @@ export function LeadsTable({
   const canManageHit = canViewHit && canManageHitlist;
   const tableKey = isHitlistPage ? "hitlist" : "leads";
   const { map: hitMap, setPriority: setHit } = useHitlist(hitlist);
+  // The HitList's Direct Line tag: one click, for anyone who sees the HitList.
+  const { lineOf, setLine } = useLineTypes(leads);
   // The priority popup (admin's empty-star click). Local state only, so it
   // opens on the click itself — no request before it shows.
   const [hitPick, setHitPick] = useState<{ lead: Lead; anchor: HTMLElement } | null>(null);
@@ -184,6 +190,10 @@ export function LeadsTable({
   const fuSel = useMemo(() => (urlState.fu ? urlState.fu.split(",") : []), [urlState.fu]);
   // Hit-list filter: "all" (any star) and/or star levels "5".."1".
   const hitSel = useMemo(() => (canViewHit && urlState.hit ? urlState.hit.split(",") : []), [canViewHit, urlState.hit]);
+  // HitList tab: Direct Line / Not Direct Line / not set.
+  const lineSel = useMemo(() => (canViewHit && isHitlistPage && urlState.line ? urlState.line.split(",") : []), [canViewHit, isHitlistPage, urlState.line]);
+  // Timezone group of the lead's region (Eastern, Central…).
+  const zoneSel = useMemo(() => (urlState.tzone ? urlState.tzone.split(",") : []), [urlState.tzone]);
   // A closer's table defaults to THEIR OWN leads; the team is opt-in behind
   // the "My team" chip, which then adds their agents' leads to their own.
   // Applied BEFORE every other filter and count, so the status tabs, the
@@ -199,9 +209,9 @@ export function LeadsTable({
   // Any non-default filter — drives a visible "Clear filters" escape so a
   // persisted filter can never silently hide leads.
   const filtersActive =
-    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.platform !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tags !== "" || urlState.hit !== "" || urlState.month !== "" || urlState.from !== "" || urlState.to !== "" || teamScope;
+    q !== "" || status !== "All" || agent !== "" || type !== "" || urlState.platform !== "" || urlState.fu !== "" || urlState.region !== "" || urlState.tzone !== "" || urlState.tags !== "" || urlState.hit !== "" || urlState.line !== "" || urlState.month !== "" || urlState.from !== "" || urlState.to !== "" || teamScope;
   const clearFilters = () =>
-    setUrlState({ q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tags: "", hit: "", month: "", from: "", to: "", scope: "", page: "0" });
+    setUrlState({ q: "", status: "All", agent: "", type: "", platform: "", fu: "", region: "", tzone: "", tags: "", hit: "", line: "", month: "", from: "", to: "", scope: "", page: "0" });
   const sorting = useMemo<SortingState>(() => {
     const [id, dir] = sort.split(":");
     // A saved "hit list" sort means nothing without the hit list.
@@ -212,7 +222,7 @@ export function LeadsTable({
   // The Priority column shows on the HitList tab; on Leads it only carries
   // the filter and the sort (the star beside the name is the read-out).
   const columnVisibility = useMemo<VisibilityState>(
-    () => ({ ...(columnPrefs[tableKey] ?? {}), region: false, tags: false, fu_status: false, platform: false, ...(isHitlistPage ? {} : { hitlist: false }) }),
+    () => ({ ...(columnPrefs[tableKey] ?? {}), region: false, zone: false, tags: false, fu_status: false, platform: false, ...(isHitlistPage ? {} : { hitlist: false, line: false }) }),
     [columnPrefs, tableKey, isHitlistPage],
   );
   const columnFilters = useMemo<ColumnFiltersState>(() => {
@@ -223,10 +233,12 @@ export function LeadsTable({
     if (platformSel.length) f.push({ id: "platform", value: platformSel });
     if (fuSel.length) f.push({ id: "fu_status", value: fuSel });
     if (regionSel.length) f.push({ id: "region", value: regionSel });
+    if (zoneSel.length) f.push({ id: "zone", value: zoneSel });
     if (tagSel.length) f.push({ id: "tags", value: tagSel });
     if (hitSel.length) f.push({ id: "hitlist", value: hitSel });
+    if (lineSel.length) f.push({ id: "line", value: lineSel });
     return f;
-  }, [status, agentSel, typeSel, platformSel, fuSel, regionSel, tagSel, hitSel]);
+  }, [status, agentSel, typeSel, platformSel, fuSel, regionSel, zoneSel, tagSel, hitSel, lineSel]);
 
   const scopedLeads = useMemo(
     () =>
@@ -293,6 +305,24 @@ export function LeadsTable({
     }
     return c;
   }, [scopedLeads]);
+
+  // Timezone options with counts — from the full visible set (option-list rule above).
+  const zoneOptions = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const l of leads) {
+      const k = leadTimezoneGroup(l);
+      c[k] = (c[k] ?? 0) + 1;
+    }
+    const opts: { value: string; label: string; count: number }[] = LEAD_ZONES.map((z) => ({ value: z.key, label: z.label, count: c[z.key] ?? 0 }));
+    if (c.unknown) opts.push({ value: "unknown", label: UNKNOWN_ZONE_LABEL, count: c.unknown });
+    return opts;
+  }, [leads]);
+
+  const lineCounts = useMemo(() => {
+    const c: Record<string, number> = { direct: 0, not_direct: 0, [LINE_UNSET]: 0 };
+    for (const l of scopedLeads) c[lineOf(l) ?? LINE_UNSET] += 1;
+    return c;
+  }, [scopedLeads, lineOf]);
 
   const hitCounts = useMemo(() => {
     const c: Record<string, number> = { all: 0 };
@@ -400,6 +430,14 @@ export function LeadsTable({
         enableSorting: false,
       },
       {
+        // Filter carrier: the timezone group of the lead's region.
+        id: "zone",
+        accessorFn: (row) => leadTimezoneGroup(row),
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
+        enableSorting: false,
+        enableHiding: false,
+      },
+      {
         // Filter carrier only (like fu_status): the platform value already
         // renders as a plain field on the detail page; here it only needs to
         // be filterable. Keys are lowercased ("__none" = empty field).
@@ -490,6 +528,23 @@ export function LeadsTable({
                 </span>
               );
             },
+          } as ColumnDef<Lead>,
+          {
+            // The HitList's Direct Line tag: two pills, one click, for anyone
+            // who sees the HitList (lib/hitlist/line.ts). On Leads it's hidden.
+            id: "line",
+            header: "Line",
+            accessorFn: (row) => lineOf(row) ?? LINE_UNSET,
+            filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue<string>(id)),
+            enableSorting: false,
+            cell: (c) => (
+              <LineTypeToggle
+                value={lineOf(c.row.original)}
+                canEdit={Boolean(hitMap[c.row.original.id])}
+                businessName={c.row.original.business_name}
+                onChange={(v) => setLine(c.row.original.id, v)}
+              />
+            ),
           } as ColumnDef<Lead>]
         : []),
       {
@@ -610,7 +665,7 @@ export function LeadsTable({
         ),
       },
     ],
-    [agentNameById, canChangeStatus, canFollowUp, canSiteAgent, canBulk, canViewTags, tagById, sentContractSet, router, canViewHit, canManageHit, hitMap, setHit]
+    [agentNameById, canChangeStatus, canFollowUp, canSiteAgent, canBulk, canViewTags, tagById, sentContractSet, router, canViewHit, canManageHit, hitMap, setHit, lineOf, setLine]
   );
 
   const table = useReactTable({
@@ -771,7 +826,25 @@ export function LeadsTable({
             onChange={(next) => setUrlState({ hit: next.join(","), page: "0" })}
           />
         )}
+        {canViewHit && isHitlistPage && (
+          <MultiSelect
+            label="Line"
+            options={[
+              { value: "direct", label: LINE_LABEL.direct, count: lineCounts.direct },
+              { value: "not_direct", label: LINE_LABEL.not_direct, count: lineCounts.not_direct },
+              { value: LINE_UNSET, label: "Not set", count: lineCounts[LINE_UNSET] },
+            ]}
+            selected={lineSel}
+            onChange={(next) => setUrlState({ line: next.join(","), page: "0" })}
+          />
+        )}
         <RegionFilter facets={regionFacets} selected={regionSel} onChange={(next) => setUrlState({ region: next.join(","), page: "0" })} />
+        <MultiSelect
+          label="Timezone"
+          options={zoneOptions}
+          selected={zoneSel}
+          onChange={(next) => setUrlState({ tzone: next.join(","), page: "0" })}
+        />
         {canViewTags && (
           <TagFilter
             tags={tags}

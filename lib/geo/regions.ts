@@ -1,4 +1,5 @@
 import { areaCodeOf, stateOfPhone, codeOfState } from "@/lib/geo/areaCodes";
+import { leadZone, type LeadZoneKey } from "@/lib/geo/timezones";
 
 export const UNKNOWN_REGION = "Unknown";
 
@@ -57,4 +58,9 @@ export function buildRegionFacets(leads: HasPhone[]): RegionFacet[] {
 export function filterLeadsByRegions<T extends HasPhone>(leads: T[], selected: Set<string>): T[] {
   if (selected.size === 0) return leads;
   return leads.filter((l) => selected.has(leadRegion(l)));
+}
+
+/** The timezone group a lead falls in (lib/geo/timezones.ts), override-aware. */
+export function leadTimezoneGroup(lead: HasPhone): LeadZoneKey {
+  return leadZone(lead, areaCodeOf, (l) => stateOf(l)?.state ?? null);
 }
