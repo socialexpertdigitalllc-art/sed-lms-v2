@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Service Areas | Homeward Maintenance &amp; Repairs</title>
+<meta name="description" content="The neighborhoods and towns Homeward serves for home repairs, remodeling, painting, floors and tile, and AC and heating.">
+<meta name="theme-color" content="#0f2236">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Service Areas | Homeward Maintenance &amp; Repairs">
+<meta property="og:description" content="Where we work, close to home.">
+<link rel="stylesheet" href="style.css">
+<script src="components.js"></script>
+<script src="script.js" defer></script>
+</head>
+<body>
+<app-header></app-header>
+
+<main id="main">
+
+  <section class="page-hero" data-theme="dark">
+    <div class="page-hero__inner">
+      <div class="ui">
+        <p class="eyebrow" data-reveal>Service areas</p>
+        <h1 class="page-hero__title" data-reveal>Close to <em>home</em>, wherever that is.</h1>
+        <p class="page-hero__sub" data-reveal>We work across the greater metro area. If your town is not on the list, call and ask: we will tell you straight away if we can get to you.</p>
+        <div class="hero__cta" data-reveal>
+          <a class="btn btn--accent" href="contact.html" data-cursor="link">Get a quote</a>
+          <a class="btn btn--ghost" href="tel:5551234567" data-cursor="link">Call (555) 123-4567</a>
+        </div>
+      </div>
+      <figure class="page-hero__media plane" data-gl="depth"><img src="media/painting/paint-teal-house.webp" alt="A two-story home painted teal with white trim" fetchpriority="high" decoding="async" width="1600" height="1066"></figure>
+    </div>
+  </section>
+
+  <!-- AREAS: one row per town or neighborhood, beside a map of the area -->
+  <section class="areas" data-theme="light">
+    <div>
+      <p class="eyebrow" data-reveal>Where we work</p>
+      <h2 data-reveal>Towns and <em>neighborhoods</em> we serve.</h2>
+      <p class="areas__lead" data-reveal>Every job starts with a visit, so we keep to an area we can reach easily. These are the places we work in most.</p>
+      <ul class="areas__list" data-reveal>
+        <li><strong>Downtown</strong><span>Repairs &middot; Painting</span></li>
+        <li><strong>Northside</strong><span>Remodels &middot; Floors</span></li>
+        <li><strong>Lakeview</strong><span>AC &amp; heating</span></li>
+        <li><strong>Westfield</strong><span>Handyman &middot; Tile</span></li>
+        <li><strong>Riverside</strong><span>Painting &middot; Floors</span></li>
+        <li><strong>Oak Park</strong><span>Every service</span></li>
+      </ul>
+      <div class="about__cta" data-reveal style="margin-top:34px">
+        <a class="btn btn--dark" href="contact.html" data-cursor="link">Check your area <i data-i="arrow-right"></i></a>
+      </div>
+    </div>
+    <div class="areas__map map" data-reveal>
+      <iframe title="Map of our service area" src="https://www.google.com/maps?q=New%20York&amp;output=embed" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+    </div>
+  </section>
+
+  <!-- TRUST: glass stat cards. Facts only. -->
+  <section class="trust" data-theme="dark" data-light>
+    <div class="trust__inner">
+      <div class="trust__head">
+        <div>
+          <p class="eyebrow" data-reveal>Why neighbors call us</p>
+          <h2 data-reveal>Honest work. <em>Fair</em> prices.</h2>
+        </div>
+        <p class="trust__lead" data-reveal>The right fix, explained plainly, at a price that makes sense.</p>
+      </div>
+      <ul class="trust__stats" data-stack>
+        <li class="trust__card" data-reveal><strong><span data-count="6">6</span></strong><span class="trust__label">areas we serve</span><small>And the places in between</small></li>
+        <li class="trust__card" data-reveal><strong><span data-count="5">5</span></strong><span class="trust__label">trades under one roof</span><small>Remodeling, painting, floors and tile, HVAC and handyman work</small></li>
+        <li class="trust__card" data-reveal><strong><span data-count="1">1</span></strong><span class="trust__label">call does it all</span><small>One number for every job</small></li>
+        <li class="trust__card" data-reveal><strong>Fair</strong><span class="trust__label">prices on every job</span><small>Quoted before we start</small></li>
+      </ul>
+    </div>
+  </section>
+
+  <app-cta></app-cta>
+
+</main>
+
+<app-footer></app-footer>
+</body>
+</html>
