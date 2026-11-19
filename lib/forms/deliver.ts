@@ -1,5 +1,5 @@
 // lib/forms/deliver.ts
-import nodemailer from "nodemailer";
+import nodemailer, { type SendMailOptions } from "nodemailer";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAppSettings } from "@/lib/settings/appSettings";
 import { getMailboxById } from "@/lib/mail/mailbox";
@@ -14,7 +14,7 @@ import { CLAIM_STALE_MS } from "@/lib/forms/types";
 import type { FormEndpointRow, FormSubmissionRow } from "@/lib/forms/types";
 
 /** Seam so tests never touch SMTP. */
-export type SendFn = (msg: nodemailer.SendMailOptions, mailbox: ResolvedMailbox) => Promise<void>;
+export type SendFn = (msg: SendMailOptions, mailbox: ResolvedMailbox) => Promise<void>;
 
 export const smtpSend: SendFn = async (msg, mailbox) => {
   // Explicit timeouts: nodemailer's defaults (2min connect, 10min socket)
@@ -127,7 +127,7 @@ async function deliverClaimed(
     timeZone,
   });
   const fromName = `${(submission.submitter_name || endpoint.name).replace(/["\\\r\n]/g, "")} via SED LMS`;
-  const msg: nodemailer.SendMailOptions = {
+  const msg: SendMailOptions = {
     from: `"${fromName}" <${mailbox.address}>`,
     to: endpoint.to_emails,
     subject: built.subject,

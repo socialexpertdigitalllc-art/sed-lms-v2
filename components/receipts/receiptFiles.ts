@@ -21,7 +21,9 @@ export async function receiptPdfToPng(pdf: Blob, scale = 2): Promise<Blob> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
 
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(await pdf.arrayBuffer()) }).promise;
+  // PDF.js 6: the loading task owns the document (and destroys it).
+  const task = pdfjs.getDocument({ data: new Uint8Array(await pdf.arrayBuffer()) });
+  const doc = await task.promise;
   try {
     const pages: HTMLCanvasElement[] = [];
     for (let n = 1; n <= doc.numPages; n++) {
@@ -50,7 +52,7 @@ export async function receiptPdfToPng(pdf: Blob, scale = 2): Promise<Blob> {
       out.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not create the image"))), "image/png")
     );
   } finally {
-    await doc.destroy();
+    await task.destroy();
   }
 }
 

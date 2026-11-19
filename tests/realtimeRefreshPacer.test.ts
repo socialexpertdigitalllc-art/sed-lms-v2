@@ -8,12 +8,12 @@ import { createRefreshPacer, REALTIME_REFRESH } from "@/hooks/useRealtimeRefresh
  */
 
 let visible = true;
-let refresh: ReturnType<typeof vi.fn>;
+let refresh: ReturnType<typeof vi.fn<() => void>>;
 
 beforeEach(() => {
   vi.useFakeTimers();
   visible = true;
-  refresh = vi.fn();
+  refresh = vi.fn<() => void>();
 });
 afterEach(() => vi.useRealTimers());
 

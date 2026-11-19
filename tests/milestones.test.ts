@@ -4,6 +4,12 @@ import { readFileSync } from "node:fs";
 import { memorySupabase, type MemoryDb } from "./helpers/memorySupabase";
 import { celebrationFor, leadMilestone, markMilestoneSeen, MILESTONE_FRESH_MS, pendingMilestone, seenMilestone, MilestoneError } from "@/lib/milestones";
 
+// The /api/me/milestone route's dependencies (used by the route tests below).
+// Module mocks are hoisted, so they live at the top level.
+const h = vi.hoisted(() => ({ user: { id: "U1" } as { id: string } | null, db: null as unknown as MemoryDb }));
+vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ auth: { getUser: async () => ({ data: { user: h.user } }) } }) }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => h.db.client }));
+
 /**
  * Every 1,000 leads the whole company gets a celebration — once per person:
  * shown the next time they open the app, then never again until the next
@@ -93,9 +99,6 @@ describe("wiring", () => {
 });
 
 describe("/api/me/milestone", () => {
-  const h = vi.hoisted(() => ({ user: { id: "U1" } as { id: string } | null, db: null as unknown as MemoryDb }));
-  vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ auth: { getUser: async () => ({ data: { user: h.user } }) } }) }));
-  vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => h.db.client }));
 
   beforeEach(() => {
     h.user = { id: "U1" };
